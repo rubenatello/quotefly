@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Timestamp policy:
+/// - All DateTime fields are stored in UTC via timestamptz.
+/// - `deletedAtUtc` indicates soft-deleted records when present.
+
+enum ServiceCategory {
+  HVAC
+  PLUMBING
+  FLOORING
+  ROOFING
+  GARDENING
+}
+
+enum QuoteStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  SENT_TO_CUSTOMER
+  ACCEPTED
+  REJECTED
+}
+
+enum SmsMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum QuoteDecisionStatus {
+  AWAITING_APPROVAL
+  APPROVED
+  REVISION_REQUESTED
+}
+
+model TenantBranding {
+  id           String    @id @default(cuid())
+  tenantId     String    @unique
+  logoUrl      String?
+  primaryColor String    @default("#5B85AA")
+  templateId   String    @default("modern")
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Tenant {
+  id                    String                 @id @default(cuid())
+  name                  String
+  slug                  String                 @unique
+  timezone              String                 @default("UTC")
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
+  deletedAtUtc          DateTime?              @db.Timestamptz(3)
+  phoneNumber           TenantPhoneNumber?
+  users                 TenantUser[]
+  customers             Customer[]
+  pricingProfiles       PricingProfile[]
+  quoteTemplates        QuoteTemplate[]
+  quotes                Quote[]
+  quoteDecisionSessions QuoteDecisionSession[]
+  smsMessages           SmsMessage[]
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  branding              TenantBranding?
+  quoteLineItems        QuoteLineItem[]
+
+  @@index([createdAt])
+  @@index([deletedAtUtc])
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  fullName     String
+  passwordHash String
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(3)
+  deletedAtUtc DateTime?    @db.Timestamptz(3)
+  tenantLink   TenantUser[]
+
+  @@index([deletedAtUtc])
+}
+
+model TenantUser {
+  id           String    @id @default(cuid())
+  tenantId     String
+  userId       String
+  role         String    @default("owner")
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model TenantPhoneNumber {
+  id           String    @id @default(cuid())
+  tenantId     String    @unique
+  provider     String    @default("twilio")
+  e164Number   String    @unique
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, deletedAtUtc])
+}
+
+model Customer {
+  id           String    @id @default(cuid())
+  tenantId     String
+  fullName     String
+  email        String?
+  phone        String
+  notes        String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quotes       Quote[]
+
+  @@unique([tenantId, phone])
+  @@unique([id, tenantId])
+  @@index([tenantId])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model PricingProfile {
+  id             String          @id @default(cuid())
+  tenantId       String
+  serviceType    ServiceCategory
+  laborRate      Decimal         @db.Decimal(10, 2)
+  materialMarkup Decimal         @db.Decimal(5, 2)
+  isDefault      Boolean         @default(false)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+  deletedAtUtc   DateTime?       @db.Timestamptz(3)
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, serviceType])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model QuoteTemplate {
+  id           String          @id @default(cuid())
+  tenantId     String
+  name         String
+  serviceType  ServiceCategory
+  description  String?
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime        @updatedAt @db.Timestamptz(3)
+  deletedAtUtc DateTime?       @db.Timestamptz(3)
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, serviceType])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model Quote {
+  id                    String                 @id @default(cuid())
+  tenantId              String
+  customerId            String
+  serviceType           ServiceCategory
+  status                QuoteStatus            @default(DRAFT)
+  title                 String
+  scopeText             String
+  internalCostSubtotal  Decimal                @db.Decimal(10, 2)
+  customerPriceSubtotal Decimal                @db.Decimal(10, 2)
+  taxAmount             Decimal                @db.Decimal(10, 2)
+  totalAmount           Decimal                @db.Decimal(10, 2)
+  sentAt                DateTime?              @db.Timestamptz(3)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
+  deletedAtUtc          DateTime?              @db.Timestamptz(3)
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer              Customer               @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  lineItems             QuoteLineItem[]
+  decisionSessions      QuoteDecisionSession[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model QuoteLineItem {
+  id           String    @id @default(cuid())
+  tenantId     String
+  quoteId      String
+  description  String
+  quantity     Decimal   @db.Decimal(10, 2)
+  unitCost     Decimal   @db.Decimal(10, 2)
+  unitPrice    Decimal   @db.Decimal(10, 2)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  quote        Quote     @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId, tenantId])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model SmsMessage {
+  id           String              @id @default(cuid())
+  tenantId     String
+  externalSid  String?             @unique
+  direction    SmsMessageDirection
+  fromNumber   String
+  toNumber     String
+  body         String
+  receivedAt   DateTime            @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime?           @db.Timestamptz(3)
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, receivedAt])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model QuoteDecisionSession {
+  id             String              @id @default(cuid())
+  tenantId       String
+  quoteId        String
+  requesterPhone String
+  status         QuoteDecisionStatus @default(AWAITING_APPROVAL)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime            @updatedAt @db.Timestamptz(3)
+  deletedAtUtc   DateTime?           @db.Timestamptz(3)
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote          Quote               @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@index([tenantId, requesterPhone, status])
+  @@index([quoteId, tenantId])
+  @@index([tenantId, deletedAtUtc])
+}

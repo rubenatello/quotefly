@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  --color-quotefly-primary: #5B85AA;
+  --color-quotefly-secondary: #F46036;
+  --color-quotefly-accent: #414770;
+  --color-quotefly-deep: #372248;
+  --color-quotefly-ink: #171123;
+  --color-quotefly-blue: #5B85AA;
+  --color-quotefly-orange: #F46036;
+  --color-quotefly-gold: #414770;
+  --font-sans: "Inter", sans-serif;
+  --font-display: "Poppins", sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at top left, rgba(91, 133, 170, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(244, 96, 54, 0.12), transparent 22%),
+    linear-gradient(180deg, #171123 0%, #1f1733 100%);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(244, 96, 54, 0.35);
+  color: #ffffff;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
