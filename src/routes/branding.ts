@@ -5,7 +5,7 @@ import { getJwtClaims } from "../lib/auth";
 const UpsertBrandingSchema = z.object({
   logoUrl: z.string().url().optional().nullable(),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#5B85AA"),
-  templateId: z.enum(["modern", "professional", "bold", "minimal"]).default("modern"),
+  templateId: z.enum(["modern", "professional", "bold", "minimal", "classic"]).default("modern"),
 });
 
 function requireSameTenant(request: FastifyRequest, reply: FastifyReply, tenantId: string): boolean {

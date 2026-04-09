@@ -4,7 +4,7 @@ function getToken(): string | null {
   return localStorage.getItem("qf_token");
 }
 
-function toQueryString(params: Record<string, string | number | undefined>): string {
+function toQueryString(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === "") continue;
@@ -44,6 +44,25 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function requestBlob(path: string, options: RequestInit = {}): Promise<Blob> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const message = (body as { error?: string }).error ?? `Request failed: ${res.status}`;
+    throw new ApiError(message, res.status);
+  }
+
+  return res.blob();
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -67,6 +86,7 @@ export type QuoteStatus =
   | "REJECTED";
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
+export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
 
 type DecimalLike = number | string;
 
@@ -128,15 +148,15 @@ export const api = {
 
   branding: {
     get: (tenantId: string) =>
-      request<{ branding: { primaryColor: string; templateId: string; logoUrl?: string | null } | null }>(
+      request<{ branding: { primaryColor: string; templateId: BrandingTemplateId; logoUrl?: string | null } | null }>(
         `/v1/tenants/${tenantId}/branding`,
       ),
 
     save: (
       tenantId: string,
-      body: { logoUrl?: string | null; primaryColor: string; templateId: string },
+      body: { logoUrl?: string | null; primaryColor: string; templateId: BrandingTemplateId },
     ) =>
-      request<{ branding: { primaryColor: string; templateId: string; logoUrl?: string | null } }>(
+      request<{ branding: { primaryColor: string; templateId: BrandingTemplateId; logoUrl?: string | null } }>(
         `/v1/tenants/${tenantId}/branding`,
         { method: "PUT", body: JSON.stringify(body) },
       ),
@@ -243,6 +263,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ decision }),
       }),
+
+    downloadPdf: (quoteId: string, options?: { inline?: boolean }) =>
+      requestBlob(
+        `/v1/quotes/${quoteId}/pdf${toQueryString({ download: options?.inline ? false : true })}`,
+      ),
 
     lineItems: {
       create: (

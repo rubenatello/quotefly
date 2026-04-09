@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { setSEOMetadata } from "../lib/seo";
 import { Upload } from "lucide-react";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, type BrandingTemplateId } from "../lib/api";
 
 interface BrandingPageProps {
   tenantId?: string;
@@ -19,7 +19,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
   const [logo, setLogo] = useState<string | null>(null);
   const [brandColor, setBrandColor] = useState("#5B85AA");
-  const [selectedTemplate, setSelectedTemplate] = useState("modern");
+  const [selectedTemplate, setSelectedTemplate] = useState<BrandingTemplateId>("modern");
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
@@ -43,7 +43,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       await api.branding.save(tenantId, {
         logoUrl: logo ?? null,
         primaryColor: brandColor,
-        templateId: selectedTemplate as "modern" | "professional" | "bold" | "minimal",
+        templateId: selectedTemplate,
       });
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
@@ -55,7 +55,12 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     }
   };
 
-  const templates = [
+  const templates: Array<{
+    id: BrandingTemplateId;
+    name: string;
+    description: string;
+    preview: string;
+  }> = [
     {
       id: "modern",
       name: "Modern Clean",
@@ -79,6 +84,12 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       name: "Ultra Minimal",
       description: "Clean, text-focused design for maximum flexibility",
       preview: "bg-white",
+    },
+    {
+      id: "classic",
+      name: "Classic",
+      description: "Traditional proposal styling with warm accents",
+      preview: "bg-gradient-to-br from-amber-50 to-stone-100",
     },
   ];
 

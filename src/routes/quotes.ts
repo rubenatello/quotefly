@@ -3,6 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
+import { generateQuotePdfBuffer } from "../services/quote-pdf";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING"]);
 const QuoteStatusSchema = z.enum([
@@ -75,12 +76,34 @@ const QuoteLineItemParamsSchema = z.object({
   lineItemId: z.string().min(1),
 });
 
+const QueryBooleanSchema = z.preprocess((raw) => {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") {
+    const value = raw.trim().toLowerCase();
+    if (value === "1" || value === "true" || value === "yes") return true;
+    if (value === "0" || value === "false" || value === "no") return false;
+  }
+  return raw;
+}, z.boolean());
+
+const QuotePdfQuerySchema = z.object({
+  download: QueryBooleanSchema.default(true),
+});
+
 function roundCurrency(value: number): number {
   return Number(value.toFixed(2));
 }
 
 function calculateQuoteTotal(customerPriceSubtotal: number, taxAmount: number): number {
   return roundCurrency(customerPriceSubtotal + taxAmount);
+}
+
+function safeFileLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60);
 }
 
 async function getActiveQuoteForTenant(
@@ -237,6 +260,87 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return { quote };
+  });
+
+  app.get("/quotes/:quoteId/pdf", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { quoteId } = QuoteParamsSchema.parse(request.params);
+    const query = QuotePdfQuerySchema.parse(request.query);
+
+    const quote = await app.prisma.quote.findFirst({
+      where: {
+        id: quoteId,
+        ...tenantActiveScope(claims.tenantId),
+      },
+      include: {
+        customer: true,
+        lineItems: {
+          where: tenantActiveScope(claims.tenantId),
+          orderBy: { createdAt: "asc" },
+        },
+        tenant: {
+          select: {
+            name: true,
+            timezone: true,
+            branding: {
+              select: {
+                templateId: true,
+                primaryColor: true,
+                logoUrl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!quote) {
+      return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+
+    const pdfBuffer = await generateQuotePdfBuffer({
+      quoteId: quote.id,
+      serviceType: quote.serviceType,
+      status: quote.status,
+      title: quote.title,
+      scopeText: quote.scopeText,
+      createdAt: quote.createdAt,
+      sentAt: quote.sentAt,
+      internalCostSubtotal: Number(quote.internalCostSubtotal),
+      customerPriceSubtotal: Number(quote.customerPriceSubtotal),
+      taxAmount: Number(quote.taxAmount),
+      totalAmount: Number(quote.totalAmount),
+      customer: {
+        fullName: quote.customer.fullName,
+        email: quote.customer.email,
+        phone: quote.customer.phone,
+      },
+      tenant: {
+        name: quote.tenant.name,
+        timezone: quote.tenant.timezone,
+      },
+      branding: {
+        templateId: quote.tenant.branding?.templateId ?? "modern",
+        primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
+        logoUrl: quote.tenant.branding?.logoUrl ?? null,
+      },
+      lineItems: quote.lineItems.map((lineItem) => ({
+        description: lineItem.description,
+        quantity: Number(lineItem.quantity),
+        unitCost: Number(lineItem.unitCost),
+        unitPrice: Number(lineItem.unitPrice),
+      })),
+    });
+
+    const label = safeFileLabel(quote.title || `quote-${quote.id.slice(0, 8)}`);
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Cache-Control", "no-store");
+    reply.header(
+      "Content-Disposition",
+      `${query.download ? "attachment" : "inline"}; filename="${label}.pdf"`,
+    );
+
+    return reply.send(pdfBuffer);
   });
 
   app.patch("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {

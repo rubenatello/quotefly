@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { CustomerIcon, DeleteIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import {
@@ -48,6 +48,16 @@ const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", unitCost
 function money(value: string | number): string {
   const amount = typeof value === "number" ? value : Number(value);
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+}
+
+function fileLabel(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 60) || "quote"
+  );
 }
 
 function statusClass(status: QuoteStatus): string {
@@ -231,6 +241,35 @@ export function DashboardPage({ session }: DashboardPageProps) {
     }
   }
 
+  async function downloadQuotePdf(options?: { inline?: boolean; afterSend?: boolean }) {
+    if (!selectedQuote) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (options?.afterSend) {
+        await api.quotes.decision(selectedQuote.id, "send");
+      }
+
+      const blob = await api.quotes.downloadPdf(selectedQuote.id, { inline: options?.inline });
+      const fileName = `${fileLabel(selectedQuote.title)}.pdf`;
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+
+      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
+      setNotice(options?.afterSend ? "Quote sent and PDF downloaded." : "PDF downloaded.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed generating PDF.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addLineItem(event: FormEvent) {
     event.preventDefault();
     if (!selectedQuote) return;
@@ -387,6 +426,8 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     <button type="submit" disabled={saving} className="rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">Save Quote</button>
                     <button type="button" onClick={() => void sendDecision("send")} disabled={saving} className="inline-flex items-center gap-1 rounded-lg border border-sky-500/50 px-3 py-2 text-sm text-sky-300"><SendIcon size={14} />Send</button>
                     <button type="button" onClick={() => void sendDecision("revise")} disabled={saving} className="rounded-lg border border-amber-500/50 px-3 py-2 text-sm text-amber-300">Revise</button>
+                    <button type="button" onClick={() => void downloadQuotePdf()} disabled={saving} className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-200">Download PDF</button>
+                    <button type="button" onClick={() => void downloadQuotePdf({ afterSend: true })} disabled={saving} className="rounded-lg border border-emerald-500/50 px-3 py-2 text-sm text-emerald-300">Send + PDF</button>
                   </div>
                 </form>
 
@@ -447,3 +488,5 @@ function Metric({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+
