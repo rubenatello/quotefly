@@ -87,6 +87,13 @@ export type QuoteStatus =
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
+export type BrandingComponentColors = {
+  headerBgColor?: string;
+  sectionTitleColor?: string;
+  tableHeaderBgColor?: string;
+  totalsColor?: string;
+  footerTextColor?: string;
+};
 
 type DecimalLike = number | string;
 
@@ -148,15 +155,36 @@ export const api = {
 
   branding: {
     get: (tenantId: string) =>
-      request<{ branding: { primaryColor: string; templateId: BrandingTemplateId; logoUrl?: string | null } | null }>(
+      request<{
+        branding:
+          | {
+              primaryColor: string;
+              templateId: BrandingTemplateId;
+              logoUrl?: string | null;
+              componentColors?: BrandingComponentColors | null;
+            }
+          | null;
+      }>(
         `/v1/tenants/${tenantId}/branding`,
       ),
 
     save: (
       tenantId: string,
-      body: { logoUrl?: string | null; primaryColor: string; templateId: BrandingTemplateId },
+      body: {
+        logoUrl?: string | null;
+        primaryColor: string;
+        templateId: BrandingTemplateId;
+        componentColors?: BrandingComponentColors | null;
+      },
     ) =>
-      request<{ branding: { primaryColor: string; templateId: BrandingTemplateId; logoUrl?: string | null } }>(
+      request<{
+        branding: {
+          primaryColor: string;
+          templateId: BrandingTemplateId;
+          logoUrl?: string | null;
+          componentColors?: BrandingComponentColors | null;
+        };
+      }>(
         `/v1/tenants/${tenantId}/branding`,
         { method: "PUT", body: JSON.stringify(body) },
       ),

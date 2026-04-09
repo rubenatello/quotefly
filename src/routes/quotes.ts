@@ -287,6 +287,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 templateId: true,
                 primaryColor: true,
                 logoUrl: true,
+                componentColors: true,
               },
             },
           },
@@ -323,6 +324,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         templateId: quote.tenant.branding?.templateId ?? "modern",
         primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
         logoUrl: quote.tenant.branding?.logoUrl ?? null,
+        componentColors:
+          (quote.tenant.branding?.componentColors as
+            | {
+                headerBgColor?: string;
+                sectionTitleColor?: string;
+                tableHeaderBgColor?: string;
+                totalsColor?: string;
+                footerTextColor?: string;
+              }
+            | null
+            | undefined) ?? null,
       },
       lineItems: quote.lineItems.map((lineItem) => ({
         description: lineItem.description,

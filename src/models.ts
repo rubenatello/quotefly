@@ -27,12 +27,21 @@ export type QuoteDecisionStatus =
   | "APPROVED"
   | "REVISION_REQUESTED";
 
+export interface BrandingComponentColors {
+  headerBgColor?: string;
+  sectionTitleColor?: string;
+  tableHeaderBgColor?: string;
+  totalsColor?: string;
+  footerTextColor?: string;
+}
+
 export interface TenantBrandingRow {
   id: string;
   tenantId: string;
   logoUrl: string | null;
   primaryColor: string;
   templateId: string;
+  componentColors: BrandingComponentColors | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
   deletedAtUtc: UtcDate | null;

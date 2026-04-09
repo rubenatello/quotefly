@@ -2,6 +2,14 @@ import PDFDocument from "pdfkit";
 
 export type QuotePdfTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
 
+export interface QuoteComponentColors {
+  headerBgColor?: string;
+  sectionTitleColor?: string;
+  tableHeaderBgColor?: string;
+  totalsColor?: string;
+  footerTextColor?: string;
+}
+
 export interface QuotePdfLineItem {
   description: string;
   quantity: number;
@@ -34,8 +42,17 @@ export interface QuotePdfData {
     templateId: string;
     primaryColor: string;
     logoUrl: string | null;
+    componentColors?: QuoteComponentColors | null;
   };
   lineItems: QuotePdfLineItem[];
+}
+
+interface ResolvedComponentColors {
+  headerBgColor: string;
+  sectionTitleColor: string;
+  tableHeaderBgColor: string;
+  totalsColor: string;
+  footerTextColor: string;
 }
 
 interface ThemeDefinition {
@@ -93,6 +110,19 @@ function safeHexColor(color: string, fallback: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : fallback;
 }
 
+function resolveComponentColors(
+  overrides: QuoteComponentColors | null | undefined,
+  accentColor: string,
+): ResolvedComponentColors {
+  return {
+    headerBgColor: safeHexColor(overrides?.headerBgColor ?? accentColor, accentColor),
+    sectionTitleColor: safeHexColor(overrides?.sectionTitleColor ?? accentColor, accentColor),
+    tableHeaderBgColor: safeHexColor(overrides?.tableHeaderBgColor ?? accentColor, accentColor),
+    totalsColor: safeHexColor(overrides?.totalsColor ?? accentColor, accentColor),
+    footerTextColor: safeHexColor(overrides?.footerTextColor ?? "#666666", "#666666"),
+  };
+}
+
 async function loadLogoBuffer(logoUrl: string | null): Promise<Buffer | null> {
   if (!logoUrl) return null;
 
@@ -123,6 +153,7 @@ function writeHeader(
   doc: PDFKit.PDFDocument,
   data: QuotePdfData,
   theme: ThemeDefinition,
+  colors: ResolvedComponentColors,
   accentColor: string,
   logoBuffer: Buffer | null,
 ): number {
@@ -132,7 +163,7 @@ function writeHeader(
   const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
 
   if (theme.headerStyle === "bar") {
-    doc.rect(0, 0, doc.page.width, 110).fill(accentColor);
+    doc.rect(0, 0, doc.page.width, 110).fill(colors.headerBgColor);
     if (logoBuffer) {
       try {
         doc.image(logoBuffer, left, 26, { fit: [88, 56] });
@@ -148,7 +179,7 @@ function writeHeader(
   }
 
   if (theme.headerStyle === "block") {
-    doc.rect(0, 0, doc.page.width, 150).fill(accentColor);
+    doc.rect(0, 0, doc.page.width, 150).fill(colors.headerBgColor);
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(26).text("QUOTE", left, 30);
     doc.font("Helvetica").fontSize(11).text(`${data.tenant.name}`, left, 66);
     doc.text(quoteLabel, left, 82);
@@ -173,14 +204,14 @@ function writeHeader(
         // Ignore bad image payloads and continue without logo rendering.
       }
     }
-    doc.fillColor(accentColor).font("Helvetica-Bold").fontSize(19).text(data.tenant.name, left + (logoBuffer ? 100 : 14), 46);
+    doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(19).text(data.tenant.name, left + (logoBuffer ? 100 : 14), 46);
     doc.fillColor(theme.textDark).font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 14), 72);
     doc.text(`Status: ${data.status}`, left + (logoBuffer ? 100 : 14), 88);
     doc.fillColor("#111111");
     return 136;
   }
 
-  doc.fillColor(accentColor).font("Helvetica-Bold").fontSize(23).text(data.tenant.name, left, 42);
+  doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(23).text(data.tenant.name, left, 42);
   doc.font("Helvetica").fontSize(11).fillColor("#555555").text(quoteLabel, left, 72);
   doc.text(`Status: ${data.status}`, left, 88);
   if (logoBuffer) {
@@ -194,8 +225,8 @@ function writeHeader(
   return 126;
 }
 
-function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, accentColor: string): number {
-  doc.fillColor(accentColor).font("Helvetica-Bold").fontSize(12).text(title, 48, y);
+function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, sectionTitleColor: string): number {
+  doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(12).text(title, 48, y);
   return y + 18;
 }
 
@@ -210,7 +241,7 @@ function drawLineItemsTable(
   doc: PDFKit.PDFDocument,
   yStart: number,
   items: QuotePdfLineItem[],
-  accentColor: string,
+  tableHeaderColor: string,
 ): number {
   let y = yStart;
   const normalizedItems =
@@ -223,7 +254,7 @@ function drawLineItemsTable(
   const xUnit = 408;
   const xTotal = 494;
 
-  doc.rect(48, y, 516, 24).fill(accentColor);
+  doc.rect(48, y, 516, 24).fill(tableHeaderColor);
   doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(10);
   doc.text("Description", xDescription + 8, y + 8, { width: 280 });
   doc.text("Qty", xQty + 8, y + 8, { width: 42, align: "right" });
@@ -252,7 +283,7 @@ function drawLineItemsTable(
   return y + 12;
 }
 
-function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, accentColor: string): number {
+function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, totalsColor: string): number {
   const xLabel = 386;
   const xValue = 492;
   doc.font("Helvetica").fontSize(10).fillColor("#333333");
@@ -262,7 +293,7 @@ function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, acce
   doc.text("Tax", xLabel, y, { width: 90, align: "right" });
   doc.text(formatMoney(data.taxAmount), xValue, y, { width: 72, align: "right" });
   y += 20;
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(accentColor);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(totalsColor);
   doc.text("Total", xLabel, y, { width: 90, align: "right" });
   doc.text(formatMoney(data.totalAmount), xValue, y, { width: 72, align: "right" });
   return y + 28;
@@ -272,6 +303,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
   const templateId = safeTemplateId(data.branding.templateId);
   const theme = TEMPLATE_THEMES[templateId];
   const accentColor = safeHexColor(data.branding.primaryColor, theme.accentColor);
+  const componentColors = resolveComponentColors(data.branding.componentColors, accentColor);
   const logoBuffer = await loadLogoBuffer(data.branding.logoUrl);
 
   return new Promise<Buffer>((resolve, reject) => {
@@ -290,7 +322,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     doc.on("error", reject);
     doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-    let y = writeHeader(doc, data, theme, accentColor, logoBuffer);
+    let y = writeHeader(doc, data, theme, componentColors, accentColor, logoBuffer);
 
     doc.fillColor("#222222").font("Helvetica-Bold").fontSize(16).text(data.title, 48, y);
     y += 24;
@@ -300,7 +332,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     doc.text(`Sent: ${data.sentAt ? data.sentAt.toLocaleDateString() : "Not sent"}`, 390, y);
     y += 20;
 
-    y = drawSectionTitle(doc, y, "Customer", accentColor);
+    y = drawSectionTitle(doc, y, "Customer", componentColors.sectionTitleColor);
     doc.font("Helvetica").fontSize(11).fillColor("#222222");
     doc.text(data.customer.fullName, 48, y);
     y += 14;
@@ -311,19 +343,19 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     }
     y += 18;
 
-    y = drawSectionTitle(doc, y, "Scope", accentColor);
+    y = drawSectionTitle(doc, y, "Scope", componentColors.sectionTitleColor);
     doc.font("Helvetica").fontSize(10).fillColor("#222222");
     doc.text(data.scopeText, 48, y, { width: 516 });
     y = doc.y + 16;
 
-    y = drawSectionTitle(doc, y, "Line Items", accentColor);
-    y = drawLineItemsTable(doc, y, data.lineItems, accentColor);
-    y = drawTotals(doc, y, data, accentColor);
+    y = drawSectionTitle(doc, y, "Line Items", componentColors.sectionTitleColor);
+    y = drawLineItemsTable(doc, y, data.lineItems, componentColors.tableHeaderBgColor);
+    y = drawTotals(doc, y, data, componentColors.totalsColor);
 
     y = ensureSpace(doc, y, 60);
     doc.moveTo(48, y).lineTo(564, y).stroke("#d8d8d8");
     y += 10;
-    doc.font("Helvetica").fontSize(9).fillColor("#666666");
+    doc.font("Helvetica").fontSize(9).fillColor(componentColors.footerTextColor);
     doc.text(
       `Generated by QuoteFly for ${data.tenant.name} (${data.tenant.timezone}). Stored and rendered from UTC.`,
       48,

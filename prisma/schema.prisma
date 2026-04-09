@@ -44,6 +44,7 @@ model TenantBranding {
   logoUrl      String?
   primaryColor String    @default("#5B85AA")
   templateId   String    @default("modern")
+  componentColors Json?
   createdAt    DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
   deletedAtUtc DateTime? @db.Timestamptz(3)
