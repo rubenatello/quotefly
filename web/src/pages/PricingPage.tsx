@@ -22,13 +22,13 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       description: "Perfect for solo contractors",
       features: [
-        "Up to 500 quotes/month",
+        "Up to 600 quotes/month",
         "SMS job capture",
         "Auto-pricing from base rates",
         "PDF quote generation",
         "3 team members",
         "Email support",
-        "7-day quote history",
+        "30-day quote history",
       ],
       cta: "Start Free Trial",
       highlighted: false,
@@ -39,43 +39,44 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       description: "Best for growing teams",
       features: [
-        "Unlimited quotes",
+        "Up to 5,000 quotes/month",
         "Everything in Starter, plus:",
-        "Advanced analytics & reporting",
+        "Advanced analytics and reporting",
         "Customer communication log",
-        "Quote versioning & history",
+        "Quote versioning and history",
         "10 team members",
         "Multi-trade support",
-        "Phone & email support",
-        "30-day quote history",
+        "Priority email and chat support",
+        "180-day quote history",
       ],
       cta: "Start Free Trial",
       highlighted: true,
     },
     {
       name: "Enterprise",
-      price: "Custom",
-      period: "",
-      description: "For large operations",
+      price: "$399",
+      period: "/month",
+      description: "For larger operations that need governance and scale",
       features: [
         "Everything in Professional, plus:",
+        "Unlimited quotes",
         "Unlimited team members",
+        "Advanced AI automation layer",
         "QuickBooks Online integration",
         "Custom branding",
         "API access",
         "Dedicated account manager",
-        "SLA & priority support",
+        "SLA and priority support",
         "Custom integrations",
         "Audit logs",
       ],
-      cta: "Contact Sales",
+      cta: "Start Free Trial",
       highlighted: false,
     },
   ];
 
   return (
     <div className="min-h-screen bg-stone-50 text-slate-900">
-      {/* Header */}
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
           <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Simple, Transparent Pricing</h1>
@@ -83,17 +84,15 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
             Choose the plan that fits your business. Upgrade or downgrade anytime.
           </p>
 
-          {/* Toggle Annual/Monthly */}
-          <div className="mt-8 flex justify-center items-center gap-4">
+          <div className="mt-8 flex items-center justify-center gap-4">
             <span className="text-sm text-slate-600">Billed Monthly</span>
-            <button className="inline-flex items-center rounded-full border border-quotefly-blue px-4 py-2 bg-quotefly-blue/10">
+            <button className="inline-flex items-center rounded-full border border-quotefly-blue bg-quotefly-blue/10 px-4 py-2">
               <span className="text-xs font-semibold text-quotefly-blue">Coming Soon: Save 20% on Annual</span>
             </button>
           </div>
         </div>
       </section>
 
-      {/* Pricing Cards */}
       <section className="px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-7xl">
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
@@ -139,7 +138,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                         <span
                           className={`text-sm ${
                             feature.includes("Everything") || feature.includes("plus:")
-                              ? "font-semibold text-zinc-200"
+                              ? "font-semibold text-slate-900"
                               : "text-slate-600"
                           }`}
                         >
@@ -155,7 +154,6 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         </div>
       </section>
 
-      {/* FAQ */}
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-4xl">
           <h2 className="mb-12 text-center text-3xl font-bold text-slate-900">Frequently Asked Questions</h2>
@@ -168,7 +166,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
               },
               {
                 q: "Is there a free trial?",
-                a: "Yes. 14 days free. Full access to all features on any plan. No credit card required.",
+                a: "Yes. 14 days free. Full access to all features on any plan.",
               },
               {
                 q: "Can I change plans?",
@@ -176,11 +174,11 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
               },
               {
                 q: "What payment methods do you accept?",
-                a: "We accept all major credit cards via Stripe. Invoicing available for Enterprise customers.",
+                a: "We accept all major credit cards via Stripe. Annual invoicing is available for larger contracts.",
               },
               {
                 q: "Do you offer discounts for annual billing?",
-                a: "Coming soon! We'll be offering 20% off for annual plans.",
+                a: "Coming soon. We plan to offer 20% off for annual plans.",
               },
             ].map((faq, idx) => (
               <div key={idx} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -192,14 +190,13 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         </div>
       </section>
 
-      {/* CTA */}
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
           <h2 className="mb-4 text-3xl font-bold text-slate-900">Start Your Free Trial Today</h2>
           <p className="mb-8 text-lg text-slate-600">No credit card required. Full access. 14 days free.</p>
           <button
             onClick={onOpenAuth}
-            className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white hover:bg-blue-600 transition-colors"
+            className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-blue-600"
           >
             Start Free Trial
           </button>

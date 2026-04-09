@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, QuoteRevisionEventType } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
@@ -90,6 +90,40 @@ const QuotePdfQuerySchema = z.object({
   download: QueryBooleanSchema.default(true),
 });
 
+const QuoteHistoryQuerySchema = PaginationQuerySchema.extend({
+  customerId: z.string().min(1).optional(),
+  quoteId: z.string().min(1).optional(),
+});
+
+const QuoteHistoryByQuoteQuerySchema = PaginationQuerySchema;
+
+const QuoteRevisionSelect = {
+  id: true,
+  quoteId: true,
+  customerId: true,
+  version: true,
+  eventType: true,
+  changedFields: true,
+  title: true,
+  status: true,
+  customerPriceSubtotal: true,
+  totalAmount: true,
+  createdAt: true,
+  snapshot: true,
+  quote: {
+    select: {
+      id: true,
+      title: true,
+    },
+  },
+  customer: {
+    select: {
+      id: true,
+      fullName: true,
+    },
+  },
+} as const satisfies Prisma.QuoteRevisionSelect;
+
 function roundCurrency(value: number): number {
   return Number(value.toFixed(2));
 }
@@ -163,6 +197,152 @@ async function recalculateQuoteFromLineItems(
   });
 }
 
+interface RevisionSnapshotLineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+interface RevisionSnapshot {
+  quote: {
+    id: string;
+    title: string;
+    serviceType: string;
+    status: string;
+    scopeText: string;
+    internalCostSubtotal: number;
+    customerPriceSubtotal: number;
+    taxAmount: number;
+    totalAmount: number;
+  };
+  customer: {
+    id: string;
+    fullName: string;
+    email: string | null;
+    phone: string;
+  };
+  lineItems: RevisionSnapshotLineItem[];
+}
+
+async function getQuoteRevisionContext(
+  tx: Prisma.TransactionClient,
+  quoteId: string,
+  tenantId: string,
+) {
+  return tx.quote.findFirst({
+    where: {
+      id: quoteId,
+      ...tenantActiveScope(tenantId),
+    },
+    include: {
+      customer: {
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          phone: true,
+        },
+      },
+      lineItems: {
+        where: tenantActiveScope(tenantId),
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          description: true,
+          quantity: true,
+          unitCost: true,
+          unitPrice: true,
+        },
+      },
+    },
+  });
+}
+
+function buildQuoteRevisionSnapshot(
+  context: NonNullable<Awaited<ReturnType<typeof getQuoteRevisionContext>>>,
+): RevisionSnapshot {
+  return {
+    quote: {
+      id: context.id,
+      title: context.title,
+      serviceType: context.serviceType,
+      status: context.status,
+      scopeText: context.scopeText,
+      internalCostSubtotal: Number(context.internalCostSubtotal),
+      customerPriceSubtotal: Number(context.customerPriceSubtotal),
+      taxAmount: Number(context.taxAmount),
+      totalAmount: Number(context.totalAmount),
+    },
+    customer: {
+      id: context.customer.id,
+      fullName: context.customer.fullName,
+      email: context.customer.email,
+      phone: context.customer.phone,
+    },
+    lineItems: context.lineItems.map((lineItem) => {
+      const quantity = Number(lineItem.quantity);
+      const unitPrice = Number(lineItem.unitPrice);
+      return {
+        id: lineItem.id,
+        description: lineItem.description,
+        quantity,
+        unitCost: Number(lineItem.unitCost),
+        unitPrice,
+        lineTotal: roundCurrency(quantity * unitPrice),
+      };
+    }),
+  };
+}
+
+async function createQuoteRevision(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    quoteId: string;
+    eventType: QuoteRevisionEventType;
+    changedFields?: string[];
+  },
+) {
+  const context = await getQuoteRevisionContext(tx, params.quoteId, params.tenantId);
+  if (!context) return null;
+
+  const lastRevision = await tx.quoteRevision.findFirst({
+    where: {
+      quoteId: context.id,
+      ...tenantActiveScope(params.tenantId),
+    },
+    orderBy: { version: "desc" },
+    select: { version: true },
+  });
+
+  const snapshot = buildQuoteRevisionSnapshot(context);
+  const version = (lastRevision?.version ?? 0) + 1;
+
+  return tx.quoteRevision.create({
+    data: {
+      tenantId: params.tenantId,
+      quoteId: context.id,
+      customerId: context.customer.id,
+      version,
+      eventType: params.eventType,
+      changedFields: params.changedFields ?? [],
+      title: context.title,
+      status: context.status,
+      customerPriceSubtotal: Number(context.customerPriceSubtotal),
+      totalAmount: Number(context.totalAmount),
+      snapshot: snapshot as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[] {
+  const fields = Object.keys(payload);
+  return fields.length ? fields : ["manual_update"];
+}
+
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteSchema.parse(request.body);
@@ -181,18 +361,38 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    const quote = await app.prisma.quote.create({
-      data: {
+    const quote = await app.prisma.$transaction(async (tx) => {
+      const createdQuote = await tx.quote.create({
+        data: {
+          tenantId: claims.tenantId,
+          customerId: payload.customerId,
+          serviceType: payload.serviceType,
+          title: payload.title,
+          scopeText: payload.scopeText,
+          internalCostSubtotal: payload.internalCostSubtotal,
+          customerPriceSubtotal: payload.customerPriceSubtotal,
+          taxAmount: payload.taxAmount,
+          totalAmount,
+        },
+      });
+
+      await createQuoteRevision(tx, {
         tenantId: claims.tenantId,
-        customerId: payload.customerId,
-        serviceType: payload.serviceType,
-        title: payload.title,
-        scopeText: payload.scopeText,
-        internalCostSubtotal: payload.internalCostSubtotal,
-        customerPriceSubtotal: payload.customerPriceSubtotal,
-        taxAmount: payload.taxAmount,
-        totalAmount,
-      },
+        quoteId: createdQuote.id,
+        eventType: "CREATED",
+        changedFields: [
+          "customerId",
+          "serviceType",
+          "title",
+          "scopeText",
+          "internalCostSubtotal",
+          "customerPriceSubtotal",
+          "taxAmount",
+          "totalAmount",
+        ],
+      });
+
+      return createdQuote;
     });
 
     return reply.code(201).send({ quote });
@@ -229,6 +429,108 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     return {
       quotes,
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total,
+      },
+    };
+  });
+
+  app.get("/quotes/history", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const query = QuoteHistoryQuerySchema.parse(request.query);
+
+    if (query.customerId) {
+      const customer = await app.prisma.customer.findFirst({
+        where: {
+          id: query.customerId,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        select: { id: true },
+      });
+
+      if (!customer) {
+        return reply.code(404).send({ error: "Customer not found for tenant." });
+      }
+    }
+
+    if (query.quoteId) {
+      const quote = await app.prisma.quote.findFirst({
+        where: {
+          id: query.quoteId,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        select: { id: true },
+      });
+
+      if (!quote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+    }
+
+    const where: Prisma.QuoteRevisionWhereInput = {
+      ...tenantActiveScope(claims.tenantId),
+      ...(query.customerId ? { customerId: query.customerId } : {}),
+      ...(query.quoteId ? { quoteId: query.quoteId } : {}),
+    };
+
+    const [revisions, total] = await app.prisma.$transaction([
+      app.prisma.quoteRevision.findMany({
+        where,
+        select: QuoteRevisionSelect,
+        orderBy: [{ createdAt: "desc" }, { version: "desc" }],
+        take: query.limit,
+        skip: query.offset,
+      }),
+      app.prisma.quoteRevision.count({ where }),
+    ]);
+
+    return {
+      revisions,
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total,
+      },
+    };
+  });
+
+  app.get("/quotes/:quoteId/history", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { quoteId } = QuoteParamsSchema.parse(request.params);
+    const query = QuoteHistoryByQuoteQuerySchema.parse(request.query);
+
+    const quote = await app.prisma.quote.findFirst({
+      where: {
+        id: quoteId,
+        ...tenantActiveScope(claims.tenantId),
+      },
+      select: { id: true },
+    });
+
+    if (!quote) {
+      return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+
+    const where: Prisma.QuoteRevisionWhereInput = {
+      quoteId: quote.id,
+      ...tenantActiveScope(claims.tenantId),
+    };
+
+    const [revisions, total] = await app.prisma.$transaction([
+      app.prisma.quoteRevision.findMany({
+        where,
+        select: QuoteRevisionSelect,
+        orderBy: [{ version: "desc" }, { createdAt: "desc" }],
+        take: query.limit,
+        skip: query.offset,
+      }),
+      app.prisma.quoteRevision.count({ where }),
+    ]);
+
+    return {
+      revisions,
       pagination: {
         limit: query.limit,
         offset: query.offset,
@@ -392,29 +694,48 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const shouldRecalculateTotal =
       payload.customerPriceSubtotal !== undefined || payload.taxAmount !== undefined;
 
-    const quote = await app.prisma.quote.update({
-      where: { id: existingQuote.id },
-      data: {
-        customerId: payload.customerId,
-        serviceType: payload.serviceType,
-        status: payload.status,
-        title: payload.title,
-        scopeText: payload.scopeText,
-        internalCostSubtotal: payload.internalCostSubtotal,
-        customerPriceSubtotal: payload.customerPriceSubtotal,
-        taxAmount: payload.taxAmount,
-        ...(shouldRecalculateTotal
-          ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
-          : {}),
-        ...(payload.status
-          ? {
-              sentAt:
-                payload.status === "SENT_TO_CUSTOMER"
-                  ? existingQuote.sentAt ?? new Date()
-                  : null,
-            }
-          : {}),
-      },
+    const revisionChangedFields = [
+      ...quoteChangedFields(payload),
+      ...(shouldRecalculateTotal ? ["totalAmount"] : []),
+      ...(payload.status ? ["sentAt"] : []),
+    ];
+    const revisionEventType: QuoteRevisionEventType =
+      payload.status !== undefined ? "STATUS_CHANGED" : "UPDATED";
+
+    const quote = await app.prisma.$transaction(async (tx) => {
+      const updatedQuote = await tx.quote.update({
+        where: { id: existingQuote.id },
+        data: {
+          customerId: payload.customerId,
+          serviceType: payload.serviceType,
+          status: payload.status,
+          title: payload.title,
+          scopeText: payload.scopeText,
+          internalCostSubtotal: payload.internalCostSubtotal,
+          customerPriceSubtotal: payload.customerPriceSubtotal,
+          taxAmount: payload.taxAmount,
+          ...(shouldRecalculateTotal
+            ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
+            : {}),
+          ...(payload.status
+            ? {
+                sentAt:
+                  payload.status === "SENT_TO_CUSTOMER"
+                    ? existingQuote.sentAt ?? new Date()
+                    : null,
+              }
+            : {}),
+        },
+      });
+
+      await createQuoteRevision(tx, {
+        tenantId: claims.tenantId,
+        quoteId: updatedQuote.id,
+        eventType: revisionEventType,
+        changedFields: Array.from(new Set(revisionChangedFields)),
+      });
+
+      return updatedQuote;
     });
 
     return { quote };
@@ -492,6 +813,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
+      await createQuoteRevision(tx, {
+        tenantId: claims.tenantId,
+        quoteId: updatedQuote.id,
+        eventType: "DECISION",
+        changedFields: ["status", "sentAt", "decisionSession.status"],
+      });
+
       return updatedQuote;
     });
 
@@ -530,6 +858,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       const updatedQuote = await recalculateQuoteFromLineItems(tx, quote.id, claims.tenantId);
       if (!updatedQuote) return null;
+
+      await createQuoteRevision(tx, {
+        tenantId: claims.tenantId,
+        quoteId: updatedQuote.id,
+        eventType: "LINE_ITEM_CHANGED",
+        changedFields: [
+          "lineItems.description",
+          "lineItems.quantity",
+          "lineItems.unitCost",
+          "lineItems.unitPrice",
+          "internalCostSubtotal",
+          "customerPriceSubtotal",
+          "totalAmount",
+        ],
+      });
 
       return { lineItem, quote: updatedQuote };
     });
@@ -578,6 +921,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         const updatedQuote = await recalculateQuoteFromLineItems(tx, quote.id, claims.tenantId);
         if (!updatedQuote) return null;
 
+        await createQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId: updatedQuote.id,
+          eventType: "LINE_ITEM_CHANGED",
+          changedFields: [
+            "lineItems.description",
+            "lineItems.quantity",
+            "lineItems.unitCost",
+            "lineItems.unitPrice",
+            "internalCostSubtotal",
+            "customerPriceSubtotal",
+            "totalAmount",
+          ],
+        });
+
         return { lineItem: updatedLineItem, quote: updatedQuote };
       });
 
@@ -617,7 +975,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           data: { deletedAtUtc: now },
         });
 
-        await recalculateQuoteFromLineItems(tx, quote.id, claims.tenantId);
+        const updatedQuote = await recalculateQuoteFromLineItems(tx, quote.id, claims.tenantId);
+        if (!updatedQuote) return false;
+
+        await createQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId: updatedQuote.id,
+          eventType: "LINE_ITEM_CHANGED",
+          changedFields: [
+            "lineItems",
+            "internalCostSubtotal",
+            "customerPriceSubtotal",
+            "totalAmount",
+          ],
+        });
+
         return true;
       });
 

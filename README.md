@@ -24,6 +24,7 @@ npm --prefix web install
 
 - Duplicate .env.example to .env
 - Set DATABASE_URL and provider keys
+- Duplicate web/.env.example to web/.env
 
 3. Generate Prisma client and run migrations:
 
@@ -93,6 +94,36 @@ Use Tailwind utility classes directly in React components.
 
 - Vite frontend reads API URL from web/.env or defaults to http://localhost:4000
 - Create web/.env from web/.env.example when needed
+
+## Environment Variables
+
+### Backend (.env)
+
+- `DATABASE_URL`: Postgres connection string
+- `PORT`: API port (default `4000`)
+- `NODE_ENV`: `development` | `test` | `production`
+- `JWT_SECRET`: at least 32 characters
+- `STRIPE_SECRET_KEY`: Stripe secret key (`sk_test_...` or `sk_live_...`)
+- `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret (`whsec_...`)
+- `STRIPE_PRICE_ID_STARTER`: Stripe starter plan price id (`price_...`)
+- `STRIPE_PRICE_ID_PROFESSIONAL`: Stripe professional plan price id (`price_...`)
+- `STRIPE_PRICE_ID_ENTERPRISE`: Stripe enterprise plan price id (`price_...`)
+- `APP_URL`: frontend URL (e.g. `http://localhost:5173`, `https://quotefly.us`)
+- `API_URL`: API URL (e.g. `http://localhost:4000`, `https://api.quotefly.us`)
+- `ENABLE_TWILIO_SMS`: set `true` to enable Twilio SMS webhook routes (default `false`)
+- `TWILIO_ACCOUNT_SID`: optional for SMS features
+- `TWILIO_AUTH_TOKEN`: optional for SMS features
+- `TWILIO_WEBHOOK_AUTH_TOKEN`: optional webhook verification token
+
+### Frontend (web/.env)
+
+- `VITE_API_BASE_URL`: backend API origin
+- `VITE_STRIPE_PUBLISHABLE_KEY`: Stripe publishable key (`pk_test_...` or `pk_live_...`)
+
+## Billing Tiers
+
+- Tier definitions and Stripe mapping:
+  - `docs/plan/subscription-tiers.md`
 
 ## Backend-first scope included
 

@@ -38,6 +38,14 @@ enum QuoteDecisionStatus {
   REVISION_REQUESTED
 }
 
+enum QuoteRevisionEventType {
+  CREATED
+  UPDATED
+  STATUS_CHANGED
+  LINE_ITEM_CHANGED
+  DECISION
+}
+
 model TenantBranding {
   id           String    @id @default(cuid())
   tenantId     String    @unique
@@ -71,6 +79,7 @@ model Tenant {
   stripeSubscriptionId  String?
   branding              TenantBranding?
   quoteLineItems        QuoteLineItem[]
+  quoteRevisions        QuoteRevision[]
 
   @@index([createdAt])
   @@index([deletedAtUtc])
@@ -129,6 +138,7 @@ model Customer {
   deletedAtUtc DateTime? @db.Timestamptz(3)
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quotes       Quote[]
+  revisions    QuoteRevision[]
 
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
@@ -188,6 +198,7 @@ model Quote {
   customer              Customer               @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
   lineItems             QuoteLineItem[]
   decisionSessions      QuoteDecisionSession[]
+  revisions             QuoteRevision[]
 
   @@unique([id, tenantId])
   @@index([tenantId, customerId])
@@ -209,6 +220,31 @@ model QuoteLineItem {
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([quoteId, tenantId])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model QuoteRevision {
+  id                    String                 @id @default(cuid())
+  tenantId              String
+  quoteId               String
+  customerId            String
+  version               Int
+  eventType             QuoteRevisionEventType @default(UPDATED)
+  changedFields         String[]               @default([])
+  title                 String
+  status                QuoteStatus
+  customerPriceSubtotal Decimal                @db.Decimal(10, 2)
+  totalAmount           Decimal                @db.Decimal(10, 2)
+  snapshot              Json
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  deletedAtUtc          DateTime?              @db.Timestamptz(3)
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote                 Quote                  @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  customer              Customer               @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@index([quoteId, tenantId, version])
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, createdAt])
   @@index([tenantId, deletedAtUtc])
 }
 

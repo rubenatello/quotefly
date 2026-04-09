@@ -85,6 +85,13 @@ export type QuoteStatus =
   | "ACCEPTED"
   | "REJECTED";
 
+export type QuoteRevisionEventType =
+  | "CREATED"
+  | "UPDATED"
+  | "STATUS_CHANGED"
+  | "LINE_ITEM_CHANGED"
+  | "DECISION";
+
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
 export type BrandingComponentColors = {
@@ -136,6 +143,57 @@ export type Quote = {
   updatedAt: string;
   customer?: Customer;
   lineItems?: QuoteLineItem[];
+};
+
+export type QuoteRevisionSnapshot = {
+  quote: {
+    id: string;
+    title: string;
+    serviceType: ServiceType;
+    status: QuoteStatus;
+    scopeText: string;
+    internalCostSubtotal: number;
+    customerPriceSubtotal: number;
+    taxAmount: number;
+    totalAmount: number;
+  };
+  customer: {
+    id: string;
+    fullName: string;
+    email?: string | null;
+    phone: string;
+  };
+  lineItems: Array<{
+    id: string;
+    description: string;
+    quantity: number;
+    unitCost: number;
+    unitPrice: number;
+    lineTotal: number;
+  }>;
+};
+
+export type QuoteRevision = {
+  id: string;
+  quoteId: string;
+  customerId: string;
+  version: number;
+  eventType: QuoteRevisionEventType;
+  changedFields: string[];
+  title: string;
+  status: QuoteStatus;
+  customerPriceSubtotal: DecimalLike;
+  totalAmount: DecimalLike;
+  createdAt: string;
+  snapshot: QuoteRevisionSnapshot;
+  quote: {
+    id: string;
+    title: string;
+  };
+  customer: {
+    id: string;
+    fullName: string;
+  };
 };
 
 type Pagination = { limit: number; offset: number; total: number };
@@ -247,7 +305,30 @@ export const api = {
         })}`,
       ),
 
+    history: (query?: {
+      limit?: number;
+      offset?: number;
+      customerId?: string;
+      quoteId?: string;
+    }) =>
+      request<{ revisions: QuoteRevision[]; pagination: Pagination }>(
+        `/v1/quotes/history${toQueryString({
+          limit: query?.limit,
+          offset: query?.offset,
+          customerId: query?.customerId,
+          quoteId: query?.quoteId,
+        })}`,
+      ),
+
     get: (quoteId: string) => request<{ quote: Quote }>(`/v1/quotes/${quoteId}`),
+
+    getHistory: (quoteId: string, query?: { limit?: number; offset?: number }) =>
+      request<{ revisions: QuoteRevision[]; pagination: Pagination }>(
+        `/v1/quotes/${quoteId}/history${toQueryString({
+          limit: query?.limit,
+          offset: query?.offset,
+        })}`,
+      ),
 
     create: (body: {
       customerId: string;

@@ -60,7 +60,9 @@ export function buildServer() {
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
-  app.register(smsRoutes, { prefix: "/v1" });
+  if (env.ENABLE_TWILIO_SMS) {
+    app.register(smsRoutes, { prefix: "/v1" });
+  }
   app.register(brandingRoutes, { prefix: "/v1" });
 
   app.addHook("onClose", async () => {

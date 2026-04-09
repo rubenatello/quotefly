@@ -27,6 +27,13 @@ export type QuoteDecisionStatus =
   | "APPROVED"
   | "REVISION_REQUESTED";
 
+export type QuoteRevisionEventType =
+  | "CREATED"
+  | "UPDATED"
+  | "STATUS_CHANGED"
+  | "LINE_ITEM_CHANGED"
+  | "DECISION";
+
 export interface BrandingComponentColors {
   headerBgColor?: string;
   sectionTitleColor?: string;
@@ -154,6 +161,23 @@ export interface QuoteLineItemRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface QuoteRevisionRow {
+  id: string;
+  tenantId: string;
+  quoteId: string;
+  customerId: string;
+  version: number;
+  eventType: QuoteRevisionEventType;
+  changedFields: string[];
+  title: string;
+  status: QuoteStatus;
+  customerPriceSubtotal: DecimalValue;
+  totalAmount: DecimalValue;
+  snapshot: Record<string, unknown>;
+  createdAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
 export interface SmsMessageRow {
   id: string;
   tenantId: string;
@@ -191,6 +215,7 @@ export const TABLE_RELATION_MAP = {
       "QuoteDecisionSession",
       "SmsMessage",
       "QuoteLineItem",
+      "QuoteRevision",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -205,7 +230,7 @@ export const TABLE_RELATION_MAP = {
   },
   Customer: {
     belongsTo: ["Tenant"],
-    hasMany: ["Quote"],
+    hasMany: ["Quote", "QuoteRevision"],
   },
   PricingProfile: {
     belongsTo: ["Tenant"],
@@ -215,10 +240,13 @@ export const TABLE_RELATION_MAP = {
   },
   Quote: {
     belongsTo: ["Tenant", "Customer"],
-    hasMany: ["QuoteLineItem", "QuoteDecisionSession"],
+    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision"],
   },
   QuoteLineItem: {
     belongsTo: ["Tenant", "Quote"],
+  },
+  QuoteRevision: {
+    belongsTo: ["Tenant", "Quote", "Customer"],
   },
   SmsMessage: {
     belongsTo: ["Tenant"],

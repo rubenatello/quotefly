@@ -36,6 +36,7 @@ function App() {
     }
     const storedName = localStorage.getItem("qf_full_name") ?? claims.email;
     setSession({ email: claims.email, fullName: storedName, tenantId: claims.tenantId });
+    setCurrentPage("dashboard");
   }, []);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
