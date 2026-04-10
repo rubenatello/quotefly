@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { PlanCode, TenantEntitlements } from "../lib/api";
 import {
@@ -70,6 +70,18 @@ export function CrmShell({
   entitlements,
 }: CrmShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const savedValue = localStorage.getItem("qf_sidebar_collapsed");
+    if (savedValue === "true") {
+      setSidebarCollapsed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("qf_sidebar_collapsed", sidebarCollapsed ? "true" : "false");
+  }, [sidebarCollapsed]);
 
   const handleNavigate = (page: string) => {
     onNavigate(page);
@@ -84,10 +96,16 @@ export function CrmShell({
         onLogout={onLogout}
       />
 
-      <div className="mx-auto w-full max-w-[1600px] lg:grid lg:grid-cols-[250px_1fr]">
+      <div
+        className={`mx-auto w-full max-w-[1600px] lg:grid ${
+          sidebarCollapsed ? "lg:grid-cols-[92px_1fr]" : "lg:grid-cols-[250px_1fr]"
+        }`}
+      >
         <CrmSidebar
           currentPage={currentPage}
           mobileOpen={mobileOpen}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
           onNavigate={handleNavigate}
           operationsLinks={OPERATIONS_LINKS}
           moduleLinks={MODULE_LINKS}

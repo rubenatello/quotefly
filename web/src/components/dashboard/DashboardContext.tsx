@@ -768,16 +768,33 @@ export function DashboardProvider({
         quoteId: latestQuote?.id, quoteTitle: latestQuote?.title, totalAmount: latestQuote ? Number(latestQuote.totalAmount) : undefined,
         status: latestQuote?.status, followUpStatus, createdAt: latestQuote?.updatedAt ?? customer.createdAt,
       };
-      if (followUpStatus === "WON" || followUpStatus === "LOST") { closedLeads.push(baseItem); continue; }
+      if (followUpStatus === "WON") { closedLeads.push(baseItem); continue; }
+      if (followUpStatus === "LOST") { continue; }
       if (!latestQuote || latestQuote.status === "DRAFT") { newLeads.push(baseItem); continue; }
       quotedLeads.push(baseItem);
     }
-    const byNewest = (l: LeadCardItem, r: LeadCardItem) => new Date(r.createdAt).getTime() - new Date(l.createdAt).getTime();
+
+    const followUpPriority: Record<LeadFollowUpStatus, number> = {
+      NEEDS_FOLLOW_UP: 0,
+      FOLLOWED_UP: 1,
+      WON: 2,
+      LOST: 3,
+    };
+
+    const byFollowUpOldestFirst = (left: LeadCardItem, right: LeadCardItem) => {
+      const priorityDelta = followUpPriority[left.followUpStatus] - followUpPriority[right.followUpStatus];
+      if (priorityDelta !== 0) return priorityDelta;
+      return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+    };
+
+    const byOldestFirst = (left: LeadCardItem, right: LeadCardItem) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+
     return {
       recentLeads,
-      newLeads: newLeads.sort(byNewest).slice(0, 8),
-      quotedLeads: quotedLeads.sort(byNewest).slice(0, 8),
-      closedLeads: closedLeads.sort(byNewest).slice(0, 8),
+      newLeads: newLeads.sort(byFollowUpOldestFirst).slice(0, 12),
+      quotedLeads: quotedLeads.sort(byFollowUpOldestFirst).slice(0, 12),
+      closedLeads: closedLeads.sort(byOldestFirst).slice(0, 12),
       totals: { newLeads: newLeads.length, quotedLeads: quotedLeads.length, closedLeads: closedLeads.length },
     };
   }, [customers, quotes]);
