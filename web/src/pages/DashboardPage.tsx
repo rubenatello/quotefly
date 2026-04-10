@@ -1,23 +1,21 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import {
-  ArrowRightIcon,
-  CallIcon,
-  CheckIcon,
-  ClockIcon,
-  CloseIcon,
-  CopyIcon,
-  CustomerIcon,
-  DeleteIcon,
-  EditIcon,
-  EmailIcon,
-  InvoiceIcon,
-  LockIcon,
-  MessageIcon,
-  QuoteIcon,
-  SendIcon,
-} from "../components/Icons";
+import type { FormEvent } from "react";
+import { CheckIcon, ClockIcon, CustomerIcon, DeleteIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import { AppLoadingScreen } from "../components/AppLoadingScreen";
+import {
+  FeatureLockedCard,
+  HistoryEventPill,
+  MobileSectionSwitcher,
+  OutboundChannelPill,
+  PipelineColumn,
+  PipelineFlow,
+  QuoteMathSummaryPanel,
+  QuoteStatusPill,
+  StatCard,
+  type DashboardMobileSection,
+  type LeadCardItem,
+  type QuoteMathSummary,
+} from "../components/dashboard/DashboardUi";
 import {
   api,
   ApiError,
@@ -63,18 +61,6 @@ type QuoteForm = {
 type QuoteEditForm = { serviceType: ServiceType; status: QuoteStatus; title: string; scopeText: string; taxAmount: string };
 type LineItemForm = { description: string; quantity: string; unitCost: string; unitPrice: string };
 type HistoryMode = "quote" | "customer" | "all";
-type LeadCardItem = {
-  customerId: string;
-  customerName: string;
-  phone: string;
-  email?: string | null;
-  quoteId?: string;
-  quoteTitle?: string;
-  totalAmount?: number;
-  status?: QuoteStatus;
-  followUpStatus: LeadFollowUpStatus;
-  createdAt: string;
-};
 type SendChannel = "email" | "sms" | "copy";
 type CreateCustomerPayload = { fullName: string; phone: string; email: string | null };
 type DuplicateCustomerModalState = {
@@ -91,23 +77,9 @@ type SendComposerState = {
   subject: string;
   body: string;
 };
-type QuoteMathSummary = {
-  internalSubtotal: number;
-  customerSubtotal: number;
-  taxAmount: number;
-  totalAmount: number;
-  estimatedProfit: number;
-  estimatedMarginPercent: number;
-};
 
 const SERVICE_TYPES: ServiceType[] = ["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"];
 const QUOTE_STATUSES: QuoteStatus[] = ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"];
-const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
-  "NEEDS_FOLLOW_UP",
-  "FOLLOWED_UP",
-  "WON",
-  "LOST",
-];
 
 const EMPTY_CUSTOMER: CustomerForm = { fullName: "", phone: "", email: "" };
 const EMPTY_QUOTE: QuoteForm = {
@@ -168,54 +140,6 @@ function fileLabel(value: string): string {
   );
 }
 
-function statusClass(status: QuoteStatus): string {
-  if (status === "ACCEPTED") return "text-emerald-700 border-emerald-300 bg-emerald-50";
-  if (status === "REJECTED") return "text-rose-700 border-rose-300 bg-rose-50";
-  if (status === "SENT_TO_CUSTOMER") return "text-sky-700 border-sky-300 bg-sky-50";
-  if (status === "READY_FOR_REVIEW") return "text-amber-700 border-amber-300 bg-amber-50";
-  return "text-slate-700 border-slate-300 bg-slate-100";
-}
-
-function quoteStatusMeta(status: QuoteStatus): { label: string; className: string; icon: ReactNode } {
-  if (status === "ACCEPTED") {
-    return {
-      label: "Won",
-      className: statusClass(status),
-      icon: <CheckIcon size={12} />,
-    };
-  }
-
-  if (status === "REJECTED") {
-    return {
-      label: "Lost",
-      className: statusClass(status),
-      icon: <CloseIcon size={12} />,
-    };
-  }
-
-  if (status === "SENT_TO_CUSTOMER") {
-    return {
-      label: "Quoted",
-      className: statusClass(status),
-      icon: <SendIcon size={12} />,
-    };
-  }
-
-  if (status === "READY_FOR_REVIEW") {
-    return {
-      label: "Review",
-      className: statusClass(status),
-      icon: <ClockIcon size={12} />,
-    };
-  }
-
-  return {
-    label: "Draft",
-    className: statusClass(status),
-    icon: <EditIcon size={12} />,
-  };
-}
-
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString();
 }
@@ -225,102 +149,6 @@ function followUpLabel(status: LeadFollowUpStatus): string {
   if (status === "FOLLOWED_UP") return "Followed Up";
   if (status === "WON") return "Won";
   return "Lost";
-}
-
-function followUpMeta(status: LeadFollowUpStatus): { label: string; className: string; icon: ReactNode } {
-  if (status === "FOLLOWED_UP") {
-    return {
-      label: "Followed Up",
-      className: "text-sky-700 border-sky-300 bg-sky-50",
-      icon: <MessageIcon size={12} />,
-    };
-  }
-
-  if (status === "WON") {
-    return {
-      label: "Won",
-      className: "text-emerald-700 border-emerald-300 bg-emerald-50",
-      icon: <CheckIcon size={12} />,
-    };
-  }
-
-  if (status === "LOST") {
-    return {
-      label: "Lost",
-      className: "text-rose-700 border-rose-300 bg-rose-50",
-      icon: <CloseIcon size={12} />,
-    };
-  }
-
-  return {
-    label: "Needs Follow-Up",
-    className: "text-amber-700 border-amber-300 bg-amber-50",
-    icon: <ClockIcon size={12} />,
-  };
-}
-
-function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; className: string; icon: ReactNode } {
-  if (eventType === "CREATED") {
-    return {
-      label: "Created",
-      className: "text-blue-700 border-blue-300 bg-blue-50",
-      icon: <QuoteIcon size={12} />,
-    };
-  }
-
-  if (eventType === "STATUS_CHANGED") {
-    return {
-      label: "Status",
-      className: "text-violet-700 border-violet-300 bg-violet-50",
-      icon: <CheckIcon size={12} />,
-    };
-  }
-
-  if (eventType === "LINE_ITEM_CHANGED") {
-    return {
-      label: "Line Items",
-      className: "text-orange-700 border-orange-300 bg-orange-50",
-      icon: <InvoiceIcon size={12} />,
-    };
-  }
-
-  if (eventType === "DECISION") {
-    return {
-      label: "Decision",
-      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
-      icon: <SendIcon size={12} />,
-    };
-  }
-
-  return {
-    label: "Updated",
-    className: "text-slate-700 border-slate-300 bg-slate-100",
-    icon: <EditIcon size={12} />,
-  };
-}
-
-function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; className: string; icon: ReactNode } {
-  if (channel === "EMAIL_APP") {
-    return {
-      label: "Email",
-      className: "text-cyan-700 border-cyan-300 bg-cyan-50",
-      icon: <EmailIcon size={12} />,
-    };
-  }
-
-  if (channel === "SMS_APP") {
-    return {
-      label: "Text",
-      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
-      icon: <MessageIcon size={12} />,
-    };
-  }
-
-  return {
-    label: "Copy",
-    className: "text-violet-700 border-violet-300 bg-violet-50",
-    icon: <CopyIcon size={12} />,
-  };
 }
 
 function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadFollowUpStatus {
@@ -383,6 +211,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
   const [historyMode, setHistoryMode] = useState<HistoryMode>("quote");
   const [historyCustomerId, setHistoryCustomerId] = useState<string>("ALL");
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [mobileSection, setMobileSection] = useState<DashboardMobileSection>("pipeline");
 
   const [customerForm, setCustomerForm] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [quoteForm, setQuoteForm] = useState<QuoteForm>(EMPTY_QUOTE);
@@ -566,6 +395,13 @@ export function DashboardPage({ session }: DashboardPageProps) {
     }
   }
 
+  function focusQuoteDesk(quoteId: string | null) {
+    setSelectedQuoteId(quoteId);
+    if (quoteId) {
+      setMobileSection("quote");
+    }
+  }
+
   async function createCustomer(event: FormEvent) {
     event.preventDefault();
     const payload = normalizeCustomerPayload(customerForm);
@@ -682,7 +518,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
       setChatPrompt("");
       setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
       await Promise.all([loadCustomers(), loadQuotes()]);
-      setSelectedQuoteId(quote.id);
+      focusQuoteDesk(quote.id);
       await loadQuoteDetail(quote.id);
       if (canViewQuoteHistory) {
         const { revisions } = await api.quotes.getHistory(quote.id, { limit: 30 });
@@ -737,7 +573,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
       });
       setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId }));
       await loadQuotes();
-      setSelectedQuoteId(quote.id);
+      focusQuoteDesk(quote.id);
       setNotice("Quote created.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed creating quote.");
@@ -1092,7 +928,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
   return (
     <div className="crm-light">
-      <div className="min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(42,127,216,0.10),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(244,96,54,0.08),_transparent_36%),#f8fafc] p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">
@@ -1109,7 +945,15 @@ export function DashboardPage({ session }: DashboardPageProps) {
           <StatCard icon={<InvoiceIcon size={24} />} label="Accepted Revenue" value={money(stats.acceptedRevenue)} />
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <MobileSectionSwitcher
+          activeSection={mobileSection}
+          onChange={setMobileSection}
+          selectedQuoteId={selectedQuoteId}
+          quoteCount={quotes.length}
+          totals={pipeline.totals}
+        />
+
+        <div className={`${mobileSection === "pipeline" ? "block" : "hidden"} rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 lg:block`}>
           <div className="mb-4">
             <h2 className="text-xl font-semibold text-slate-900">Lead Pipeline</h2>
             <p className="text-sm text-slate-600">
@@ -1121,18 +965,19 @@ export function DashboardPage({ session }: DashboardPageProps) {
             quotedLeads={pipeline.totals.quotedLeads}
             closedLeads={pipeline.totals.closedLeads}
           />
-          <div className="grid gap-4 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <PipelineColumn
               icon={<CustomerIcon size={14} />}
               title={`New Leads (${pipeline.totals.newLeads})`}
               subtitle="No quote yet or still draft"
               leads={pipeline.newLeads}
               emptyLabel="No leads waiting for first quote."
-              onSelectLead={(quoteId) => setSelectedQuoteId(quoteId ?? null)}
+              onSelectLead={(quoteId) => focusQuoteDesk(quoteId ?? null)}
               onUpdateFollowUp={(customerId, followUpStatus) =>
                 void updateLeadFollowUpStatus(customerId, followUpStatus)
               }
               saving={saving}
+              money={money}
             />
             <PipelineColumn
               icon={<SendIcon size={14} />}
@@ -1140,11 +985,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
               subtitle="Quote prepared or sent"
               leads={pipeline.quotedLeads}
               emptyLabel="No active quoted leads."
-              onSelectLead={(quoteId) => setSelectedQuoteId(quoteId ?? null)}
+              onSelectLead={(quoteId) => focusQuoteDesk(quoteId ?? null)}
               onUpdateFollowUp={(customerId, followUpStatus) =>
                 void updateLeadFollowUpStatus(customerId, followUpStatus)
               }
               saving={saving}
+              money={money}
             />
             <PipelineColumn
               icon={<CheckIcon size={14} />}
@@ -1152,11 +998,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
               subtitle="Accepted, work in progress"
               leads={pipeline.closedLeads}
               emptyLabel="No closed deals yet."
-              onSelectLead={(quoteId) => setSelectedQuoteId(quoteId ?? null)}
+              onSelectLead={(quoteId) => focusQuoteDesk(quoteId ?? null)}
               onUpdateFollowUp={(customerId, followUpStatus) =>
                 void updateLeadFollowUpStatus(customerId, followUpStatus)
               }
               saving={saving}
+              money={money}
             />
             <PipelineColumn
               icon={<ClockIcon size={14} />}
@@ -1164,28 +1011,36 @@ export function DashboardPage({ session }: DashboardPageProps) {
               subtitle="Most recent customer records"
               leads={pipeline.recentLeads}
               emptyLabel="No customers added yet."
-              onSelectLead={(quoteId) => setSelectedQuoteId(quoteId ?? null)}
+              onSelectLead={(quoteId) => focusQuoteDesk(quoteId ?? null)}
               onUpdateFollowUp={(customerId, followUpStatus) =>
                 void updateLeadFollowUpStatus(customerId, followUpStatus)
               }
               saving={saving}
+              money={money}
             />
           </div>
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <p
+            role="alert"
+            className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700"
+          >
             {error}
           </p>
         )}
         {notice && (
-          <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+          <p
+            role="status"
+            aria-live="polite"
+            className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700"
+          >
             {notice}
           </p>
         )}
 
         <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
-          <div className="space-y-6">
+          <div className={`space-y-6 ${mobileSection === "builder" ? "block" : "hidden"} lg:block`}>
             {canUseChatToQuote ? (
               <form
                 onSubmit={createQuoteFromChatPrompt}
@@ -1331,6 +1186,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               <QuoteMathSummaryPanel
                 summary={createQuoteMath}
                 compact
+                money={money}
                 warning={
                   createQuoteMath.customerSubtotal > 0 && createQuoteMath.estimatedProfit < 0
                     ? "Customer subtotal is lower than cost. This quote would lose money."
@@ -1354,7 +1210,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               <button onClick={() => void loadQuotes()} className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50">Apply Filters</button>
               <div className="max-h-[340px] space-y-2 overflow-auto">
                 {quotes.map((quote) => (
-                  <button key={quote.id} onClick={() => setSelectedQuoteId(quote.id)} className={`w-full rounded-lg border p-3 text-left ${selectedQuoteId === quote.id ? "border-quotefly-blue bg-quotefly-blue/10" : "border-slate-200 bg-slate-50 hover:bg-slate-100"}`}>
+                  <button key={quote.id} onClick={() => focusQuoteDesk(quote.id)} className={`w-full rounded-lg border p-3 text-left ${selectedQuoteId === quote.id ? "border-quotefly-blue bg-quotefly-blue/10" : "border-slate-200 bg-slate-50 hover:bg-slate-100"}`}>
                     <p className="text-sm font-semibold text-slate-900">{quote.title}</p>
                     <div className="mt-1 flex items-center justify-between">
                       <QuoteStatusPill status={quote.status} compact />
@@ -1366,7 +1222,66 @@ export function DashboardPage({ session }: DashboardPageProps) {
             </div>
           </div>
 
-          <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className={`${mobileSection === "quote" ? "block" : "hidden"} space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 lg:block`}>
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 lg:hidden">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-slate-900">Quote Desk</h2>
+                <button
+                  type="button"
+                  onClick={() => setMobileSection("builder")}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                >
+                  Open Builder
+                </button>
+              </div>
+              <div className="grid grid-cols-[1fr_130px] gap-2">
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search quotes"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                />
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as QuoteStatus | "ALL")}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="ALL">All statuses</option>
+                  {QUOTE_STATUSES.map((status) => (
+                    <option key={`mobile-quote-filter-${status}`} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadQuotes()}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+              >
+                Refresh Quote List
+              </button>
+              <div className="max-h-56 space-y-2 overflow-auto">
+                {quotes.map((quote) => (
+                  <button
+                    key={`mobile-quote-${quote.id}`}
+                    type="button"
+                    onClick={() => focusQuoteDesk(quote.id)}
+                    className={`w-full rounded-lg border p-3 text-left ${
+                      selectedQuoteId === quote.id
+                        ? "border-quotefly-blue bg-quotefly-blue/10"
+                        : "border-slate-200 bg-white hover:bg-slate-100"
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-slate-900">{quote.title}</p>
+                    <div className="mt-1 flex items-center justify-between">
+                      <QuoteStatusPill status={quote.status} compact />
+                      <span className="text-xs text-slate-600">{money(quote.totalAmount)}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
             {!selectedQuote ? (
               <p className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
                 Select a quote to view details.
@@ -1394,6 +1309,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
                   {selectedQuoteMath && (
                     <QuoteMathSummaryPanel
                       summary={selectedQuoteMath}
+                      money={money}
                       warning={
                         selectedQuoteMath.customerSubtotal > 0 && selectedQuoteMath.estimatedProfit < 0
                           ? "Current pricing is below cost."
@@ -1448,9 +1364,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
                   </form>
                 </div>
 
-                {selectedQuoteMath && (
-                  <QuoteMathSummaryPanel summary={selectedQuoteMath} />
-                )}
+                {selectedQuoteMath && <QuoteMathSummaryPanel summary={selectedQuoteMath} money={money} />}
 
                 <div className="sticky bottom-3 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg sm:hidden">
                   <div className="grid grid-cols-2 gap-2">
@@ -1697,322 +1611,6 @@ export function DashboardPage({ session }: DashboardPageProps) {
         }
         onConfirm={() => void confirmSendComposer()}
       />
-    </div>
-  );
-}
-
-function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-colors hover:border-slate-300">
-      <div className="mb-2 text-quotefly-blue">{icon}</div>
-      <p className="text-xs uppercase text-slate-500">{label}</p>
-      <p className="text-2xl font-bold text-slate-900">{value}</p>
-    </div>
-  );
-}
-
-function PipelineFlow({
-  newLeads,
-  quotedLeads,
-  closedLeads,
-}: {
-  newLeads: number;
-  quotedLeads: number;
-  closedLeads: number;
-}) {
-  return (
-    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-      <div className="flex flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
-        <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
-        <FlowArrow />
-        <PipelineStage icon={<SendIcon size={14} />} label="Quoted Leads" count={quotedLeads} tone="orange" />
-        <FlowArrow />
-        <PipelineStage icon={<CheckIcon size={14} />} label="Closed Leads" count={closedLeads} tone="emerald" />
-      </div>
-    </div>
-  );
-}
-
-function PipelineStage({
-  icon,
-  label,
-  count,
-  tone,
-}: {
-  icon: ReactNode;
-  label: string;
-  count: number;
-  tone: "blue" | "orange" | "emerald";
-}) {
-  const toneClass =
-    tone === "blue"
-      ? "text-quotefly-blue border-quotefly-blue/30 bg-quotefly-blue/10"
-      : tone === "orange"
-        ? "text-quotefly-orange border-quotefly-orange/30 bg-quotefly-orange/10"
-        : "text-emerald-700 border-emerald-300 bg-emerald-50";
-
-  return (
-    <div className={`flex min-w-[170px] items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
-      <p className="inline-flex items-center gap-2">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/30 bg-white/70">
-          {icon}
-        </span>
-        {label}
-      </p>
-      <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold">{count}</span>
-    </div>
-  );
-}
-
-function FlowArrow() {
-  return (
-    <span className="hidden text-slate-400 sm:inline-flex">
-      <ArrowRightIcon size={14} />
-    </span>
-  );
-}
-
-function PipelineColumn({
-  icon,
-  title,
-  subtitle,
-  leads,
-  emptyLabel,
-  onSelectLead,
-  onUpdateFollowUp,
-  saving,
-}: {
-  icon: ReactNode;
-  title: string;
-  subtitle: string;
-  leads: LeadCardItem[];
-  emptyLabel: string;
-  onSelectLead: (quoteId?: string) => void;
-  onUpdateFollowUp: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
-  saving: boolean;
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-quotefly-blue">
-          {icon}
-        </span>
-        {title}
-      </h3>
-      <p className="mb-3 text-xs text-slate-500">{subtitle}</p>
-      {leads.length === 0 ? (
-        <p className="rounded-md border border-dashed border-slate-300 bg-white px-2 py-3 text-xs text-slate-500">
-          {emptyLabel}
-        </p>
-      ) : (
-        <div className="max-h-64 space-y-2 overflow-auto pr-1">
-          {leads.map((lead) => (
-            <button
-              key={`${lead.customerId}-${lead.quoteId ?? "lead"}`}
-              type="button"
-              onClick={() => onSelectLead(lead.quoteId)}
-              disabled={!lead.quoteId}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
-            >
-              <p className="text-sm font-medium text-slate-900">{lead.customerName}</p>
-              <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-600">
-                <CallIcon size={11} />
-                {lead.phone}
-              </p>
-              {lead.email && (
-                <p className="inline-flex items-center gap-1 text-xs text-slate-500">
-                  <EmailIcon size={11} />
-                  {lead.email}
-                </p>
-              )}
-              {lead.quoteTitle && (
-                <p className="mt-1 text-xs text-slate-700">
-                  {lead.quoteTitle} · {lead.totalAmount !== undefined ? money(lead.totalAmount) : ""}
-                </p>
-              )}
-              {lead.status && (
-                <div className="mt-2">
-                  <QuoteStatusPill status={lead.status} compact />
-                </div>
-              )}
-              <div className="mt-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <FollowUpPill status={lead.followUpStatus} compact />
-                  {lead.quoteId ? (
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">Status</span>
-                  ) : null}
-                </div>
-                {lead.quoteId ? (
-                  <select
-                    value={lead.followUpStatus}
-                    disabled={saving}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) =>
-                      onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
-                    }
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
-                  >
-                    {FOLLOW_UP_STATUSES.map((status) => (
-                      <option key={`${lead.customerId}-${status}`} value={status}>
-                        {followUpLabel(status)}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </div>
-              {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">No quote attached yet</p>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function QuoteStatusPill({
-  status,
-  compact = false,
-}: {
-  status: QuoteStatus;
-  compact?: boolean;
-}) {
-  const meta = quoteStatusMeta(status);
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border font-semibold ${meta.className} ${
-        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs"
-      }`}
-    >
-      {meta.icon}
-      {meta.label}
-    </span>
-  );
-}
-
-function FollowUpPill({
-  status,
-  compact = false,
-}: {
-  status: LeadFollowUpStatus;
-  compact?: boolean;
-}) {
-  const meta = followUpMeta(status);
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border font-semibold ${meta.className} ${
-        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs"
-      }`}
-    >
-      {meta.icon}
-      {meta.label}
-    </span>
-  );
-}
-
-function HistoryEventPill({ eventType }: { eventType: QuoteRevision["eventType"] }) {
-  const meta = eventMeta(eventType);
-
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-      {meta.icon}
-      {meta.label}
-    </span>
-  );
-}
-
-function OutboundChannelPill({ channel }: { channel: QuoteOutboundChannel }) {
-  const meta = outboundChannelMeta(channel);
-
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-      {meta.icon}
-      {meta.label}
-    </span>
-  );
-}
-
-function FeatureLockedCard({
-  title,
-  description,
-  currentPlanLabel,
-  requiredPlanLabel,
-  showUpgradeHint,
-}: {
-  title: string;
-  description: string;
-  currentPlanLabel: string;
-  requiredPlanLabel: string;
-  showUpgradeHint: boolean;
-}) {
-  return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-amber-900">{title}</h3>
-          <p className="mt-1 text-xs text-amber-800">{description}</p>
-        </div>
-        <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-          <LockIcon size={10} />
-          {requiredPlanLabel}
-        </span>
-      </div>
-      <p className="mt-2 text-[11px] text-amber-700">Current plan: {currentPlanLabel}</p>
-      {showUpgradeHint && (
-        <p className="mt-1 text-[11px] text-amber-700">
-          Upgrade plan to unlock this module for your whole workspace.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function QuoteMathSummaryPanel({
-  summary,
-  compact = false,
-  warning,
-}: {
-  summary: QuoteMathSummary;
-  compact?: boolean;
-  warning?: string;
-}) {
-  const profitTone = summary.estimatedProfit >= 0 ? "text-emerald-700" : "text-red-700";
-  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-emerald-700" : "text-amber-700";
-
-  return (
-    <div className={`rounded-lg border border-slate-200 bg-white ${compact ? "p-3" : "p-4"}`}>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Live Quote Math</p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Metric label="Internal Cost" value={money(summary.internalSubtotal)} />
-        <Metric label="Customer Subtotal" value={money(summary.customerSubtotal)} />
-        <Metric label="Tax" value={money(summary.taxAmount)} />
-        <Metric label="Total" value={money(summary.totalAmount)} />
-        <Metric label="Est. Profit" value={money(summary.estimatedProfit)} valueClassName={profitTone} />
-        <Metric label="Margin" value={`${summary.estimatedMarginPercent.toFixed(1)}%`} valueClassName={marginTone} />
-      </div>
-      {warning && (
-        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-          {warning}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  valueClassName,
-}: {
-  label: string;
-  value: string;
-  valueClassName?: string;
-}) {
-  return (
-    <div>
-      <p className="text-xs uppercase text-slate-500">{label}</p>
-      <p className={`text-base font-semibold ${valueClassName ?? "text-slate-900"}`}>{value}</p>
     </div>
   );
 }
