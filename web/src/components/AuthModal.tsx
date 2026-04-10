@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CloseIcon } from "./Icons";
-import { api, ApiError, type AuthPayload } from "../lib/api";
+import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -14,6 +14,8 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [businessName, setBusinessName] = useState("");
+  const [primaryTrade, setPrimaryTrade] = useState<ServiceType>("ROOFING");
+  const [logoDataUrl, setLogoDataUrl] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +27,15 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
     try {
       let payload: AuthPayload;
       if (mode === "signup") {
-        payload = await api.auth.signup({ email, password, fullName, companyName: businessName });
+        payload = await api.auth.signup({
+          email,
+          password,
+          fullName,
+          companyName: businessName,
+          primaryTrade,
+          logoUrl: logoDataUrl || undefined,
+          generateLogoIfMissing: true,
+        });
       } else {
         payload = await api.auth.signin({ email, password });
       }
@@ -38,6 +48,8 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
       setPassword("");
       setFullName("");
       setBusinessName("");
+      setPrimaryTrade("ROOFING");
+      setLogoDataUrl("");
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
@@ -52,6 +64,21 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   };
 
   if (!isOpen) return null;
+
+  const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setLogoDataUrl("");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      setLogoDataUrl(value);
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -109,6 +136,50 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-quotefly-blue transition-colors"
                 required
               />
+            </div>
+          )}
+
+          {mode === "signup" && (
+            <div>
+              <label htmlFor="primaryTrade" className="block text-sm font-medium text-zinc-300 mb-2">
+                What kind of work do you do?
+              </label>
+              <select
+                id="primaryTrade"
+                value={primaryTrade}
+                onChange={(event) => setPrimaryTrade(event.target.value as ServiceType)}
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-quotefly-blue transition-colors"
+              >
+                <option value="HVAC">HVAC</option>
+                <option value="ROOFING">Roofing</option>
+                <option value="FLOORING">Flooring</option>
+                <option value="GARDENING">Gardening</option>
+                <option value="PLUMBING">Plumbing</option>
+                <option value="CONSTRUCTION">Construction</option>
+              </select>
+            </div>
+          )}
+
+          {mode === "signup" && (
+            <div>
+              <label htmlFor="logoUpload" className="block text-sm font-medium text-zinc-300 mb-2">
+                Logo (optional)
+              </label>
+              <input
+                id="logoUpload"
+                type="file"
+                accept="image/*"
+                onChange={handleLogoUpload}
+                className="w-full cursor-pointer rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 file:mr-3 file:rounded file:border-0 file:bg-zinc-700 file:px-2 file:py-1 file:text-xs file:text-white"
+              />
+              <p className="mt-1 text-xs text-zinc-500">
+                If skipped, QuoteFly generates a minimal transparent logo you can replace later.
+              </p>
+              {logoDataUrl && (
+                <div className="mt-2 rounded-lg border border-zinc-700 bg-zinc-800 p-2">
+                  <img src={logoDataUrl} alt="Uploaded logo preview" className="max-h-20 max-w-full object-contain" />
+                </div>
+              )}
             </div>
           )}
 

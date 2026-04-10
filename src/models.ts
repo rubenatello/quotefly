@@ -11,7 +11,8 @@ export type ServiceCategory =
   | "PLUMBING"
   | "FLOORING"
   | "ROOFING"
-  | "GARDENING";
+  | "GARDENING"
+  | "CONSTRUCTION";
 
 export type QuoteStatus =
   | "DRAFT"
@@ -45,6 +46,18 @@ export type QuoteOutboundChannel =
   | "SMS_APP"
   | "COPY";
 
+export type PresetCategory =
+  | "LABOR"
+  | "MATERIAL"
+  | "FEE"
+  | "SERVICE";
+
+export type PresetUnitType =
+  | "FLAT"
+  | "SQ_FT"
+  | "HOUR"
+  | "EACH";
+
 export interface BrandingComponentColors {
   headerBgColor?: string;
   sectionTitleColor?: string;
@@ -70,6 +83,8 @@ export interface TenantRow {
   name: string;
   slug: string;
   timezone: string;
+  primaryTrade: ServiceCategory | null;
+  onboardingCompletedAtUtc: UtcDate | null;
   subscriptionStatus: string;
   subscriptionPlanCode: string | null;
   trialStartsAtUtc: UtcDate | null;
@@ -161,6 +176,7 @@ export interface QuoteRow {
   customerPriceSubtotal: DecimalValue;
   taxAmount: DecimalValue;
   totalAmount: DecimalValue;
+  aiGeneratedAtUtc: UtcDate | null;
   sentAt: UtcDate | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
@@ -232,6 +248,23 @@ export interface QuoteOutboundEventRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface WorkPresetRow {
+  id: string;
+  tenantId: string;
+  serviceType: ServiceCategory;
+  category: PresetCategory;
+  unitType: PresetUnitType;
+  name: string;
+  description: string | null;
+  defaultQuantity: DecimalValue;
+  unitCost: DecimalValue;
+  unitPrice: DecimalValue;
+  isDefault: boolean;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
 export interface BillingWebhookEventRow {
   id: string;
   stripeEventId: string;
@@ -259,6 +292,7 @@ export const TABLE_RELATION_MAP = {
       "QuoteRevision",
       "QuoteOutboundEvent",
       "BillingWebhookEvent",
+      "WorkPreset",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -301,6 +335,9 @@ export const TABLE_RELATION_MAP = {
     belongsTo: ["Tenant", "Quote", "Customer"],
   },
   BillingWebhookEvent: {
+    belongsTo: ["Tenant"],
+  },
+  WorkPreset: {
     belongsTo: ["Tenant"],
   },
 } as const;

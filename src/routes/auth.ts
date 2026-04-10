@@ -3,6 +3,8 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { getJwtClaims } from "../lib/auth";
+import { buildTenantEntitlements } from "../lib/subscription";
+import { applyOnboardingSetup } from "../services/onboarding";
 
 const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
@@ -14,6 +16,9 @@ const SignUpSchema = z.object({
   password: z.string().min(8),
   fullName: z.string().trim().min(2),
   companyName: z.string().trim().min(2),
+  primaryTrade: z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]),
+  logoUrl: z.string().trim().max(1_500_000).optional(),
+  generateLogoIfMissing: z.boolean().default(true),
 });
 
 const SignInSchema = z.object({
@@ -96,6 +101,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             data: {
               name: payload.companyName,
               slug,
+              primaryTrade: payload.primaryTrade,
               subscriptionStatus: "trialing",
               trialStartsAtUtc,
               trialEndsAtUtc,
@@ -103,6 +109,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
                 create: { userId: newUser.id, role: "owner" },
               },
             },
+          });
+
+          await applyOnboardingSetup(tx, {
+            tenantId: newTenant.id,
+            companyName: payload.companyName,
+            primaryTrade: payload.primaryTrade,
+            logoUrl: payload.logoUrl,
+            generateLogoIfMissing: payload.generateLogoIfMissing,
           });
 
           return [newUser, newTenant] as const;
@@ -215,6 +229,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             slug: true,
             subscriptionStatus: true,
             subscriptionPlanCode: true,
+            primaryTrade: true,
+            onboardingCompletedAtUtc: true,
+            trialStartsAtUtc: true,
             trialEndsAtUtc: true,
             subscriptionCurrentPeriodEndUtc: true,
           },
@@ -226,7 +243,25 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(401).send({ error: "Session is no longer valid." });
     }
 
-    return { user: membership.user, tenant: membership.tenant, role: membership.role };
+    const entitlements = buildTenantEntitlements({
+      subscriptionStatus: membership.tenant.subscriptionStatus,
+      subscriptionPlanCode: membership.tenant.subscriptionPlanCode,
+      trialStartsAtUtc: membership.tenant.trialStartsAtUtc,
+      trialEndsAtUtc: membership.tenant.trialEndsAtUtc,
+      subscriptionCurrentPeriodEndUtc: membership.tenant.subscriptionCurrentPeriodEndUtc,
+    });
+
+    return {
+      user: membership.user,
+      tenant: {
+        ...membership.tenant,
+        effectivePlanCode: entitlements.planCode,
+        effectivePlanName: entitlements.planName,
+        isTrial: entitlements.isTrial,
+        entitlements,
+      },
+      role: membership.role,
+    };
   });
 };
 

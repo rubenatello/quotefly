@@ -1,6 +1,17 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { CloseIcon, MenuIcon } from "./Icons";
+import type { PlanCode, TenantEntitlements } from "../lib/api";
+import {
+  ClockIcon,
+  CustomerIcon,
+  InvoiceIcon,
+  MessageIcon,
+  QuoteIcon,
+  SettingsIcon,
+} from "./Icons";
+import { CrmMobileHeader } from "./crm/CrmMobileHeader";
+import { CrmSidebar, type CrmModuleLink, type CrmNavLink } from "./crm/CrmSidebar";
+import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
 
 interface CrmShellProps {
   currentPage: string;
@@ -8,14 +19,56 @@ interface CrmShellProps {
   onLogout: () => void;
   children: ReactNode;
   fullName?: string;
+  planName?: string;
+  planCode?: PlanCode;
+  isTrial?: boolean;
+  entitlements?: TenantEntitlements;
 }
 
-const OPERATIONS_LINKS = [
-  { label: "Dashboard", path: "dashboard" },
-  { label: "Branding", path: "branding" },
+const OPERATIONS_LINKS: readonly CrmNavLink[] = [
+  { label: "Dashboard", path: "dashboard", icon: <QuoteIcon size={14} /> },
+  { label: "Admin", path: "admin", icon: <SettingsIcon size={14} /> },
+  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
+] as const;
+
+const MODULE_LINKS: readonly CrmModuleLink[] = [
+  {
+    label: "Quote History",
+    feature: "quoteVersionHistory",
+    requiredPlanLabel: "Professional+",
+    icon: <ClockIcon size={14} />,
+  },
+  {
+    label: "Comms Log",
+    feature: "communicationLog",
+    requiredPlanLabel: "Professional+",
+    icon: <MessageIcon size={14} />,
+  },
+  {
+    label: "Advanced Analytics",
+    feature: "advancedAnalytics",
+    requiredPlanLabel: "Professional+",
+    icon: <CustomerIcon size={14} />,
+  },
+  {
+    label: "API & Integrations",
+    feature: "apiAccess",
+    requiredPlanLabel: "Enterprise",
+    icon: <SettingsIcon size={14} />,
+  },
 ];
 
-export function CrmShell({ currentPage, onNavigate, onLogout, children, fullName }: CrmShellProps) {
+export function CrmShell({
+  currentPage,
+  onNavigate,
+  onLogout,
+  children,
+  fullName,
+  planName,
+  planCode,
+  isTrial,
+  entitlements,
+}: CrmShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleNavigate = (page: string) => {
@@ -25,71 +78,26 @@ export function CrmShell({ currentPage, onNavigate, onLogout, children, fullName
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
-        <button
-          type="button"
-          onClick={() => setMobileOpen((open) => !open)}
-          className="inline-flex items-center justify-center rounded-md border border-slate-300 p-2 text-slate-700"
-        >
-          {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
-        </button>
-        <img src="/logo.png" alt="QuoteFly" className="h-8 w-auto" />
-        <button
-          type="button"
-          onClick={onLogout}
-          className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-        >
-          Sign Out
-        </button>
-      </header>
+      <CrmMobileHeader
+        mobileOpen={mobileOpen}
+        onToggleMobile={() => setMobileOpen((open) => !open)}
+        onLogout={onLogout}
+      />
 
       <div className="mx-auto w-full max-w-[1600px] lg:grid lg:grid-cols-[250px_1fr]">
-        <aside
-          className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white px-4 py-5 shadow-xl transition-transform lg:static lg:w-auto lg:translate-x-0 lg:shadow-none ${
-            mobileOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => handleNavigate("dashboard")}
-            className="mb-6 inline-flex items-center"
-          >
-            <img src="/logo.png" alt="QuoteFly" className="h-9 w-auto" />
-          </button>
-
-          <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Operations
-          </p>
-          <nav className="space-y-1">
-            {OPERATIONS_LINKS.map((link) => (
-              <button
-                key={link.path}
-                type="button"
-                onClick={() => handleNavigate(link.path)}
-                className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
-                  currentPage === link.path
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                {link.label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="mt-8 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
-            <p className="font-medium text-slate-800">{fullName || "Signed In User"}</p>
-            <p className="text-slate-500">QuoteFly CRM workspace</p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onLogout}
-            className="mt-4 w-full rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100"
-          >
-            Sign Out
-          </button>
-        </aside>
+        <CrmSidebar
+          currentPage={currentPage}
+          mobileOpen={mobileOpen}
+          onNavigate={handleNavigate}
+          operationsLinks={OPERATIONS_LINKS}
+          moduleLinks={MODULE_LINKS}
+          onLogout={onLogout}
+          fullName={fullName}
+          planName={planName}
+          planCode={planCode}
+          isTrial={isTrial}
+          entitlements={entitlements}
+        />
 
         {mobileOpen && (
           <button
@@ -100,7 +108,10 @@ export function CrmShell({ currentPage, onNavigate, onLogout, children, fullName
           />
         )}
 
-        <div className="min-w-0">{children}</div>
+        <div className="min-w-0">
+          {children}
+          <CrmLayoutFooter />
+        </div>
       </div>
     </div>
   );

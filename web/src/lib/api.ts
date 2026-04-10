@@ -81,6 +81,29 @@ export type AuthPayload = {
   tenant: { id: string; name: string; slug: string };
 };
 
+export type PlanCode = "starter" | "professional" | "enterprise";
+
+export type TenantEntitlements = {
+  planCode: PlanCode;
+  planName: string;
+  isTrial: boolean;
+  limits: {
+    quotesPerMonth: number | null;
+    aiQuotesPerMonth: number | null;
+    teamMembers: number | null;
+    quoteHistoryDays: number | null;
+  };
+  features: {
+    quoteVersionHistory: boolean;
+    communicationLog: boolean;
+    advancedAnalytics: boolean;
+    multiTrade: boolean;
+    apiAccess: boolean;
+    auditLogs: boolean;
+    aiAutomation: boolean;
+  };
+};
+
 export type AuthSessionPayload = {
   user: {
     id: string;
@@ -92,10 +115,16 @@ export type AuthSessionPayload = {
     id: string;
     name: string;
     slug: string;
+    primaryTrade?: ServiceType | null;
+    onboardingCompletedAtUtc?: string | null;
     subscriptionStatus?: string;
     subscriptionPlanCode?: string | null;
     trialEndsAtUtc?: string | null;
     subscriptionCurrentPeriodEndUtc?: string | null;
+    effectivePlanCode?: PlanCode;
+    effectivePlanName?: string;
+    isTrial?: boolean;
+    entitlements?: TenantEntitlements;
   };
   role: string;
 };
@@ -117,7 +146,7 @@ export type QuoteRevisionEventType =
 export type QuoteOutboundChannel = "EMAIL_APP" | "SMS_APP" | "COPY";
 export type LeadFollowUpStatus = "NEEDS_FOLLOW_UP" | "FOLLOWED_UP" | "WON" | "LOST";
 
-export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
+export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
 export type BrandingComponentColors = {
   headerBgColor?: string;
@@ -245,6 +274,54 @@ export type QuoteOutboundEvent = {
   createdAt: string;
 };
 
+export type ChatToQuoteParsed = {
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  serviceType: ServiceType;
+  squareFeetEstimate?: number | null;
+  estimatedTotalAmount?: number | null;
+};
+
+export type ChatToQuoteResult = {
+  quote: Quote;
+  parsed: ChatToQuoteParsed;
+};
+
+export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
+export type WorkPresetUnitType = "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+
+export type WorkPreset = {
+  id: string;
+  tenantId: string;
+  serviceType: ServiceType;
+  category: WorkPresetCategory;
+  unitType: WorkPresetUnitType;
+  name: string;
+  description?: string | null;
+  defaultQuantity: number | string;
+  unitCost: number | string;
+  unitPrice: number | string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OrgUserRole = "owner" | "admin" | "member";
+
+export type OrganizationUser = {
+  id: string;
+  tenantId: string;
+  role: OrgUserRole;
+  createdAt: string;
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    createdAt: string;
+  };
+};
+
 type Pagination = { limit: number; offset: number; total: number };
 
 export const api = {
@@ -254,6 +331,9 @@ export const api = {
       password: string;
       fullName: string;
       companyName: string;
+      primaryTrade: ServiceType;
+      logoUrl?: string;
+      generateLogoIfMissing?: boolean;
     }) => request<AuthPayload>("/v1/auth/signup", { method: "POST", body: JSON.stringify(body) }),
 
     signin: (body: { email: string; password: string }) =>
@@ -297,6 +377,107 @@ export const api = {
         `/v1/tenants/${tenantId}/branding`,
         { method: "PUT", body: JSON.stringify(body) },
       ),
+  },
+
+  onboarding: {
+    getSetup: () =>
+      request<{
+        tenant: {
+          id: string;
+          name: string;
+          primaryTrade?: ServiceType | null;
+          onboardingCompletedAtUtc?: string | null;
+        };
+        branding: {
+          logoUrl?: string | null;
+          primaryColor: string;
+          templateId: BrandingTemplateId;
+        } | null;
+        defaultPricingProfiles: Array<{
+          id: string;
+          serviceType: ServiceType;
+          laborRate: number | string;
+          materialMarkup: number | string;
+          isDefault: boolean;
+        }>;
+        presets: WorkPreset[];
+        supportedTrades: ServiceType[];
+      }>("/v1/onboarding/setup"),
+
+    getRecommendedPresets: (serviceType: ServiceType) =>
+      request<{
+        serviceType: ServiceType;
+        presets: Array<{
+          name: string;
+          description?: string;
+          category: WorkPresetCategory;
+          unitType: WorkPresetUnitType;
+          defaultQuantity: number;
+          unitCost: number;
+          unitPrice: number;
+          isDefault?: boolean;
+        }>;
+      }>(`/v1/onboarding/presets/recommended${toQueryString({ serviceType })}`),
+
+    saveSetup: (body: {
+      primaryTrade: ServiceType;
+      logoUrl?: string;
+      primaryColor?: string;
+      generateLogoIfMissing?: boolean;
+      chargeBySquareFoot?: boolean;
+      sqFtUnitCost?: number;
+      sqFtUnitPrice?: number;
+      presets?: Array<{
+        name: string;
+        description?: string;
+        category: WorkPresetCategory;
+        unitType: WorkPresetUnitType;
+        defaultQuantity: number;
+        unitCost: number;
+        unitPrice: number;
+        isDefault?: boolean;
+      }>;
+    }) =>
+      request<{ message: string; presetsCreatedOrUpdated: number }>(`/v1/onboarding/setup`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
+  org: {
+    users: {
+      list: () =>
+        request<{
+          members: OrganizationUser[];
+          policy: {
+            canManageUsers: boolean;
+            teamMembersLimit: number | null;
+            teamMembersUsed: number;
+          };
+        }>(`/v1/org/users`),
+
+      create: (body: {
+        email: string;
+        fullName: string;
+        password: string;
+        role?: OrgUserRole;
+      }) =>
+        request<{ member: OrganizationUser }>(`/v1/org/users`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+
+      updateRole: (tenantUserId: string, body: { role: OrgUserRole }) =>
+        request<{ member: OrganizationUser }>(`/v1/org/users/${tenantUserId}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        }),
+
+      remove: (tenantUserId: string) =>
+        request<void>(`/v1/org/users/${tenantUserId}`, {
+          method: "DELETE",
+        }),
+    },
   },
 
   customers: {
@@ -401,6 +582,17 @@ export const api = {
       taxAmount: number;
     }) =>
       request<{ quote: Quote }>(`/v1/quotes`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    createFromChat: (body: {
+      prompt: string;
+      customerName?: string;
+      customerPhone?: string;
+      customerEmail?: string;
+    }) =>
+      request<ChatToQuoteResult>(`/v1/quotes/chat-draft`, {
         method: "POST",
         body: JSON.stringify(body),
       }),

@@ -1,4 +1,4 @@
-export type ServiceCategory = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
+export type ServiceCategory = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
 
 const serviceKeywords: Record<ServiceCategory, string[]> = {
   HVAC: ["hvac", "furnace", "ac", "air conditioner", "cooling", "heating"],
@@ -6,6 +6,7 @@ const serviceKeywords: Record<ServiceCategory, string[]> = {
   FLOORING: ["floor", "flooring", "tile", "linoleum", "vinyl", "hardwood"],
   ROOFING: ["roof", "roofing", "shingle", "gutter"],
   GARDENING: ["garden", "gardening", "lawn", "yard", "landscape"],
+  CONSTRUCTION: ["construction", "remodel", "renovation", "framing", "build-out"],
 };
 
 export interface GeneratedQuoteDraft {

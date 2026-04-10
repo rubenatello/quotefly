@@ -17,6 +17,8 @@ import { smsRoutes } from "./routes/sms";
 import { authRoutes } from "./routes/auth";
 import { brandingRoutes } from "./routes/branding";
 import { billingRoutes } from "./routes/billing";
+import { onboardingRoutes } from "./routes/onboarding";
+import { orgUserRoutes } from "./routes/org-users";
 import { swaggerPlugin } from "./plugins/swagger";
 
 declare module "fastify" {
@@ -99,6 +101,8 @@ export function buildServer() {
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
   app.register(billingRoutes, { prefix: "/v1" });
+  app.register(onboardingRoutes, { prefix: "/v1" });
+  app.register(orgUserRoutes, { prefix: "/v1" });
   if (env.ENABLE_TWILIO_SMS) {
     app.register(smsRoutes, { prefix: "/v1" });
   }

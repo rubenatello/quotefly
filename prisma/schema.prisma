@@ -17,6 +17,7 @@ enum ServiceCategory {
   FLOORING
   ROOFING
   GARDENING
+  CONSTRUCTION
 }
 
 enum QuoteStatus {
@@ -59,6 +60,20 @@ enum QuoteOutboundChannel {
   COPY
 }
 
+enum PresetCategory {
+  LABOR
+  MATERIAL
+  FEE
+  SERVICE
+}
+
+enum PresetUnitType {
+  FLAT
+  SQ_FT
+  HOUR
+  EACH
+}
+
 model TenantBranding {
   id           String    @id @default(cuid())
   tenantId     String    @unique
@@ -77,6 +92,8 @@ model Tenant {
   name                  String
   slug                  String                 @unique
   timezone              String                 @default("UTC")
+  primaryTrade          ServiceCategory?
+  onboardingCompletedAtUtc DateTime?           @db.Timestamptz(3)
   subscriptionStatus    String                 @default("inactive")
   subscriptionPlanCode  String?
   trialStartsAtUtc      DateTime?              @db.Timestamptz(3)
@@ -100,8 +117,10 @@ model Tenant {
   quoteRevisions        QuoteRevision[]
   quoteOutboundEvents   QuoteOutboundEvent[]
   billingWebhookEvents  BillingWebhookEvent[]
+  workPresets           WorkPreset[]
 
   @@index([createdAt])
+  @@index([primaryTrade])
   @@index([deletedAtUtc])
 }
 
@@ -213,6 +232,7 @@ model Quote {
   customerPriceSubtotal Decimal                @db.Decimal(10, 2)
   taxAmount             Decimal                @db.Decimal(10, 2)
   totalAmount           Decimal                @db.Decimal(10, 2)
+  aiGeneratedAtUtc      DateTime?              @db.Timestamptz(3)
   sentAt                DateTime?              @db.Timestamptz(3)
   createdAt             DateTime               @default(now()) @db.Timestamptz(3)
   updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
@@ -227,6 +247,7 @@ model Quote {
   @@unique([id, tenantId])
   @@index([tenantId, customerId])
   @@index([tenantId, status])
+  @@index([tenantId, aiGeneratedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }
 
@@ -337,4 +358,25 @@ model QuoteOutboundEvent {
   @@index([tenantId, quoteId, createdAt])
   @@index([tenantId, customerId, createdAt])
   @@index([tenantId, deletedAtUtc])
+}
+
+model WorkPreset {
+  id              String         @id @default(cuid())
+  tenantId        String
+  serviceType     ServiceCategory
+  category        PresetCategory
+  unitType        PresetUnitType @default(FLAT)
+  name            String
+  description     String?
+  defaultQuantity Decimal        @default(1) @db.Decimal(10, 2)
+  unitCost        Decimal        @default(0) @db.Decimal(10, 2)
+  unitPrice       Decimal        @default(0) @db.Decimal(10, 2)
+  isDefault       Boolean        @default(true)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+  deletedAtUtc    DateTime?      @db.Timestamptz(3)
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, serviceType, name])
+  @@index([tenantId, serviceType, deletedAtUtc])
 }

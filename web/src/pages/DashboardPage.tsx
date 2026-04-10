@@ -1,9 +1,27 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { CustomerIcon, DeleteIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
+import {
+  ArrowRightIcon,
+  CallIcon,
+  CheckIcon,
+  ClockIcon,
+  CloseIcon,
+  CopyIcon,
+  CustomerIcon,
+  DeleteIcon,
+  EditIcon,
+  EmailIcon,
+  InvoiceIcon,
+  LockIcon,
+  MessageIcon,
+  QuoteIcon,
+  SendIcon,
+} from "../components/Icons";
+import { AppLoadingScreen } from "../components/AppLoadingScreen";
 import {
   api,
   ApiError,
+  type ChatToQuoteParsed,
   type Customer,
   type CustomerDuplicateMatch,
   type LeadFollowUpStatus,
@@ -13,11 +31,22 @@ import {
   type QuoteRevision,
   type QuoteStatus,
   type ServiceType,
+  type TenantEntitlements,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 
 interface DashboardPageProps {
-  session?: { email: string; fullName: string; tenantId: string } | null;
+  session?: {
+    email: string;
+    fullName: string;
+    tenantId: string;
+    primaryTrade?: ServiceType | null;
+    onboardingCompletedAtUtc?: string | null;
+    effectivePlanName?: string;
+    effectivePlanCode?: "starter" | "professional" | "enterprise";
+    isTrial?: boolean;
+    entitlements?: TenantEntitlements;
+  } | null;
   onLogout?: () => void;
 }
 
@@ -62,8 +91,16 @@ type SendComposerState = {
   subject: string;
   body: string;
 };
+type QuoteMathSummary = {
+  internalSubtotal: number;
+  customerSubtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  estimatedProfit: number;
+  estimatedMarginPercent: number;
+};
 
-const SERVICE_TYPES: ServiceType[] = ["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING"];
+const SERVICE_TYPES: ServiceType[] = ["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"];
 const QUOTE_STATUSES: QuoteStatus[] = ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"];
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
   "NEEDS_FOLLOW_UP",
@@ -84,10 +121,41 @@ const EMPTY_QUOTE: QuoteForm = {
 };
 const EMPTY_EDIT: QuoteEditForm = { serviceType: "HVAC", status: "DRAFT", title: "", scopeText: "", taxAmount: "0" };
 const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", unitCost: "0", unitPrice: "0" };
+const CHAT_PROMPT_EXAMPLE =
+  "New quote for Alan Johnson 818-233-4333. He has a roof that is about 1,250 square feet and wants to replace his roof-shingles. We will remove old and aged roofing and check for any damage underneath and apply new layer as needed. Whole job should cost about 8,500 using standard asphalt shingles.";
 
 function money(value: string | number): string {
   const amount = typeof value === "number" ? value : Number(value);
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+}
+
+function safeAmount(value: string | number | null | undefined): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const amount = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function summarizeQuoteMath(input: {
+  internalCostSubtotal: string | number;
+  customerPriceSubtotal: string | number;
+  taxAmount: string | number;
+}): QuoteMathSummary {
+  const internalSubtotal = safeAmount(input.internalCostSubtotal);
+  const customerSubtotal = safeAmount(input.customerPriceSubtotal);
+  const taxAmount = safeAmount(input.taxAmount);
+  const totalAmount = customerSubtotal + taxAmount;
+  const estimatedProfit = customerSubtotal - internalSubtotal;
+  const estimatedMarginPercent =
+    customerSubtotal > 0 ? Number(((estimatedProfit / customerSubtotal) * 100).toFixed(1)) : 0;
+
+  return {
+    internalSubtotal,
+    customerSubtotal,
+    taxAmount,
+    totalAmount,
+    estimatedProfit,
+    estimatedMarginPercent,
+  };
 }
 
 function fileLabel(value: string): string {
@@ -101,19 +169,51 @@ function fileLabel(value: string): string {
 }
 
 function statusClass(status: QuoteStatus): string {
-  if (status === "ACCEPTED") return "text-emerald-300 border-emerald-500/40 bg-emerald-500/10";
-  if (status === "REJECTED") return "text-rose-300 border-rose-500/40 bg-rose-500/10";
-  if (status === "SENT_TO_CUSTOMER") return "text-sky-300 border-sky-500/40 bg-sky-500/10";
-  if (status === "READY_FOR_REVIEW") return "text-amber-300 border-amber-500/40 bg-amber-500/10";
-  return "text-zinc-300 border-zinc-600 bg-zinc-700/30";
+  if (status === "ACCEPTED") return "text-emerald-700 border-emerald-300 bg-emerald-50";
+  if (status === "REJECTED") return "text-rose-700 border-rose-300 bg-rose-50";
+  if (status === "SENT_TO_CUSTOMER") return "text-sky-700 border-sky-300 bg-sky-50";
+  if (status === "READY_FOR_REVIEW") return "text-amber-700 border-amber-300 bg-amber-50";
+  return "text-slate-700 border-slate-300 bg-slate-100";
 }
 
-function eventLabel(eventType: QuoteRevision["eventType"]): string {
-  if (eventType === "CREATED") return "Created";
-  if (eventType === "STATUS_CHANGED") return "Status";
-  if (eventType === "LINE_ITEM_CHANGED") return "Line Items";
-  if (eventType === "DECISION") return "Decision";
-  return "Updated";
+function quoteStatusMeta(status: QuoteStatus): { label: string; className: string; icon: ReactNode } {
+  if (status === "ACCEPTED") {
+    return {
+      label: "Won",
+      className: statusClass(status),
+      icon: <CheckIcon size={12} />,
+    };
+  }
+
+  if (status === "REJECTED") {
+    return {
+      label: "Lost",
+      className: statusClass(status),
+      icon: <CloseIcon size={12} />,
+    };
+  }
+
+  if (status === "SENT_TO_CUSTOMER") {
+    return {
+      label: "Quoted",
+      className: statusClass(status),
+      icon: <SendIcon size={12} />,
+    };
+  }
+
+  if (status === "READY_FOR_REVIEW") {
+    return {
+      label: "Review",
+      className: statusClass(status),
+      icon: <ClockIcon size={12} />,
+    };
+  }
+
+  return {
+    label: "Draft",
+    className: statusClass(status),
+    icon: <EditIcon size={12} />,
+  };
 }
 
 function formatDateTime(value: string): string {
@@ -125,6 +225,102 @@ function followUpLabel(status: LeadFollowUpStatus): string {
   if (status === "FOLLOWED_UP") return "Followed Up";
   if (status === "WON") return "Won";
   return "Lost";
+}
+
+function followUpMeta(status: LeadFollowUpStatus): { label: string; className: string; icon: ReactNode } {
+  if (status === "FOLLOWED_UP") {
+    return {
+      label: "Followed Up",
+      className: "text-sky-700 border-sky-300 bg-sky-50",
+      icon: <MessageIcon size={12} />,
+    };
+  }
+
+  if (status === "WON") {
+    return {
+      label: "Won",
+      className: "text-emerald-700 border-emerald-300 bg-emerald-50",
+      icon: <CheckIcon size={12} />,
+    };
+  }
+
+  if (status === "LOST") {
+    return {
+      label: "Lost",
+      className: "text-rose-700 border-rose-300 bg-rose-50",
+      icon: <CloseIcon size={12} />,
+    };
+  }
+
+  return {
+    label: "Needs Follow-Up",
+    className: "text-amber-700 border-amber-300 bg-amber-50",
+    icon: <ClockIcon size={12} />,
+  };
+}
+
+function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; className: string; icon: ReactNode } {
+  if (eventType === "CREATED") {
+    return {
+      label: "Created",
+      className: "text-blue-700 border-blue-300 bg-blue-50",
+      icon: <QuoteIcon size={12} />,
+    };
+  }
+
+  if (eventType === "STATUS_CHANGED") {
+    return {
+      label: "Status",
+      className: "text-violet-700 border-violet-300 bg-violet-50",
+      icon: <CheckIcon size={12} />,
+    };
+  }
+
+  if (eventType === "LINE_ITEM_CHANGED") {
+    return {
+      label: "Line Items",
+      className: "text-orange-700 border-orange-300 bg-orange-50",
+      icon: <InvoiceIcon size={12} />,
+    };
+  }
+
+  if (eventType === "DECISION") {
+    return {
+      label: "Decision",
+      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
+      icon: <SendIcon size={12} />,
+    };
+  }
+
+  return {
+    label: "Updated",
+    className: "text-slate-700 border-slate-300 bg-slate-100",
+    icon: <EditIcon size={12} />,
+  };
+}
+
+function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; className: string; icon: ReactNode } {
+  if (channel === "EMAIL_APP") {
+    return {
+      label: "Email",
+      className: "text-cyan-700 border-cyan-300 bg-cyan-50",
+      icon: <EmailIcon size={12} />,
+    };
+  }
+
+  if (channel === "SMS_APP") {
+    return {
+      label: "Text",
+      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
+      icon: <MessageIcon size={12} />,
+    };
+  }
+
+  return {
+    label: "Copy",
+    className: "text-violet-700 border-violet-300 bg-violet-50",
+    icon: <CopyIcon size={12} />,
+  };
 }
 
 function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadFollowUpStatus {
@@ -194,6 +390,19 @@ export function DashboardPage({ session }: DashboardPageProps) {
   const [lineItemForm, setLineItemForm] = useState<LineItemForm>(EMPTY_LINE_ITEM);
   const [duplicateModal, setDuplicateModal] = useState<DuplicateCustomerModalState | null>(null);
   const [sendComposer, setSendComposer] = useState<SendComposerState | null>(null);
+  const [chatPrompt, setChatPrompt] = useState("");
+  const [chatParsed, setChatParsed] = useState<ChatToQuoteParsed | null>(null);
+  const [setupTrade, setSetupTrade] = useState<ServiceType>(session?.primaryTrade ?? "ROOFING");
+  const [setupSqFtMode, setSetupSqFtMode] = useState(false);
+  const [setupSqFtUnitCost, setSetupSqFtUnitCost] = useState("");
+  const [setupSqFtUnitPrice, setSetupSqFtUnitPrice] = useState("");
+  const [recommendedPresetCount, setRecommendedPresetCount] = useState(0);
+  const canUseChatToQuote = session?.entitlements?.features.aiAutomation ?? true;
+  const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
+  const canViewQuoteHistory = session?.entitlements?.features.quoteVersionHistory ?? true;
+  const canViewCommunicationLog = session?.entitlements?.features.communicationLog ?? true;
+  const currentPlanLabel = session?.effectivePlanName ?? "Starter";
+  const canAutoUpgradeMessage = !(session?.isTrial ?? false);
 
   useEffect(() => {
     setSEOMetadata({
@@ -204,13 +413,35 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }, []);
 
   useEffect(() => {
-    if (!selectedQuoteId) return;
-    void loadQuoteDetail(selectedQuoteId);
-  }, [selectedQuoteId]);
+    let mounted = true;
+    api.onboarding
+      .getRecommendedPresets(setupTrade)
+      .then((result) => {
+        if (!mounted) return;
+        setRecommendedPresetCount(result.presets.length);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setRecommendedPresetCount(0);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [setupTrade]);
 
   useEffect(() => {
+    if (!selectedQuoteId) return;
+    void loadQuoteDetail(selectedQuoteId);
+  }, [selectedQuoteId, canViewCommunicationLog]);
+
+  useEffect(() => {
+    if (!canViewQuoteHistory) {
+      setQuoteHistory([]);
+      return;
+    }
     void loadQuoteHistory();
-  }, [historyMode, historyCustomerId, selectedQuoteId]);
+  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
 
   async function loadAll() {
     setLoading(true);
@@ -260,7 +491,11 @@ export function DashboardPage({ session }: DashboardPageProps) {
     try {
       const { quote } = await api.quotes.get(quoteId);
       setSelectedQuote(quote);
-      await loadOutboundEvents(quoteId);
+      if (canViewCommunicationLog) {
+        await loadOutboundEvents(quoteId);
+      } else {
+        setOutboundEvents([]);
+      }
       setQuoteEditForm({
         serviceType: quote.serviceType,
         status: quote.status,
@@ -276,6 +511,11 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }
 
   async function loadOutboundEvents(quoteId: string) {
+    if (!canViewCommunicationLog) {
+      setOutboundEvents([]);
+      return;
+    }
+
     setOutboundEventsLoading(true);
     try {
       const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
@@ -289,6 +529,11 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }
 
   async function loadQuoteHistory() {
+    if (!canViewQuoteHistory) {
+      setQuoteHistory([]);
+      return;
+    }
+
     setHistoryLoading(true);
     try {
       if (historyMode === "quote") {
@@ -416,6 +661,66 @@ export function DashboardPage({ session }: DashboardPageProps) {
     }
   }
 
+  async function createQuoteFromChatPrompt(event: FormEvent) {
+    event.preventDefault();
+    if (!canUseChatToQuote) {
+      setError("Chat to Quote is not available on your current plan.");
+      return;
+    }
+
+    const prompt = chatPrompt.trim();
+    if (!prompt) {
+      setError("Enter a prompt before generating a quote.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const { quote, parsed } = await api.quotes.createFromChat({ prompt });
+      setChatParsed(parsed);
+      setChatPrompt("");
+      setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
+      await Promise.all([loadCustomers(), loadQuotes()]);
+      setSelectedQuoteId(quote.id);
+      await loadQuoteDetail(quote.id);
+      if (canViewQuoteHistory) {
+        const { revisions } = await api.quotes.getHistory(quote.id, { limit: 30 });
+        setQuoteHistory(revisions);
+      }
+
+      const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
+      setNotice(
+        `Draft quote created for ${customerName}. Review details, then use Email App, Text App, or PDF actions.`,
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyTradeSetup(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+
+    try {
+      await api.onboarding.saveSetup({
+        primaryTrade: setupTrade,
+        generateLogoIfMissing: true,
+        chargeBySquareFoot: setupSqFtMode,
+        sqFtUnitCost: setupSqFtMode && setupSqFtUnitCost ? Number(setupSqFtUnitCost) : undefined,
+        sqFtUnitPrice: setupSqFtMode && setupSqFtUnitPrice ? Number(setupSqFtUnitPrice) : undefined,
+      });
+      setNotice(`Trade setup saved for ${setupTrade}. Presets and pricing defaults are ready.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed saving trade setup.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createQuote(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
@@ -441,8 +746,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
     }
   }
 
-  async function saveQuote(event: FormEvent) {
-    event.preventDefault();
+  async function persistSelectedQuote() {
     if (!selectedQuote) return;
     setSaving(true);
     setError(null);
@@ -455,13 +759,20 @@ export function DashboardPage({ session }: DashboardPageProps) {
         taxAmount: Number(quoteEditForm.taxAmount),
       });
       await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      await loadQuoteHistory();
+      if (canViewQuoteHistory) {
+        await loadQuoteHistory();
+      }
       setNotice("Quote updated.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed saving quote.");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveQuote(event: FormEvent) {
+    event.preventDefault();
+    await persistSelectedQuote();
   }
 
   async function sendDecision(decision: "send" | "revise") {
@@ -471,7 +782,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
     try {
       const result = await api.quotes.decision(selectedQuote.id, decision);
       await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      await loadQuoteHistory();
+      if (canViewQuoteHistory) {
+        await loadQuoteHistory();
+      }
       setNotice(result.message);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed updating decision.");
@@ -517,17 +830,19 @@ export function DashboardPage({ session }: DashboardPageProps) {
     setError(null);
     try {
       await api.quotes.decision(sendComposer.quoteId, "send");
-      await api.quotes.outboundEvents.create(sendComposer.quoteId, {
-        channel: mapSendChannelToOutboundChannel(sendComposer.channel),
-        destination:
-          sendComposer.channel === "email"
-            ? sendComposer.customerEmail ?? undefined
-            : sendComposer.channel === "sms"
-              ? sendComposer.customerPhone
-              : undefined,
-        subject: sendComposer.subject,
-        body: sendComposer.body,
-      });
+      if (canViewCommunicationLog) {
+        await api.quotes.outboundEvents.create(sendComposer.quoteId, {
+          channel: mapSendChannelToOutboundChannel(sendComposer.channel),
+          destination:
+            sendComposer.channel === "email"
+              ? sendComposer.customerEmail ?? undefined
+              : sendComposer.channel === "sms"
+                ? sendComposer.customerPhone
+                : undefined,
+          subject: sendComposer.subject,
+          body: sendComposer.body,
+        });
+      }
 
       if (sendComposer.channel === "email") {
         const recipient = sendComposer.customerEmail ?? "";
@@ -544,8 +859,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
       }
 
       await Promise.all([loadQuotes(), loadQuoteDetail(sendComposer.quoteId)]);
-      await loadOutboundEvents(sendComposer.quoteId);
-      await loadQuoteHistory();
+      if (canViewCommunicationLog) {
+        await loadOutboundEvents(sendComposer.quoteId);
+      }
+      if (canViewQuoteHistory) {
+        await loadQuoteHistory();
+      }
       setNotice(
         sendComposer.channel === "copy"
           ? "Quote marked as quoted and message copied."
@@ -602,7 +921,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
       });
       setLineItemForm(EMPTY_LINE_ITEM);
       await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      await loadQuoteHistory();
+      if (canViewQuoteHistory) {
+        await loadQuoteHistory();
+      }
       setNotice("Line item added.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed adding line item.");
@@ -619,7 +940,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
     try {
       await api.quotes.lineItems.remove(selectedQuote.id, lineItemId);
       await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      await loadQuoteHistory();
+      if (canViewQuoteHistory) {
+        await loadQuoteHistory();
+      }
       setNotice("Line item deleted.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed deleting line item.");
@@ -644,6 +967,41 @@ export function DashboardPage({ session }: DashboardPageProps) {
       setSaving(false);
     }
   }
+
+  const createQuoteMath = useMemo(
+    () =>
+      summarizeQuoteMath({
+        internalCostSubtotal: quoteForm.internalCostSubtotal,
+        customerPriceSubtotal: quoteForm.customerPriceSubtotal,
+        taxAmount: quoteForm.taxAmount,
+      }),
+    [quoteForm.internalCostSubtotal, quoteForm.customerPriceSubtotal, quoteForm.taxAmount],
+  );
+
+  const selectedQuoteMath = useMemo(() => {
+    if (!selectedQuote) return null;
+
+    return summarizeQuoteMath({
+      internalCostSubtotal: selectedQuote.internalCostSubtotal,
+      customerPriceSubtotal: selectedQuote.customerPriceSubtotal,
+      taxAmount: quoteEditForm.taxAmount,
+    });
+  }, [selectedQuote, quoteEditForm.taxAmount]);
+
+  const lineItemMath = useMemo(() => {
+    const quantity = safeAmount(lineItemForm.quantity);
+    const unitCost = safeAmount(lineItemForm.unitCost);
+    const unitPrice = safeAmount(lineItemForm.unitPrice);
+    const costTotal = quantity * unitCost;
+    const priceTotal = quantity * unitPrice;
+
+    return {
+      quantity,
+      costTotal,
+      priceTotal,
+      profit: priceTotal - costTotal,
+    };
+  }, [lineItemForm.quantity, lineItemForm.unitCost, lineItemForm.unitPrice]);
 
   const stats = useMemo(() => {
     const acceptedRevenue = quotes
@@ -729,18 +1087,20 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }, [customers, quotes]);
 
   if (loading) {
-    return <div className="min-h-screen bg-slate-50 p-6 text-slate-700">Loading dashboard...</div>;
+    return <AppLoadingScreen message="Loading dashboard..." />;
   }
 
   return (
     <div className="crm-light">
-      <div className="min-h-screen bg-zinc-950 p-4 sm:p-6 lg:p-8">
+      <div className="min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
-          <h1 className="text-3xl font-bold text-white">
+          <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">
             {session?.fullName ? `Welcome, ${session.fullName.split(" ")[0]}` : "QuoteFly CRM"}
           </h1>
-          <p className="mt-2 text-zinc-400">Easy quote flow with full detail controls when needed.</p>
+          <p className="mt-2 text-sm text-slate-600 sm:text-base">
+            Easy quote flow with full detail controls when needed.
+          </p>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
@@ -749,10 +1109,10 @@ export function DashboardPage({ session }: DashboardPageProps) {
           <StatCard icon={<InvoiceIcon size={24} />} label="Accepted Revenue" value={money(stats.acceptedRevenue)} />
         </div>
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="mb-4">
-            <h2 className="text-xl font-semibold text-white">Lead Pipeline</h2>
-            <p className="text-sm text-zinc-400">
+            <h2 className="text-xl font-semibold text-slate-900">Lead Pipeline</h2>
+            <p className="text-sm text-slate-600">
               New leads, quoted jobs, and closed work at a glance.
             </p>
           </div>
@@ -763,6 +1123,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
           />
           <div className="grid gap-4 lg:grid-cols-4">
             <PipelineColumn
+              icon={<CustomerIcon size={14} />}
               title={`New Leads (${pipeline.totals.newLeads})`}
               subtitle="No quote yet or still draft"
               leads={pipeline.newLeads}
@@ -774,6 +1135,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               saving={saving}
             />
             <PipelineColumn
+              icon={<SendIcon size={14} />}
               title={`Quoted Leads (${pipeline.totals.quotedLeads})`}
               subtitle="Quote prepared or sent"
               leads={pipeline.quotedLeads}
@@ -785,6 +1147,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               saving={saving}
             />
             <PipelineColumn
+              icon={<CheckIcon size={14} />}
               title={`Closed Leads (${pipeline.totals.closedLeads})`}
               subtitle="Accepted, work in progress"
               leads={pipeline.closedLeads}
@@ -796,6 +1159,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               saving={saving}
             />
             <PipelineColumn
+              icon={<ClockIcon size={14} />}
               title="Recently Added Leads"
               subtitle="Most recent customer records"
               leads={pipeline.recentLeads}
@@ -809,57 +1173,192 @@ export function DashboardPage({ session }: DashboardPageProps) {
           </div>
         </div>
 
-        {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200">{error}</p>}
-        {notice && <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">{notice}</p>}
+        {error && (
+          <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+        {notice && (
+          <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+            {notice}
+          </p>
+        )}
 
         <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
           <div className="space-y-6">
-            <form onSubmit={createCustomer} className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h2 className="text-lg font-semibold text-white">Quick Customer</h2>
-              <input placeholder="Full name" required value={customerForm.fullName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-              <input placeholder="Phone" required value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-              <input placeholder="Email (optional)" type="email" value={customerForm.email} onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
+            {canUseChatToQuote ? (
+              <form
+                onSubmit={createQuoteFromChatPrompt}
+                className="space-y-3 rounded-xl border border-blue-200 bg-gradient-to-b from-blue-50 to-white p-4 shadow-sm"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-semibold text-slate-900">Chat to Quote</h2>
+                  <button
+                    type="button"
+                    onClick={() => setChatPrompt(CHAT_PROMPT_EXAMPLE)}
+                    className="rounded-md border border-blue-300 bg-white px-2 py-1 text-xs text-blue-700"
+                  >
+                    Use Sample
+                  </button>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Describe customer, scope, and pricing in one message. QuoteFly will build the customer, quote, and labor/material lines.
+                </p>
+                <p className="text-[11px] text-blue-700">
+                  AI quote generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}. Manual revisions stay unlimited.
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  AI only generates the first draft. Final quote edits are performed directly by your team.
+                </p>
+                <textarea
+                  rows={6}
+                  value={chatPrompt}
+                  onChange={(event) => setChatPrompt(event.target.value)}
+                  placeholder="New quote for..."
+                  className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm text-slate-900"
+                />
+                {chatParsed && (
+                  <div className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <p>
+                      Last parse: {chatParsed.serviceType}
+                      {chatParsed.squareFeetEstimate ? ` · ${chatParsed.squareFeetEstimate.toLocaleString()} sq ft` : ""}
+                      {chatParsed.estimatedTotalAmount ? ` · Est. ${money(chatParsed.estimatedTotalAmount)}` : ""}
+                    </p>
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white"
+                >
+                  {saving ? "Generating..." : "Generate Draft Quote"}
+                </button>
+              </form>
+            ) : (
+              <FeatureLockedCard
+                title="Chat to Quote"
+                description="Turn one natural-language prompt into a ready quote with labor/material lines."
+                currentPlanLabel={currentPlanLabel}
+                requiredPlanLabel="Supported Plan"
+                showUpgradeHint={canAutoUpgradeMessage}
+              />
+            )}
+
+            <form onSubmit={applyTradeSetup} className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Quick Trade Setup</h2>
+              <p className="text-xs text-slate-600">
+                Set your trade defaults and save ready-to-use labor/material presets for faster quote creation.
+              </p>
+              <select
+                value={setupTrade}
+                onChange={(event) => setSetupTrade(event.target.value as ServiceType)}
+                className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                {SERVICE_TYPES.map((serviceType) => (
+                  <option key={serviceType} value={serviceType}>
+                    {serviceType}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={setupSqFtMode}
+                  onChange={(event) => setSetupSqFtMode(event.target.checked)}
+                />
+                I price jobs by square foot (optional)
+              </label>
+              {setupSqFtMode && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="SQ FT internal cost"
+                    value={setupSqFtUnitCost}
+                    onChange={(event) => setSetupSqFtUnitCost(event.target.value)}
+                    className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="SQ FT customer price"
+                    value={setupSqFtUnitPrice}
+                    onChange={(event) => setSetupSqFtUnitPrice(event.target.value)}
+                    className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  />
+                </div>
+              )}
+              <p className="text-[11px] text-amber-700">
+                Recommended presets for {setupTrade}: {recommendedPresetCount}
+              </p>
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white"
+              >
+                {saving ? "Saving..." : "Save Trade Presets"}
+              </button>
+            </form>
+
+            <form onSubmit={createCustomer} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Quick Customer</h2>
+              <input placeholder="Full name" required value={customerForm.fullName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+              <input placeholder="Phone" required value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+              <input placeholder="Email (optional)" type="email" value={customerForm.email} onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
               <button type="submit" disabled={saving} className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">{saving ? "Saving..." : "Create Customer"}</button>
             </form>
 
-            <form onSubmit={createQuote} className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h2 className="text-lg font-semibold text-white">Create Quote</h2>
-              <select value={quoteForm.customerId} required onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerId: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white">
+            <form onSubmit={createQuote} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Create Quote</h2>
+              <select value={quoteForm.customerId} required onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerId: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
                 <option value="">Select customer</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>{customer.fullName} ({customer.phone})</option>
                 ))}
               </select>
-              <select value={quoteForm.serviceType} onChange={(event) => setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white">
+              <select value={quoteForm.serviceType} onChange={(event) => setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
                 {SERVICE_TYPES.map((serviceType) => <option key={serviceType} value={serviceType}>{serviceType}</option>)}
               </select>
-              <input placeholder="Title" required value={quoteForm.title} onChange={(event) => setQuoteForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-              <textarea placeholder="Scope details" required rows={3} value={quoteForm.scopeText} onChange={(event) => setQuoteForm((prev) => ({ ...prev, scopeText: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-              <div className="grid grid-cols-3 gap-2">
-                <input type="number" min="0" step="0.01" placeholder="Internal" value={quoteForm.internalCostSubtotal} onChange={(event) => setQuoteForm((prev) => ({ ...prev, internalCostSubtotal: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
-                <input type="number" min="0" step="0.01" placeholder="Customer" value={quoteForm.customerPriceSubtotal} onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerPriceSubtotal: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
-                <input type="number" min="0" step="0.01" placeholder="Tax" value={quoteForm.taxAmount} onChange={(event) => setQuoteForm((prev) => ({ ...prev, taxAmount: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
+              <input placeholder="Title" required value={quoteForm.title} onChange={(event) => setQuoteForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+              <textarea placeholder="Scope details" required rows={3} value={quoteForm.scopeText} onChange={(event) => setQuoteForm((prev) => ({ ...prev, scopeText: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input type="number" min="0" step="0.01" placeholder="Internal cost subtotal" value={quoteForm.internalCostSubtotal} onChange={(event) => setQuoteForm((prev) => ({ ...prev, internalCostSubtotal: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
+                <input type="number" min="0" step="0.01" placeholder="Customer subtotal" value={quoteForm.customerPriceSubtotal} onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerPriceSubtotal: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
+                <input type="number" min="0" step="0.01" placeholder="Tax amount" value={quoteForm.taxAmount} onChange={(event) => setQuoteForm((prev) => ({ ...prev, taxAmount: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
               </div>
+              <QuoteMathSummaryPanel
+                summary={createQuoteMath}
+                compact
+                warning={
+                  createQuoteMath.customerSubtotal > 0 && createQuoteMath.estimatedProfit < 0
+                    ? "Customer subtotal is lower than cost. This quote would lose money."
+                    : createQuoteMath.customerSubtotal > 0 && createQuoteMath.estimatedMarginPercent < 10
+                      ? "Margin is below 10%. Confirm this is intentional."
+                      : undefined
+                }
+              />
               <button type="submit" disabled={saving || !customers.length} className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">{saving ? "Saving..." : "Create Quote"}</button>
             </form>
 
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h2 className="mb-3 text-lg font-semibold text-white">Quote List</h2>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-lg font-semibold text-slate-900">Quote List</h2>
               <div className="mb-2 grid grid-cols-[1fr_140px] gap-2">
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search quotes" className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as QuoteStatus | "ALL")} className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white">
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search quotes" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as QuoteStatus | "ALL")} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
                   <option value="ALL">All statuses</option>
                   {QUOTE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
                 </select>
               </div>
-              <button onClick={() => void loadQuotes()} className="mb-3 w-full rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300">Apply Filters</button>
+              <button onClick={() => void loadQuotes()} className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50">Apply Filters</button>
               <div className="max-h-[340px] space-y-2 overflow-auto">
                 {quotes.map((quote) => (
-                  <button key={quote.id} onClick={() => setSelectedQuoteId(quote.id)} className={`w-full rounded-lg border p-3 text-left ${selectedQuoteId === quote.id ? "border-quotefly-blue bg-quotefly-blue/10" : "border-zinc-800 bg-zinc-950/60"}`}>
-                    <p className="text-sm font-semibold text-white">{quote.title}</p>
+                  <button key={quote.id} onClick={() => setSelectedQuoteId(quote.id)} className={`w-full rounded-lg border p-3 text-left ${selectedQuoteId === quote.id ? "border-quotefly-blue bg-quotefly-blue/10" : "border-slate-200 bg-slate-50 hover:bg-slate-100"}`}>
+                    <p className="text-sm font-semibold text-slate-900">{quote.title}</p>
                     <div className="mt-1 flex items-center justify-between">
-                      <span className={`rounded-md border px-2 py-0.5 text-[10px] ${statusClass(quote.status)}`}>{quote.status}</span>
-                      <span className="text-xs text-zinc-400">{money(quote.totalAmount)}</span>
+                      <QuoteStatusPill status={quote.status} compact />
+                      <span className="text-xs text-slate-600">{money(quote.totalAmount)}</span>
                     </div>
                   </button>
                 ))}
@@ -867,230 +1366,308 @@ export function DashboardPage({ session }: DashboardPageProps) {
             </div>
           </div>
 
-          <div className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+          <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             {!selectedQuote ? (
-              <p className="rounded-lg border border-dashed border-zinc-700 p-8 text-center text-zinc-500">Select a quote to view details.</p>
+              <p className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
+                Select a quote to view details.
+              </p>
             ) : (
               <>
                 <div className="flex items-center justify-between">
-                  <h2 className="text-xl font-semibold text-white">{selectedQuote.title}</h2>
-                  <span className={`rounded-md border px-2 py-1 text-xs ${statusClass(selectedQuote.status)}`}>{selectedQuote.status}</span>
+                  <h2 className="text-xl font-semibold text-slate-900">{selectedQuote.title}</h2>
+                  <QuoteStatusPill status={selectedQuote.status} />
                 </div>
-                <p className="text-xs text-zinc-400">Customer: {selectedQuote.customer?.fullName ?? selectedQuote.customerId}</p>
+                <p className="text-xs text-slate-600">Customer: {selectedQuote.customer?.fullName ?? selectedQuote.customerId}</p>
 
-                <form onSubmit={saveQuote} className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
+                <form onSubmit={saveQuote} className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <select value={quoteEditForm.serviceType} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white">
+                    <select value={quoteEditForm.serviceType} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900">
                       {SERVICE_TYPES.map((serviceType) => <option key={serviceType} value={serviceType}>{serviceType}</option>)}
                     </select>
-                    <select value={quoteEditForm.status} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as QuoteStatus }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white">
+                    <select value={quoteEditForm.status} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as QuoteStatus }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900">
                       {QUOTE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
-                    <input type="number" min="0" step="0.01" placeholder="Tax amount" value={quoteEditForm.taxAmount} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
+                    <input type="number" min="0" step="0.01" placeholder="Tax amount" value={quoteEditForm.taxAmount} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
                   </div>
-                  <input value={quoteEditForm.title} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-                  <textarea rows={3} value={quoteEditForm.scopeText} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-                  <div className="flex flex-wrap gap-2">
+                  <input value={quoteEditForm.title} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+                  <textarea rows={3} value={quoteEditForm.scopeText} onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+                  {selectedQuoteMath && (
+                    <QuoteMathSummaryPanel
+                      summary={selectedQuoteMath}
+                      warning={
+                        selectedQuoteMath.customerSubtotal > 0 && selectedQuoteMath.estimatedProfit < 0
+                          ? "Current pricing is below cost."
+                          : selectedQuoteMath.customerSubtotal > 0 && selectedQuoteMath.estimatedMarginPercent < 10
+                            ? "Margin is below 10%."
+                            : undefined
+                      }
+                    />
+                  )}
+                  <div className="hidden flex-wrap gap-2 sm:flex">
                     <button type="submit" disabled={saving} className="rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">Save Quote</button>
-                    <button type="button" onClick={() => void sendDecision("send")} disabled={saving} className="inline-flex items-center gap-1 rounded-lg border border-sky-500/50 px-3 py-2 text-sm text-sky-300"><SendIcon size={14} />Mark Quoted</button>
-                    <button type="button" onClick={() => void sendDecision("revise")} disabled={saving} className="rounded-lg border border-amber-500/50 px-3 py-2 text-sm text-amber-300">Revise</button>
-                    <button type="button" onClick={() => openSendComposer("email")} disabled={saving} className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm text-cyan-300">Email App</button>
-                    <button type="button" onClick={() => openSendComposer("sms")} disabled={saving} className="rounded-lg border border-indigo-500/50 px-3 py-2 text-sm text-indigo-300">Text App</button>
-                    <button type="button" onClick={() => openSendComposer("copy")} disabled={saving} className="rounded-lg border border-violet-500/50 px-3 py-2 text-sm text-violet-300">Copy Message</button>
-                    <button type="button" onClick={() => void downloadQuotePdf()} disabled={saving} className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-200">Download PDF</button>
-                    <button type="button" onClick={() => void downloadQuotePdf({ afterSend: true })} disabled={saving} className="rounded-lg border border-emerald-500/50 px-3 py-2 text-sm text-emerald-300">Send + PDF</button>
+                    <button type="button" onClick={() => void sendDecision("send")} disabled={saving} className="inline-flex items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-700"><SendIcon size={14} />Mark Quoted</button>
+                    <button type="button" onClick={() => void sendDecision("revise")} disabled={saving} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">Revise</button>
+                    <button type="button" onClick={() => openSendComposer("email")} disabled={saving} className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm text-cyan-700">Email App</button>
+                    <button type="button" onClick={() => openSendComposer("sms")} disabled={saving} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">Text App</button>
+                    <button type="button" onClick={() => openSendComposer("copy")} disabled={saving} className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-700">Copy Message</button>
+                    <button type="button" onClick={() => void downloadQuotePdf()} disabled={saving} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">Download PDF</button>
+                    <button type="button" onClick={() => void downloadQuotePdf({ afterSend: true })} disabled={saving} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Send + PDF</button>
                   </div>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-slate-600">
                     Email and text use the device apps after confirmation, so no paid messaging service is required for v1.
                   </p>
                 </form>
 
-                <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
-                  <h3 className="mb-3 text-sm font-semibold text-white">Line Items</h3>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="mb-3 text-sm font-semibold text-slate-900">Line Items</h3>
                   <div className="space-y-2">
                     {(selectedQuote.lineItems ?? []).map((item) => (
-                      <div key={item.id} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+                      <div key={item.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
                         <div>
-                          <p className="text-sm text-white">{item.description}</p>
-                          <p className="text-xs text-zinc-400">Qty {Number(item.quantity)} · {money(item.unitPrice)}</p>
+                          <p className="text-sm text-slate-900">{item.description}</p>
+                          <p className="text-xs text-slate-600">Qty {Number(item.quantity)} · {money(item.unitPrice)}</p>
                         </div>
-                        <button onClick={() => void deleteLineItem(item.id)} className="inline-flex items-center gap-1 rounded-md border border-red-500/50 px-2 py-1 text-xs text-red-300"><DeleteIcon size={12} />Delete</button>
+                        <button onClick={() => void deleteLineItem(item.id)} className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700"><DeleteIcon size={12} />Delete</button>
                       </div>
                     ))}
                   </div>
-                  <form onSubmit={addLineItem} className="mt-3 space-y-2 border-t border-zinc-800 pt-3">
-                    <input placeholder="Description" value={lineItemForm.description} onChange={(event) => setLineItemForm((prev) => ({ ...prev, description: event.target.value }))} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white" />
-                    <div className="grid grid-cols-3 gap-2">
-                      <input type="number" min="0" step="0.01" value={lineItemForm.quantity} onChange={(event) => setLineItemForm((prev) => ({ ...prev, quantity: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
-                      <input type="number" min="0" step="0.01" value={lineItemForm.unitCost} onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitCost: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
-                      <input type="number" min="0" step="0.01" value={lineItemForm.unitPrice} onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitPrice: event.target.value }))} className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-sm text-white" />
+                  <form onSubmit={addLineItem} className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                    <input placeholder="Description" value={lineItemForm.description} onChange={(event) => setLineItemForm((prev) => ({ ...prev, description: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <input type="number" min="0" step="0.01" placeholder="Qty" value={lineItemForm.quantity} onChange={(event) => setLineItemForm((prev) => ({ ...prev, quantity: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
+                      <input type="number" min="0" step="0.01" placeholder="Unit cost" value={lineItemForm.unitCost} onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitCost: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
+                      <input type="number" min="0" step="0.01" placeholder="Unit price" value={lineItemForm.unitPrice} onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitPrice: event.target.value }))} className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900" />
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                      Draft line math: Cost {money(lineItemMath.costTotal)} · Price {money(lineItemMath.priceTotal)} · Profit{" "}
+                      <span className={lineItemMath.profit >= 0 ? "text-emerald-700" : "text-red-700"}>
+                        {money(lineItemMath.profit)}
+                      </span>
                     </div>
                     <button type="submit" disabled={saving} className="rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">Add Line Item</button>
                   </form>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 sm:grid-cols-4">
-                  <Metric label="Internal" value={money(selectedQuote.internalCostSubtotal)} />
-                  <Metric label="Customer" value={money(selectedQuote.customerPriceSubtotal)} />
-                  <Metric label="Tax" value={money(selectedQuote.taxAmount)} />
-                  <Metric label="Total" value={money(selectedQuote.totalAmount)} />
-                </div>
+                {selectedQuoteMath && (
+                  <QuoteMathSummaryPanel summary={selectedQuoteMath} />
+                )}
 
-                <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-sm font-semibold text-white">Quote Revision History</h3>
-                      <p className="text-xs text-zinc-400">
-                        Track original quote values, revisions, and decision changes.
-                      </p>
-                    </div>
+                <div className="sticky bottom-3 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg sm:hidden">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => void loadQuoteHistory()}
-                      className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300"
+                      disabled={saving}
+                      onClick={() => void persistSelectedQuote()}
+                      className="rounded-lg bg-quotefly-blue px-3 py-2 text-sm font-semibold text-white"
                     >
-                      Refresh
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void sendDecision("send")}
+                      disabled={saving}
+                      className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-700"
+                    >
+                      Mark Quoted
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openSendComposer("email")}
+                      disabled={saving}
+                      className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm text-cyan-700"
+                    >
+                      Email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadQuotePdf()}
+                      disabled={saving}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      PDF
                     </button>
                   </div>
+                </div>
 
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setHistoryMode("quote")}
-                      className={`rounded-md border px-2 py-1 text-xs ${
-                        historyMode === "quote"
-                          ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
-                          : "border-zinc-700 text-zinc-300"
-                      }`}
-                    >
-                      Selected Quote
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHistoryMode("customer")}
-                      className={`rounded-md border px-2 py-1 text-xs ${
-                        historyMode === "customer"
-                          ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
-                          : "border-zinc-700 text-zinc-300"
-                      }`}
-                    >
-                      By Customer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHistoryMode("all")}
-                      className={`rounded-md border px-2 py-1 text-xs ${
-                        historyMode === "all"
-                          ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
-                          : "border-zinc-700 text-zinc-300"
-                      }`}
-                    >
-                      All Activity
-                    </button>
-
-                    {historyMode === "customer" && (
-                      <select
-                        value={historyCustomerId}
-                        onChange={(event) => setHistoryCustomerId(event.target.value)}
-                        className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-white"
+                {canViewQuoteHistory ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Quote Revision History</h3>
+                        <p className="text-xs text-slate-600">
+                          Track original quote values, revisions, and decision changes.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadQuoteHistory()}
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
                       >
-                        <option value="ALL">Select customer...</option>
-                        {customers.map((customer) => (
-                          <option key={customer.id} value={customer.id}>
-                            {customer.fullName}
-                          </option>
+                        Refresh
+                      </button>
+                    </div>
+
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setHistoryMode("quote")}
+                        className={`rounded-md border px-2 py-1 text-xs ${
+                          historyMode === "quote"
+                            ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
+                            : "border-slate-300 bg-white text-slate-700"
+                        }`}
+                      >
+                        Selected Quote
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryMode("customer")}
+                        className={`rounded-md border px-2 py-1 text-xs ${
+                          historyMode === "customer"
+                            ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
+                            : "border-slate-300 bg-white text-slate-700"
+                        }`}
+                      >
+                        By Customer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryMode("all")}
+                        className={`rounded-md border px-2 py-1 text-xs ${
+                          historyMode === "all"
+                            ? "border-quotefly-blue bg-quotefly-blue/20 text-white"
+                            : "border-slate-300 bg-white text-slate-700"
+                        }`}
+                      >
+                        All Activity
+                      </button>
+
+                      {historyMode === "customer" && (
+                        <select
+                          value={historyCustomerId}
+                          onChange={(event) => setHistoryCustomerId(event.target.value)}
+                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                        >
+                          <option value="ALL">Select customer...</option>
+                          {customers.map((customer) => (
+                            <option key={customer.id} value={customer.id}>
+                              {customer.fullName}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {historyLoading ? (
+                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                        Loading revision history...
+                      </p>
+                    ) : quoteHistory.length === 0 ? (
+                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                        No history entries for this filter yet.
+                      </p>
+                    ) : (
+                      <div className="max-h-64 space-y-2 overflow-auto">
+                        {quoteHistory.map((revision) => (
+                          <div
+                            key={revision.id}
+                            className="rounded-md border border-slate-200 bg-white px-3 py-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <HistoryEventPill eventType={revision.eventType} />
+                                <p className="truncate text-sm font-medium text-slate-900">{revision.title}</p>
+                              </div>
+                              <p className="text-xs text-slate-600">{formatDateTime(revision.createdAt)}</p>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <p className="text-slate-600">
+                                v{revision.version} · Customer: {revision.customer.fullName}
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <QuoteStatusPill status={revision.status} compact />
+                                <p className="text-slate-700">
+                                  Subtotal {money(revision.customerPriceSubtotal)} · Total {money(revision.totalAmount)}
+                                </p>
+                              </div>
+                            </div>
+                            {revision.changedFields.length > 0 && (
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                Fields: {revision.changedFields.join(", ")}
+                              </p>
+                            )}
+                          </div>
                         ))}
-                      </select>
+                      </div>
                     )}
                   </div>
+                ) : (
+                  <FeatureLockedCard
+                    title="Quote Revision History"
+                    description="Revision history, customer-level history, and long-term quote timelines unlock on Professional."
+                    currentPlanLabel={currentPlanLabel}
+                    requiredPlanLabel="Professional"
+                    showUpgradeHint={canAutoUpgradeMessage}
+                  />
+                )}
 
-                  {historyLoading ? (
-                    <p className="rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-400">
-                      Loading revision history...
-                    </p>
-                  ) : quoteHistory.length === 0 ? (
-                    <p className="rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-500">
-                      No history entries for this filter yet.
-                    </p>
-                  ) : (
-                    <div className="max-h-64 space-y-2 overflow-auto">
-                      {quoteHistory.map((revision) => (
-                        <div
-                          key={revision.id}
-                          className="rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-medium text-white">
-                              v{revision.version} · {eventLabel(revision.eventType)} · {revision.title}
-                            </p>
-                            <p className="text-xs text-zinc-400">{formatDateTime(revision.createdAt)}</p>
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
-                            <p className="text-zinc-400">
-                              Customer: {revision.customer.fullName} · Status: {revision.status}
-                            </p>
-                            <p className="text-zinc-300">
-                              Subtotal {money(revision.customerPriceSubtotal)} · Total {money(revision.totalAmount)}
-                            </p>
-                          </div>
-                          {revision.changedFields.length > 0 && (
-                            <p className="mt-1 text-[11px] text-zinc-500">
-                              Fields: {revision.changedFields.join(", ")}
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                {canViewCommunicationLog ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Send Activity</h3>
+                        <p className="text-xs text-slate-600">
+                          Logged email/text/copy actions for this quote.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadOutboundEvents(selectedQuote.id)}
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                      >
+                        Refresh
+                      </button>
                     </div>
-                  )}
-                </div>
 
-                <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-sm font-semibold text-white">Send Activity</h3>
-                      <p className="text-xs text-zinc-400">
-                        Logged email/text/copy actions for this quote.
+                    {outboundEventsLoading ? (
+                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                        Loading send activity...
                       </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void loadOutboundEvents(selectedQuote.id)}
-                      className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300"
-                    >
-                      Refresh
-                    </button>
-                  </div>
-
-                  {outboundEventsLoading ? (
-                    <p className="rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-400">
-                      Loading send activity...
-                    </p>
-                  ) : outboundEvents.length === 0 ? (
-                    <p className="rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-500">
-                      No send actions logged yet.
-                    </p>
-                  ) : (
-                    <div className="max-h-52 space-y-2 overflow-auto">
-                      {outboundEvents.map((event) => (
-                        <div
-                          key={event.id}
-                          className="rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-medium text-zinc-200">{event.channel}</p>
-                            <p className="text-xs text-zinc-400">{formatDateTime(event.createdAt)}</p>
+                    ) : outboundEvents.length === 0 ? (
+                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                        No send actions logged yet.
+                      </p>
+                    ) : (
+                      <div className="max-h-52 space-y-2 overflow-auto">
+                        {outboundEvents.map((event) => (
+                          <div
+                            key={event.id}
+                            className="rounded-md border border-slate-200 bg-white px-3 py-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <OutboundChannelPill channel={event.channel} />
+                              <p className="text-xs text-slate-600">{formatDateTime(event.createdAt)}</p>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {event.destination ? `To: ${event.destination}` : "Destination not captured"}
+                            </p>
+                            {event.subject && (
+                              <p className="mt-1 text-xs text-slate-600">Subject: {event.subject}</p>
+                            )}
                           </div>
-                          <p className="mt-1 text-xs text-zinc-500">
-                            {event.destination ? `To: ${event.destination}` : "Destination not captured"}
-                          </p>
-                          {event.subject && (
-                            <p className="mt-1 text-xs text-zinc-400">Subject: {event.subject}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <FeatureLockedCard
+                    title="Communication Log"
+                    description="Email/text/copy activity tracking unlocks on Professional."
+                    currentPlanLabel={currentPlanLabel}
+                    requiredPlanLabel="Professional"
+                    showUpgradeHint={canAutoUpgradeMessage}
+                  />
+                )}
               </>
             )}
           </div>
@@ -1126,10 +1703,10 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
 function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-2 text-quotefly-blue">{icon}</div>
-      <p className="text-xs uppercase text-zinc-400">{label}</p>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-xs uppercase text-slate-500">{label}</p>
+      <p className="text-2xl font-bold text-slate-900">{value}</p>
     </div>
   );
 }
@@ -1144,25 +1721,59 @@ function PipelineFlow({
   closedLeads: number;
 }) {
   return (
-    <div className="mb-4 rounded-xl border border-zinc-700 bg-zinc-950/40 p-3">
-      <div className="flex flex-wrap items-center gap-3 text-sm font-semibold">
-        <div className="rounded-lg border border-quotefly-blue/40 bg-quotefly-blue/10 px-3 py-2 text-quotefly-blue">
-          NEW LEADS {newLeads}
-        </div>
-        <span className="text-zinc-500">{">"}</span>
-        <div className="rounded-lg border border-quotefly-orange/40 bg-quotefly-orange/10 px-3 py-2 text-quotefly-orange">
-          QUOTED LEADS {quotedLeads}
-        </div>
-        <span className="text-zinc-500">{">"}</span>
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-emerald-600">
-          CLOSED LEADS {closedLeads}
-        </div>
+    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
+        <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
+        <FlowArrow />
+        <PipelineStage icon={<SendIcon size={14} />} label="Quoted Leads" count={quotedLeads} tone="orange" />
+        <FlowArrow />
+        <PipelineStage icon={<CheckIcon size={14} />} label="Closed Leads" count={closedLeads} tone="emerald" />
       </div>
     </div>
   );
 }
 
+function PipelineStage({
+  icon,
+  label,
+  count,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  count: number;
+  tone: "blue" | "orange" | "emerald";
+}) {
+  const toneClass =
+    tone === "blue"
+      ? "text-quotefly-blue border-quotefly-blue/30 bg-quotefly-blue/10"
+      : tone === "orange"
+        ? "text-quotefly-orange border-quotefly-orange/30 bg-quotefly-orange/10"
+        : "text-emerald-700 border-emerald-300 bg-emerald-50";
+
+  return (
+    <div className={`flex items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
+      <p className="inline-flex items-center gap-2">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/30 bg-white/70">
+          {icon}
+        </span>
+        {label}
+      </p>
+      <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold">{count}</span>
+    </div>
+  );
+}
+
+function FlowArrow() {
+  return (
+    <span className="hidden text-slate-400 sm:inline-flex">
+      <ArrowRightIcon size={14} />
+    </span>
+  );
+}
+
 function PipelineColumn({
+  icon,
   title,
   subtitle,
   leads,
@@ -1171,6 +1782,7 @@ function PipelineColumn({
   onUpdateFollowUp,
   saving,
 }: {
+  icon: ReactNode;
   title: string;
   subtitle: string;
   leads: LeadCardItem[];
@@ -1180,11 +1792,16 @@ function PipelineColumn({
   saving: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-      <h3 className="text-sm font-semibold text-white">{title}</h3>
-      <p className="mb-3 text-xs text-zinc-500">{subtitle}</p>
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-quotefly-blue">
+          {icon}
+        </span>
+        {title}
+      </h3>
+      <p className="mb-3 text-xs text-slate-500">{subtitle}</p>
       {leads.length === 0 ? (
-        <p className="rounded-md border border-dashed border-zinc-700 px-2 py-3 text-xs text-zinc-500">
+        <p className="rounded-md border border-dashed border-slate-300 bg-white px-2 py-3 text-xs text-slate-500">
           {emptyLabel}
         </p>
       ) : (
@@ -1195,25 +1812,34 @@ function PipelineColumn({
               type="button"
               onClick={() => onSelectLead(lead.quoteId)}
               disabled={!lead.quoteId}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-900/40 px-2 py-2 text-left transition hover:border-zinc-700 disabled:cursor-not-allowed disabled:opacity-90"
+              className="w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-left transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
             >
-              <p className="text-sm font-medium text-zinc-100">{lead.customerName}</p>
-              <p className="text-xs text-zinc-400">{lead.phone}</p>
-              {lead.email && <p className="text-xs text-zinc-500">{lead.email}</p>}
+              <p className="text-sm font-medium text-slate-900">{lead.customerName}</p>
+              <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-600">
+                <CallIcon size={11} />
+                {lead.phone}
+              </p>
+              {lead.email && (
+                <p className="inline-flex items-center gap-1 text-xs text-slate-500">
+                  <EmailIcon size={11} />
+                  {lead.email}
+                </p>
+              )}
               {lead.quoteTitle && (
-                <p className="mt-1 text-xs text-zinc-300">
+                <p className="mt-1 text-xs text-slate-700">
                   {lead.quoteTitle} · {lead.totalAmount !== undefined ? money(lead.totalAmount) : ""}
                 </p>
               )}
               {lead.status && (
-                <span className={`mt-2 inline-block rounded-md border px-1.5 py-0.5 text-[10px] ${statusClass(lead.status)}`}>
-                  {lead.status}
-                </span>
+                <div className="mt-2">
+                  <QuoteStatusPill status={lead.status} compact />
+                </div>
               )}
-              <div className="mt-2">
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-zinc-500">
-                  Follow-up
-                </label>
+              <div className="mt-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <FollowUpPill status={lead.followUpStatus} compact />
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Follow-up</span>
+                </div>
                 <select
                   value={lead.followUpStatus}
                   disabled={saving}
@@ -1221,7 +1847,7 @@ function PipelineColumn({
                   onChange={(event) =>
                     onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
                   }
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100"
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
                 >
                   {FOLLOW_UP_STATUSES.map((status) => (
                     <option key={`${lead.customerId}-${status}`} value={status}>
@@ -1230,7 +1856,7 @@ function PipelineColumn({
                   ))}
                 </select>
               </div>
-              {!lead.quoteId && <p className="mt-1 text-[11px] text-zinc-500">No quote attached yet</p>}
+              {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">No quote attached yet</p>}
             </button>
           ))}
         </div>
@@ -1239,11 +1865,150 @@ function PipelineColumn({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function QuoteStatusPill({
+  status,
+  compact = false,
+}: {
+  status: QuoteStatus;
+  compact?: boolean;
+}) {
+  const meta = quoteStatusMeta(status);
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border font-semibold ${meta.className} ${
+        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs"
+      }`}
+    >
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
+}
+
+function FollowUpPill({
+  status,
+  compact = false,
+}: {
+  status: LeadFollowUpStatus;
+  compact?: boolean;
+}) {
+  const meta = followUpMeta(status);
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border font-semibold ${meta.className} ${
+        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs"
+      }`}
+    >
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
+}
+
+function HistoryEventPill({ eventType }: { eventType: QuoteRevision["eventType"] }) {
+  const meta = eventMeta(eventType);
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
+}
+
+function OutboundChannelPill({ channel }: { channel: QuoteOutboundChannel }) {
+  const meta = outboundChannelMeta(channel);
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
+}
+
+function FeatureLockedCard({
+  title,
+  description,
+  currentPlanLabel,
+  requiredPlanLabel,
+  showUpgradeHint,
+}: {
+  title: string;
+  description: string;
+  currentPlanLabel: string;
+  requiredPlanLabel: string;
+  showUpgradeHint: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-amber-900">{title}</h3>
+          <p className="mt-1 text-xs text-amber-800">{description}</p>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+          <LockIcon size={10} />
+          {requiredPlanLabel}
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] text-amber-700">Current plan: {currentPlanLabel}</p>
+      {showUpgradeHint && (
+        <p className="mt-1 text-[11px] text-amber-700">
+          Upgrade plan to unlock this module for your whole workspace.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function QuoteMathSummaryPanel({
+  summary,
+  compact = false,
+  warning,
+}: {
+  summary: QuoteMathSummary;
+  compact?: boolean;
+  warning?: string;
+}) {
+  const profitTone = summary.estimatedProfit >= 0 ? "text-emerald-700" : "text-red-700";
+  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-emerald-700" : "text-amber-700";
+
+  return (
+    <div className={`rounded-lg border border-slate-200 bg-white ${compact ? "p-3" : "p-4"}`}>
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Live Quote Math</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Metric label="Internal Cost" value={money(summary.internalSubtotal)} />
+        <Metric label="Customer Subtotal" value={money(summary.customerSubtotal)} />
+        <Metric label="Tax" value={money(summary.taxAmount)} />
+        <Metric label="Total" value={money(summary.totalAmount)} />
+        <Metric label="Est. Profit" value={money(summary.estimatedProfit)} valueClassName={profitTone} />
+        <Metric label="Margin" value={`${summary.estimatedMarginPercent.toFixed(1)}%`} valueClassName={marginTone} />
+      </div>
+      {warning && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+          {warning}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
     <div>
-      <p className="text-xs uppercase text-zinc-500">{label}</p>
-      <p className="text-base font-semibold text-white">{value}</p>
+      <p className="text-xs uppercase text-slate-500">{label}</p>
+      <p className={`text-base font-semibold ${valueClassName ?? "text-slate-900"}`}>{value}</p>
     </div>
   );
 }
@@ -1270,9 +2035,9 @@ function DuplicateCustomerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-2xl rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl">
-        <h3 className="text-lg font-semibold text-white">Potential Duplicate Customer</h3>
-        <p className="mt-1 text-sm text-zinc-400">
+      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <h3 className="text-lg font-semibold text-slate-900">Potential Duplicate Customer</h3>
+        <p className="mt-1 text-sm text-slate-600">
           We found matching customer records. Merge to keep one clean record, or save as new.
         </p>
 
@@ -1283,7 +2048,7 @@ function DuplicateCustomerModal({
               className={`block cursor-pointer rounded-lg border px-3 py-2 ${
                 state.selectedMatchId === match.id
                   ? "border-quotefly-blue bg-quotefly-blue/10"
-                  : "border-zinc-700 bg-zinc-950/40"
+                  : "border-slate-200 bg-slate-50"
               }`}
             >
               <input
@@ -1293,21 +2058,21 @@ function DuplicateCustomerModal({
                 checked={state.selectedMatchId === match.id}
                 onChange={() => onSelect(match.id)}
               />
-              <span className="text-sm font-medium text-white">{match.fullName}</span>
-              <p className="text-xs text-zinc-400">
+              <span className="text-sm font-medium text-slate-900">{match.fullName}</span>
+              <p className="text-xs text-slate-600">
                 {match.phone} {match.email ? `| ${match.email}` : ""}
               </p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {match.matchReasons.map((reason) => (
                   <span
                     key={`${match.id}-${reason}`}
-                    className="rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                    className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700"
                   >
                     {duplicateReasonLabel(reason)}
                   </span>
                 ))}
                 {match.deletedAtUtc && (
-                  <span className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] text-amber-300">
+                  <span className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
                     Archived record
                   </span>
                 )}
@@ -1321,7 +2086,7 @@ function DuplicateCustomerModal({
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-300"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
           >
             Cancel
           </button>
@@ -1329,7 +2094,7 @@ function DuplicateCustomerModal({
             type="button"
             onClick={onSaveNew}
             disabled={saving || !canSaveAsNew}
-            className="rounded-lg border border-zinc-500 px-3 py-2 text-sm text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Save as New
           </button>
@@ -1343,7 +2108,7 @@ function DuplicateCustomerModal({
           </button>
         </div>
         {!canSaveAsNew && (
-          <p className="mt-2 text-xs text-amber-300">
+          <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700">
             Save as new is disabled when the phone number already exists. Use merge for phone matches.
           </p>
         )}
@@ -1374,40 +2139,40 @@ function SendComposerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-2xl rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl">
-        <h3 className="text-lg font-semibold text-white">Confirm Send Action</h3>
-        <p className="mt-1 text-sm text-zinc-400">
+      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <h3 className="text-lg font-semibold text-slate-900">Confirm Send Action</h3>
+        <p className="mt-1 text-sm text-slate-600">
           Confirming will mark this quote as quoted, then open {channelLabel.toLowerCase()}.
         </p>
 
         <div className="mt-4 space-y-2">
-          <p className="text-sm text-zinc-300">Customer: {state.customerName}</p>
+          <p className="text-sm text-slate-800">Customer: {state.customerName}</p>
           {state.channel === "email" && (
-            <p className="text-sm text-zinc-400">To: {state.customerEmail ?? "No email set"}</p>
+            <p className="text-sm text-slate-600">To: {state.customerEmail ?? "No email set"}</p>
           )}
           {state.channel === "sms" && (
-            <p className="text-sm text-zinc-400">To: {state.customerPhone}</p>
+            <p className="text-sm text-slate-600">To: {state.customerPhone}</p>
           )}
         </div>
 
         {state.channel === "email" && (
           <div className="mt-4">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Subject</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Subject</label>
             <input
               value={state.subject}
               onChange={(event) => onChange({ subject: event.target.value })}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
             />
           </div>
         )}
 
         <div className="mt-4">
-          <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">Message</label>
+          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Message</label>
           <textarea
             rows={10}
             value={state.body}
             onChange={(event) => onChange({ body: event.target.value })}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
           />
         </div>
 
@@ -1416,7 +2181,7 @@ function SendComposerModal({
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-300"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
           >
             Cancel
           </button>

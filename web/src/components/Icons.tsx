@@ -14,6 +14,9 @@ import {
   Trash2,
   Menu,
   X,
+  Copy,
+  ArrowRight,
+  Lock,
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
 import { forwardRef } from "react";
@@ -82,6 +85,21 @@ export const CloseIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => 
   <X ref={ref} {...props} />
 ));
 CloseIcon.displayName = "CloseIcon";
+
+export const CopyIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <Copy ref={ref} {...props} />
+));
+CopyIcon.displayName = "CopyIcon";
+
+export const ArrowRightIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <ArrowRight ref={ref} {...props} />
+));
+ArrowRightIcon.displayName = "ArrowRightIcon";
+
+export const LockIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <Lock ref={ref} {...props} />
+));
+LockIcon.displayName = "LockIcon";
 
 export const CheckIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
   <CheckCircle ref={ref} {...props} />

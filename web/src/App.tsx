@@ -3,22 +3,61 @@ import { Navbar } from "./components/Navbar";
 import { CrmShell } from "./components/CrmShell";
 import { AuthModal } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
+import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { LandingPage } from "./pages/LandingPage";
 import { PricingPage } from "./pages/PricingPage";
 import { SolutionsPage } from "./pages/SolutionsPage";
 import { AboutPage } from "./pages/AboutPage";
 import { BrandingPage } from "./pages/BrandingPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { api, ApiError, type AuthPayload } from "./lib/api";
+import { AdminPage } from "./pages/AdminPage";
+import {
+  api,
+  ApiError,
+  type AuthPayload,
+  type AuthSessionPayload,
+  type ServiceType,
+  type TenantEntitlements,
+} from "./lib/api";
 
-type Session = { email: string; fullName: string; tenantId: string; role: string };
+type Session = {
+  email: string;
+  fullName: string;
+  tenantId: string;
+  role: string;
+  primaryTrade?: ServiceType | null;
+  onboardingCompletedAtUtc?: string | null;
+  subscriptionStatus?: string;
+  subscriptionPlanCode?: string | null;
+  effectivePlanCode?: "starter" | "professional" | "enterprise";
+  effectivePlanName?: string;
+  isTrial?: boolean;
+  entitlements?: TenantEntitlements;
+};
 
-const PROTECTED_PAGES = new Set(["dashboard", "branding"]);
+const PROTECTED_PAGES = new Set(["dashboard", "branding", "admin"]);
 
 function clearStoredSession() {
   localStorage.removeItem("qf_token");
   localStorage.removeItem("qf_tenant_id");
   localStorage.removeItem("qf_full_name");
+}
+
+function toSession(payload: AuthSessionPayload): Session {
+  return {
+    email: payload.user.email,
+    fullName: payload.user.fullName,
+    tenantId: payload.tenant.id,
+    role: payload.role,
+    primaryTrade: payload.tenant.primaryTrade ?? null,
+    onboardingCompletedAtUtc: payload.tenant.onboardingCompletedAtUtc ?? null,
+    subscriptionStatus: payload.tenant.subscriptionStatus,
+    subscriptionPlanCode: payload.tenant.subscriptionPlanCode,
+    effectivePlanCode: payload.tenant.effectivePlanCode,
+    effectivePlanName: payload.tenant.effectivePlanName,
+    isTrial: payload.tenant.isTrial,
+    entitlements: payload.tenant.entitlements,
+  };
 }
 
 function App() {
@@ -46,12 +85,7 @@ function App() {
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
 
-        setSession({
-          email: payload.user.email,
-          fullName: payload.user.fullName,
-          tenantId: payload.tenant.id,
-          role: payload.role,
-        });
+        setSession(toSession(payload));
         setCurrentPage("dashboard");
       } catch (error) {
         clearStoredSession();
@@ -78,13 +112,28 @@ function App() {
 
   const handleAuthSuccess = (payload: AuthPayload) => {
     localStorage.setItem("qf_full_name", payload.user.fullName);
-    setSession({
-      email: payload.user.email,
-      fullName: payload.user.fullName,
-      tenantId: payload.tenant.id,
-      role: "owner",
-    });
-    setCurrentPage("dashboard");
+    setIsSessionChecking(true);
+
+    void api.auth
+      .me()
+      .then((sessionPayload) => {
+        setSession(toSession(sessionPayload));
+      })
+      .catch((error) => {
+        if (!(error instanceof ApiError && error.status === 401)) {
+          console.error("Session hydration after auth failed", error);
+        }
+        setSession({
+          email: payload.user.email,
+          fullName: payload.user.fullName,
+          tenantId: payload.tenant.id,
+          role: "owner",
+        });
+      })
+      .finally(() => {
+        setCurrentPage("dashboard");
+        setIsSessionChecking(false);
+      });
   };
 
   const handleLogout = () => {
@@ -127,17 +176,17 @@ function App() {
         return isLoggedIn
           ? <DashboardPage session={session} onLogout={handleLogout} />
           : <LandingPage onOpenAuth={() => setIsAuthModalOpen(true)} />;
+      case "admin":
+        return isLoggedIn
+          ? <AdminPage session={session} />
+          : <LandingPage onOpenAuth={() => setIsAuthModalOpen(true)} />;
       default:
         return <LandingPage onOpenAuth={() => setIsAuthModalOpen(true)} />;
     }
   };
 
   if (isSessionChecking) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50 px-4">
-        <p className="text-sm text-slate-600">Restoring your session...</p>
-      </div>
-    );
+    return <AppLoadingScreen message="Restoring your session..." />;
   }
 
   if (isLoggedIn) {
@@ -147,6 +196,10 @@ function App() {
         onNavigate={handleNavigate}
         onLogout={handleLogout}
         fullName={session?.fullName}
+        planName={session?.effectivePlanName}
+        planCode={session?.effectivePlanCode}
+        isTrial={session?.isTrial}
+        entitlements={session?.entitlements}
       >
         <main className="flex-1">{renderPage()}</main>
       </CrmShell>

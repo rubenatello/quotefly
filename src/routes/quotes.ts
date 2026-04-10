@@ -3,9 +3,15 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
+import {
+  loadTenantEntitlements,
+  startOfCurrentUtcMonth,
+  startOfNextUtcMonth,
+} from "../lib/subscription";
+import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 
-const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING"]);
+const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QuoteStatusSchema = z.enum([
   "DRAFT",
   "READY_FOR_REVIEW",
@@ -105,6 +111,14 @@ const CreateQuoteOutboundEventSchema = z.object({
 });
 
 const QuoteOutboundEventQuerySchema = PaginationQuerySchema;
+
+const CreateQuoteFromChatSchema = z.object({
+  prompt: z.string().trim().min(12).max(5000),
+  customerName: z.string().trim().min(2).max(120).optional(),
+  customerPhone: z.string().trim().min(7).max(40).optional(),
+  customerEmail: z.string().trim().email().optional(),
+});
+
 
 const QuoteRevisionSelect = {
   id: true,
@@ -359,11 +373,338 @@ function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[
   return fields.length ? fields : ["manual_update"];
 }
 
+function requiredPlanForFeature(
+  feature: "quoteVersionHistory" | "communicationLog",
+): "professional" | "enterprise" {
+  if (feature === "quoteVersionHistory") return "professional";
+  return "professional";
+}
+
+function defaultLaborRate(serviceType: z.infer<typeof ServiceTypeSchema>): number {
+  if (serviceType === "ROOFING") return 2.75;
+  if (serviceType === "FLOORING") return 2.1;
+  if (serviceType === "PLUMBING") return 2.6;
+  if (serviceType === "GARDENING") return 1.75;
+  if (serviceType === "CONSTRUCTION") return 3.1;
+  return 2.4;
+}
+
+function defaultMaterialMarkup(serviceType: z.infer<typeof ServiceTypeSchema>): number {
+  if (serviceType === "ROOFING") return 0.35;
+  if (serviceType === "FLOORING") return 0.3;
+  if (serviceType === "PLUMBING") return 0.38;
+  if (serviceType === "GARDENING") return 0.28;
+  if (serviceType === "CONSTRUCTION") return 0.34;
+  return 0.33;
+}
+
+function laborSplit(serviceType: z.infer<typeof ServiceTypeSchema>): number {
+  if (serviceType === "ROOFING") return 0.45;
+  if (serviceType === "FLOORING") return 0.5;
+  if (serviceType === "PLUMBING") return 0.62;
+  if (serviceType === "GARDENING") return 0.68;
+  if (serviceType === "CONSTRUCTION") return 0.56;
+  return 0.58;
+}
+
+function normalizeNullableEmail(value?: string): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function normalizeNullablePhone(value?: string): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
+  app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const payload = CreateQuoteFromChatSchema.parse(request.body);
+    const claims = getJwtClaims(request);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    if (entitlements.limits.quotesPerMonth !== null) {
+      const periodStart = startOfCurrentUtcMonth();
+      const periodEnd = startOfNextUtcMonth();
+      const monthlyQuoteCount = await app.prisma.quote.count({
+        where: {
+          ...tenantActiveScope(claims.tenantId),
+          createdAt: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      });
+
+      if (monthlyQuoteCount >= entitlements.limits.quotesPerMonth) {
+        const requiredPlan =
+          entitlements.planCode === "starter" ? "professional" : "enterprise";
+        return reply.code(403).send({
+          code: "PLAN_LIMIT_EXCEEDED",
+          error: `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
+          feature: "quotesPerMonth",
+          currentPlan: entitlements.planCode,
+          requiredPlan,
+          limit: entitlements.limits.quotesPerMonth,
+          used: monthlyQuoteCount,
+        });
+      }
+    }
+
+    if (entitlements.limits.aiQuotesPerMonth !== null) {
+      const periodStart = startOfCurrentUtcMonth();
+      const periodEnd = startOfNextUtcMonth();
+      const monthlyAiQuoteCount = await app.prisma.quote.count({
+        where: {
+          ...tenantActiveScope(claims.tenantId),
+          aiGeneratedAtUtc: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      });
+
+      if (monthlyAiQuoteCount >= entitlements.limits.aiQuotesPerMonth) {
+        const requiredPlan =
+          entitlements.planCode === "starter" ? "professional" : "enterprise";
+        return reply.code(403).send({
+          code: "PLAN_LIMIT_EXCEEDED",
+          error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI-generated quotes per month. You can still revise existing quotes manually.`,
+          feature: "aiQuotesPerMonth",
+          currentPlan: entitlements.planCode,
+          requiredPlan,
+          limit: entitlements.limits.aiQuotesPerMonth,
+          used: monthlyAiQuoteCount,
+        });
+      }
+    }
+
+    const parsedDraft = parseChatToQuotePrompt(payload.prompt);
+    const detectedCustomerName = payload.customerName?.trim() || parsedDraft.customerName;
+    const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(parsedDraft.customerPhone);
+    const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(parsedDraft.customerEmail);
+
+    let customer = customerPhone
+      ? await app.prisma.customer.findFirst({
+          where: {
+            phone: customerPhone,
+            ...tenantActiveScope(claims.tenantId),
+          },
+        })
+      : null;
+
+    if (!customer && customerEmail) {
+      customer = await app.prisma.customer.findFirst({
+        where: {
+          email: customerEmail,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      });
+    }
+
+    if (!customer && !customerPhone) {
+      return reply.code(400).send({
+        error:
+          "Include a customer phone number (or a known customer email) in the prompt so we can create the quote.",
+      });
+    }
+
+    if (customer) {
+      customer = await app.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          fullName: detectedCustomerName ?? customer.fullName,
+          email: customerEmail ?? customer.email ?? undefined,
+        },
+      });
+    } else {
+      customer = await app.prisma.customer.create({
+        data: {
+          tenantId: claims.tenantId,
+          fullName: detectedCustomerName ?? "New Customer",
+          phone: customerPhone!,
+          email: customerEmail,
+        },
+      });
+    }
+
+    const pricingProfile = await app.prisma.pricingProfile.findFirst({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: parsedDraft.serviceType,
+      },
+      orderBy: {
+        isDefault: "desc",
+      },
+    });
+
+    const laborRate = Number(pricingProfile?.laborRate ?? defaultLaborRate(parsedDraft.serviceType));
+    const materialMarkup = Number(
+      pricingProfile?.materialMarkup ?? defaultMaterialMarkup(parsedDraft.serviceType),
+    );
+    const estimatedUnits = parsedDraft.squareFeetEstimate ?? 100;
+    const taxAmount = roundCurrency(parsedDraft.estimatedTaxAmount ?? 0);
+
+    let customerPriceSubtotal = roundCurrency(parsedDraft.estimatedTotalAmount ?? 0);
+    if (customerPriceSubtotal <= 0) {
+      const baselineInternalCost = roundCurrency(estimatedUnits * laborRate);
+      customerPriceSubtotal = roundCurrency(baselineInternalCost * (1 + materialMarkup));
+    }
+
+    let internalCostSubtotal = roundCurrency(parsedDraft.estimatedInternalCostAmount ?? 0);
+    if (internalCostSubtotal <= 0) {
+      const divisor = 1 + Math.max(materialMarkup, 0.05);
+      internalCostSubtotal = roundCurrency(customerPriceSubtotal / divisor);
+    }
+
+    const laborPercent = laborSplit(parsedDraft.serviceType);
+    const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
+    const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
+    const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
+    const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
+
+    const laborSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "LABOR");
+    const materialSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "MATERIAL");
+    const laborQuantity = Number(Math.max(1, laborSuggestion?.quantity ?? 1).toFixed(2));
+    const materialQuantity = Number(Math.max(1, materialSuggestion?.quantity ?? 1).toFixed(2));
+    const laborUnitCost = roundCurrency(laborInternalTotal / laborQuantity);
+    const laborUnitPrice = roundCurrency(laborCustomerTotal / laborQuantity);
+    const materialUnitCost = roundCurrency(materialInternalTotal / materialQuantity);
+    const materialUnitPrice = roundCurrency(materialCustomerTotal / materialQuantity);
+    const totalAmount = calculateQuoteTotal(customerPriceSubtotal, taxAmount);
+
+    const quote = await app.prisma.$transaction(async (tx) => {
+      const createdQuote = await tx.quote.create({
+        data: {
+          tenantId: claims.tenantId,
+          customerId: customer.id,
+          serviceType: parsedDraft.serviceType,
+          status: "READY_FOR_REVIEW",
+          title: parsedDraft.title,
+          scopeText: parsedDraft.scopeText,
+          internalCostSubtotal,
+          customerPriceSubtotal,
+          taxAmount,
+          totalAmount,
+          aiGeneratedAtUtc: new Date(),
+        },
+      });
+
+      await tx.quoteLineItem.createMany({
+        data: [
+          {
+            tenantId: claims.tenantId,
+            quoteId: createdQuote.id,
+            description: laborSuggestion?.description ?? `${parsedDraft.serviceType} labor`,
+            quantity: laborQuantity,
+            unitCost: laborUnitCost,
+            unitPrice: laborUnitPrice,
+          },
+          {
+            tenantId: claims.tenantId,
+            quoteId: createdQuote.id,
+            description: materialSuggestion?.description ?? "Materials and install supplies",
+            quantity: materialQuantity,
+            unitCost: materialUnitCost,
+            unitPrice: materialUnitPrice,
+          },
+        ],
+      });
+
+      await recalculateQuoteFromLineItems(tx, createdQuote.id, claims.tenantId);
+
+      await createQuoteRevision(tx, {
+        tenantId: claims.tenantId,
+        quoteId: createdQuote.id,
+        eventType: "CREATED",
+        changedFields: [
+          "customerId",
+          "serviceType",
+          "title",
+          "scopeText",
+          "internalCostSubtotal",
+          "customerPriceSubtotal",
+          "taxAmount",
+          "totalAmount",
+          "lineItems",
+        ],
+      });
+
+      return tx.quote.findFirst({
+        where: {
+          id: createdQuote.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        include: {
+          customer: true,
+          lineItems: {
+            where: tenantActiveScope(claims.tenantId),
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+    });
+
+    if (!quote) {
+      return reply.code(500).send({ error: "Failed generating quote from chat prompt." });
+    }
+
+    return reply.code(201).send({
+      quote,
+      parsed: {
+        customerName: parsedDraft.customerName,
+        customerPhone: parsedDraft.customerPhone,
+        customerEmail: parsedDraft.customerEmail,
+        serviceType: parsedDraft.serviceType,
+        squareFeetEstimate: parsedDraft.squareFeetEstimate,
+        estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
+      },
+    });
+  });
+
   app.post("/quotes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteSchema.parse(request.body);
     const claims = getJwtClaims(request);
     const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    if (entitlements.limits.quotesPerMonth !== null) {
+      const periodStart = startOfCurrentUtcMonth();
+      const periodEnd = startOfNextUtcMonth();
+      const monthlyQuoteCount = await app.prisma.quote.count({
+        where: {
+          ...tenantActiveScope(claims.tenantId),
+          createdAt: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      });
+
+      if (monthlyQuoteCount >= entitlements.limits.quotesPerMonth) {
+        const requiredPlan =
+          entitlements.planCode === "starter" ? "professional" : "enterprise";
+        return reply.code(403).send({
+          code: "PLAN_LIMIT_EXCEEDED",
+          error: `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
+          feature: "quotesPerMonth",
+          currentPlan: entitlements.planCode,
+          requiredPlan,
+          limit: entitlements.limits.quotesPerMonth,
+          used: monthlyQuoteCount,
+        });
+      }
+    }
 
     const customer = await app.prisma.customer.findFirst({
       where: {
@@ -456,6 +797,26 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.get("/quotes/history", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const query = QuoteHistoryQuerySchema.parse(request.query);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    if (!entitlements.features.quoteVersionHistory) {
+      return reply.code(403).send({
+        code: "PLAN_FEATURE_REQUIRED",
+        feature: "quoteVersionHistory",
+        currentPlan: entitlements.planCode,
+        requiredPlan: requiredPlanForFeature("quoteVersionHistory"),
+        error: "Quote revision history is available on Professional and Enterprise plans.",
+      });
+    }
+
+    const historyWindowStart =
+      entitlements.limits.quoteHistoryDays === null
+        ? null
+        : new Date(Date.now() - entitlements.limits.quoteHistoryDays * 24 * 60 * 60 * 1000);
 
     if (query.customerId) {
       const customer = await app.prisma.customer.findFirst({
@@ -489,6 +850,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       ...tenantActiveScope(claims.tenantId),
       ...(query.customerId ? { customerId: query.customerId } : {}),
       ...(query.quoteId ? { quoteId: query.quoteId } : {}),
+      ...(historyWindowStart ? { createdAt: { gte: historyWindowStart } } : {}),
     };
 
     const [revisions, total] = await app.prisma.$transaction([
@@ -509,6 +871,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         offset: query.offset,
         total,
       },
+      policy: {
+        quoteHistoryDays: entitlements.limits.quoteHistoryDays,
+      },
     };
   });
 
@@ -516,6 +881,26 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const query = QuoteHistoryByQuoteQuerySchema.parse(request.query);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    if (!entitlements.features.quoteVersionHistory) {
+      return reply.code(403).send({
+        code: "PLAN_FEATURE_REQUIRED",
+        feature: "quoteVersionHistory",
+        currentPlan: entitlements.planCode,
+        requiredPlan: requiredPlanForFeature("quoteVersionHistory"),
+        error: "Quote revision history is available on Professional and Enterprise plans.",
+      });
+    }
+
+    const historyWindowStart =
+      entitlements.limits.quoteHistoryDays === null
+        ? null
+        : new Date(Date.now() - entitlements.limits.quoteHistoryDays * 24 * 60 * 60 * 1000);
 
     const quote = await app.prisma.quote.findFirst({
       where: {
@@ -532,6 +917,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const where: Prisma.QuoteRevisionWhereInput = {
       quoteId: quote.id,
       ...tenantActiveScope(claims.tenantId),
+      ...(historyWindowStart ? { createdAt: { gte: historyWindowStart } } : {}),
     };
 
     const [revisions, total] = await app.prisma.$transaction([
@@ -551,6 +937,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         limit: query.limit,
         offset: query.offset,
         total,
+      },
+      policy: {
+        quoteHistoryDays: entitlements.limits.quoteHistoryDays,
       },
     };
   });
@@ -886,6 +1275,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const query = QuoteOutboundEventQuerySchema.parse(request.query);
+      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+      if (!entitlements) {
+        return reply.code(404).send({ error: "Tenant not found for account." });
+      }
+
+      if (!entitlements.features.communicationLog) {
+        return reply.code(403).send({
+          code: "PLAN_FEATURE_REQUIRED",
+          feature: "communicationLog",
+          currentPlan: entitlements.planCode,
+          requiredPlan: requiredPlanForFeature("communicationLog"),
+          error: "Communication logs are available on Professional and Enterprise plans.",
+        });
+      }
 
       const quote = await app.prisma.quote.findFirst({
         where: {
@@ -932,6 +1336,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const payload = CreateQuoteOutboundEventSchema.parse(request.body);
+      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+
+      if (!entitlements) {
+        return reply.code(404).send({ error: "Tenant not found for account." });
+      }
+
+      if (!entitlements.features.communicationLog) {
+        return reply.code(403).send({
+          code: "PLAN_FEATURE_REQUIRED",
+          feature: "communicationLog",
+          currentPlan: entitlements.planCode,
+          requiredPlan: requiredPlanForFeature("communicationLog"),
+          error: "Communication logs are available on Professional and Enterprise plans.",
+        });
+      }
 
       const quote = await app.prisma.quote.findFirst({
         where: {
