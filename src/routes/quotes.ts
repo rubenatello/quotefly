@@ -1,4 +1,4 @@
-import { Prisma, QuoteRevisionEventType } from "@prisma/client";
+import { LeadFollowUpStatus, Prisma, QuoteOutboundChannel, QuoteRevisionEventType } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
@@ -97,6 +97,15 @@ const QuoteHistoryQuerySchema = PaginationQuerySchema.extend({
 
 const QuoteHistoryByQuoteQuerySchema = PaginationQuerySchema;
 
+const CreateQuoteOutboundEventSchema = z.object({
+  channel: z.enum(["EMAIL_APP", "SMS_APP", "COPY"]),
+  destination: z.string().trim().min(1).max(320).optional(),
+  subject: z.string().trim().min(1).max(220).optional(),
+  body: z.string().trim().min(1).max(5000).optional(),
+});
+
+const QuoteOutboundEventQuerySchema = PaginationQuerySchema;
+
 const QuoteRevisionSelect = {
   id: true,
   quoteId: true,
@@ -138,6 +147,13 @@ function safeFileLabel(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 60);
+}
+
+function mapQuoteStatusToFollowUpStatus(status?: z.infer<typeof QuoteStatusSchema>): LeadFollowUpStatus | undefined {
+  if (status === "SENT_TO_CUSTOMER") return "NEEDS_FOLLOW_UP";
+  if (status === "ACCEPTED") return "WON";
+  if (status === "REJECTED") return "LOST";
+  return undefined;
 }
 
 async function getActiveQuoteForTenant(
@@ -701,6 +717,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     ];
     const revisionEventType: QuoteRevisionEventType =
       payload.status !== undefined ? "STATUS_CHANGED" : "UPDATED";
+    const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
 
     const quote = await app.prisma.$transaction(async (tx) => {
       const updatedQuote = await tx.quote.update({
@@ -734,6 +751,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         eventType: revisionEventType,
         changedFields: Array.from(new Set(revisionChangedFields)),
       });
+
+      if (followUpStatusUpdate) {
+        await tx.customer.updateMany({
+          where: {
+            id: updatedQuote.customerId,
+            ...tenantActiveScope(claims.tenantId),
+          },
+          data: {
+            followUpStatus: followUpStatusUpdate,
+            followUpUpdatedAtUtc: new Date(),
+          },
+        });
+      }
 
       return updatedQuote;
     });
@@ -820,6 +850,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         changedFields: ["status", "sentAt", "decisionSession.status"],
       });
 
+      if (decision === "send") {
+        await tx.customer.updateMany({
+          where: {
+            id: updatedQuote.customerId,
+            ...tenantActiveScope(claims.tenantId),
+          },
+          data: {
+            followUpStatus: "NEEDS_FOLLOW_UP",
+            followUpUpdatedAtUtc: new Date(),
+          },
+        });
+      }
+
       return updatedQuote;
     });
 
@@ -835,6 +878,105 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           : "Quote marked for revision",
     });
   });
+
+  app.get(
+    "/quotes/:quoteId/outbound-events",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      const { quoteId } = QuoteParamsSchema.parse(request.params);
+      const query = QuoteOutboundEventQuerySchema.parse(request.query);
+
+      const quote = await app.prisma.quote.findFirst({
+        where: {
+          id: quoteId,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        select: { id: true },
+      });
+
+      if (!quote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+
+      const where: Prisma.QuoteOutboundEventWhereInput = {
+        quoteId: quote.id,
+        ...tenantActiveScope(claims.tenantId),
+      };
+
+      const [events, total] = await app.prisma.$transaction([
+        app.prisma.quoteOutboundEvent.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take: query.limit,
+          skip: query.offset,
+        }),
+        app.prisma.quoteOutboundEvent.count({ where }),
+      ]);
+
+      return {
+        events,
+        pagination: {
+          limit: query.limit,
+          offset: query.offset,
+          total,
+        },
+      };
+    },
+  );
+
+  app.post(
+    "/quotes/:quoteId/outbound-events",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      const { quoteId } = QuoteParamsSchema.parse(request.params);
+      const payload = CreateQuoteOutboundEventSchema.parse(request.body);
+
+      const quote = await app.prisma.quote.findFirst({
+        where: {
+          id: quoteId,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        select: {
+          id: true,
+          customerId: true,
+          customer: {
+            select: {
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (!quote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+
+      const destination =
+        payload.destination ??
+        (payload.channel === "EMAIL_APP"
+          ? quote.customer.email ?? undefined
+          : payload.channel === "SMS_APP"
+            ? quote.customer.phone
+            : undefined);
+
+      const event = await app.prisma.quoteOutboundEvent.create({
+        data: {
+          tenantId: claims.tenantId,
+          quoteId: quote.id,
+          customerId: quote.customerId,
+          channel: payload.channel as QuoteOutboundChannel,
+          destination,
+          subject: payload.subject,
+          bodyPreview: payload.body?.slice(0, 500),
+        },
+      });
+
+      return reply.code(201).send({ event });
+    },
+  );
 
   app.post("/quotes/:quoteId/line-items", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);

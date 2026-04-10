@@ -14,7 +14,7 @@
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -63,4 +63,56 @@ button {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+.crm-light {
+  color: #0f172a;
+}
+
+.crm-light .bg-zinc-950 {
+  background-color: #f8fafc !important;
+}
+
+.crm-light .bg-zinc-900\/60,
+.crm-light .bg-zinc-900\/40,
+.crm-light .bg-zinc-950\/40 {
+  background-color: #ffffff !important;
+}
+
+.crm-light .border-zinc-800,
+.crm-light .border-zinc-700,
+.crm-light .border-zinc-600 {
+  border-color: #dbe3ef !important;
+}
+
+.crm-light .text-white,
+.crm-light .text-zinc-100,
+.crm-light .text-zinc-200,
+.crm-light .text-zinc-300 {
+  color: #0f172a !important;
+}
+
+.crm-light .text-zinc-400 {
+  color: #475569 !important;
+}
+
+.crm-light .text-zinc-500 {
+  color: #64748b !important;
+}
+
+.crm-light .bg-zinc-700\/30 {
+  background-color: #eff6ff !important;
+}
+
+.crm-light .bg-quotefly-blue {
+  background-color: #2a7fd8 !important;
+  color: #ffffff !important;
+}
+
+.crm-light .text-quotefly-blue {
+  color: #1f69b2 !important;
+}
+
+.crm-light .text-quotefly-orange {
+  color: #d46a26 !important;
 }

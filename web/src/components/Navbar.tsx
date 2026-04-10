@@ -119,12 +119,23 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
             ))}
             <div className="border-t border-slate-200 pt-4 flex flex-col gap-3">
               {isLoggedIn ? (
-                <button
-                  onClick={() => handleNavigate("dashboard")}
-                  className="w-full px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
-                >
-                  Dashboard
-                </button>
+                <>
+                  <button
+                    onClick={() => handleNavigate("dashboard")}
+                    className="w-full px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    onClick={() => {
+                      onLogout?.();
+                      setMobileMenuOpen(false);
+                    }}
+                    className="w-full px-4 py-2 text-sm font-medium text-slate-700 hover:text-slate-900 transition-colors"
+                  >
+                    Sign Out
+                  </button>
+                </>
               ) : (
                 <>
                   <button

@@ -34,6 +34,17 @@ export type QuoteRevisionEventType =
   | "LINE_ITEM_CHANGED"
   | "DECISION";
 
+export type LeadFollowUpStatus =
+  | "NEEDS_FOLLOW_UP"
+  | "FOLLOWED_UP"
+  | "WON"
+  | "LOST";
+
+export type QuoteOutboundChannel =
+  | "EMAIL_APP"
+  | "SMS_APP"
+  | "COPY";
+
 export interface BrandingComponentColors {
   headerBgColor?: string;
   sectionTitleColor?: string;
@@ -59,6 +70,11 @@ export interface TenantRow {
   name: string;
   slug: string;
   timezone: string;
+  subscriptionStatus: string;
+  subscriptionPlanCode: string | null;
+  trialStartsAtUtc: UtcDate | null;
+  trialEndsAtUtc: UtcDate | null;
+  subscriptionCurrentPeriodEndUtc: UtcDate | null;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   createdAt: UtcDate;
@@ -102,6 +118,8 @@ export interface CustomerRow {
   email: string | null;
   phone: string;
   notes: string | null;
+  followUpStatus: LeadFollowUpStatus;
+  followUpUpdatedAtUtc: UtcDate | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
   deletedAtUtc: UtcDate | null;
@@ -201,6 +219,29 @@ export interface QuoteDecisionSessionRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface QuoteOutboundEventRow {
+  id: string;
+  tenantId: string;
+  quoteId: string;
+  customerId: string;
+  channel: QuoteOutboundChannel;
+  destination: string | null;
+  subject: string | null;
+  bodyPreview: string | null;
+  createdAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface BillingWebhookEventRow {
+  id: string;
+  stripeEventId: string;
+  eventType: string;
+  tenantId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: UtcDate;
+  processedAtUtc: UtcDate;
+}
+
 export const TABLE_RELATION_MAP = {
   TenantBranding: {
     belongsTo: ["Tenant"],
@@ -216,6 +257,8 @@ export const TABLE_RELATION_MAP = {
       "SmsMessage",
       "QuoteLineItem",
       "QuoteRevision",
+      "QuoteOutboundEvent",
+      "BillingWebhookEvent",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -230,7 +273,7 @@ export const TABLE_RELATION_MAP = {
   },
   Customer: {
     belongsTo: ["Tenant"],
-    hasMany: ["Quote", "QuoteRevision"],
+    hasMany: ["Quote", "QuoteRevision", "QuoteOutboundEvent"],
   },
   PricingProfile: {
     belongsTo: ["Tenant"],
@@ -240,7 +283,7 @@ export const TABLE_RELATION_MAP = {
   },
   Quote: {
     belongsTo: ["Tenant", "Customer"],
-    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision"],
+    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision", "QuoteOutboundEvent"],
   },
   QuoteLineItem: {
     belongsTo: ["Tenant", "Quote"],
@@ -253,5 +296,11 @@ export const TABLE_RELATION_MAP = {
   },
   QuoteDecisionSession: {
     belongsTo: ["Tenant", "Quote"],
+  },
+  QuoteOutboundEvent: {
+    belongsTo: ["Tenant", "Quote", "Customer"],
+  },
+  BillingWebhookEvent: {
+    belongsTo: ["Tenant"],
   },
 } as const;

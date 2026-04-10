@@ -46,6 +46,19 @@ enum QuoteRevisionEventType {
   DECISION
 }
 
+enum LeadFollowUpStatus {
+  NEEDS_FOLLOW_UP
+  FOLLOWED_UP
+  WON
+  LOST
+}
+
+enum QuoteOutboundChannel {
+  EMAIL_APP
+  SMS_APP
+  COPY
+}
+
 model TenantBranding {
   id           String    @id @default(cuid())
   tenantId     String    @unique
@@ -64,6 +77,11 @@ model Tenant {
   name                  String
   slug                  String                 @unique
   timezone              String                 @default("UTC")
+  subscriptionStatus    String                 @default("inactive")
+  subscriptionPlanCode  String?
+  trialStartsAtUtc      DateTime?              @db.Timestamptz(3)
+  trialEndsAtUtc        DateTime?              @db.Timestamptz(3)
+  subscriptionCurrentPeriodEndUtc DateTime?    @db.Timestamptz(3)
   createdAt             DateTime               @default(now()) @db.Timestamptz(3)
   updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
   deletedAtUtc          DateTime?              @db.Timestamptz(3)
@@ -80,6 +98,8 @@ model Tenant {
   branding              TenantBranding?
   quoteLineItems        QuoteLineItem[]
   quoteRevisions        QuoteRevision[]
+  quoteOutboundEvents   QuoteOutboundEvent[]
+  billingWebhookEvents  BillingWebhookEvent[]
 
   @@index([createdAt])
   @@index([deletedAtUtc])
@@ -133,12 +153,15 @@ model Customer {
   email        String?
   phone        String
   notes        String?
+  followUpStatus LeadFollowUpStatus @default(NEEDS_FOLLOW_UP)
+  followUpUpdatedAtUtc DateTime? @db.Timestamptz(3)
   createdAt    DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
   deletedAtUtc DateTime? @db.Timestamptz(3)
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quotes       Quote[]
   revisions    QuoteRevision[]
+  quoteOutboundEvents QuoteOutboundEvent[]
 
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
@@ -199,6 +222,7 @@ model Quote {
   lineItems             QuoteLineItem[]
   decisionSessions      QuoteDecisionSession[]
   revisions             QuoteRevision[]
+  outboundEvents        QuoteOutboundEvent[]
 
   @@unique([id, tenantId])
   @@index([tenantId, customerId])
@@ -278,5 +302,39 @@ model QuoteDecisionSession {
 
   @@index([tenantId, requesterPhone, status])
   @@index([quoteId, tenantId])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model BillingWebhookEvent {
+  id            String    @id @default(cuid())
+  stripeEventId String    @unique
+  eventType     String
+  tenantId      String?
+  payload       Json
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  processedAtUtc DateTime @default(now()) @db.Timestamptz(3)
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([createdAt])
+}
+
+model QuoteOutboundEvent {
+  id           String               @id @default(cuid())
+  tenantId     String
+  quoteId      String
+  customerId   String
+  channel      QuoteOutboundChannel
+  destination  String?
+  subject      String?
+  bodyPreview  String?
+  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime?            @db.Timestamptz(3)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  customer     Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@index([tenantId, quoteId, createdAt])
+  @@index([tenantId, customerId, createdAt])
   @@index([tenantId, deletedAtUtc])
 }

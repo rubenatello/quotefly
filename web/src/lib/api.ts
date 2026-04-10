@@ -29,7 +29,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const message = (body as { error?: string }).error ?? `Request failed: ${res.status}`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
 
   if (res.status === 204) {
@@ -57,7 +57,7 @@ async function requestBlob(path: string, options: RequestInit = {}): Promise<Blo
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const message = (body as { error?: string }).error ?? `Request failed: ${res.status}`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
 
   return res.blob();
@@ -65,10 +65,13 @@ async function requestBlob(path: string, options: RequestInit = {}): Promise<Blo
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly details: unknown;
+
+  constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -76,6 +79,25 @@ export type AuthPayload = {
   token: string;
   user: { id: string; email: string; fullName: string };
   tenant: { id: string; name: string; slug: string };
+};
+
+export type AuthSessionPayload = {
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    createdAt: string;
+  };
+  tenant: {
+    id: string;
+    name: string;
+    slug: string;
+    subscriptionStatus?: string;
+    subscriptionPlanCode?: string | null;
+    trialEndsAtUtc?: string | null;
+    subscriptionCurrentPeriodEndUtc?: string | null;
+  };
+  role: string;
 };
 
 export type QuoteStatus =
@@ -91,6 +113,9 @@ export type QuoteRevisionEventType =
   | "STATUS_CHANGED"
   | "LINE_ITEM_CHANGED"
   | "DECISION";
+
+export type QuoteOutboundChannel = "EMAIL_APP" | "SMS_APP" | "COPY";
+export type LeadFollowUpStatus = "NEEDS_FOLLOW_UP" | "FOLLOWED_UP" | "WON" | "LOST";
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING";
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
@@ -111,8 +136,20 @@ export type Customer = {
   email?: string | null;
   phone: string;
   notes?: string | null;
+  followUpStatus: LeadFollowUpStatus;
+  followUpUpdatedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CustomerDuplicateMatch = {
+  id: string;
+  fullName: string;
+  phone: string;
+  email?: string | null;
+  deletedAtUtc?: string | null;
+  createdAt: string;
+  matchReasons: Array<"phone" | "email">;
 };
 
 export type QuoteLineItem = {
@@ -196,6 +233,18 @@ export type QuoteRevision = {
   };
 };
 
+export type QuoteOutboundEvent = {
+  id: string;
+  tenantId: string;
+  quoteId: string;
+  customerId: string;
+  channel: QuoteOutboundChannel;
+  destination?: string | null;
+  subject?: string | null;
+  bodyPreview?: string | null;
+  createdAt: string;
+};
+
 type Pagination = { limit: number; offset: number; total: number };
 
 export const api = {
@@ -209,6 +258,8 @@ export const api = {
 
     signin: (body: { email: string; password: string }) =>
       request<AuthPayload>("/v1/auth/signin", { method: "POST", body: JSON.stringify(body) }),
+
+    me: () => request<AuthSessionPayload>("/v1/auth/me"),
   },
 
   branding: {
@@ -263,7 +314,16 @@ export const api = {
       phone: string;
       email?: string | null;
       notes?: string | null;
-    }) => request<{ customer: Customer; restored?: boolean }>("/v1/customers", {
+      followUpStatus?: LeadFollowUpStatus;
+      duplicateAction?: "merge" | "create_new";
+      duplicateCustomerId?: string;
+    }) => request<{
+      customer: Customer;
+      restored?: boolean;
+      merged?: boolean;
+      matches?: CustomerDuplicateMatch[];
+      code?: string;
+    }>("/v1/customers", {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -275,6 +335,7 @@ export const api = {
         phone?: string;
         email?: string | null;
         notes?: string | null;
+        followUpStatus?: LeadFollowUpStatus;
       },
     ) => request<{ customer: Customer }>(`/v1/customers/${customerId}`, {
       method: "PATCH",
@@ -404,6 +465,30 @@ export const api = {
       remove: (quoteId: string, lineItemId: string) =>
         request<void>(`/v1/quotes/${quoteId}/line-items/${lineItemId}`, {
           method: "DELETE",
+        }),
+    },
+
+    outboundEvents: {
+      list: (quoteId: string, query?: { limit?: number; offset?: number }) =>
+        request<{ events: QuoteOutboundEvent[]; pagination: Pagination }>(
+          `/v1/quotes/${quoteId}/outbound-events${toQueryString({
+            limit: query?.limit,
+            offset: query?.offset,
+          })}`,
+        ),
+
+      create: (
+        quoteId: string,
+        body: {
+          channel: QuoteOutboundChannel;
+          destination?: string;
+          subject?: string;
+          body?: string;
+        },
+      ) =>
+        request<{ event: QuoteOutboundEvent }>(`/v1/quotes/${quoteId}/outbound-events`, {
+          method: "POST",
+          body: JSON.stringify(body),
         }),
     },
   },

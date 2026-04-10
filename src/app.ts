@@ -4,7 +4,9 @@ import formbody from "@fastify/formbody";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import jwt from "@fastify/jwt";
+import fastifyRawBody from "fastify-raw-body";
 import { PrismaClient } from "@prisma/client";
+import { ZodError } from "zod";
 import { env } from "./config/env";
 import { prisma } from "./lib/prisma";
 import { healthRoutes } from "./routes/health";
@@ -14,6 +16,7 @@ import { quoteRoutes } from "./routes/quotes";
 import { smsRoutes } from "./routes/sms";
 import { authRoutes } from "./routes/auth";
 import { brandingRoutes } from "./routes/branding";
+import { billingRoutes } from "./routes/billing";
 import { swaggerPlugin } from "./plugins/swagger";
 
 declare module "fastify" {
@@ -41,10 +44,45 @@ export function buildServer() {
 
   app.register(cors, { origin: true });
   app.register(formbody);
+  app.register(fastifyRawBody, {
+    field: "rawBody",
+    global: false,
+    encoding: "utf8",
+    runFirst: true,
+  });
   app.register(helmet);
   app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
   app.register(jwt, { secret: env.JWT_SECRET });
   app.register(swaggerPlugin);
+
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(400).send({
+        error: "Invalid request data.",
+        issues: error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+          code: issue.code,
+        })),
+      });
+    }
+
+    request.log.error(error);
+
+    const statusCode =
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+
+    return reply.code(statusCode).send({
+      error:
+        statusCode >= 500
+          ? "Internal Server Error"
+          : error instanceof Error
+            ? error.message
+            : "Request failed.",
+    });
+  });
 
   // Reusable preHandler hook for protected routes
   app.decorate("authenticate", async function (request, reply) {
@@ -60,6 +98,7 @@ export function buildServer() {
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
+  app.register(billingRoutes, { prefix: "/v1" });
   if (env.ENABLE_TWILIO_SMS) {
     app.register(smsRoutes, { prefix: "/v1" });
   }
