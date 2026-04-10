@@ -1703,7 +1703,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
 function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-colors hover:border-slate-300">
       <div className="mb-2 text-quotefly-blue">{icon}</div>
       <p className="text-xs uppercase text-slate-500">{label}</p>
       <p className="text-2xl font-bold text-slate-900">{value}</p>
@@ -1721,7 +1721,7 @@ function PipelineFlow({
   closedLeads: number;
 }) {
   return (
-    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
       <div className="flex flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
@@ -1752,7 +1752,7 @@ function PipelineStage({
         : "text-emerald-700 border-emerald-300 bg-emerald-50";
 
   return (
-    <div className={`flex items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
+    <div className={`flex min-w-[170px] items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/30 bg-white/70">
           {icon}
@@ -1805,14 +1805,14 @@ function PipelineColumn({
           {emptyLabel}
         </p>
       ) : (
-        <div className="max-h-64 space-y-2 overflow-auto">
+        <div className="max-h-64 space-y-2 overflow-auto pr-1">
           {leads.map((lead) => (
             <button
               key={`${lead.customerId}-${lead.quoteId ?? "lead"}`}
               type="button"
               onClick={() => onSelectLead(lead.quoteId)}
               disabled={!lead.quoteId}
-              className="w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-left transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
             >
               <p className="text-sm font-medium text-slate-900">{lead.customerName}</p>
               <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-600">
@@ -1838,23 +1838,27 @@ function PipelineColumn({
               <div className="mt-2 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <FollowUpPill status={lead.followUpStatus} compact />
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Follow-up</span>
+                  {lead.quoteId ? (
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">Status</span>
+                  ) : null}
                 </div>
-                <select
-                  value={lead.followUpStatus}
-                  disabled={saving}
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) =>
-                    onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
-                  }
-                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
-                >
-                  {FOLLOW_UP_STATUSES.map((status) => (
-                    <option key={`${lead.customerId}-${status}`} value={status}>
-                      {followUpLabel(status)}
-                    </option>
-                  ))}
-                </select>
+                {lead.quoteId ? (
+                  <select
+                    value={lead.followUpStatus}
+                    disabled={saving}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) =>
+                      onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
+                    }
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                  >
+                    {FOLLOW_UP_STATUSES.map((status) => (
+                      <option key={`${lead.customerId}-${status}`} value={status}>
+                        {followUpLabel(status)}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
               </div>
               {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">No quote attached yet</p>}
             </button>

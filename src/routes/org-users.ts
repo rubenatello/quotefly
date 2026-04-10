@@ -71,7 +71,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         },
         orderBy: [{ role: "asc" }, { createdAt: "asc" }],
       }),
-      loadTenantEntitlements(app.prisma, claims.tenantId),
+      loadTenantEntitlements(app.prisma, claims.tenantId, { userEmail: claims.email }),
     ]);
 
     return {
@@ -113,7 +113,9 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "Insufficient permission to manage organization users." });
     }
 
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }

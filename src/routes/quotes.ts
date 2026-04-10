@@ -423,7 +423,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteFromChatSchema.parse(request.body);
     const claims = getJwtClaims(request);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
 
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
@@ -672,7 +674,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const payload = CreateQuoteSchema.parse(request.body);
     const claims = getJwtClaims(request);
     const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
 
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
@@ -797,7 +801,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.get("/quotes/history", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const query = QuoteHistoryQuerySchema.parse(request.query);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
 
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
@@ -881,7 +887,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const query = QuoteHistoryByQuoteQuerySchema.parse(request.query);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
 
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
@@ -1275,7 +1283,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const query = QuoteOutboundEventQuerySchema.parse(request.query);
-      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
+      });
 
       if (!entitlements) {
         return reply.code(404).send({ error: "Tenant not found for account." });
@@ -1336,7 +1346,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const payload = CreateQuoteOutboundEventSchema.parse(request.body);
-      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId);
+      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
+      });
 
       if (!entitlements) {
         return reply.code(404).send({ error: "Tenant not found for account." });

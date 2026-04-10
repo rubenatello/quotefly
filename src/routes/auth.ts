@@ -249,7 +249,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       trialStartsAtUtc: membership.tenant.trialStartsAtUtc,
       trialEndsAtUtc: membership.tenant.trialEndsAtUtc,
       subscriptionCurrentPeriodEndUtc: membership.tenant.subscriptionCurrentPeriodEndUtc,
-    });
+    }, new Date(), { userEmail: membership.user.email });
 
     return {
       user: membership.user,

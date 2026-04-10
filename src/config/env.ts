@@ -19,6 +19,7 @@ const EnvSchema = z.object({
   STRIPE_PRICE_ID_STARTER: z.string().default(""),
   STRIPE_PRICE_ID_PROFESSIONAL: z.string().default(""),
   STRIPE_PRICE_ID_ENTERPRISE: z.string().default(""),
+  SUPERUSER_EMAILS: z.string().default(""),
   APP_URL: z.string().url().default("http://localhost:5173"),
   API_URL: z.string().url().default("http://localhost:4000"),
   ENABLE_TWILIO_SMS: BooleanFromEnv.default(false),

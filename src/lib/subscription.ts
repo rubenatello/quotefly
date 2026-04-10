@@ -10,6 +10,10 @@ export interface TenantBillingSnapshot {
   subscriptionCurrentPeriodEndUtc: Date | null;
 }
 
+interface EntitlementContext {
+  userEmail?: string | null;
+}
+
 interface PlanDefinition {
   code: PlanCode;
   name: string;
@@ -92,6 +96,13 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
 
 const PLAN_CODES = new Set<PlanCode>(["starter", "professional", "enterprise"]);
 
+const SUPERUSER_EMAIL_SET = new Set(
+  (process.env.SUPERUSER_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
+);
+
 function parsePlanCode(value: string | null | undefined): PlanCode | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
@@ -104,7 +115,18 @@ function isActiveTrial(snapshot: TenantBillingSnapshot, now: Date): boolean {
   return snapshot.trialEndsAtUtc.getTime() > now.getTime();
 }
 
-export function resolveEffectivePlanCode(snapshot: TenantBillingSnapshot, now = new Date()): PlanCode {
+function isSuperuser(context?: EntitlementContext): boolean {
+  const email = context?.userEmail?.trim().toLowerCase();
+  if (!email) return false;
+  return SUPERUSER_EMAIL_SET.has(email);
+}
+
+export function resolveEffectivePlanCode(
+  snapshot: TenantBillingSnapshot,
+  now = new Date(),
+  context?: EntitlementContext,
+): PlanCode {
+  if (isSuperuser(context)) return "enterprise";
   if (isActiveTrial(snapshot, now)) return "enterprise";
   const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
   if (explicitPlan) return explicitPlan;
@@ -122,14 +144,15 @@ export interface TenantEntitlements {
 export function buildTenantEntitlements(
   snapshot: TenantBillingSnapshot,
   now = new Date(),
+  context?: EntitlementContext,
 ): TenantEntitlements {
-  const planCode = resolveEffectivePlanCode(snapshot, now);
+  const planCode = resolveEffectivePlanCode(snapshot, now, context);
   const definition = PLAN_DEFINITIONS[planCode];
 
   return {
     planCode,
     planName: definition.name,
-    isTrial: isActiveTrial(snapshot, now),
+    isTrial: isActiveTrial(snapshot, now) && !isSuperuser(context),
     limits: definition.limits,
     features: definition.features,
   };
@@ -157,10 +180,11 @@ export async function loadTenantBillingSnapshot(
 export async function loadTenantEntitlements(
   prisma: PrismaClient,
   tenantId: string,
+  context?: EntitlementContext,
 ): Promise<TenantEntitlements | null> {
   const snapshot = await loadTenantBillingSnapshot(prisma, tenantId);
   if (!snapshot) return null;
-  return buildTenantEntitlements(snapshot);
+  return buildTenantEntitlements(snapshot, new Date(), context);
 }
 
 export function startOfCurrentUtcMonth(now = new Date()): Date {
