@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { useParams } from "react-router-dom";
 import { useDashboard, money, formatDateTime, SERVICE_TYPES, QUOTE_STATUSES } from "../components/dashboard/DashboardContext";
 import { FeatureLockedCard, QuoteMathSummaryPanel, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { DeleteIcon, SendIcon } from "../components/Icons";
@@ -8,6 +10,7 @@ export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
   const {
+    selectedQuoteId, focusQuoteDesk,
     selectedQuote, selectedQuoteMath, quoteEditForm, setQuoteEditForm,
     lineItemForm, setLineItemForm, lineItemMath,
     saving, error, notice, setError, setNotice,
@@ -19,6 +22,14 @@ export function QuoteDeskView() {
     historyMode, setHistoryMode, historyCustomerId, setHistoryCustomerId,
     customers, loadQuoteHistory, loadOutboundEvents,
   } = useDashboard();
+  const { quoteId } = useParams<{ quoteId: string }>();
+
+  useEffect(() => {
+    if (!quoteId) return;
+    if (quoteId !== selectedQuoteId) {
+      focusQuoteDesk(quoteId);
+    }
+  }, [quoteId, selectedQuoteId, focusQuoteDesk]);
 
   const serviceOptions = SERVICE_TYPES.map((s) => ({ value: s, label: s }));
   const statusOptions = QUOTE_STATUSES.map((s) => ({ value: s, label: s }));

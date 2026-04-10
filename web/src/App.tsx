@@ -121,6 +121,7 @@ function CrmLayout({ session, onLogout }: { session: Session; onLogout: () => vo
               <Route path="quotes" element={<QuoteDeskView />} />
               <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
               <Route path="history" element={<QuoteHistoryView />} />
+              <Route path="settings" element={<Navigate to="/app/admin" replace />} />
               <Route path="branding" element={<BrandingPage tenantId={session.tenantId} />} />
               <Route path="admin" element={<AdminPage session={session} />} />
               <Route path="*" element={<Navigate to="/app" replace />} />

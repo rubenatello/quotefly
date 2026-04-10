@@ -19,7 +19,7 @@ const TABS: TabItem[] = [
   { path: "/app/build", label: "Build", icon: <EditIcon size={20} /> },
   { path: "/app/quotes", label: "Quotes", icon: <QuoteIcon size={20} /> },
   { path: "/app/history", label: "History", icon: <ClockIcon size={20} /> },
-  { path: "/app/settings", label: "More", icon: <SettingsIcon size={20} /> },
+  { path: "/app/admin", label: "More", icon: <SettingsIcon size={20} /> },
 ];
 
 function isActive(tabPath: string, currentPath: string): boolean {
