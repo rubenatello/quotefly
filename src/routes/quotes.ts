@@ -9,6 +9,7 @@ import {
   startOfNextUtcMonth,
 } from "../lib/subscription";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
+import { aiParseChatToQuotePrompt } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
@@ -487,7 +488,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const parsedDraft = parseChatToQuotePrompt(payload.prompt);
+    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt);
     const detectedCustomerName = payload.customerName?.trim() || parsedDraft.customerName;
     const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(parsedDraft.customerPhone);
     const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(parsedDraft.customerEmail);
