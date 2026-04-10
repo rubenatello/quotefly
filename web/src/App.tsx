@@ -5,11 +5,17 @@ import { CrmShell } from "./components/CrmShell";
 import { AuthModal } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
+import { CookieConsentBanner } from "./components/CookieConsentBanner";
 import { BottomTabBar } from "./components/crm/BottomTabBar";
 import { LandingPage } from "./pages/LandingPage";
 import { PricingPage } from "./pages/PricingPage";
 import { SolutionsPage } from "./pages/SolutionsPage";
 import { AboutPage } from "./pages/AboutPage";
+import { SupportPage } from "./pages/SupportPage";
+import { PrivacyPage } from "./pages/PrivacyPage";
+import { DataPrivacyPage } from "./pages/DataPrivacyPage";
+import { TermsPage } from "./pages/TermsPage";
+import { CookiePolicyPage } from "./pages/CookiePolicyPage";
 import { BrandingPage } from "./pages/BrandingPage";
 import { AdminPage } from "./pages/AdminPage";
 import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
@@ -35,6 +41,8 @@ type Session = {
   onboardingCompletedAtUtc?: string | null;
   subscriptionStatus?: string;
   subscriptionPlanCode?: string | null;
+  trialEndsAtUtc?: string | null;
+  subscriptionCurrentPeriodEndUtc?: string | null;
   effectivePlanCode?: "starter" | "professional" | "enterprise";
   effectivePlanName?: string;
   isTrial?: boolean;
@@ -57,6 +65,8 @@ function toSession(payload: AuthSessionPayload): Session {
     onboardingCompletedAtUtc: payload.tenant.onboardingCompletedAtUtc ?? null,
     subscriptionStatus: payload.tenant.subscriptionStatus,
     subscriptionPlanCode: payload.tenant.subscriptionPlanCode,
+    trialEndsAtUtc: payload.tenant.trialEndsAtUtc ?? null,
+    subscriptionCurrentPeriodEndUtc: payload.tenant.subscriptionCurrentPeriodEndUtc ?? null,
     effectivePlanCode: payload.tenant.effectivePlanCode,
     effectivePlanName: payload.tenant.effectivePlanName,
     isTrial: payload.tenant.isTrial,
@@ -169,10 +179,16 @@ function MarketingLayout({
           <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
           <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
           <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
+          <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
+          <Route path="privacy" element={<PrivacyPage />} />
+          <Route path="data-privacy" element={<DataPrivacyPage />} />
+          <Route path="terms" element={<TermsPage />} />
+          <Route path="cookies" element={<CookiePolicyPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       <Footer />
+      <CookieConsentBanner />
     </div>
   );
 }

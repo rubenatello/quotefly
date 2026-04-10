@@ -1,26 +1,93 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useParams } from "react-router-dom";
-import { useDashboard, money, formatDateTime, SERVICE_TYPES, QUOTE_STATUSES } from "../components/dashboard/DashboardContext";
-import { FeatureLockedCard, QuoteMathSummaryPanel, QuoteStatusPill } from "../components/dashboard/DashboardUi";
-import { DeleteIcon, SendIcon } from "../components/Icons";
-import { Button, Card, CardHeader, Input, Select, Textarea, Alert, EmptyState } from "../components/ui";
+import {
+  useDashboard,
+  money,
+  formatDateTime,
+  SERVICE_TYPES,
+  QUOTE_STATUSES,
+} from "../components/dashboard/DashboardContext";
+import {
+  FeatureLockedCard,
+  HistoryEventPill,
+  OutboundChannelPill,
+  QuoteMathSummaryPanel,
+  QuoteStatusPill,
+} from "../components/dashboard/DashboardUi";
+import {
+  CopyIcon,
+  CustomerIcon,
+  DeleteIcon,
+  EmailIcon,
+  InvoiceIcon,
+  MessageIcon,
+  PriceIcon,
+  QuoteIcon,
+  SendIcon,
+} from "../components/Icons";
+import {
+  Alert,
+  Button,
+  Card,
+  CardHeader,
+  ConfirmModal,
+  EmptyState,
+  Input,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  PageHeader,
+  Select,
+  Textarea,
+} from "../components/ui";
 import { usePageView, useTrack } from "../lib/analytics";
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
+  const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
   const {
-    selectedQuoteId, focusQuoteDesk,
-    selectedQuote, selectedQuoteMath, quoteEditForm, setQuoteEditForm,
-    lineItemForm, setLineItemForm, lineItemMath,
-    saving, error, notice, setError, setNotice,
-    saveQuote, sendDecision, openSendComposer, confirmSendComposer,
-    downloadQuotePdf, addLineItem, deleteLineItem, persistSelectedQuote,
-    sendComposer, setSendComposer,
-    canViewQuoteHistory, canViewCommunicationLog, currentPlanLabel, canAutoUpgradeMessage,
-    quoteHistory, outboundEvents, outboundEventsLoading, historyLoading,
-    historyMode, setHistoryMode, historyCustomerId, setHistoryCustomerId,
-    customers, loadQuoteHistory, loadOutboundEvents,
+    selectedQuoteId,
+    focusQuoteDesk,
+    selectedQuote,
+    selectedQuoteMath,
+    quoteEditForm,
+    setQuoteEditForm,
+    lineItemForm,
+    setLineItemForm,
+    lineItemMath,
+    saving,
+    error,
+    notice,
+    setError,
+    setNotice,
+    saveQuote,
+    sendDecision,
+    openSendComposer,
+    confirmSendComposer,
+    downloadQuotePdf,
+    addLineItem,
+    deleteLineItem,
+    persistSelectedQuote,
+    sendComposer,
+    setSendComposer,
+    canViewQuoteHistory,
+    canViewCommunicationLog,
+    currentPlanLabel,
+    canAutoUpgradeMessage,
+    quoteHistory,
+    outboundEvents,
+    outboundEventsLoading,
+    historyLoading,
+    historyMode,
+    setHistoryMode,
+    historyCustomerId,
+    setHistoryCustomerId,
+    customers,
+    loadQuoteHistory,
+    loadOutboundEvents,
   } = useDashboard();
   const { quoteId } = useParams<{ quoteId: string }>();
 
@@ -31,120 +98,396 @@ export function QuoteDeskView() {
     }
   }, [quoteId, selectedQuoteId, focusQuoteDesk]);
 
-  const serviceOptions = SERVICE_TYPES.map((s) => ({ value: s, label: s }));
-  const statusOptions = QUOTE_STATUSES.map((s) => ({ value: s, label: s }));
+  const serviceOptions = SERVICE_TYPES.map((serviceType) => ({
+    value: serviceType,
+    label: formatServiceTypeLabel(serviceType),
+  }));
+  const statusOptions = QUOTE_STATUSES.map((status) => ({
+    value: status,
+    label: formatQuoteStatusLabel(status),
+  }));
+
+  const quoteMathWarning = useMemo(() => {
+    if (!selectedQuoteMath || selectedQuoteMath.customerSubtotal <= 0) return undefined;
+    if (selectedQuoteMath.estimatedProfit < 0) return "Current pricing is below cost.";
+    if (selectedQuoteMath.estimatedMarginPercent < 10) return "Margin is below 10 percent.";
+    return undefined;
+  }, [selectedQuoteMath]);
 
   if (!selectedQuote) {
-    return <EmptyState title="No quote selected" description="Select a quote from the Builder tab or create a new one." />;
+    return (
+      <EmptyState
+        icon={<QuoteIcon size={18} />}
+        title="No quote selected"
+        description="Select a quote from the Builder tab or create a new one."
+      />
+    );
+  }
+
+  const customerName = selectedQuote.customer?.fullName ?? selectedQuote.customerId;
+  const customerPhone = selectedQuote.customer?.phone ?? "No phone yet";
+  const customerEmail = selectedQuote.customer?.email ?? null;
+  const lineItemCount = selectedQuote.lineItems?.length ?? 0;
+
+  async function confirmDeleteLineItem() {
+    if (!lineItemPendingDeleteId) return;
+    track("line_item_delete");
+    await deleteLineItem(lineItemPendingDeleteId);
+    setLineItemPendingDeleteId(null);
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      {/* ── Quote Header ── */}
-      <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-slate-900">{selectedQuote.title}</h2>
-            <p className="text-xs text-slate-600">Customer: {selectedQuote.customer?.fullName ?? selectedQuote.customerId}</p>
-          </div>
-          <QuoteStatusPill status={selectedQuote.status} />
-        </div>
-      </Card>
+      <Card variant="elevated" padding="lg">
+        <PageHeader
+          title={selectedQuote.title}
+          subtitle="Review the scope, keep the numbers tight, and move the job forward from one screen."
+          actions={<QuoteStatusPill status={selectedQuote.status} />}
+        />
 
-      {/* ── Edit Form ── */}
-      <Card>
-        <CardHeader title="Quote Details" />
-        <form onSubmit={(e) => { track("quote_save"); void saveQuote(e); }} className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Select value={quoteEditForm.serviceType} onChange={(e) => setQuoteEditForm((prev) => ({ ...prev, serviceType: e.target.value as typeof prev.serviceType }))} options={serviceOptions} />
-            <Select value={quoteEditForm.status} onChange={(e) => setQuoteEditForm((prev) => ({ ...prev, status: e.target.value as typeof prev.status }))} options={statusOptions} />
-            <Input type="number" min="0" step="0.01" placeholder="Tax amount" value={quoteEditForm.taxAmount} onChange={(e) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: e.target.value }))} />
-          </div>
-          <Input value={quoteEditForm.title} onChange={(e) => setQuoteEditForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Title" />
-          <Textarea rows={3} value={quoteEditForm.scopeText} onChange={(e) => setQuoteEditForm((prev) => ({ ...prev, scopeText: e.target.value }))} placeholder="Scope details" />
-          {selectedQuoteMath && (
-            <QuoteMathSummaryPanel
-              summary={selectedQuoteMath}
-              money={money}
-              warning={
-                selectedQuoteMath.customerSubtotal > 0 && selectedQuoteMath.estimatedProfit < 0
-                  ? "Current pricing is below cost."
-                  : selectedQuoteMath.customerSubtotal > 0 && selectedQuoteMath.estimatedMarginPercent < 10
-                    ? "Margin is below 10%."
-                    : undefined
-              }
+        <div className="mt-4 flex flex-wrap gap-2">
+          <HeaderMetaChip icon={<CustomerIcon size={13} />} label={customerName} />
+          <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
+          {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
+          <HeaderMetaChip icon={<InvoiceIcon size={13} />} label={`Updated ${formatDateTime(selectedQuote.updatedAt)}`} />
+        </div>
+
+        {selectedQuoteMath && (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <DeskMetricCard
+              icon={<PriceIcon size={16} />}
+              label="Quote total"
+              value={money(selectedQuoteMath.totalAmount)}
+              tone="blue"
             />
-          )}
-
-          {/* Desktop action buttons */}
-          <div className="hidden flex-wrap gap-2 sm:flex">
-            <Button type="submit" loading={saving}>Save Quote</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_mark_quoted"); void sendDecision("send"); }} disabled={saving} icon={<SendIcon size={14} />}>Mark Quoted</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_revise"); void sendDecision("revise"); }} disabled={saving}>Revise</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_email"); openSendComposer("email"); }} disabled={saving}>Email App</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_sms"); openSendComposer("sms"); }} disabled={saving}>Text App</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_copy"); openSendComposer("copy"); }} disabled={saving}>Copy Message</Button>
-            <Button type="button" variant="outline" onClick={() => { track("quote_pdf"); void downloadQuotePdf(); }} disabled={saving}>Download PDF</Button>
-            <Button type="button" variant="secondary" onClick={() => { track("quote_send_pdf"); void downloadQuotePdf({ afterSend: true }); }} disabled={saving}>Send + PDF</Button>
+            <DeskMetricCard
+              icon={<InvoiceIcon size={16} />}
+              label="Line items"
+              value={String(lineItemCount)}
+              tone="slate"
+            />
+            <DeskMetricCard
+              icon={<QuoteIcon size={16} />}
+              label="Est. profit"
+              value={money(selectedQuoteMath.estimatedProfit)}
+              tone={selectedQuoteMath.estimatedProfit >= 0 ? "emerald" : "rose"}
+            />
+            <DeskMetricCard
+              icon={<SendIcon size={16} />}
+              label="Margin"
+              value={`${selectedQuoteMath.estimatedMarginPercent.toFixed(1)}%`}
+              tone={selectedQuoteMath.estimatedMarginPercent >= 10 ? "emerald" : "amber"}
+            />
           </div>
-          <p className="text-xs text-slate-600">
-            Email and text use the device apps after confirmation, so no paid messaging service is required for v1.
-          </p>
-        </form>
+        )}
       </Card>
 
-      {/* ── Line Items ── */}
-      <Card>
-        <CardHeader title="Line Items" />
-        <div className="space-y-2">
-          {(selectedQuote.lineItems ?? []).map((item) => (
-            <div key={item.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div>
-                <p className="text-sm text-slate-900">{item.description}</p>
-                <p className="text-xs text-slate-600">Qty {Number(item.quantity)} · {money(item.unitPrice)}</p>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+        <div className="space-y-5">
+          <Card padding="lg">
+            <CardHeader
+              title="Quote Details"
+              subtitle="Keep the customer-facing scope clear while preserving the internal math behind the quote."
+            />
+            <form id="quote-desk-form" onSubmit={(event) => { track("quote_save"); void saveQuote(event); }} className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[1.1fr_1.1fr_0.8fr]">
+                <Select
+                  label="Trade"
+                  value={quoteEditForm.serviceType}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+                  }
+                  options={serviceOptions}
+                />
+                <Select
+                  label="Pipeline stage"
+                  value={quoteEditForm.status}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
+                  }
+                  options={statusOptions}
+                />
+                <Input
+                  label="Tax amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={quoteEditForm.taxAmount}
+                  onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+                />
               </div>
-              <Button variant="danger" size="sm" onClick={() => { track("line_item_delete"); void deleteLineItem(item.id); }} icon={<DeleteIcon size={12} />}>Delete</Button>
+
+              <Input
+                label="Quote title"
+                value={quoteEditForm.title}
+                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))}
+                placeholder="Replace condenser and evaporator coil"
+              />
+
+              <Textarea
+                label="Scope of work"
+                rows={5}
+                value={quoteEditForm.scopeText}
+                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))}
+                placeholder="Describe the work, materials, exclusions, and completion notes."
+              />
+
+              {selectedQuoteMath && (
+                <QuoteMathSummaryPanel summary={selectedQuoteMath} money={money} warning={quoteMathWarning} />
+              )}
+            </form>
+          </Card>
+
+          <Card padding="lg">
+            <CardHeader
+              title="Line Items"
+              subtitle={`${lineItemCount} line item${lineItemCount === 1 ? "" : "s"} currently attached to this quote.`}
+            />
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
+              <div className="space-y-3">
+                {lineItemCount === 0 ? (
+                  <EmptyState
+                    icon={<InvoiceIcon size={18} />}
+                    title="No line items yet"
+                    description="Add labor, materials, or service charges so the quote math has usable structure."
+                  />
+                ) : (
+                  (selectedQuote.lineItems ?? []).map((item) => {
+                    const quantity = Number(item.quantity);
+                    const unitCost = Number(item.unitCost);
+                    const unitPrice = Number(item.unitPrice);
+                    const lineTotal = quantity * unitPrice;
+                    const lineProfit = quantity * (unitPrice - unitCost);
+
+                    return (
+                      <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{item.description}</p>
+                            <div className="mt-3 grid gap-3 text-xs text-slate-600 sm:grid-cols-4">
+                              <MiniMetric label="Qty" value={quantity.toString()} />
+                              <MiniMetric label="Unit Cost" value={money(unitCost)} />
+                              <MiniMetric label="Unit Price" value={money(unitPrice)} />
+                              <MiniMetric
+                                label="Line Profit"
+                                value={money(lineProfit)}
+                                valueClassName={lineProfit >= 0 ? "text-emerald-700" : "text-red-700"}
+                              />
+                            </div>
+                            <p className="mt-3 text-sm font-semibold text-slate-900">Line total {money(lineTotal)}</p>
+                          </div>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => setLineItemPendingDeleteId(item.id)}
+                            icon={<DeleteIcon size={12} />}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-sm font-semibold text-slate-900">Add Line Item</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Build labor, materials, and service charges with cost and sell price separated.
+                </p>
+                <form onSubmit={(event) => { track("line_item_add"); void addLineItem(event); }} className="mt-4 space-y-3">
+                  <Input
+                    label="Description"
+                    placeholder="Install new condenser"
+                    value={lineItemForm.description}
+                    onChange={(event) => setLineItemForm((prev) => ({ ...prev, description: event.target.value }))}
+                  />
+                  <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                    <Input
+                      label="Quantity"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="1"
+                      value={lineItemForm.quantity}
+                      onChange={(event) => setLineItemForm((prev) => ({ ...prev, quantity: event.target.value }))}
+                    />
+                    <Input
+                      label="Unit cost"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={lineItemForm.unitCost}
+                      onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitCost: event.target.value }))}
+                    />
+                    <Input
+                      label="Unit price"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={lineItemForm.unitPrice}
+                      onChange={(event) => setLineItemForm((prev) => ({ ...prev, unitPrice: event.target.value }))}
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Draft line math</p>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
+                      <MiniMetric label="Cost" value={money(lineItemMath.costTotal)} />
+                      <MiniMetric label="Price" value={money(lineItemMath.priceTotal)} />
+                      <MiniMetric
+                        label="Profit"
+                        value={money(lineItemMath.profit)}
+                        valueClassName={lineItemMath.profit >= 0 ? "text-emerald-700" : "text-red-700"}
+                      />
+                    </div>
+                  </div>
+
+                  <Button type="submit" loading={saving} fullWidth>
+                    Add Line Item
+                  </Button>
+                </form>
+              </div>
             </div>
-          ))}
+          </Card>
         </div>
-        <form onSubmit={(e) => { track("line_item_add"); void addLineItem(e); }} className="mt-3 space-y-2 border-t border-slate-200 pt-3">
-          <Input placeholder="Description" value={lineItemForm.description} onChange={(e) => setLineItemForm((prev) => ({ ...prev, description: e.target.value }))} />
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Input type="number" min="0" step="0.01" placeholder="Qty" value={lineItemForm.quantity} onChange={(e) => setLineItemForm((prev) => ({ ...prev, quantity: e.target.value }))} />
-            <Input type="number" min="0" step="0.01" placeholder="Unit cost" value={lineItemForm.unitCost} onChange={(e) => setLineItemForm((prev) => ({ ...prev, unitCost: e.target.value }))} />
-            <Input type="number" min="0" step="0.01" placeholder="Unit price" value={lineItemForm.unitPrice} onChange={(e) => setLineItemForm((prev) => ({ ...prev, unitPrice: e.target.value }))} />
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-            Draft line math: Cost {money(lineItemMath.costTotal)} · Price {money(lineItemMath.priceTotal)} · Profit{" "}
-            <span className={lineItemMath.profit >= 0 ? "text-emerald-700" : "text-red-700"}>
-              {money(lineItemMath.profit)}
-            </span>
-          </div>
-          <Button type="submit" loading={saving}>Add Line Item</Button>
-        </form>
-      </Card>
 
-      {selectedQuoteMath && <QuoteMathSummaryPanel summary={selectedQuoteMath} money={money} />}
+        <div className="space-y-5 xl:sticky xl:top-24 xl:self-start">
+          <Card variant="blue" padding="lg">
+            <CardHeader
+              title="Operator Actions"
+              subtitle="Save internal changes first, then move or send the quote."
+            />
 
-      {/* ── Mobile Sticky Actions ── */}
-      <div className="sticky bottom-16 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg sm:hidden">
-        <div className="grid grid-cols-2 gap-2">
-          <Button size="sm" onClick={() => void persistSelectedQuote()} loading={saving}>Save</Button>
-          <Button size="sm" variant="outline" onClick={() => void sendDecision("send")} disabled={saving}>Mark Quoted</Button>
-          <Button size="sm" variant="outline" onClick={() => openSendComposer("email")} disabled={saving}>Email</Button>
-          <Button size="sm" variant="outline" onClick={() => void downloadQuotePdf()} disabled={saving}>PDF</Button>
+            <div className="rounded-2xl border border-white/60 bg-white/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer snapshot</p>
+              <p className="mt-2 text-base font-semibold text-slate-900">{customerName}</p>
+              <div className="mt-2 space-y-1 text-sm text-slate-600">
+                <p className="inline-flex items-center gap-2">
+                  <MessageIcon size={14} />
+                  {customerPhone}
+                </p>
+                <p className="inline-flex items-center gap-2">
+                  <EmailIcon size={14} />
+                  {customerEmail ?? "Add customer email before sending by email"}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Internal actions</p>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                <Button type="button" loading={saving} onClick={() => void persistSelectedQuote()}>
+                  Save Quote
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={<SendIcon size={14} />}
+                  onClick={() => { track("quote_mark_quoted"); void sendDecision("send"); }}
+                  disabled={saving}
+                >
+                  Mark Quoted
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => { track("quote_revise"); void sendDecision("revise"); }}
+                  disabled={saving}
+                >
+                  Revise
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Send and export</p>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={<EmailIcon size={14} />}
+                  onClick={() => { track("quote_email"); openSendComposer("email"); }}
+                  disabled={saving}
+                >
+                  Email App
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={<MessageIcon size={14} />}
+                  onClick={() => { track("quote_sms"); openSendComposer("sms"); }}
+                  disabled={saving}
+                >
+                  Text App
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={<CopyIcon size={14} />}
+                  onClick={() => { track("quote_copy"); openSendComposer("copy"); }}
+                  disabled={saving}
+                >
+                  Copy Message
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={<InvoiceIcon size={14} />}
+                  onClick={() => { track("quote_pdf"); void downloadQuotePdf(); }}
+                  disabled={saving}
+                >
+                  Download PDF
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<SendIcon size={14} />}
+                  onClick={() => { track("quote_send_pdf"); void downloadQuotePdf({ afterSend: true }); }}
+                  disabled={saving}
+                >
+                  Send + PDF
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-blue-200 bg-white/80 px-3 py-3 text-xs text-slate-600">
+              Email and text actions open the device apps after confirmation, so v1 does not require a paid messaging provider.
+            </div>
+          </Card>
         </div>
       </div>
 
-      {/* ── Quote History ── */}
+      <div className="sticky bottom-16 z-20 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg sm:hidden">
+        <div className="grid grid-cols-2 gap-2">
+          <Button size="sm" loading={saving} onClick={() => void persistSelectedQuote()}>
+            Save
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void sendDecision("send")} disabled={saving}>
+            Mark Quoted
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => openSendComposer("email")} disabled={saving}>
+            Email
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => void downloadQuotePdf({ afterSend: true })} disabled={saving}>
+            Send + PDF
+          </Button>
+        </div>
+      </div>
+
       {canViewQuoteHistory ? (
-        <Card>
+        <Card padding="lg">
           <CardHeader
             title="Quote Revision History"
-            subtitle="Track original quote values, revisions, and decision changes."
+            subtitle="Track original values, revisions, and decision changes."
             actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh</Button>}
           />
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -153,7 +496,11 @@ export function QuoteDeskView() {
                 key={mode}
                 type="button"
                 onClick={() => setHistoryMode(mode)}
-                className={`rounded-md border px-2 py-1 text-xs ${historyMode === mode ? "border-quotefly-blue bg-quotefly-blue/20 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  historyMode === mode
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
               >
                 {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
               </button>
@@ -161,31 +508,34 @@ export function QuoteDeskView() {
             {historyMode === "customer" && (
               <select
                 value={historyCustomerId}
-                onChange={(e) => setHistoryCustomerId(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                onChange={(event) => setHistoryCustomerId(event.target.value)}
+                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
               >
                 <option value="ALL">Select customer...</option>
-                {customers.map((c) => <option key={c.id} value={c.id}>{c.fullName}</option>)}
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>{customer.fullName}</option>
+                ))}
               </select>
             )}
           </div>
           {historyLoading ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Loading revision history...</p>
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading revision history...</p>
           ) : quoteHistory.length === 0 ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No history entries for this filter yet.</p>
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No history entries for this filter yet.</p>
           ) : (
-            <div className="max-h-64 space-y-2 overflow-auto">
+            <div className="max-h-72 space-y-2 overflow-auto">
               {quoteHistory.map((revision) => (
-                <div key={revision.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                <div key={revision.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <HistoryEventPill eventType={revision.eventType} />
                       <QuoteStatusPill status={revision.status} compact />
-                      <p className="truncate text-sm font-medium text-slate-900">{revision.title}</p>
+                      <p className="text-sm font-semibold text-slate-900">{revision.title}</p>
                     </div>
-                    <p className="text-xs text-slate-600">{formatDateTime(revision.createdAt)}</p>
+                    <p className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</p>
                   </div>
-                  <p className="mt-1 text-xs text-slate-600">
-                    v{revision.version} · Customer: {revision.customer.fullName} · Total {money(revision.totalAmount)}
+                  <p className="mt-2 text-xs text-slate-600">
+                    v{revision.version} / Customer: {revision.customer.fullName} / Total {money(revision.totalAmount)}
                   </p>
                   {revision.changedFields.length > 0 && (
                     <p className="mt-1 text-[11px] text-slate-500">Fields: {revision.changedFields.join(", ")}</p>
@@ -205,28 +555,29 @@ export function QuoteDeskView() {
         />
       )}
 
-      {/* ── Communication Log ── */}
       {canViewCommunicationLog ? (
-        <Card>
+        <Card padding="lg">
           <CardHeader
             title="Send Activity"
-            subtitle="Logged email/text/copy actions for this quote."
+            subtitle="Logged email, text, and copy actions for this quote."
             actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
           />
           {outboundEventsLoading ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Loading send activity...</p>
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading send activity...</p>
           ) : outboundEvents.length === 0 ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">No send actions logged yet.</p>
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No send actions logged yet.</p>
           ) : (
-            <div className="max-h-52 space-y-2 overflow-auto">
+            <div className="max-h-60 space-y-2 overflow-auto">
               {outboundEvents.map((event) => (
-                <div key={event.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">{event.channel}</span>
-                    <p className="text-xs text-slate-600">{formatDateTime(event.createdAt)}</p>
+                <div key={event.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <OutboundChannelPill channel={event.channel} />
+                    <p className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</p>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">{event.destination ? `To: ${event.destination}` : "Destination not captured"}</p>
-                  {event.subject && <p className="mt-1 text-xs text-slate-600">Subject: {event.subject}</p>}
+                  <p className="mt-2 text-xs text-slate-600">
+                    {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
+                  </p>
+                  {event.subject && <p className="mt-1 text-xs text-slate-500">Subject: {event.subject}</p>}
                 </div>
               ))}
             </div>
@@ -235,34 +586,140 @@ export function QuoteDeskView() {
       ) : (
         <FeatureLockedCard
           title="Communication Log"
-          description="Email/text/copy activity tracking unlocks on Professional."
+          description="Email, text, and copy activity tracking unlocks on Professional."
           currentPlanLabel={currentPlanLabel}
           requiredPlanLabel="Professional"
           showUpgradeHint={canAutoUpgradeMessage}
         />
       )}
 
-      {/* ── Send Composer Modal ── */}
+      <ConfirmModal
+        open={lineItemPendingDeleteId !== null}
+        onClose={() => setLineItemPendingDeleteId(null)}
+        onConfirm={() => void confirmDeleteLineItem()}
+        title="Delete line item"
+        description="This removes the line item from the quote and recalculates the totals."
+        confirmLabel="Delete line item"
+        loading={saving}
+      />
+
       {sendComposer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <Card className="w-full max-w-lg">
-            <h3 className="text-lg font-semibold text-slate-900">
-              {sendComposer.channel === "email" ? "Email Quote" : sendComposer.channel === "sms" ? "Text Quote" : "Copy Quote Message"}
-            </h3>
-            <p className="mt-1 text-sm text-slate-600">To: {sendComposer.customerName}</p>
+        <Modal open={true} onClose={() => setSendComposer(null)} size="lg" ariaLabel="Send quote confirmation">
+          <ModalHeader
+            title={
+              sendComposer.channel === "email"
+                ? "Email Quote"
+                : sendComposer.channel === "sms"
+                  ? "Text Quote"
+                  : "Copy Quote Message"
+            }
+            description={`Customer: ${sendComposer.customerName}`}
+            onClose={() => setSendComposer(null)}
+          />
+          <ModalBody className="space-y-4">
             {sendComposer.channel === "email" && (
-              <Input label="Subject" value={sendComposer.subject} onChange={(e) => setSendComposer((prev) => prev ? { ...prev, subject: e.target.value } : prev)} className="mt-3" />
+              <Input
+                label="Subject"
+                value={sendComposer.subject}
+                onChange={(event) =>
+                  setSendComposer((prev) => (prev ? { ...prev, subject: event.target.value } : prev))
+                }
+              />
             )}
-            <Textarea label="Message" rows={8} value={sendComposer.body} onChange={(e) => setSendComposer((prev) => prev ? { ...prev, body: e.target.value } : prev)} className="mt-3" />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setSendComposer(null)} disabled={saving}>Cancel</Button>
-              <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
-                {sendComposer.channel === "copy" ? "Copy & Mark Quoted" : "Open App & Mark Quoted"}
-              </Button>
+            <Textarea
+              label="Message"
+              rows={8}
+              value={sendComposer.body}
+              onChange={(event) =>
+                setSendComposer((prev) => (prev ? { ...prev, body: event.target.value } : prev))
+              }
+            />
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-slate-700">
+              Confirming will mark the quote as quoted, log the action, and open the selected app.
             </div>
-          </Card>
-        </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="outline" onClick={() => setSendComposer(null)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
+              {sendComposer.channel === "copy" ? "Copy and Mark Quoted" : "Open App and Mark Quoted"}
+            </Button>
+          </ModalFooter>
+        </Modal>
       )}
+    </div>
+  );
+}
+
+function formatServiceTypeLabel(serviceType: string) {
+  if (serviceType === "HVAC") return "HVAC";
+  return serviceType.charAt(0) + serviceType.slice(1).toLowerCase();
+}
+
+function formatQuoteStatusLabel(status: string) {
+  if (status === "READY_FOR_REVIEW") return "Ready for review";
+  if (status === "SENT_TO_CUSTOMER") return "Quoted";
+  if (status === "ACCEPTED") return "Won";
+  if (status === "REJECTED") return "Lost";
+  return "Draft";
+}
+
+function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+      <span className="text-quotefly-blue">{icon}</span>
+      {label}
+    </span>
+  );
+}
+
+function DeskMetricCard({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone: "blue" | "emerald" | "amber" | "rose" | "slate";
+}) {
+  const toneClass =
+    tone === "blue"
+      ? "border-blue-200 bg-blue-50 text-blue-700"
+      : tone === "emerald"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : tone === "amber"
+          ? "border-amber-200 bg-amber-50 text-amber-700"
+          : tone === "rose"
+            ? "border-rose-200 bg-rose-50 text-rose-700"
+            : "border-slate-200 bg-slate-50 text-slate-700";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <p className="mt-3 text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-1 text-sm font-semibold text-slate-900 ${valueClassName ?? ""}`}>{value}</p>
     </div>
   );
 }

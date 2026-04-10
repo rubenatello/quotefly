@@ -41,7 +41,7 @@ export function setSEOMetadata(props: SEOProps) {
   const ogImage = document.querySelector('meta[property="og:image"]') || createMetaTag("og:image");
   ogImage?.setAttribute(
     "content",
-    props.ogImage || "https://quotefly.app/og-image.png"
+    props.ogImage || "https://quotefly.us/og-image.png"
   );
 
   const ogType = document.querySelector('meta[property="og:type"]') || createMetaTag("og:type");

@@ -282,6 +282,7 @@ export interface DashboardContextValue {
   openSendComposer: (channel: SendChannel) => void;
   confirmSendComposer: () => Promise<void>;
   downloadQuotePdf: (options?: { inline?: boolean; afterSend?: boolean }) => Promise<void>;
+  exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
   deleteLineItem: (lineItemId: string) => Promise<void>;
   updateLeadFollowUpStatus: (customerId: string, followUpStatus: LeadFollowUpStatus) => Promise<void>;
@@ -697,6 +698,45 @@ export function DashboardProvider({
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed generating PDF."); } finally { setSaving(false); }
   }, [selectedQuote]);
 
+  const exportQuotesAsInvoicesCsv = useCallback(
+    async (quoteIds: string[], options?: { dueInDays?: number }) => {
+      const uniqueQuoteIds = Array.from(new Set(quoteIds.filter((quoteId) => quoteId.trim().length > 0)));
+      if (uniqueQuoteIds.length === 0) {
+        setError("Select at least one quote to export.");
+        return;
+      }
+
+      setSaving(true);
+      setError(null);
+
+      try {
+        const blob = await api.quotes.exportInvoiceCsv({
+          quoteIds: uniqueQuoteIds,
+          dueInDays: options?.dueInDays,
+        });
+
+        const dateLabel = new Date().toISOString().slice(0, 10);
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = `quotefly-quickbooks-invoices-${dateLabel}.csv`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+
+        setNotice(
+          `Exported ${uniqueQuoteIds.length} quote${uniqueQuoteIds.length === 1 ? "" : "s"} to QuickBooks CSV.`,
+        );
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Failed exporting QuickBooks CSV.");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [],
+  );
+
   const addLineItem = useCallback(async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedQuote) return;
@@ -715,7 +755,6 @@ export function DashboardProvider({
 
   const deleteLineItem = useCallback(async (lineItemId: string) => {
     if (!selectedQuote) return;
-    if (!confirm("Delete this line item?")) return;
     setSaving(true); setError(null);
     try {
       await api.quotes.lineItems.remove(selectedQuote.id, lineItemId);
@@ -834,7 +873,8 @@ export function DashboardProvider({
     focusQuoteDesk, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
     createQuoteFromChatPrompt, applyTradeSetup, createQuote, persistSelectedQuote, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
-    downloadQuotePdf, addLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
+    downloadQuotePdf, exportQuotesAsInvoicesCsv,
+    addLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

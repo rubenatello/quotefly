@@ -125,6 +125,11 @@ Use Tailwind utility classes directly in React components.
 - Tier definitions and Stripe mapping:
   - `docs/plan/subscription-tiers.md`
 
+## Accounting Export
+
+- QuickBooks-friendly invoice CSV export guide:
+  - `docs/integrations/quickbooks-csv-import.md`
+
 ## Backend-first scope included
 
 - Tenant and customer APIs

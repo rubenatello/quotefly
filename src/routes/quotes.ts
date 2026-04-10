@@ -11,6 +11,7 @@ import {
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { aiParseChatToQuotePrompt } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
+import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QuoteStatusSchema = z.enum([
@@ -50,6 +51,11 @@ const ListQuotesQuerySchema = PaginationQuerySchema.extend({
   status: QuoteStatusSchema.optional(),
   customerId: z.string().min(1).optional(),
   search: z.string().trim().min(1).max(120).optional(),
+});
+
+const ExportQuickBooksInvoicesCsvSchema = z.object({
+  quoteIds: z.array(z.string().min(1)).min(1).max(100),
+  dueInDays: z.number().int().min(0).max(365).default(14),
 });
 
 const QuoteParamsSchema = z.object({
@@ -799,6 +805,94 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.post("/quotes/invoices/export-csv", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const payload = ExportQuickBooksInvoicesCsvSchema.parse(request.body);
+    const quoteIds = Array.from(new Set(payload.quoteIds));
+
+    const quotes = await app.prisma.quote.findMany({
+      where: {
+        id: { in: quoteIds },
+        ...tenantActiveScope(claims.tenantId),
+      },
+      include: {
+        customer: {
+          select: {
+            fullName: true,
+            email: true,
+            phone: true,
+          },
+        },
+        lineItems: {
+          where: tenantActiveScope(claims.tenantId),
+          orderBy: { createdAt: "asc" },
+          select: {
+            description: true,
+            quantity: true,
+            unitPrice: true,
+          },
+        },
+      },
+    });
+
+    if (quotes.length === 0) {
+      return reply.code(404).send({ error: "No matching quotes found for tenant." });
+    }
+
+    if (quotes.length !== quoteIds.length) {
+      const foundIds = new Set(quotes.map((quote) => quote.id));
+      const missingQuoteIds = quoteIds.filter((quoteId) => !foundIds.has(quoteId));
+      return reply.code(404).send({
+        error: `${missingQuoteIds.length} selected quote(s) were not found for tenant.`,
+        missingQuoteIds,
+      });
+    }
+
+    const quotesById = new Map(quotes.map((quote) => [quote.id, quote]));
+    const orderedQuotes = quoteIds
+      .map((quoteId) => quotesById.get(quoteId))
+      .filter((quote): quote is NonNullable<typeof quote> => Boolean(quote));
+
+    const csv = buildQuickBooksInvoiceCsv(
+      orderedQuotes.map((quote) => ({
+        id: quote.id,
+        title: quote.title,
+        serviceType: quote.serviceType,
+        status: quote.status,
+        scopeText: quote.scopeText,
+        customerPriceSubtotal: Number(quote.customerPriceSubtotal),
+        taxAmount: Number(quote.taxAmount),
+        totalAmount: Number(quote.totalAmount),
+        createdAt: quote.createdAt,
+        sentAt: quote.sentAt,
+        customer: {
+          fullName: quote.customer.fullName,
+          email: quote.customer.email,
+          phone: quote.customer.phone,
+        },
+        lineItems: quote.lineItems.map((lineItem) => ({
+          description: lineItem.description,
+          quantity: Number(lineItem.quantity),
+          unitPrice: Number(lineItem.unitPrice),
+        })),
+      })),
+      {
+        dueInDays: payload.dueInDays,
+        exportedAt: new Date(),
+      },
+    );
+
+    const fileDate = new Date().toISOString().slice(0, 10);
+    reply.header("Content-Type", "text/csv; charset=utf-8");
+    reply.header("Cache-Control", "no-store");
+    reply.header(
+      "Content-Disposition",
+      `attachment; filename="quotefly-quickbooks-invoices-${fileDate}.csv"`,
+    );
+
+    return reply.send(csv);
+  });
+
   app.get("/quotes/history", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const query = QuoteHistoryQuerySchema.parse(request.query);
@@ -1003,6 +1097,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 templateId: true,
                 primaryColor: true,
                 logoUrl: true,
+                businessEmail: true,
+                businessPhone: true,
+                addressLine1: true,
+                addressLine2: true,
+                city: true,
+                state: true,
+                postalCode: true,
                 componentColors: true,
               },
             },
@@ -1040,6 +1141,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         templateId: quote.tenant.branding?.templateId ?? "modern",
         primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
         logoUrl: quote.tenant.branding?.logoUrl ?? null,
+        businessEmail: quote.tenant.branding?.businessEmail ?? null,
+        businessPhone: quote.tenant.branding?.businessPhone ?? null,
+        addressLine1: quote.tenant.branding?.addressLine1 ?? null,
+        addressLine2: quote.tenant.branding?.addressLine2 ?? null,
+        city: quote.tenant.branding?.city ?? null,
+        state: quote.tenant.branding?.state ?? null,
+        postalCode: quote.tenant.branding?.postalCode ?? null,
         componentColors:
           (quote.tenant.branding?.componentColors as
             | {

@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiError, api, type OrganizationUser, type OrgUserRole, type TenantEntitlements } from "../lib/api";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  ApiError,
+  api,
+  type OrganizationUser,
+  type OrgUserRole,
+  type PlanCode,
+  type TenantEntitlements,
+} from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
+import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
+import { ConfirmModal } from "../components/ui";
 
 interface AdminPageProps {
   session?: {
     tenantId: string;
     role: string;
+    email: string;
+    subscriptionStatus?: string;
+    subscriptionPlanCode?: string | null;
+    trialEndsAtUtc?: string | null;
+    subscriptionCurrentPeriodEndUtc?: string | null;
+    effectivePlanCode?: PlanCode;
+    effectivePlanName?: string;
+    isTrial?: boolean;
     entitlements?: TenantEntitlements;
   } | null;
 }
@@ -18,6 +36,20 @@ type NewUserForm = {
   role: OrgUserRole;
 };
 
+type BillingAction = PlanCode | "portal" | null;
+
+type PlanCard = {
+  code: PlanCode;
+  name: string;
+  price: string;
+  summary: string;
+  seatText: string;
+  aiQuoteText: string;
+  historyText: string;
+  accentClassName: string;
+  features: string[];
+};
+
 const EMPTY_NEW_USER: NewUserForm = {
   fullName: "",
   email: "",
@@ -25,10 +57,68 @@ const EMPTY_NEW_USER: NewUserForm = {
   role: "member",
 };
 
+const PLAN_CARDS: readonly PlanCard[] = [
+  {
+    code: "starter",
+    name: "Starter",
+    price: "$19/mo",
+    summary: "For solo operators and small crews that need clean quoting fast.",
+    seatText: "Up to 7 users",
+    aiQuoteText: "10 AI quote drafts / month",
+    historyText: "30-day quote history",
+    accentClassName: "border-blue-200 bg-blue-50/70",
+    features: [
+      "600 quotes per month",
+      "Quick customer intake and pipeline tracking",
+      "PDF quote generation",
+      "QuickBooks-friendly invoice CSV export",
+    ],
+  },
+  {
+    code: "professional",
+    name: "Professional",
+    price: "$59/mo",
+    summary: "For field teams that need stronger pipeline visibility and revision tracking.",
+    seatText: "Up to 15 users",
+    aiQuoteText: "50 AI quote drafts / month",
+    historyText: "180-day quote history",
+    accentClassName: "border-orange-200 bg-orange-50/70",
+    features: [
+      "5,000 quotes per month",
+      "Quote version history",
+      "Communication log and advanced analytics",
+      "Multi-trade workspace support",
+    ],
+  },
+  {
+    code: "enterprise",
+    name: "Enterprise",
+    price: "$249/mo",
+    summary: "For larger operations that need automation, governance, and integrations.",
+    seatText: "Unlimited users",
+    aiQuoteText: "300 AI quote drafts / month",
+    historyText: "Unlimited quote history",
+    accentClassName: "border-slate-300 bg-slate-100",
+    features: [
+      "Unlimited quotes",
+      "API access and audit logs",
+      "Advanced AI automation layer",
+      "Custom integrations and priority support",
+    ],
+  },
+] as const;
+
 function normalizeRole(role: string): OrgUserRole {
   const value = role.trim().toLowerCase();
   if (value === "owner" || value === "admin") return value;
   return "member";
+}
+
+function normalizePlanCode(planCode: string | null | undefined): PlanCode | null {
+  if (planCode === "starter" || planCode === "professional" || planCode === "enterprise") {
+    return planCode;
+  }
+  return null;
 }
 
 function roleLabel(role: OrgUserRole): string {
@@ -37,11 +127,34 @@ function roleLabel(role: OrgUserRole): string {
   return "Member";
 }
 
-function dateText(value: string): string {
-  return new Date(value).toLocaleDateString();
+function dateText(value: string | null | undefined): string {
+  if (!value) return "Not set";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function sentenceCaseStatus(value: string | null | undefined): string {
+  if (!value) return "Not started";
+  return value
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function billingNoticeText(code: string | null): string | null {
+  if (code === "success") return "Billing updated. Stripe checkout completed successfully.";
+  if (code === "cancel") return "Stripe checkout was canceled. No billing changes were made.";
+  if (code === "portal") return "Returned from the Stripe billing portal.";
+  return null;
 }
 
 export function AdminPage({ session }: AdminPageProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [members, setMembers] = useState<OrganizationUser[]>([]);
   const [teamMembersLimit, setTeamMembersLimit] = useState<number | null>(
     session?.entitlements?.limits.teamMembers ?? null,
@@ -50,20 +163,42 @@ export function AdminPage({ session }: AdminPageProps) {
   const [canManageUsers, setCanManageUsers] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState<NewUserForm>(EMPTY_NEW_USER);
+  const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
 
   const sessionRole = normalizeRole(session?.role ?? "member");
   const ownerView = sessionRole === "owner";
+  const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
+  const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
+  const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Starter";
+  const seatLimitReached = teamMembersLimit !== null && teamMembersUsed >= teamMembersLimit;
+  const hasPortalAccess =
+    activeSubscriptionPlan !== null ||
+    ["active", "past_due", "unpaid", "canceled", "incomplete"].includes(
+      (session?.subscriptionStatus ?? "").toLowerCase(),
+    );
 
   useEffect(() => {
     setSEOMetadata({
       title: "Organization Admin",
-      description: "Manage team members and organization access settings.",
+      description: "Manage team members, billing, and workspace access settings.",
     });
     void loadMembers();
   }, []);
+
+  useEffect(() => {
+    const billingState = new URLSearchParams(location.search).get("billing");
+    const nextNotice = billingNoticeText(billingState);
+
+    if (!nextNotice) return;
+
+    setNotice(nextNotice);
+    setError(null);
+    navigate("/app/admin", { replace: true });
+  }, [location.search, navigate]);
 
   async function loadMembers() {
     setLoading(true);
@@ -83,7 +218,7 @@ export function AdminPage({ session }: AdminPageProps) {
 
   async function createMember(event: FormEvent) {
     event.preventDefault();
-    if (!canManageUsers) return;
+    if (!canManageUsers || seatLimitReached) return;
 
     setSaving(true);
     setError(null);
@@ -119,20 +254,53 @@ export function AdminPage({ session }: AdminPageProps) {
     }
   }
 
-  async function removeMember(memberId: string) {
-    if (!ownerView) return;
-    if (!confirm("Remove this member from your organization?")) return;
+  async function removeMember() {
+    if (!ownerView || !pendingRemovalMember) return;
 
     setSaving(true);
     setError(null);
     try {
-      await api.org.users.remove(memberId);
+      await api.org.users.remove(pendingRemovalMember.id);
       await loadMembers();
       setNotice("Member removed.");
+      setPendingRemovalMember(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed removing member.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function startCheckout(planCode: PlanCode) {
+    if (!ownerView) return;
+
+    setBillingAction(planCode);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.billing.createCheckoutSession({ planCode });
+      if (!result.checkoutUrl) {
+        throw new Error("Stripe checkout session did not return a redirect URL.");
+      }
+      window.location.assign(result.checkoutUrl);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed starting Stripe checkout.");
+      setBillingAction(null);
+    }
+  }
+
+  async function openBillingPortal() {
+    if (!ownerView) return;
+
+    setBillingAction("portal");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.billing.createPortalSession();
+      window.location.assign(result.url);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed opening billing portal.");
+      setBillingAction(null);
     }
   }
 
@@ -141,6 +309,27 @@ export function AdminPage({ session }: AdminPageProps) {
     return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
 
+  const billingSummaryText = useMemo(() => {
+    if (session?.isTrial) {
+      return `Trial access active until ${dateText(session.trialEndsAtUtc)}.`;
+    }
+
+    if (session?.subscriptionCurrentPeriodEndUtc) {
+      return `Current billing period ends ${dateText(session.subscriptionCurrentPeriodEndUtc)}.`;
+    }
+
+    if (activeSubscriptionPlan) {
+      return "Stripe billing is connected for this workspace.";
+    }
+
+    return "No paid plan connected yet.";
+  }, [
+    activeSubscriptionPlan,
+    session?.isTrial,
+    session?.subscriptionCurrentPeriodEndUtc,
+    session?.trialEndsAtUtc,
+  ]);
+
   if (loading) {
     return <div className="min-h-screen bg-slate-50 p-6 text-slate-700">Loading organization settings...</div>;
   }
@@ -148,16 +337,59 @@ export function AdminPage({ session }: AdminPageProps) {
   return (
     <div className="min-h-screen bg-slate-50 p-3 sm:p-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <h1 className="text-2xl font-bold text-slate-900">Organization Admin</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Manage team users and seat limits by subscription tier.
-          </p>
-          <div className="mt-3 inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-            {seatUsageText}
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Role permissions: Owner can edit roles/remove members. Admin can add members. Member is read-only.
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <h1 className="text-2xl font-bold text-slate-900">Organization Admin</h1>
+              <p className="mt-2 text-sm text-slate-600">
+                Manage billing, team seats, and workspace access without leaving the CRM.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  {effectivePlanName} access
+                </span>
+                {session?.isTrial && (
+                  <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+                    Trial active
+                  </span>
+                )}
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                  Status: {sentenceCaseStatus(session?.subscriptionStatus)}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-slate-500">{billingSummaryText}</p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3 lg:w-[420px]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <PriceIcon size={16} />
+                  Current access
+                </div>
+                <p className="mt-3 text-lg font-semibold text-slate-900">{effectivePlanName}</p>
+                <p className="mt-1 text-xs text-slate-500">{session?.isTrial ? "Trial access" : "Live plan access"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <ClockIcon size={16} />
+                  Billing state
+                </div>
+                <p className="mt-3 text-lg font-semibold text-slate-900">{sentenceCaseStatus(session?.subscriptionStatus)}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <CustomerIcon size={16} />
+                  Team seats
+                </div>
+                <p className="mt-3 text-lg font-semibold text-slate-900">{seatUsageText}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {teamMembersLimit === null ? "No seat cap on this plan" : "Seats are enforced per plan"}
+                </p>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -172,15 +404,113 @@ export function AdminPage({ session }: AdminPageProps) {
           </p>
         )}
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <h2 className="text-lg font-semibold text-slate-900">Billing and Plan Controls</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Choose the plan that matches your crew size. Stripe handles billing, and QuoteFly enforces access by tenant.
+              </p>
+              {!ownerView && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                  <LockIcon size={14} />
+                  Only workspace owners can change billing
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => void openBillingPortal()}
+                disabled={!ownerView || !hasPortalAccess || billingAction !== null}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {billingAction === "portal" ? "Opening portal..." : "Manage Billing"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            {PLAN_CARDS.map((plan) => {
+              const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
+              const isCurrentAccessPlan = effectivePlanCode === plan.code;
+
+              return (
+                <article key={plan.code} className={`rounded-2xl border p-4 shadow-sm ${plan.accentClassName}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">{plan.name}</h3>
+                      <p className="mt-1 text-2xl font-bold text-slate-900">{plan.price}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      {isCurrentAccessPlan && (
+                        <span className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+                          Current access
+                        </span>
+                      )}
+                      {isCurrentPaidPlan && (
+                        <span className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                          Active billing plan
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-sm text-slate-600">{plan.summary}</p>
+
+                  <div className="mt-4 grid gap-2 rounded-xl border border-white/80 bg-white/80 p-3 text-xs font-medium text-slate-700">
+                    <div>{plan.seatText}</div>
+                    <div>{plan.aiQuoteText}</div>
+                    <div>{plan.historyText}</div>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    {plan.features.map((feature) => (
+                      <div key={feature} className="flex items-start gap-2 text-sm text-slate-700">
+                        <CheckIcon size={14} className="mt-0.5 text-emerald-600" />
+                        <span>{feature}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => void startCheckout(plan.code)}
+                    disabled={!ownerView || isCurrentPaidPlan || billingAction !== null}
+                    className="mt-5 w-full rounded-xl bg-quotefly-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {billingAction === plan.code
+                      ? "Redirecting..."
+                      : isCurrentPaidPlan
+                        ? "Current Paid Plan"
+                        : `Choose ${plan.name}`}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+            <p className="font-semibold text-slate-900">Operational note</p>
+            <p className="mt-1">
+              Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocking based on the plan attached to this workspace.
+            </p>
+          </div>
+        </section>
+
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <form onSubmit={createMember} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <form onSubmit={createMember} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">Add Team Member</h2>
+            <p className="text-sm text-slate-500">
+              Invite field users and office staff into the same workspace.
+            </p>
             <input
               placeholder="Full name"
               value={form.fullName}
               onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              disabled={!canManageUsers || saving}
+              disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <input
@@ -189,7 +519,7 @@ export function AdminPage({ session }: AdminPageProps) {
               value={form.email}
               onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              disabled={!canManageUsers || saving}
+              disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <input
@@ -199,14 +529,14 @@ export function AdminPage({ session }: AdminPageProps) {
               value={form.password}
               onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              disabled={!canManageUsers || saving}
+              disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <select
               value={form.role}
               onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value as OrgUserRole }))}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              disabled={!canManageUsers || saving}
+              disabled={!canManageUsers || saving || seatLimitReached}
             >
               <option value="member">Member</option>
               <option value="admin">Admin</option>
@@ -214,32 +544,40 @@ export function AdminPage({ session }: AdminPageProps) {
             </select>
             <button
               type="submit"
-              disabled={!canManageUsers || saving}
+              disabled={!canManageUsers || saving || seatLimitReached}
               className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             >
               {saving ? "Saving..." : "Add User"}
             </button>
             {!canManageUsers && (
               <p className="text-xs text-slate-500">
-                Your role cannot add users. Ask an Owner/Admin.
+                Your role cannot add users. Ask an owner or admin.
+              </p>
+            )}
+            {seatLimitReached && (
+              <p className="text-xs text-amber-700">
+                Seat limit reached. Upgrade the workspace plan to add more users.
               </p>
             )}
           </form>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="mb-3 text-lg font-semibold text-slate-900">Organization Users</h2>
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-1 text-lg font-semibold text-slate-900">Organization Users</h2>
+            <p className="mb-4 text-sm text-slate-500">
+              Role permissions: owner can edit roles and remove members. Admin can add members. Member is read-only.
+            </p>
             <div className="space-y-3">
               {members.map((member) => (
                 <div
                   key={member.id}
-                  className="rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex sm:items-center sm:justify-between"
+                  className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex sm:items-center sm:justify-between"
                 >
                   <div>
                     <p className="text-sm font-semibold text-slate-900">{member.user.fullName}</p>
                     <p className="text-xs text-slate-600">{member.user.email}</p>
                     <p className="text-[11px] text-slate-500">Joined {dateText(member.createdAt)}</p>
                   </div>
-                  <div className="mt-3 flex items-center gap-2 sm:mt-0">
+                  <div className="mt-3 flex flex-wrap items-center gap-2 sm:mt-0 sm:justify-end">
                     <select
                       value={member.role}
                       disabled={!ownerView || saving}
@@ -257,7 +595,7 @@ export function AdminPage({ session }: AdminPageProps) {
                     </span>
                     <button
                       type="button"
-                      onClick={() => void removeMember(member.id)}
+                      onClick={() => setPendingRemovalMember(member)}
                       disabled={!ownerView || member.role === "owner" || saving}
                       className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 disabled:opacity-60"
                     >
@@ -274,6 +612,20 @@ export function AdminPage({ session }: AdminPageProps) {
             </div>
           </section>
         </div>
+
+        <ConfirmModal
+          open={pendingRemovalMember !== null}
+          onClose={() => setPendingRemovalMember(null)}
+          onConfirm={() => void removeMember()}
+          title="Remove team member"
+          description={
+            pendingRemovalMember
+              ? `Remove ${pendingRemovalMember.user.fullName} from this workspace? They will lose access immediately.`
+              : "Remove this member from the workspace?"
+          }
+          confirmLabel="Remove member"
+          loading={saving}
+        />
       </div>
     </div>
   );

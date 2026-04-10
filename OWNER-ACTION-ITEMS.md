@@ -106,3 +106,9 @@ Each Chat-to-Quote AI call uses ~500-800 tokens. At `gpt-4o-mini` pricing:
 - **Enterprise plan** (unlimited): scales with usage, typically <$1/month for most contractors
 
 The existing regex parser continues to work as a free fallback.
+
+## 10. QuickBooks CSV Export
+
+- Use `App > Build > Quote List` to select one or more quotes.
+- Click **Export QuickBooks CSV** to download invoice-style rows.
+- Import guide: `docs/integrations/quickbooks-csv-import.md`

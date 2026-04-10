@@ -6,28 +6,30 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 
 ### Starter (`starter`)
 
-- Price: `$29/month`
+- Price: `$19/month`
 - Intended buyer: solo operators and early-stage contractors
 - Core limits:
   - Up to 600 quotes/month
-  - Up to 3 team members
+  - Up to 7 team members
   - 30-day quote history
 - Included capabilities:
-  - SMS job capture
-  - Auto-pricing from base rates
+  - AI-assisted quote drafting (10 per month)
+  - Fast customer intake and lead pipeline
   - Branded PDF quote generation
+  - QuickBooks-friendly invoice CSV export
   - Email support
 
 ### Professional (`professional`)
 
-- Price: `$79/month`
+- Price: `$59/month`
 - Intended buyer: growing contractor teams
 - Core limits:
   - Up to 5,000 quotes/month
-  - Up to 10 team members
+  - Up to 15 team members
   - 180-day quote history
 - Included capabilities:
   - Everything in Starter
+  - AI-assisted quote drafting (50 per month)
   - Advanced analytics and reporting
   - Customer communication log
   - Quote versioning and history
@@ -36,7 +38,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 
 ### Enterprise (`enterprise`)
 
-- Price: `$399/month`
+- Price: `$249/month`
 - Intended buyer: larger operations requiring governance and integration
 - Core limits:
   - Unlimited quotes
@@ -44,7 +46,8 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Full historical access
 - Included capabilities:
   - Everything in Professional
-  - QuickBooks Online integration
+  - AI-assisted quote drafting (300 per month)
+  - QuickBooks-friendly export workflow with direct sync roadmap
   - API access
   - Custom branding and integration support
   - Dedicated account manager

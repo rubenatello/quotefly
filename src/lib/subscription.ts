@@ -41,7 +41,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     limits: {
       quotesPerMonth: 600,
       aiQuotesPerMonth: 10,
-      teamMembers: 3,
+      teamMembers: 7,
       quoteHistoryDays: 30,
     },
     features: {
@@ -60,7 +60,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     limits: {
       quotesPerMonth: 5_000,
       aiQuotesPerMonth: 50,
-      teamMembers: 10,
+      teamMembers: 15,
       quoteHistoryDays: 180,
     },
     features: {

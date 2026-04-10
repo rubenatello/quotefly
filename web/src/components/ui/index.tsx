@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef, useEffect, useId } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, HTMLAttributes } from "react";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
@@ -288,6 +288,163 @@ export function Alert({ tone, children, onDismiss }: AlertProps) {
         <button type="button" onClick={onDismiss} className="text-current opacity-60 hover:opacity-100 text-lg leading-none">&times;</button>
       )}
     </div>
+  );
+}
+
+type ModalSize = "sm" | "md" | "lg" | "xl";
+
+interface ModalProps {
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+  size?: ModalSize;
+  closeOnBackdrop?: boolean;
+  panelClassName?: string;
+  ariaLabel?: string;
+}
+
+const MODAL_SIZES: Record<ModalSize, string> = {
+  sm: "max-w-md",
+  md: "max-w-lg",
+  lg: "max-w-2xl",
+  xl: "max-w-4xl",
+};
+
+export function Modal({
+  open,
+  onClose,
+  children,
+  size = "md",
+  closeOnBackdrop = true,
+  panelClassName = "",
+  ariaLabel,
+}: ModalProps) {
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/65 p-3 backdrop-blur-sm sm:p-4"
+      onClick={(event) => {
+        if (closeOnBackdrop && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={ariaLabel ? undefined : titleId}
+        aria-label={ariaLabel}
+        className={`max-h-[90vh] w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.24)] ${MODAL_SIZES[size]} ${panelClassName}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div id={titleId} className="sr-only">
+          {ariaLabel ?? "Modal"}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function ModalHeader({
+  title,
+  description,
+  onClose,
+  className = "",
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  onClose?: () => void;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6 ${className}`}>
+      <div className="min-w-0">
+        <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">{title}</h2>
+        {description ? <p className="mt-1 text-sm text-slate-600">{description}</p> : null}
+      </div>
+      {onClose ? (
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+          aria-label="Close modal"
+        >
+          <span className="text-xl leading-none">&times;</span>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export function ModalBody({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`overflow-auto px-5 py-5 sm:px-6 ${className}`}>{children}</div>;
+}
+
+export function ModalFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4 sm:px-6 ${className}`}>{children}</div>;
+}
+
+interface ConfirmModalProps {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  description?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  loading?: boolean;
+  confirmVariant?: ButtonVariant;
+  children?: ReactNode;
+  size?: ModalSize;
+}
+
+export function ConfirmModal({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  loading = false,
+  confirmVariant = "danger",
+  children,
+  size = "sm",
+}: ConfirmModalProps) {
+  return (
+    <Modal open={open} onClose={onClose} size={size} ariaLabel={title}>
+      <ModalHeader title={title} description={description} onClose={onClose} />
+      {children ? <ModalBody>{children}</ModalBody> : null}
+      <ModalFooter>
+        <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+          {cancelLabel}
+        </Button>
+        <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading}>
+          {confirmLabel}
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }
 

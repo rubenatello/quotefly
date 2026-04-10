@@ -42,6 +42,13 @@ export interface QuotePdfData {
     templateId: string;
     primaryColor: string;
     logoUrl: string | null;
+    businessEmail?: string | null;
+    businessPhone?: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postalCode?: string | null;
     componentColors?: QuoteComponentColors | null;
   };
   lineItems: QuotePdfLineItem[];
@@ -97,6 +104,68 @@ const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
 
 function formatMoney(value: number): string {
   return `$${value.toFixed(2)}`;
+}
+
+function formatLocalDate(value: Date | null, timeZone: string): string {
+  if (!value) return "Not sent";
+
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(value);
+  } catch {
+    return value.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+}
+
+function compactLocationLine(data: QuotePdfData["branding"]): string | null {
+  const city = data.city?.trim();
+  const state = data.state?.trim();
+  const postalCode = data.postalCode?.trim();
+
+  if (!city && !state && !postalCode) return null;
+
+  const locationParts: string[] = [];
+  if (city) locationParts.push(city);
+  if (state) locationParts.push(state);
+  const left = locationParts.join(", ");
+
+  if (left && postalCode) return `${left} ${postalCode}`;
+  return left || postalCode || null;
+}
+
+function buildSenderLines(data: QuotePdfData): string[] {
+  const lines = [data.tenant.name];
+  const addressLine1 = data.branding.addressLine1?.trim();
+  const addressLine2 = data.branding.addressLine2?.trim();
+  const locationLine = compactLocationLine(data.branding);
+  const businessPhone = data.branding.businessPhone?.trim();
+  const businessEmail = data.branding.businessEmail?.trim();
+
+  if (addressLine1) lines.push(addressLine1);
+  if (addressLine2) lines.push(addressLine2);
+  if (locationLine) lines.push(locationLine);
+  if (businessPhone) lines.push(businessPhone);
+  if (businessEmail) lines.push(businessEmail);
+
+  return lines;
+}
+
+function buildFooterText(data: QuotePdfData): string {
+  const contactParts = [data.branding.businessPhone?.trim(), data.branding.businessEmail?.trim()].filter(Boolean);
+
+  if (contactParts.length > 0) {
+    return `Questions about this quote? Contact ${data.tenant.name} at ${contactParts.join(" or ")}.`;
+  }
+
+  return `Questions about this quote? Contact ${data.tenant.name}.`;
 }
 
 function safeTemplateId(templateId: string): QuotePdfTemplateId {
@@ -161,6 +230,7 @@ function writeHeader(
   const right = doc.page.width - 48;
   const width = right - left;
   const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
+  const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
 
   if (theme.headerStyle === "bar") {
     doc.rect(0, 0, doc.page.width, 110).fill(colors.headerBgColor);
@@ -173,7 +243,7 @@ function writeHeader(
     }
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(21).text(data.tenant.name, left + (logoBuffer ? 100 : 0), 28);
     doc.font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 0), 58);
-    doc.text(`Status: ${data.status}`, left + (logoBuffer ? 100 : 0), 74);
+    doc.text(`Prepared ${createdDate}`, left + (logoBuffer ? 100 : 0), 74);
     doc.fillColor("#111111");
     return 132;
   }
@@ -183,7 +253,7 @@ function writeHeader(
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(26).text("QUOTE", left, 30);
     doc.font("Helvetica").fontSize(11).text(`${data.tenant.name}`, left, 66);
     doc.text(quoteLabel, left, 82);
-    doc.text(`Created: ${data.createdAt.toLocaleDateString()}`, left, 98);
+    doc.text(`Prepared: ${createdDate}`, left, 98);
     if (logoBuffer) {
       try {
         doc.image(logoBuffer, right - 105, 25, { fit: [92, 92] });
@@ -206,14 +276,14 @@ function writeHeader(
     }
     doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(19).text(data.tenant.name, left + (logoBuffer ? 100 : 14), 46);
     doc.fillColor(theme.textDark).font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 14), 72);
-    doc.text(`Status: ${data.status}`, left + (logoBuffer ? 100 : 14), 88);
+    doc.text(`Prepared ${createdDate}`, left + (logoBuffer ? 100 : 14), 88);
     doc.fillColor("#111111");
     return 136;
   }
 
   doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(23).text(data.tenant.name, left, 42);
   doc.font("Helvetica").fontSize(11).fillColor("#555555").text(quoteLabel, left, 72);
-  doc.text(`Status: ${data.status}`, left, 88);
+  doc.text(`Prepared ${createdDate}`, left, 88);
   if (logoBuffer) {
     try {
       doc.image(logoBuffer, right - 96, 38, { fit: [84, 56] });
@@ -235,6 +305,31 @@ function ensureSpace(doc: PDFKit.PDFDocument, y: number, minSpace: number): numb
   if (y + minSpace <= bottomLimit) return y;
   doc.addPage();
   return 56;
+}
+
+function drawPartyCard(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number,
+  title: string,
+  lines: string[],
+  sectionTitleColor: string,
+): number {
+  const contentLines = lines.filter((line) => line.trim().length > 0);
+  const height = Math.max(86, 42 + contentLines.length * 14);
+
+  doc.roundedRect(x, y, width, height, 10).fillAndStroke("#ffffff", "#d7dde5");
+  doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(11).text(title, x + 14, y + 12);
+
+  let textY = y + 32;
+  doc.fillColor("#222222").font("Helvetica").fontSize(10);
+  for (const line of contentLines) {
+    doc.text(line, x + 14, textY, { width: width - 28 });
+    textY += 14;
+  }
+
+  return y + height;
 }
 
 function drawLineItemsTable(
@@ -328,20 +423,18 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     y += 24;
     doc.font("Helvetica").fontSize(10).fillColor("#444444");
     doc.text(`Service: ${data.serviceType}`, 48, y);
-    doc.text(`Created: ${data.createdAt.toLocaleDateString()}`, 230, y);
-    doc.text(`Sent: ${data.sentAt ? data.sentAt.toLocaleDateString() : "Not sent"}`, 390, y);
-    y += 20;
+    doc.text(`Prepared: ${formatLocalDate(data.createdAt, data.tenant.timezone)}`, 230, y);
+    doc.text(`Sent: ${formatLocalDate(data.sentAt, data.tenant.timezone)}`, 390, y);
+    y += 24;
 
-    y = drawSectionTitle(doc, y, "Customer", componentColors.sectionTitleColor);
-    doc.font("Helvetica").fontSize(11).fillColor("#222222");
-    doc.text(data.customer.fullName, 48, y);
-    y += 14;
-    doc.text(data.customer.phone, 48, y);
-    if (data.customer.email) {
-      y += 14;
-      doc.text(data.customer.email, 48, y);
-    }
-    y += 18;
+    y = ensureSpace(doc, y, 130);
+    const senderLines = buildSenderLines(data);
+    const customerLines = [data.customer.fullName, data.customer.phone, data.customer.email ?? ""];
+    const partyCardBottom = Math.max(
+      drawPartyCard(doc, 48, y, 250, "From", senderLines, componentColors.sectionTitleColor),
+      drawPartyCard(doc, 314, y, 250, "Prepared For", customerLines, componentColors.sectionTitleColor),
+    );
+    y = partyCardBottom + 20;
 
     y = drawSectionTitle(doc, y, "Scope", componentColors.sectionTitleColor);
     doc.font("Helvetica").fontSize(10).fillColor("#222222");
@@ -357,7 +450,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     y += 10;
     doc.font("Helvetica").fontSize(9).fillColor(componentColors.footerTextColor);
     doc.text(
-      `Generated by QuoteFly for ${data.tenant.name} (${data.tenant.timezone}). Stored and rendered from UTC.`,
+      `${buildFooterText(data)} Dates shown in ${data.tenant.timezone}.`,
       48,
       y,
       { width: 516, align: "center" },

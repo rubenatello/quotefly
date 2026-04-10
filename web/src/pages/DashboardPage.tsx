@@ -16,6 +16,7 @@ import {
   type LeadCardItem,
   type QuoteMathSummary,
 } from "../components/dashboard/DashboardUi";
+import { ConfirmModal, Modal, ModalBody, ModalFooter, ModalHeader } from "../components/ui";
 import {
   api,
   ApiError,
@@ -219,6 +220,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
   const [lineItemForm, setLineItemForm] = useState<LineItemForm>(EMPTY_LINE_ITEM);
   const [duplicateModal, setDuplicateModal] = useState<DuplicateCustomerModalState | null>(null);
   const [sendComposer, setSendComposer] = useState<SendComposerState | null>(null);
+  const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
   const [chatPrompt, setChatPrompt] = useState("");
   const [chatParsed, setChatParsed] = useState<ChatToQuoteParsed | null>(null);
   const [setupTrade, setSetupTrade] = useState<ServiceType>(session?.primaryTrade ?? "ROOFING");
@@ -770,7 +772,6 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
   async function deleteLineItem(lineItemId: string) {
     if (!selectedQuote) return;
-    if (!confirm("Delete this line item?")) return;
     setSaving(true);
     setError(null);
     try {
@@ -1343,7 +1344,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
                           <p className="text-sm text-slate-900">{item.description}</p>
                           <p className="text-xs text-slate-600">Qty {Number(item.quantity)} · {money(item.unitPrice)}</p>
                         </div>
-                        <button onClick={() => void deleteLineItem(item.id)} className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700"><DeleteIcon size={12} />Delete</button>
+                        <button onClick={() => setLineItemPendingDeleteId(item.id)} className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700"><DeleteIcon size={12} />Delete</button>
                       </div>
                     ))}
                   </div>
@@ -1611,6 +1612,19 @@ export function DashboardPage({ session }: DashboardPageProps) {
         }
         onConfirm={() => void confirmSendComposer()}
       />
+
+      <ConfirmModal
+        open={lineItemPendingDeleteId !== null}
+        onClose={() => setLineItemPendingDeleteId(null)}
+        onConfirm={() => {
+          if (!lineItemPendingDeleteId) return;
+          void deleteLineItem(lineItemPendingDeleteId).finally(() => setLineItemPendingDeleteId(null));
+        }}
+        title="Delete line item"
+        description="This removes the line item from the quote and recalculates totals."
+        confirmLabel="Delete line item"
+        loading={saving}
+      />
     </div>
   );
 }
@@ -1636,14 +1650,14 @@ function DuplicateCustomerModal({
   const canSaveAsNew = !state.matches.some((match) => match.matchReasons.includes("phone"));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
-        <h3 className="text-lg font-semibold text-slate-900">Potential Duplicate Customer</h3>
-        <p className="mt-1 text-sm text-slate-600">
-          We found matching customer records. Merge to keep one clean record, or save as new.
-        </p>
-
-        <div className="mt-4 max-h-64 space-y-2 overflow-auto">
+    <Modal open={open} onClose={onClose} size="lg" ariaLabel="Potential duplicate customer">
+      <ModalHeader
+        title="Potential Duplicate Customer"
+        description="We found matching customer records. Merge to keep one clean record, or save as new."
+        onClose={onClose}
+      />
+      <ModalBody className="max-h-[70vh] space-y-4">
+        <div className="max-h-64 space-y-2 overflow-auto">
           {state.matches.map((match) => (
             <label
               key={match.id}
@@ -1683,39 +1697,39 @@ function DuplicateCustomerModal({
           ))}
         </div>
 
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onSaveNew}
-            disabled={saving || !canSaveAsNew}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Save as New
-          </button>
-          <button
-            type="button"
-            onClick={onMerge}
-            disabled={saving}
-            className="rounded-lg bg-quotefly-blue px-3 py-2 text-sm font-semibold text-white"
-          >
-            Merge Selected
-          </button>
-        </div>
         {!canSaveAsNew && (
           <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700">
             Save as new is disabled when the phone number already exists. Use merge for phone matches.
           </p>
         )}
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={saving}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSaveNew}
+          disabled={saving || !canSaveAsNew}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Save as New
+        </button>
+        <button
+          type="button"
+          onClick={onMerge}
+          disabled={saving}
+          className="rounded-lg bg-quotefly-blue px-3 py-2 text-sm font-semibold text-white"
+        >
+          Merge Selected
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }
 
@@ -1740,14 +1754,14 @@ function SendComposerModal({
     state.channel === "email" ? "Email App" : state.channel === "sms" ? "Text App" : "Copy Message";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
-        <h3 className="text-lg font-semibold text-slate-900">Confirm Send Action</h3>
-        <p className="mt-1 text-sm text-slate-600">
-          Confirming will mark this quote as quoted, then open {channelLabel.toLowerCase()}.
-        </p>
-
-        <div className="mt-4 space-y-2">
+    <Modal open={open} onClose={onClose} size="lg" ariaLabel="Confirm send action">
+      <ModalHeader
+        title="Confirm Send Action"
+        description={`Confirming will mark this quote as quoted, then open ${channelLabel.toLowerCase()}.`}
+        onClose={onClose}
+      />
+      <ModalBody className="space-y-4">
+        <div className="space-y-2">
           <p className="text-sm text-slate-800">Customer: {state.customerName}</p>
           {state.channel === "email" && (
             <p className="text-sm text-slate-600">To: {state.customerEmail ?? "No email set"}</p>
@@ -1768,7 +1782,7 @@ function SendComposerModal({
           </div>
         )}
 
-        <div className="mt-4">
+        <div>
           <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Message</label>
           <textarea
             rows={10}
@@ -1777,27 +1791,26 @@ function SendComposerModal({
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
           />
         </div>
-
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={saving}
-            className="rounded-lg bg-quotefly-blue px-3 py-2 text-sm font-semibold text-white"
-          >
-            Confirm + Open {channelLabel}
-          </button>
-        </div>
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={saving}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={saving}
+          className="rounded-lg bg-quotefly-blue px-3 py-2 text-sm font-semibold text-white"
+        >
+          Confirm + Open {channelLabel}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }
 

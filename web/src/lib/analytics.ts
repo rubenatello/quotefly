@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { canTrackAnalytics } from "./cookie-consent";
 
 type AnalyticsEvent = {
   name: string;
@@ -26,6 +27,7 @@ function ensureFlushTimer() {
 }
 
 export function trackEvent(name: string, properties?: AnalyticsEvent["properties"]) {
+  if (!canTrackAnalytics()) return;
   EVENT_BUFFER.push({ name, properties: { ...properties, _ts: Date.now() } });
   ensureFlushTimer();
   if (EVENT_BUFFER.length >= MAX_BUFFER_SIZE) {

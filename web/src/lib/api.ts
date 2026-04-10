@@ -156,6 +156,16 @@ export type BrandingComponentColors = {
   footerTextColor?: string;
 };
 
+export type BrandingBusinessProfile = {
+  businessEmail?: string | null;
+  businessPhone?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+};
+
 type DecimalLike = number | string;
 
 export type Customer = {
@@ -324,6 +334,15 @@ export type OrganizationUser = {
 
 type Pagination = { limit: number; offset: number; total: number };
 
+export type BillingCheckoutSession = {
+  sessionId: string;
+  checkoutUrl: string | null;
+};
+
+export type BillingPortalSession = {
+  url: string;
+};
+
 export const api = {
   auth: {
     signup: (body: {
@@ -342,14 +361,38 @@ export const api = {
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
   },
 
+  billing: {
+    createCheckoutSession: (body: { planCode: PlanCode }) =>
+      request<BillingCheckoutSession>(`/v1/billing/checkout-session`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    createPortalSession: () =>
+      request<BillingPortalSession>(`/v1/billing/portal-session`, {
+        method: "POST",
+      }),
+  },
+
   branding: {
     get: (tenantId: string) =>
       request<{
+        tenant: {
+          name: string;
+          timezone: string;
+        };
         branding:
           | {
               primaryColor: string;
               templateId: BrandingTemplateId;
               logoUrl?: string | null;
+              businessEmail?: string | null;
+              businessPhone?: string | null;
+              addressLine1?: string | null;
+              addressLine2?: string | null;
+              city?: string | null;
+              state?: string | null;
+              postalCode?: string | null;
               componentColors?: BrandingComponentColors | null;
             }
           | null;
@@ -363,14 +406,27 @@ export const api = {
         logoUrl?: string | null;
         primaryColor: string;
         templateId: BrandingTemplateId;
+        timezone: string;
+        businessProfile: BrandingBusinessProfile;
         componentColors?: BrandingComponentColors | null;
       },
     ) =>
       request<{
+        tenant: {
+          name: string;
+          timezone: string;
+        };
         branding: {
           primaryColor: string;
           templateId: BrandingTemplateId;
           logoUrl?: string | null;
+          businessEmail?: string | null;
+          businessPhone?: string | null;
+          addressLine1?: string | null;
+          addressLine2?: string | null;
+          city?: string | null;
+          state?: string | null;
+          postalCode?: string | null;
           componentColors?: BrandingComponentColors | null;
         };
       }>(
@@ -630,6 +686,15 @@ export const api = {
       requestBlob(
         `/v1/quotes/${quoteId}/pdf${toQueryString({ download: options?.inline ? false : true })}`,
       ),
+
+    exportInvoiceCsv: (body: { quoteIds: string[]; dueInDays?: number }) =>
+      requestBlob(`/v1/quotes/invoices/export-csv`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
 
     lineItems: {
       create: (

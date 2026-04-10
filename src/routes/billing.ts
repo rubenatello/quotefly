@@ -274,6 +274,11 @@ function getRawBody(request: FastifyRequest): string | null {
   return typeof rawBody === "string" ? rawBody : null;
 }
 
+function buildAppUrl(baseUrl: string, path: string): string {
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL(path.replace(/^\//, ""), normalizedBase).toString();
+}
+
 export const billingRoutes: FastifyPluginAsync = async (app) => {
   app.post("/billing/checkout-session", { preHandler: [app.authenticate] }, async (request, reply) => {
     if (!app.env.STRIPE_SECRET_KEY) {
@@ -327,8 +332,8 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       customer: stripeCustomerId,
       line_items: [{ price: priceId, quantity: 1 }],
       client_reference_id: tenant.id,
-      success_url: `${app.env.APP_URL}/dashboard?billing=success`,
-      cancel_url: `${app.env.APP_URL}/pricing?billing=cancel`,
+      success_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=success"),
+      cancel_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=cancel"),
       allow_promotion_codes: true,
       metadata: {
         tenantId: tenant.id,
@@ -378,7 +383,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const stripe = createStripeClient(app.env.STRIPE_SECRET_KEY);
     const portalSession = (await stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
-      return_url: `${app.env.APP_URL}/dashboard?billing=portal`,
+      return_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=portal"),
     })) as { url: string };
 
     return { url: portalSession.url };

@@ -1,5 +1,5 @@
-import { MenuIcon, CloseIcon } from "./Icons";
 import { useState } from "react";
+import { CloseIcon, MenuIcon } from "./Icons";
 
 interface NavbarProps {
   currentPage: string;
@@ -16,7 +16,7 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
     { label: "Solutions", path: "solutions" },
     { label: "Pricing", path: "pricing" },
     { label: "About", path: "about" },
-    { label: "Branding", path: "branding" },
+    { label: "Support", path: "support" },
   ];
 
   const handleNavigate = (path: string) => {
@@ -27,16 +27,15 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
   return (
     <nav className="sticky top-0 z-50 border-b border-slate-200/80 bg-stone-50/95 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-        {/* Logo/Brand */}
         <button
           onClick={() => handleNavigate("landing")}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2 transition-opacity hover:opacity-80"
+          aria-label="Go to QuoteFly home"
         >
           <img src="/logo.png" alt="QuoteFly" className="h-9 w-auto sm:h-10" />
         </button>
 
-        {/* Desktop Navigation */}
-        <div className="hidden md:flex items-center gap-8">
+        <div className="hidden items-center gap-8 md:flex">
           {navLinks.map((link) => (
             <button
               key={link.path}
@@ -52,19 +51,18 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
           ))}
         </div>
 
-        {/* Auth Buttons */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden items-center gap-3 md:flex">
           {isLoggedIn ? (
             <div className="flex items-center gap-3">
               <button
                 onClick={() => handleNavigate("dashboard")}
-                className="px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                className="rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
               >
                 Dashboard
               </button>
               <button
                 onClick={onLogout}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                className="px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
               >
                 Sign Out
               </button>
@@ -73,13 +71,13 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
             <>
               <button
                 onClick={onOpenAuth}
-                className="px-4 py-2 text-sm font-medium text-slate-700 hover:text-quotefly-primary transition-colors"
+                className="px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"
               >
                 Sign In
               </button>
               <button
                 onClick={onOpenAuth}
-                className="px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                className="rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
               >
                 Start Free Trial
               </button>
@@ -87,22 +85,17 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
           )}
         </div>
 
-        {/* Mobile Menu Button */}
         <button
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="md:hidden text-slate-600 hover:text-slate-900"
+          onClick={() => setMobileMenuOpen((current) => !current)}
+          className="text-slate-600 hover:text-slate-900 md:hidden"
+          aria-label={mobileMenuOpen ? "Close navigation" : "Open navigation"}
         >
-          {mobileMenuOpen ? (
-            <CloseIcon size={24} />
-          ) : (
-            <MenuIcon size={24} />
-          )}
+          {mobileMenuOpen ? <CloseIcon size={24} /> : <MenuIcon size={24} />}
         </button>
       </div>
 
-      {/* Mobile Menu */}
       {mobileMenuOpen && (
-        <div className="md:hidden border-t border-slate-200 bg-white px-4 py-4">
+        <div className="border-t border-slate-200 bg-white px-4 py-4 md:hidden">
           <div className="flex flex-col gap-4">
             {navLinks.map((link) => (
               <button
@@ -117,12 +110,12 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
                 {link.label}
               </button>
             ))}
-            <div className="border-t border-slate-200 pt-4 flex flex-col gap-3">
+            <div className="flex flex-col gap-3 border-t border-slate-200 pt-4">
               {isLoggedIn ? (
                 <>
                   <button
                     onClick={() => handleNavigate("dashboard")}
-                    className="w-full px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                    className="w-full rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   >
                     Dashboard
                   </button>
@@ -131,7 +124,7 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
                       onLogout?.();
                       setMobileMenuOpen(false);
                     }}
-                    className="w-full px-4 py-2 text-sm font-medium text-slate-700 hover:text-slate-900 transition-colors"
+                    className="w-full px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900"
                   >
                     Sign Out
                   </button>
@@ -140,13 +133,13 @@ export function Navbar({ currentPage, onNavigate, isLoggedIn, onOpenAuth, onLogo
                 <>
                   <button
                     onClick={onOpenAuth}
-                    className="w-full px-4 py-2 text-sm font-medium text-slate-700 hover:text-quotefly-primary transition-colors"
+                    className="w-full px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"
                   >
                     Sign In
                   </button>
                   <button
                     onClick={onOpenAuth}
-                    className="w-full px-4 py-2 bg-quotefly-primary text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                    className="w-full rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   >
                     Start Free Trial
                   </button>

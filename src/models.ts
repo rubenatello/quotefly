@@ -72,6 +72,13 @@ export interface TenantBrandingRow {
   logoUrl: string | null;
   primaryColor: string;
   templateId: string;
+  businessEmail: string | null;
+  businessPhone: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
   componentColors: BrandingComponentColors | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
