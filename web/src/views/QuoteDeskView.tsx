@@ -29,6 +29,7 @@ import {
 } from "../components/Icons";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -44,6 +45,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
+import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import {
   api,
   type QuickBooksInvoiceStatusPayload,
@@ -400,6 +402,14 @@ export function QuoteDeskView() {
   const deskCompletionPercent = Math.round((deskSteps.filter((step) => step.complete).length / deskSteps.length) * 100);
   const nextDeskStep =
     deskSteps.find((step) => !step.complete)?.description ?? "Quote is fully staged. Send it or move job status forward.";
+  const deskLinks = [
+    { id: "desk-overview", label: "Overview", hint: "Customer + progress" },
+    { id: "desk-details", label: "Details", hint: "Scope + pricing" },
+    { id: "desk-lines", label: "Line Items", hint: "Saved jobs + math" },
+    { id: "desk-actions", label: "Actions", hint: "Send + lifecycle" },
+    { id: "desk-history", label: "History", hint: "Revisions" },
+    { id: "desk-comms", label: "Send Log", hint: "Outbound activity" },
+  ];
 
   async function confirmDeleteLineItem() {
     if (!lineItemPendingDeleteId) return;
@@ -410,157 +420,244 @@ export function QuoteDeskView() {
 
   return (
     <div className="space-y-5">
+      <PageHeader
+        title={selectedQuote.title}
+        subtitle="Keep the quote clean: verify scope, price the lines, then move the job forward or sync it out."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+              New Quote for Customer
+            </Button>
+            <QuoteStatusPill status={selectedQuote.status} />
+          </>
+        }
+      />
+
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <Card variant="blue" padding="lg" className="overflow-hidden">
-        <PageHeader
-          title={selectedQuote.title}
-          subtitle="Review the scope, keep the numbers tight, and move the job forward from one screen."
-          actions={<QuoteStatusPill status={selectedQuote.status} />}
-        />
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+          <WorkspaceRailCard
+            eyebrow="Quote Desk"
+            title={customerName}
+            description="Everything for this job stays in one place: overview, scope, line items, send actions, and accounting sync."
+          >
+            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <DeskRailStat label="Status" value={formatQuoteStatusLabel(selectedQuote.status)} />
+              <DeskRailStat label="Line Items" value={String(lineItemCount)} />
+              <DeskRailStat label="Updated" value={formatDateTime(selectedQuote.updatedAt)} />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
+              {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
+            </div>
+            <WorkspaceJumpBar links={deskLinks} className="mt-4" />
+          </WorkspaceRailCard>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <HeaderMetaChip icon={<CustomerIcon size={13} />} label={customerName} />
-          <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
-          {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
-          <HeaderMetaChip icon={<InvoiceIcon size={13} />} label={`Updated ${formatDateTime(selectedQuote.updatedAt)}`} />
-        </div>
-
-        {selectedQuoteMath && (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <DeskMetricCard
-              icon={<PriceIcon size={16} />}
-              label="Quote total"
-              value={money(selectedQuoteMath.totalAmount)}
-              tone="blue"
-            />
-            <DeskMetricCard
-              icon={<InvoiceIcon size={16} />}
-              label="Line items"
-              value={String(lineItemCount)}
-              tone="slate"
-            />
-            <DeskMetricCard
-              icon={<QuoteIcon size={16} />}
-              label="Est. profit"
-              value={money(selectedQuoteMath.estimatedProfit)}
-              tone={selectedQuoteMath.estimatedProfit >= 0 ? "emerald" : "rose"}
-            />
-            <DeskMetricCard
-              icon={<SendIcon size={16} />}
-              label="Margin"
-              value={`${selectedQuoteMath.estimatedMarginPercent.toFixed(1)}%`}
-              tone={selectedQuoteMath.estimatedMarginPercent >= 10 ? "emerald" : "amber"}
-            />
-          </div>
-        )}
-      </Card>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <QuickLookupCard
-          title="Switch Customer or Quote"
-          subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
-          customerActionLabel="New Quote"
-          customerActionVariant="secondary"
-          activeCustomerId={selectedQuote.customerId}
-          activeQuoteId={selectedQuote.id}
-          onCustomerAction={(customer) => {
-            setNotice(`${customer.fullName} is ready for a new quote.`);
-            navigateToBuilder(customer.id);
-          }}
-          onQuoteAction={(quote) => navigateToQuote(quote.id)}
-        />
-
-        <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_360px]">
-        <div className="space-y-5">
-          <Card variant="elevated" padding="lg">
-            <CardHeader
-              title="Quote Details"
-              subtitle="Control customer-facing wording, stage, and tax without losing the internal quote math."
-            />
-            <form id="quote-desk-form" onSubmit={(event) => { track("quote_save"); void saveQuote(event); }} className="space-y-4">
-              <div className="grid gap-3 lg:grid-cols-[1.1fr_1.1fr_0.8fr]">
-                <Select
-                  label="Trade"
-                  value={quoteEditForm.serviceType}
-                  onChange={(event) =>
-                    setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-                  }
-                  options={serviceOptions}
-                />
-                <Select
-                  label="Pipeline stage"
-                  value={quoteEditForm.status}
-                  onChange={(event) =>
-                    setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
-                  }
-                  options={statusOptions}
-                />
-                <Input
-                  label="Tax amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={quoteEditForm.taxAmount}
-                  onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-                />
-              </div>
-
-              <div className="grid gap-3 lg:grid-cols-[1fr_1fr_0.9fr]">
-                <Select
-                  label="Job stage"
-                  value={quoteEditForm.jobStatus}
-                  disabled={quoteEditForm.status !== "ACCEPTED"}
-                  onChange={(event) =>
-                    setQuoteEditForm((prev) => ({ ...prev, jobStatus: event.target.value as typeof prev.jobStatus }))
-                  }
-                  options={jobStatusOptions}
-                />
-                <Select
-                  label="After-sale follow-up"
-                  value={quoteEditForm.afterSaleFollowUpStatus}
-                  disabled={quoteEditForm.status !== "ACCEPTED"}
-                  onChange={(event) =>
-                    setQuoteEditForm((prev) => ({
-                      ...prev,
-                      afterSaleFollowUpStatus: event.target.value as typeof prev.afterSaleFollowUpStatus,
-                    }))
-                  }
-                  options={afterSaleOptions}
-                />
-                <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-3.5 py-3 shadow-sm">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-up due</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{afterSaleDueLabel}</p>
+          <WorkspaceRailCard
+            eyebrow="Next Step"
+            title={`${deskCompletionPercent}% ready`}
+            description={nextDeskStep}
+          >
+            <ProgressBar value={deskCompletionPercent} label="Desk progress" hint={`${deskCompletionPercent}%`} />
+            <div className="mt-4 grid gap-2">
+              <Button fullWidth loading={saving} onClick={() => void persistSelectedQuote()}>
+                Save Quote
+              </Button>
+              <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                Start Another Quote
+              </Button>
+              {quickBooksInvoiceStatus ? (
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
+                    <span className="text-sm font-semibold text-slate-900">
+                      {quickBooksInvoiceStatus.paid ? "Paid" : money(quickBooksInvoiceStatus.balance)}
+                    </span>
+                  </div>
                 </div>
+              ) : quickBooksSyncRecord ? (
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
+                    <span className="text-sm font-semibold text-slate-900">
+                      {quickBooksSyncRecord.quickBooksInvoiceId ?? "Not pushed"}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </WorkspaceRailCard>
+        </aside>
+
+        <div className="space-y-6">
+          <WorkspaceSection
+            id="desk-overview"
+            step="Step 1"
+            title="Overview"
+            description="Get customer context, confirm quote health, and switch records without losing flow."
+          >
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_360px]">
+              <Card variant="blue" padding="lg" className="overflow-hidden">
+                <div className="flex flex-wrap gap-2">
+                  <HeaderMetaChip icon={<CustomerIcon size={13} />} label={customerName} />
+                  <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
+                  {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
+                  <HeaderMetaChip icon={<InvoiceIcon size={13} />} label={`Updated ${formatDateTime(selectedQuote.updatedAt)}`} />
+                </div>
+
+                {selectedQuoteMath && (
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <DeskMetricCard
+                      icon={<PriceIcon size={16} />}
+                      label="Quote Total"
+                      value={money(selectedQuoteMath.totalAmount)}
+                      tone="blue"
+                    />
+                    <DeskMetricCard
+                      icon={<InvoiceIcon size={16} />}
+                      label="Line Items"
+                      value={String(lineItemCount)}
+                      tone="slate"
+                    />
+                    <DeskMetricCard
+                      icon={<QuoteIcon size={16} />}
+                      label="Est. Profit"
+                      value={money(selectedQuoteMath.estimatedProfit)}
+                      tone={selectedQuoteMath.estimatedProfit >= 0 ? "emerald" : "rose"}
+                    />
+                    <DeskMetricCard
+                      icon={<SendIcon size={16} />}
+                      label="Margin"
+                      value={`${selectedQuoteMath.estimatedMarginPercent.toFixed(1)}%`}
+                      tone={selectedQuoteMath.estimatedMarginPercent >= 10 ? "emerald" : "amber"}
+                    />
+                  </div>
+                )}
+              </Card>
+
+              <div className="space-y-5">
+                <QuickLookupCard
+                  title="Switch Customer or Quote"
+                  subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
+                  customerActionLabel="New Quote"
+                  customerActionVariant="secondary"
+                  activeCustomerId={selectedQuote.customerId}
+                  activeQuoteId={selectedQuote.id}
+                  onCustomerAction={(customer) => {
+                    setNotice(`${customer.fullName} is ready for a new quote.`);
+                    navigateToBuilder(customer.id);
+                  }}
+                  onQuoteAction={(quote) => navigateToQuote(quote.id)}
+                />
+
+                <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
               </div>
+            </div>
+          </WorkspaceSection>
 
-              <Input
-                label="Quote title"
-                value={quoteEditForm.title}
-                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))}
-                placeholder="Replace condenser and evaporator coil"
+          <WorkspaceSection
+            id="desk-details"
+            step="Step 2"
+            title="Quote Details"
+            description="Control customer-facing wording, lifecycle stage, and tax without losing the internal math."
+            actions={<Badge tone="blue">Live Draft</Badge>}
+          >
+            <Card variant="elevated" padding="lg">
+              <CardHeader
+                title="Quote Details"
+                subtitle="Keep the quote readable for the customer and the operator at the same time."
               />
+              <form id="quote-desk-form" onSubmit={(event) => { track("quote_save"); void saveQuote(event); }} className="space-y-4">
+                <div className="grid gap-3 lg:grid-cols-[1.1fr_1.1fr_0.8fr]">
+                  <Select
+                    label="Trade"
+                    value={quoteEditForm.serviceType}
+                    onChange={(event) =>
+                      setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+                    }
+                    options={serviceOptions}
+                  />
+                  <Select
+                    label="Pipeline Stage"
+                    value={quoteEditForm.status}
+                    onChange={(event) =>
+                      setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
+                    }
+                    options={statusOptions}
+                  />
+                  <Input
+                    label="Tax Amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={quoteEditForm.taxAmount}
+                    onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+                  />
+                </div>
 
-              <Textarea
-                label="Scope of work"
-                rows={5}
-                value={quoteEditForm.scopeText}
-                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))}
-                placeholder="Describe the work, materials, exclusions, and completion notes."
-              />
+                <div className="grid gap-3 lg:grid-cols-[1fr_1fr_0.9fr]">
+                  <Select
+                    label="Job Stage"
+                    value={quoteEditForm.jobStatus}
+                    disabled={quoteEditForm.status !== "ACCEPTED"}
+                    onChange={(event) =>
+                      setQuoteEditForm((prev) => ({ ...prev, jobStatus: event.target.value as typeof prev.jobStatus }))
+                    }
+                    options={jobStatusOptions}
+                  />
+                  <Select
+                    label="After-Sale Follow-Up"
+                    value={quoteEditForm.afterSaleFollowUpStatus}
+                    disabled={quoteEditForm.status !== "ACCEPTED"}
+                    onChange={(event) =>
+                      setQuoteEditForm((prev) => ({
+                        ...prev,
+                        afterSaleFollowUpStatus: event.target.value as typeof prev.afterSaleFollowUpStatus,
+                      }))
+                    }
+                    options={afterSaleOptions}
+                  />
+                  <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-3.5 py-3 shadow-sm">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-Up Due</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{afterSaleDueLabel}</p>
+                  </div>
+                </div>
 
-              {selectedQuoteMath && (
-                <QuoteMathSummaryPanel summary={selectedQuoteMath} money={money} warning={quoteMathWarning} />
-              )}
-            </form>
-          </Card>
+                <Input
+                  label="Quote Title"
+                  value={quoteEditForm.title}
+                  onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))}
+                  placeholder="Replace condenser and evaporator coil"
+                />
 
-          <Card variant="elevated" padding="lg">
+                <Textarea
+                  label="Scope of Work"
+                  rows={5}
+                  value={quoteEditForm.scopeText}
+                  onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))}
+                  placeholder="Describe the work, materials, exclusions, and completion notes."
+                />
+
+                {selectedQuoteMath && (
+                  <QuoteMathSummaryPanel summary={selectedQuoteMath} money={money} warning={quoteMathWarning} />
+                )}
+              </form>
+            </Card>
+          </WorkspaceSection>
+
+          <WorkspaceSection
+            id="desk-lines"
+            step="Step 3"
+            title="Line Items"
+            description="Use saved jobs when possible, then fine-tune labor, material, or service lines."
+            actions={<Badge tone="slate">{lineItemCount} lines</Badge>}
+          >
+            <Card variant="elevated" padding="lg">
             <CardHeader
               title="Line Items"
               subtitle={`${lineItemCount} line item${lineItemCount === 1 ? "" : "s"} attached. Keep labor, material, and service pricing readable and fast to edit.`}
@@ -786,171 +883,161 @@ export function QuoteDeskView() {
                 </form>
               </div>
             </div>
-          </Card>
-        </div>
+            </Card>
+          </WorkspaceSection>
 
-        <div className="space-y-5 xl:sticky xl:top-24 xl:self-start">
-          <Card variant="blue" padding="lg" className="overflow-hidden">
-            <CardHeader
-              title="Operator Actions"
-              subtitle="Save first, then move the deal, send the quote, or sync to accounting."
-            />
-
-            <div className="rounded-[26px] border border-white/70 bg-white/85 p-4 shadow-sm backdrop-blur">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer snapshot</p>
-              <p className="mt-2 text-base font-semibold text-slate-900">{customerName}</p>
-              <div className="mt-2 space-y-1 text-sm text-slate-600">
-                <p className="inline-flex items-center gap-2">
-                  <MessageIcon size={14} />
-                  {customerPhone}
-                </p>
-                <p className="inline-flex items-center gap-2">
-                  <EmailIcon size={14} />
-                  {customerEmail ?? "Add customer email before sending by email"}
-                </p>
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
-                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quote stage</p>
-                  <div className="mt-2">
-                    <QuoteStatusPill status={selectedQuote.status} compact />
+          <WorkspaceSection
+            id="desk-actions"
+            step="Step 4"
+            title="Actions and Sync"
+            description="Save the quote, move the lifecycle forward, send it out, or sync the invoice into QuickBooks."
+          >
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+              <div className="space-y-5">
+                <Card variant="elevated" padding="lg">
+                  <CardHeader
+                    title="Internal Actions"
+                    subtitle="Keep the record current before you send or sync anything out."
+                  />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button type="button" loading={saving} onClick={() => void persistSelectedQuote()}>
+                      Save Quote
+                    </Button>
+                    {selectedQuote.status !== "ACCEPTED" && (
+                      <Button
+                        type="button"
+                        variant="success"
+                        icon={<QuoteIcon size={14} />}
+                        onClick={() => { track("quote_mark_won"); void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" }); }}
+                        disabled={saving}
+                      >
+                        Mark Won
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={<SendIcon size={14} />}
+                      onClick={() => { track("quote_mark_quoted"); void sendDecision("send"); }}
+                      disabled={saving}
+                    >
+                      Mark Quoted
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => { track("quote_revise"); void sendDecision("revise"); }}
+                      disabled={saving}
+                    >
+                      Revise
+                    </Button>
+                    {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "IN_PROGRESS" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => { track("quote_job_in_progress"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "IN_PROGRESS" }); }}
+                        disabled={saving}
+                      >
+                        Start Job
+                      </Button>
+                    )}
+                    {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "COMPLETED" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => { track("quote_job_complete"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "COMPLETED" }); }}
+                        disabled={saving}
+                      >
+                        Complete Job
+                      </Button>
+                    )}
+                    {selectedQuote.status === "ACCEPTED" && selectedQuote.afterSaleFollowUpStatus === "DUE" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          track("quote_after_sale_complete");
+                          void updateQuoteLifecycle(selectedQuote.id, { afterSaleFollowUpStatus: "COMPLETED" });
+                        }}
+                        disabled={saving}
+                      >
+                        Follow-Up Done
+                      </Button>
+                    )}
                   </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Job stage</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{formatJobStatusLabel(selectedQuote.jobStatus)}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">After-sale</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{formatAfterSaleStatusLabel(selectedQuote.afterSaleFollowUpStatus)}</p>
-                </div>
-              </div>
-            </div>
 
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Internal actions</p>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                <Button type="button" loading={saving} onClick={() => void persistSelectedQuote()}>
-                  Save Quote
-                </Button>
-                {selectedQuote.status !== "ACCEPTED" && (
-                  <Button
-                    type="button"
-                    variant="success"
-                    icon={<QuoteIcon size={14} />}
-                    onClick={() => { track("quote_mark_won"); void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" }); }}
-                    disabled={saving}
-                  >
-                    Mark Won
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  icon={<SendIcon size={14} />}
-                  onClick={() => { track("quote_mark_quoted"); void sendDecision("send"); }}
-                  disabled={saving}
-                >
-                  Mark Quoted
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => { track("quote_revise"); void sendDecision("revise"); }}
-                  disabled={saving}
-                >
-                  Revise
-                </Button>
-                {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "IN_PROGRESS" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => { track("quote_job_in_progress"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "IN_PROGRESS" }); }}
-                    disabled={saving}
-                  >
-                    Start Job
-                  </Button>
-                )}
-                {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "COMPLETED" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => { track("quote_job_complete"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "COMPLETED" }); }}
-                    disabled={saving}
-                  >
-                    Complete Job
-                  </Button>
-                )}
-                {selectedQuote.status === "ACCEPTED" && selectedQuote.afterSaleFollowUpStatus === "DUE" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      track("quote_after_sale_complete");
-                      void updateQuoteLifecycle(selectedQuote.id, { afterSaleFollowUpStatus: "COMPLETED" });
-                    }}
-                    disabled={saving}
-                  >
-                    Follow-Up Done
-                  </Button>
-                )}
-              </div>
-            </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <DeskRailStat label="Quote Stage" value={formatQuoteStatusLabel(selectedQuote.status)} />
+                    <DeskRailStat label="Job Stage" value={formatJobStatusLabel(selectedQuote.jobStatus)} />
+                    <DeskRailStat label="After-Sale" value={formatAfterSaleStatusLabel(selectedQuote.afterSaleFollowUpStatus)} />
+                  </div>
+                </Card>
 
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Send and export</p>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  icon={<EmailIcon size={14} />}
-                  onClick={() => { track("quote_email"); openSendComposer("email"); }}
-                  disabled={saving}
-                >
-                  Email App
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  icon={<MessageIcon size={14} />}
-                  onClick={() => { track("quote_sms"); openSendComposer("sms"); }}
-                  disabled={saving}
-                >
-                  Text App
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  icon={<CopyIcon size={14} />}
-                  onClick={() => { track("quote_copy"); openSendComposer("copy"); }}
-                  disabled={saving}
-                >
-                  Copy Message
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  icon={<InvoiceIcon size={14} />}
-                  onClick={() => { track("quote_pdf"); void downloadQuotePdf(); }}
-                  disabled={saving}
-                >
-                  Download PDF
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={<SendIcon size={14} />}
-                  onClick={() => { track("quote_send_pdf"); void downloadQuotePdf({ afterSend: true }); }}
-                  disabled={saving}
-                >
-                  Send + PDF
-                </Button>
-              </div>
-            </div>
+                <Card variant="elevated" padding="lg">
+                  <CardHeader
+                    title="Send and Export"
+                    subtitle="Use the customer’s device apps first. That keeps v1 simple and avoids paid messaging."
+                  />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={<EmailIcon size={14} />}
+                      onClick={() => { track("quote_email"); openSendComposer("email"); }}
+                      disabled={saving}
+                    >
+                      Email App
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={<MessageIcon size={14} />}
+                      onClick={() => { track("quote_sms"); openSendComposer("sms"); }}
+                      disabled={saving}
+                    >
+                      Text App
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={<CopyIcon size={14} />}
+                      onClick={() => { track("quote_copy"); openSendComposer("copy"); }}
+                      disabled={saving}
+                    >
+                      Copy Message
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      icon={<InvoiceIcon size={14} />}
+                      onClick={() => { track("quote_pdf"); void downloadQuotePdf(); }}
+                      disabled={saving}
+                    >
+                      Download PDF
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      icon={<SendIcon size={14} />}
+                      onClick={() => { track("quote_send_pdf"); void downloadQuotePdf({ afterSend: true }); }}
+                      disabled={saving}
+                      className="sm:col-span-2"
+                    >
+                      Send + PDF
+                    </Button>
+                  </div>
 
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
-              <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                    Email and text actions open the device apps after confirmation, so v1 does not require a paid messaging provider.
+                  </div>
+                </Card>
+              </div>
+
+              <Card variant="blue" padding="lg" className="overflow-hidden">
+                <CardHeader
+                  title="QuickBooks"
+                  subtitle="Use this only after the quote is accepted and ready to invoice."
+                />
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Invoice Sync</p>
@@ -1091,13 +1178,9 @@ export function QuoteDeskView() {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </Card>
             </div>
-
-            <div className="mt-4 rounded-[22px] border border-quotefly-blue/15 bg-white/85 px-3 py-3 text-xs text-slate-600 shadow-sm">
-              Email and text actions open the device apps after confirmation, so v1 does not require a paid messaging provider.
-            </div>
-          </Card>
+          </WorkspaceSection>
         </div>
       </div>
 
@@ -1118,115 +1201,129 @@ export function QuoteDeskView() {
         </div>
       </div>
 
-      {canViewQuoteHistory ? (
-        <Card variant="elevated" padding="lg">
-          <CardHeader
-            title="Quote Revision History"
-            subtitle="Track original values, revisions, and decision changes."
-            actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh</Button>}
-          />
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            {(["quote", "customer", "all"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setHistoryMode(mode)}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                  historyMode === mode
-                    ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
-              </button>
-            ))}
-            {historyMode === "customer" && (
-              <select
-                value={historyCustomerId}
-                onChange={(event) => setHistoryCustomerId(event.target.value)}
-                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
-              >
-                <option value="ALL">Select customer...</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>{customer.fullName}</option>
-                ))}
-              </select>
-            )}
-          </div>
-          {historyLoading ? (
-            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading revision history...</p>
-          ) : quoteHistory.length === 0 ? (
-            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No history entries for this filter yet.</p>
-          ) : (
-            <div className="max-h-72 space-y-2 overflow-auto">
-              {quoteHistory.map((revision) => (
-                <div key={revision.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <HistoryEventPill eventType={revision.eventType} />
-                      <QuoteStatusPill status={revision.status} compact />
-                      <p className="text-sm font-semibold text-slate-900">{revision.title}</p>
+      <WorkspaceSection
+        id="desk-history"
+        step="Step 5"
+        title="Revision History"
+        description="Track original values, revisions, and decision changes on the selected quote."
+      >
+        {canViewQuoteHistory ? (
+          <Card variant="elevated" padding="lg">
+            <CardHeader
+              title="Quote Revision History"
+              subtitle="Track original values, revisions, and decision changes."
+              actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh</Button>}
+            />
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {(["quote", "customer", "all"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setHistoryMode(mode)}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                    historyMode === mode
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
+                </button>
+              ))}
+              {historyMode === "customer" && (
+                <select
+                  value={historyCustomerId}
+                  onChange={(event) => setHistoryCustomerId(event.target.value)}
+                  className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
+                >
+                  <option value="ALL">Select customer...</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.fullName}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {historyLoading ? (
+              <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading revision history...</p>
+            ) : quoteHistory.length === 0 ? (
+              <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No history entries for this filter yet.</p>
+            ) : (
+              <div className="max-h-72 space-y-2 overflow-auto">
+                {quoteHistory.map((revision) => (
+                  <div key={revision.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <HistoryEventPill eventType={revision.eventType} />
+                        <QuoteStatusPill status={revision.status} compact />
+                        <p className="text-sm font-semibold text-slate-900">{revision.title}</p>
+                      </div>
+                      <p className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</p>
                     </div>
-                    <p className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</p>
+                    <p className="mt-2 text-xs text-slate-600">
+                      v{revision.version} / Customer: {revision.customer.fullName} / Total {money(revision.totalAmount)}
+                    </p>
+                    {revision.changedFields.length > 0 && (
+                      <p className="mt-1 text-[11px] text-slate-500">Fields: {revision.changedFields.join(", ")}</p>
+                    )}
                   </div>
-                  <p className="mt-2 text-xs text-slate-600">
-                    v{revision.version} / Customer: {revision.customer.fullName} / Total {money(revision.totalAmount)}
-                  </p>
-                  {revision.changedFields.length > 0 && (
-                    <p className="mt-1 text-[11px] text-slate-500">Fields: {revision.changedFields.join(", ")}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      ) : (
-        <FeatureLockedCard
-          title="Quote Revision History"
-          description="Revision history, customer-level history, and long-term quote timelines unlock on Professional."
-          currentPlanLabel={currentPlanLabel}
-          requiredPlanLabel="Professional"
-          showUpgradeHint={canAutoUpgradeMessage}
-        />
-      )}
-
-      {canViewCommunicationLog ? (
-        <Card variant="elevated" padding="lg">
-          <CardHeader
-            title="Send Activity"
-            subtitle="Logged email, text, and copy actions for this quote."
-            actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
+                ))}
+              </div>
+            )}
+          </Card>
+        ) : (
+          <FeatureLockedCard
+            title="Quote Revision History"
+            description="Revision history, customer-level history, and long-term quote timelines unlock on Professional."
+            currentPlanLabel={currentPlanLabel}
+            requiredPlanLabel="Professional"
+            showUpgradeHint={canAutoUpgradeMessage}
           />
-          {outboundEventsLoading ? (
-            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading send activity...</p>
-          ) : outboundEvents.length === 0 ? (
-            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No send actions logged yet.</p>
-          ) : (
-            <div className="max-h-60 space-y-2 overflow-auto">
-              {outboundEvents.map((event) => (
-                <div key={event.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <OutboundChannelPill channel={event.channel} />
-                    <p className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</p>
+        )}
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        id="desk-comms"
+        step="Step 6"
+        title="Send Activity"
+        description="Review logged email, text, and copy actions for this quote."
+      >
+        {canViewCommunicationLog ? (
+          <Card variant="elevated" padding="lg">
+            <CardHeader
+              title="Send Activity"
+              subtitle="Logged email, text, and copy actions for this quote."
+              actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
+            />
+            {outboundEventsLoading ? (
+              <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading send activity...</p>
+            ) : outboundEvents.length === 0 ? (
+              <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No send actions logged yet.</p>
+            ) : (
+              <div className="max-h-60 space-y-2 overflow-auto">
+                {outboundEvents.map((event) => (
+                  <div key={event.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <OutboundChannelPill channel={event.channel} />
+                      <p className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</p>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
+                    </p>
+                    {event.subject && <p className="mt-1 text-xs text-slate-500">Subject: {event.subject}</p>}
                   </div>
-                  <p className="mt-2 text-xs text-slate-600">
-                    {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
-                  </p>
-                  {event.subject && <p className="mt-1 text-xs text-slate-500">Subject: {event.subject}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      ) : (
-        <FeatureLockedCard
-          title="Communication Log"
-          description="Email, text, and copy activity tracking unlocks on Professional."
-          currentPlanLabel={currentPlanLabel}
-          requiredPlanLabel="Professional"
-          showUpgradeHint={canAutoUpgradeMessage}
-        />
-      )}
+                ))}
+              </div>
+            )}
+          </Card>
+        ) : (
+          <FeatureLockedCard
+            title="Communication Log"
+            description="Email, text, and copy activity tracking unlocks on Professional."
+            currentPlanLabel={currentPlanLabel}
+            requiredPlanLabel="Professional"
+            showUpgradeHint={canAutoUpgradeMessage}
+          />
+        )}
+      </WorkspaceSection>
 
       <ConfirmModal
         open={lineItemPendingDeleteId !== null}
@@ -1317,6 +1414,15 @@ function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
       <span className="text-quotefly-blue">{icon}</span>
       {label}
     </span>
+  );
+}
+
+function DeskRailStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
+    </div>
   );
 }
 

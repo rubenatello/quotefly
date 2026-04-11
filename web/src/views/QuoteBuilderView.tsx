@@ -27,6 +27,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
+import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import { usePageView, useTrack } from "../lib/analytics";
 
 const MAX_QUICKBOOKS_EXPORT_QUOTES = 100;
@@ -175,6 +176,16 @@ export function QuoteBuilderView() {
   const builderCompletionPercent = useMemo(
     () => Math.round((builderSteps.filter((step) => step.complete).length / builderSteps.length) * 100),
     [builderSteps],
+  );
+  const builderLinks = useMemo(
+    () => [
+      { id: "builder-overview", label: "Overview", hint: "Progress + totals" },
+      { id: "builder-customer", label: "Customer", hint: "Lookup or add lead" },
+      { id: "builder-ai", label: "AI Draft", hint: "Prompt to quote" },
+      { id: "builder-draft", label: "Draft Quote", hint: "Starter + pricing" },
+      { id: "builder-export", label: "Export", hint: "Quotes + QuickBooks" },
+    ],
+    [],
   );
 
   useEffect(() => {
@@ -342,125 +353,193 @@ export function QuoteBuilderView() {
       <PageHeader
         title="Quote Builder"
         subtitle="Create customers, draft quotes, and prep exports from one operator workflow built for phone-first teams."
+        actions={
+          selectedQuoteId ? (
+            <Button onClick={() => navigateToQuote(selectedQuoteId)}>
+              Open Active Quote
+            </Button>
+          ) : undefined
+        }
       />
 
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
-        <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
-        <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
-      </div>
-
-      <BuilderWorkflowCard steps={builderSteps} progress={builderCompletionPercent} />
-
-      <QuickLookupCard
-        customerActionLabel="Use Customer"
-        activeCustomerId={quoteForm.customerId}
-        activeQuoteId={selectedQuoteId}
-        onCustomerAction={(customer) => {
-          selectQuoteCustomer(customer.id);
-          setNotice(`${customer.fullName} is ready for a new quote.`);
-        }}
-        onQuoteAction={(quote) => navigateToQuote(quote.id)}
-      />
-
-      {/* Chat to Quote (AI) */}
-      {canUseChatToQuote ? (
-        <Card variant="blue" padding="lg">
-          <CardHeader
-            title="Chat to Quote"
-            subtitle="Describe customer, scope, and pricing in one message. QuoteFly AI builds the draft."
-          />
-          <form
-            onSubmit={(event) => {
-              track("chat_to_quote_submit");
-              void createQuoteFromChatPrompt(event);
-            }}
-            className="space-y-3"
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+          <WorkspaceRailCard
+            eyebrow="Builder"
+            title="One clean flow"
+            description="Find the customer, draft the quote, then export or open the desk without losing your place."
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-quotefly-blue shadow-sm">
-                AI generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setChatPrompt(CHAT_PROMPT_EXAMPLE);
-                  track("chat_to_quote_sample");
-                }}
-              >
-                Use Sample
-              </Button>
+            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
+              <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
+              <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
             </div>
-            <Textarea
-              rows={5}
-              value={chatPrompt}
-              onChange={(event) => setChatPrompt(event.target.value)}
-              placeholder="New quote for..."
-            />
-            {chatParsed && (
-              <div className="rounded-2xl border border-quotefly-blue/20 bg-white/90 px-3 py-2.5 text-xs text-slate-700 shadow-sm">
-                Last parse: {chatParsed.serviceType}
-                {chatParsed.squareFeetEstimate ? ` · ${chatParsed.squareFeetEstimate.toLocaleString()} sq ft` : ""}
-                {chatParsed.estimatedTotalAmount ? ` · Est. ${money(chatParsed.estimatedTotalAmount)}` : ""}
-              </div>
-            )}
-            <Button type="submit" loading={saving} fullWidth>
-              Generate Draft Quote
-            </Button>
-          </form>
-        </Card>
-      ) : (
-        <FeatureLockedCard
-          title="Chat to Quote"
-          description="Turn one natural-language prompt into a ready quote with labor/material lines."
-          currentPlanLabel={currentPlanLabel}
-          requiredPlanLabel="Supported Plan"
-          showUpgradeHint={canAutoUpgradeMessage}
-        />
-      )}
+            <WorkspaceJumpBar links={builderLinks} className="mt-4" />
+          </WorkspaceRailCard>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-      {/* Quick Customer */}
-      <Card variant="elevated" padding="lg">
-        <CardHeader title="Quick Customer" subtitle="Add a lead fast, then move directly into quoting." />
-        <form onSubmit={createCustomer} className="space-y-3">
-          <Input
-            label="Customer name"
-            placeholder="Full name"
-            required
-            value={customerForm.fullName}
-            onChange={(event) =>
-              setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))
+          <WorkspaceRailCard
+            eyebrow="Current state"
+            title={activeCustomer ? activeCustomer.fullName : "No customer selected"}
+            description={
+              activeCustomer
+                ? `${activeCustomer.phone}${activeCustomer.email ? ` · ${activeCustomer.email}` : ""}`
+                : "Use the customer section first so the quote attaches to the right record."
             }
-          />
-          <Input
-            label="Phone"
-            type="tel"
-            placeholder="Phone"
-            required
-            value={customerForm.phone}
-            onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))}
-          />
-          <Input
-            label="Email"
-            type="email"
-            placeholder="Email (optional)"
-            value={customerForm.email}
-            onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))}
-          />
-          <Button type="submit" loading={saving} fullWidth>
-            Create Customer
-          </Button>
-        </form>
-      </Card>
+          >
+            <div className="grid gap-2">
+              <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Builder progress</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{builderCompletionPercent}%</p>
+              </div>
+              {selectedQuoteId ? (
+                <Button fullWidth onClick={() => navigateToQuote(selectedQuoteId)}>
+                  Open Quote Desk
+                </Button>
+              ) : (
+                <Button fullWidth variant="outline" disabled>
+                  Create Quote First
+                </Button>
+              )}
+            </div>
+          </WorkspaceRailCard>
+        </aside>
 
-      {/* Create Quote */}
-      <Card variant="elevated" padding="lg">
+        <div className="space-y-6">
+          <WorkspaceSection
+            id="builder-overview"
+            step="Step 1"
+            title="Overview"
+            description="Track builder progress, customer readiness, and quote throughput before drafting."
+          >
+            <BuilderWorkflowCard steps={builderSteps} progress={builderCompletionPercent} />
+          </WorkspaceSection>
+
+          <WorkspaceSection
+            id="builder-customer"
+            step="Step 2"
+            title="Customer"
+            description="Search an existing customer first. If they do not exist, add them fast and keep moving."
+          >
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
+              <QuickLookupCard
+                customerActionLabel="Use Customer"
+                activeCustomerId={quoteForm.customerId}
+                activeQuoteId={selectedQuoteId}
+                onCustomerAction={(customer) => {
+                  selectQuoteCustomer(customer.id);
+                  setNotice(`${customer.fullName} is ready for a new quote.`);
+                }}
+                onQuoteAction={(quote) => navigateToQuote(quote.id)}
+              />
+
+              <Card variant="elevated" padding="lg">
+                <CardHeader title="Quick Customer" subtitle="Add a lead fast, then move directly into quoting." />
+                <form onSubmit={createCustomer} className="space-y-3">
+                  <Input
+                    label="Customer name"
+                    placeholder="Full name"
+                    required
+                    value={customerForm.fullName}
+                    onChange={(event) =>
+                      setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))
+                    }
+                  />
+                  <Input
+                    label="Phone"
+                    type="tel"
+                    placeholder="Phone"
+                    required
+                    value={customerForm.phone}
+                    onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))}
+                  />
+                  <Input
+                    label="Email"
+                    type="email"
+                    placeholder="Email (optional)"
+                    value={customerForm.email}
+                    onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))}
+                  />
+                  <Button type="submit" loading={saving} fullWidth>
+                    Create Customer
+                  </Button>
+                </form>
+              </Card>
+            </div>
+          </WorkspaceSection>
+
+          <WorkspaceSection
+            id="builder-ai"
+            step="Step 3"
+            title="AI Draft"
+            description="Use AI when it helps, but keep it in a tight card so it does not compete with the main quote form."
+          >
+            {canUseChatToQuote ? (
+              <Card variant="blue" padding="lg">
+                <CardHeader
+                  title="Chat to Quote"
+                  subtitle="Describe customer, scope, and pricing in one message. QuoteFly AI builds the draft."
+                />
+                <form
+                  onSubmit={(event) => {
+                    track("chat_to_quote_submit");
+                    void createQuoteFromChatPrompt(event);
+                  }}
+                  className="space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-quotefly-blue shadow-sm">
+                      AI generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setChatPrompt(CHAT_PROMPT_EXAMPLE);
+                        track("chat_to_quote_sample");
+                      }}
+                    >
+                      Use Sample
+                    </Button>
+                  </div>
+                  <Textarea
+                    rows={5}
+                    value={chatPrompt}
+                    onChange={(event) => setChatPrompt(event.target.value)}
+                    placeholder="New quote for..."
+                  />
+                  {chatParsed && (
+                    <div className="rounded-2xl border border-quotefly-blue/20 bg-white/90 px-3 py-2.5 text-xs text-slate-700 shadow-sm">
+                      Last parse: {chatParsed.serviceType}
+                      {chatParsed.squareFeetEstimate ? ` · ${chatParsed.squareFeetEstimate.toLocaleString()} sq ft` : ""}
+                      {chatParsed.estimatedTotalAmount ? ` · Est. ${money(chatParsed.estimatedTotalAmount)}` : ""}
+                    </div>
+                  )}
+                  <Button type="submit" loading={saving} fullWidth>
+                    Generate Draft Quote
+                  </Button>
+                </form>
+              </Card>
+            ) : (
+              <FeatureLockedCard
+                title="Chat to Quote"
+                description="Turn one natural-language prompt into a ready quote with labor/material lines."
+                currentPlanLabel={currentPlanLabel}
+                requiredPlanLabel="Supported Plan"
+                showUpgradeHint={canAutoUpgradeMessage}
+              />
+            )}
+          </WorkspaceSection>
+
+          <WorkspaceSection
+            id="builder-draft"
+            step="Step 4"
+            title="Draft Quote"
+            description="Use a starter job, tighten pricing, then create the quote and move into the desk."
+          >
+            <Card variant="elevated" padding="lg">
         <CardHeader title="Create Quote" subtitle="Use a saved starter job, then tune the scope and math before opening the desk." />
         <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -655,11 +734,16 @@ export function QuoteBuilderView() {
             Create Quote
           </Button>
         </form>
-      </Card>
-      </div>
+            </Card>
+          </WorkspaceSection>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
-      {/* Quote List */}
+          <WorkspaceSection
+            id="builder-export"
+            step="Step 5"
+            title="Export"
+            description="Review live quotes, select invoice-ready records, and hand off cleanly into QuickBooks."
+          >
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
       <Card variant="elevated" padding="lg">
         <CardHeader
           title="Quote List"
@@ -798,6 +882,9 @@ export function QuoteBuilderView() {
           </Button>
         </div>
       </Card>
+            </div>
+          </WorkspaceSection>
+        </div>
       </div>
 
       <QuickBooksGuideModal
@@ -1012,8 +1099,6 @@ function QuickBooksGuideModal({
     </Modal>
   );
 }
-
-
 
 
 
