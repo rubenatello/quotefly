@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Hammer, Palette, Ruler, Sparkles } from "lucide-react";
+import { ArrowRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, Select } from "../components/ui";
-import { ApiError, api, type ServiceType, type WorkPreset } from "../lib/api";
+import {
+  ApiError,
+  api,
+  type ServiceType,
+  type WorkPreset,
+  type WorkPresetCategory,
+  type WorkPresetUnitType,
+} from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 
 interface SetupPageProps {
@@ -13,6 +20,18 @@ interface SetupPageProps {
   onSetupSaved?: () => Promise<void> | void;
 }
 
+interface SetupPresetDraft {
+  id: string;
+  name: string;
+  description: string;
+  category: WorkPresetCategory;
+  unitType: WorkPresetUnitType;
+  defaultQuantity: string;
+  unitCost: string;
+  unitPrice: string;
+  isDefault: boolean;
+}
+
 const TRADE_LABELS: Record<ServiceType, string> = {
   HVAC: "HVAC",
   PLUMBING: "Plumbing",
@@ -21,6 +40,20 @@ const TRADE_LABELS: Record<ServiceType, string> = {
   GARDENING: "Gardening",
   CONSTRUCTION: "Construction",
 };
+
+const PRESET_CATEGORY_OPTIONS: Array<{ value: WorkPresetCategory; label: string }> = [
+  { value: "SERVICE", label: "Service" },
+  { value: "LABOR", label: "Labor" },
+  { value: "MATERIAL", label: "Material" },
+  { value: "FEE", label: "Fee" },
+];
+
+const PRESET_UNIT_OPTIONS: Array<{ value: WorkPresetUnitType; label: string }> = [
+  { value: "FLAT", label: "Flat" },
+  { value: "SQ_FT", label: "SQ FT" },
+  { value: "HOUR", label: "Hour" },
+  { value: "EACH", label: "Each" },
+];
 
 function formatUnitType(value: WorkPreset["unitType"]): string {
   if (value === "SQ_FT") return "SQ FT";
@@ -33,6 +66,34 @@ function inferSquareFootPreset(presets: WorkPreset[], trade: ServiceType) {
   return presets.find((preset) => preset.serviceType === trade && preset.unitType === "SQ_FT") ?? null;
 }
 
+function toPresetDraft(preset: WorkPreset): SetupPresetDraft {
+  return {
+    id: preset.id,
+    name: preset.name,
+    description: preset.description ?? "",
+    category: preset.category,
+    unitType: preset.unitType,
+    defaultQuantity: String(Number(preset.defaultQuantity)),
+    unitCost: String(Number(preset.unitCost)),
+    unitPrice: String(Number(preset.unitPrice)),
+    isDefault: preset.isDefault,
+  };
+}
+
+function createEmptyPresetDraft(trade: ServiceType, index: number): SetupPresetDraft {
+  return {
+    id: `custom-${trade}-${Date.now()}-${index}`,
+    name: "",
+    description: "",
+    category: "SERVICE",
+    unitType: "FLAT",
+    defaultQuantity: "1",
+    unitCost: "0",
+    unitPrice: "0",
+    isDefault: true,
+  };
+}
+
 export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -43,6 +104,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   const [supportedTrades, setSupportedTrades] = useState<ServiceType[]>([]);
   const [recommendedPresets, setRecommendedPresets] = useState<WorkPreset[]>([]);
   const [existingPresets, setExistingPresets] = useState<WorkPreset[]>([]);
+  const [presetDrafts, setPresetDrafts] = useState<SetupPresetDraft[]>([]);
   const [chargeBySquareFoot, setChargeBySquareFoot] = useState(false);
   const [sqFtUnitCost, setSqFtUnitCost] = useState("");
   const [sqFtUnitPrice, setSqFtUnitPrice] = useState("");
@@ -131,12 +193,65 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     return recommendedPresets;
   }, [existingPresets, recommendedPresets, trade]);
 
+  useEffect(() => {
+    setPresetDrafts(currentPresetSummary.map(toPresetDraft));
+  }, [currentPresetSummary]);
+
+  const visiblePresetDrafts = useMemo(
+    () => presetDrafts.filter((preset) => !(chargeBySquareFoot && preset.unitType === "SQ_FT")),
+    [chargeBySquareFoot, presetDrafts],
+  );
+
+  const canSaveSetup =
+    presetDrafts.length > 0 &&
+    presetDrafts.every((preset) => preset.name.trim().length >= 2 && Number(preset.defaultQuantity) > 0);
+
+  function resetPresetDraftsToDefaults() {
+    setPresetDrafts(recommendedPresets.map(toPresetDraft));
+  }
+
+  function updatePresetDraft(
+    presetId: string,
+    field: keyof SetupPresetDraft,
+    value: string | boolean,
+  ) {
+    setPresetDrafts((current) =>
+      current.map((preset) => (preset.id === presetId ? { ...preset, [field]: value } : preset)),
+    );
+  }
+
+  function addPresetDraft() {
+    setPresetDrafts((current) => {
+      if (current.length >= 50) {
+        setError("Preset setup is limited to 50 items.");
+        return current;
+      }
+      return [...current, createEmptyPresetDraft(trade, current.length)];
+    });
+  }
+
+  function removePresetDraft(presetId: string) {
+    setPresetDrafts((current) => current.filter((preset) => preset.id !== presetId));
+  }
+
   async function saveSetup() {
     setSaving(true);
     setError(null);
     try {
       const nextSqFtCost = chargeBySquareFoot && sqFtUnitCost ? Number(sqFtUnitCost) : undefined;
       const nextSqFtPrice = chargeBySquareFoot && sqFtUnitPrice ? Number(sqFtUnitPrice) : undefined;
+      const normalizedPresets = presetDrafts
+        .filter((preset) => preset.name.trim().length >= 2)
+        .map((preset) => ({
+          name: preset.name.trim(),
+          description: preset.description.trim() || undefined,
+          category: preset.category,
+          unitType: preset.unitType,
+          defaultQuantity: Number(preset.defaultQuantity || "0"),
+          unitCost: Number(preset.unitCost || "0"),
+          unitPrice: Number(preset.unitPrice || "0"),
+          isDefault: preset.isDefault,
+        }));
 
       await api.onboarding.saveSetup({
         primaryTrade: trade,
@@ -144,6 +259,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
         chargeBySquareFoot,
         sqFtUnitCost: nextSqFtCost,
         sqFtUnitPrice: nextSqFtPrice,
+        presets: normalizedPresets,
       });
 
       const refreshedSetup = await api.onboarding.getSetup();
@@ -261,7 +377,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <Button onClick={() => void saveSetup()} loading={saving}>
+                <Button onClick={() => void saveSetup()} loading={saving} disabled={!canSaveSetup}>
                   Save Setup
                 </Button>
                 <Button variant="outline" onClick={() => navigate("/app/branding")}>
@@ -278,23 +394,109 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
         <div className="space-y-5">
           <Card>
             <CardHeader
-              title="Preset Preview"
-              subtitle={`What ${TRADE_LABELS[trade]} users will start with after setup is saved.`}
+              title="Preset Builder"
+              subtitle={`Edit the starter pricing pack for ${TRADE_LABELS[trade]} before your crew starts quoting.`}
+              actions={
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={resetPresetDraftsToDefaults}>
+                    <RotateCcw size={14} />
+                    Reset
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={addPresetDraft}>
+                    <Plus size={14} />
+                    Add
+                  </Button>
+                </div>
+              }
             />
             <div className="space-y-3">
-              {currentPresetSummary.slice(0, 6).map((preset) => (
+              {chargeBySquareFoot ? (
+                <Alert tone="info">
+                  Square-foot baseline pricing is managed above. Custom SQ FT presets created by setup are hidden here to avoid duplicate edits.
+                </Alert>
+              ) : null}
+
+              {visiblePresetDrafts.length === 0 ? (
+                <Alert tone="warning">Add at least one preset before saving setup.</Alert>
+              ) : null}
+
+              {visiblePresetDrafts.map((preset, index) => (
                 <div key={preset.id} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-medium text-slate-900">{preset.name}</p>
-                      {preset.description ? <p className="mt-1 text-xs text-slate-500">{preset.description}</p> : null}
+                      <p className="font-medium text-slate-900">Preset {index + 1}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        This becomes a reusable starting line in quote creation.
+                      </p>
                     </div>
-                    <Badge tone="slate">{formatUnitType(preset.unitType)}</Badge>
+                    <button
+                      type="button"
+                      onClick={() => removePresetDraft(preset.id)}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                      aria-label={`Remove preset ${index + 1}`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
-                    <span className="rounded-full bg-slate-100 px-2 py-1">Qty {Number(preset.defaultQuantity)}</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1">Cost ${Number(preset.unitCost).toFixed(2)}</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1">Price ${Number(preset.unitPrice).toFixed(2)}</span>
+
+                  <div className="mt-3 grid gap-3">
+                    <Input
+                      value={preset.name}
+                      onChange={(event) => updatePresetDraft(preset.id, "name", event.target.value)}
+                      placeholder="Preset name"
+                    />
+                    <Input
+                      value={preset.description}
+                      onChange={(event) => updatePresetDraft(preset.id, "description", event.target.value)}
+                      placeholder="Description (optional)"
+                    />
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Select
+                        value={preset.category}
+                        onChange={(event) => updatePresetDraft(preset.id, "category", event.target.value as WorkPresetCategory)}
+                        options={PRESET_CATEGORY_OPTIONS}
+                      />
+                      <Select
+                        value={preset.unitType}
+                        onChange={(event) => updatePresetDraft(preset.id, "unitType", event.target.value as WorkPresetUnitType)}
+                        options={PRESET_UNIT_OPTIONS}
+                      />
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <Input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={preset.defaultQuantity}
+                        onChange={(event) => updatePresetDraft(preset.id, "defaultQuantity", event.target.value)}
+                        placeholder="Qty"
+                      />
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={preset.unitCost}
+                        onChange={(event) => updatePresetDraft(preset.id, "unitCost", event.target.value)}
+                        placeholder="Unit cost"
+                      />
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={preset.unitPrice}
+                        onChange={(event) => updatePresetDraft(preset.id, "unitPrice", event.target.value)}
+                        placeholder="Unit price"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <Badge tone="slate">{formatUnitType(preset.unitType)}</Badge>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">Qty {preset.defaultQuantity || "0"}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">Cost ${Number(preset.unitCost || 0).toFixed(2)}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">Price ${Number(preset.unitPrice || 0).toFixed(2)}</span>
+                    </div>
                   </div>
                 </div>
               ))}
