@@ -32,6 +32,7 @@ import {
   type ServiceType,
   type TenantEntitlements,
 } from "./lib/api";
+import { Toaster } from "sonner";
 
 type Session = {
   email: string;
@@ -109,16 +110,21 @@ function CrmLayout({
     }
   }, [location.pathname, navigate, session.onboardingCompletedAtUtc]);
 
-  // Map location to legacy "currentPage" for CrmShell sidebar highlighting
   const currentPage = (() => {
+    if (location.pathname.startsWith("/app/build")) return "build";
+    if (location.pathname.startsWith("/app/quotes")) return "quotes";
+    if (location.pathname.startsWith("/app/history")) return "history";
     if (location.pathname.startsWith("/app/setup")) return "setup";
     if (location.pathname.startsWith("/app/branding")) return "branding";
     if (location.pathname.startsWith("/app/admin")) return "admin";
-    return "dashboard";
+    return "pipeline";
   })();
 
   const handleNavigate = (page: string) => {
-    if (page === "dashboard") navigate("/app");
+    if (page === "pipeline") navigate("/app");
+    else if (page === "build") navigate("/app/build");
+    else if (page === "quotes") navigate("/app/quotes");
+    else if (page === "history") navigate("/app/history");
     else if (page === "setup") navigate("/app/setup");
     else if (page === "branding") navigate("/app/branding");
     else if (page === "admin") navigate("/app/admin");
@@ -318,6 +324,7 @@ function AppRoutes() {
         onClose={() => setIsAuthModalOpen(false)}
         onSuccess={handleAuthSuccess}
       />
+      <Toaster position="top-right" richColors closeButton theme="light" />
     </>
   );
 }
