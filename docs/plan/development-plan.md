@@ -2,7 +2,7 @@
 
 **Target launch date:** `2026-05-01`  
 **Current date:** `2026-04-10`  
-**Launch objective:** production-ready mobile-first quoting CRM for contractors with billing, onboarding, PDF quoting, and QuickBooks CSV export working end to end.
+**Launch objective:** production-ready mobile-first quoting CRM for contractors with billing, onboarding, PDF quoting, QuickBooks Online sync, and QuickBooks CSV fallback working end to end.
 
 ## Product Scope For V1
 
@@ -17,12 +17,12 @@ QuoteFly V1 will ship with:
 - Branding with logo, business info, and PDF themes
 - Quote PDF download/share flow
 - Lead pipeline with won/closed/after-sale stages
-- QuickBooks-friendly invoice CSV export
+- QuickBooks Online invoice sync plus CSV fallback
 - Stripe subscriptions and plan enforcement
 
 V1 will **not** block launch on:
 
-- Direct QuickBooks OAuth sync
+- QuickBooks Desktop support
 - Yelp or Angi lead ingestion
 - Twilio SMS delivery
 - Market pricing benchmark network
@@ -47,7 +47,7 @@ Still launch-critical:
 - Deterministic production deploy and migration strategy
 - Full Stripe billing QA
 - Full onboarding QA on mobile
-- Real QuickBooks CSV import smoke test
+- Real QuickBooks Online sync smoke test plus CSV fallback validation
 - Seat and AI quota enforcement QA
 - Final signed-in UX cleanup on dashboard/admin
 - Launch ops checklist and owner-side provisioning
@@ -103,7 +103,8 @@ Definition of done:
 
 Engineering:
 
-- Real QuickBooks CSV import smoke test with mixed quotes
+- Real QuickBooks Online sync smoke test with mixed quotes
+- QuickBooks CSV fallback validation with mixed quotes
 - Mobile QA across setup, pipeline, builder, and quote desk
 - Clean remaining rough UI on admin/dashboard/history
 - Improve template set so all quote templates feel standard and production-safe
@@ -161,7 +162,7 @@ This is the order to execute remaining work:
 1. Deploy/migration safety
 2. Billing QA and limit enforcement
 3. Onboarding and mobile workflow polish
-4. QuickBooks real import validation
+4. QuickBooks Online sync and CSV validation
 5. Dashboard/admin cleanup
 6. Launch analytics and monitoring sanity checks
 
@@ -189,7 +190,8 @@ The app is launch-ready only when all of these are true:
 - [ ] Quote PDF downloads with correct branding and readable colors
 - [ ] Email/text/copy actions behave correctly
 - [ ] Quote lifecycle updates reflect in pipeline
-- [ ] QuickBooks CSV imports cleanly in a real test
+- [ ] QuickBooks Online sync works in a real test tenant
+- [ ] QuickBooks CSV fallback imports cleanly in a real test
 - [ ] Stripe checkout and webhook flow are verified
 - [ ] Seat limits and AI limits are enforced
 - [ ] Support/legal pages are complete
@@ -208,7 +210,7 @@ Between `2026-04-25` and `2026-05-01`:
 
 These move to post-launch:
 
-- QuickBooks OAuth direct sync
+- QuickBooks Desktop compatibility layer
 - Regional price benchmark engine
 - Yelp/Angi integrations
 - Twilio messaging

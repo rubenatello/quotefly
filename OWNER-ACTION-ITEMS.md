@@ -53,6 +53,8 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 4. Put the client id/secret into Railway env vars
 5. Use `production` once the Intuit app is approved/live; use `sandbox` only for testing
 6. Full owner checklist: `docs/integrations/quickbooks-owner-setup.md`
+7. Progress/status doc: `docs/integrations/quickbooks-api-progress.md`
+8. Online/Desktop architecture doc: `docs/integrations/quickbooks-online-desktop-architecture.md`
 
 ### AI Model Options (set via `OPENAI_MODEL`)
 | Model | Cost (input/output per 1M tokens) | Speed | Best For |
