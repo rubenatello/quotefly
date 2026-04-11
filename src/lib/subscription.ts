@@ -40,7 +40,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     name: "Starter",
     limits: {
       quotesPerMonth: 600,
-      aiQuotesPerMonth: 10,
+      aiQuotesPerMonth: 30,
       teamMembers: 7,
       quoteHistoryDays: 30,
     },
@@ -59,7 +59,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     name: "Professional",
     limits: {
       quotesPerMonth: 5_000,
-      aiQuotesPerMonth: 50,
+      aiQuotesPerMonth: 300,
       teamMembers: 15,
       quoteHistoryDays: 180,
     },
@@ -78,7 +78,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     name: "Enterprise",
     limits: {
       quotesPerMonth: null,
-      aiQuotesPerMonth: 300,
+      aiQuotesPerMonth: 800,
       teamMembers: null,
       quoteHistoryDays: null,
     },

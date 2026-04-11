@@ -147,9 +147,9 @@ That command runs `prisma migrate deploy` before starting the API so production 
 ## 9. Cost Estimation (AI Usage)
 
 Each Chat-to-Quote AI call uses ~500-800 tokens. At `gpt-4o-mini` pricing:
-- **Starter plan** (5 AI quotes/month): ~$0.01/month
-- **Professional plan** (50 AI quotes/month): ~$0.05/month
-- **Enterprise plan** (unlimited): scales with usage, typically <$1/month for most contractors
+- **Starter plan** (30 AI quotes/month): still effectively pennies per month
+- **Professional plan** (300 AI quotes/month): still very low cost for normal usage
+- **Enterprise plan** (800 AI quotes/month): materially higher than the other tiers, but still manageable if prompts and outputs stay disciplined
 
 The existing regex parser continues to work as a free fallback.
 

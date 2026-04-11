@@ -13,7 +13,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Up to 7 team members
   - 30-day quote history
 - Included capabilities:
-  - AI-assisted quote drafting (10 per month)
+  - AI-assisted quote drafting (30 per month)
   - Fast customer intake and lead pipeline
   - Branded PDF quote generation
   - QuickBooks-friendly invoice CSV export
@@ -29,7 +29,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - 180-day quote history
 - Included capabilities:
   - Everything in Starter
-  - AI-assisted quote drafting (50 per month)
+  - AI-assisted quote drafting (300 per month)
   - Advanced analytics and reporting
   - Customer communication log
   - Quote versioning and history
@@ -46,7 +46,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Full historical access
 - Included capabilities:
   - Everything in Professional
-  - AI-assisted quote drafting (300 per month)
+  - AI-assisted quote drafting (800 per month)
   - QuickBooks-friendly export workflow with direct sync roadmap
   - API access
   - Custom branding and integration support

@@ -24,7 +24,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       description: "For solo contractors and lean crews that need speed without extra overhead.",
       features: [
         "Up to 600 quotes/month",
-        "10 AI quote drafts/month",
+        "30 AI quote drafts/month",
         "Quick customer intake and lead pipeline",
         "PDF quote generation",
         "QuickBooks Online invoice sync plus CSV fallback",
@@ -42,7 +42,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       features: [
         "Up to 5,000 quotes/month",
         "Everything in Starter, plus:",
-        "50 AI quote drafts/month",
+        "300 AI quote drafts/month",
         "Advanced analytics and reporting",
         "Customer communication log",
         "Quote versioning and history",
@@ -60,7 +60,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       features: [
         "Everything in Professional, plus:",
         "Unlimited quotes",
-        "300 AI quote drafts/month",
+        "800 AI quote drafts/month",
         "Unlimited team members",
         "Advanced AI automation layer",
         "API access and audit logs",

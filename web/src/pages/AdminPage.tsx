@@ -65,7 +65,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     price: "$19/mo",
     summary: "For solo operators and small crews that need clean quoting fast.",
     seatText: "Up to 7 users",
-    aiQuoteText: "10 AI quote drafts / month",
+    aiQuoteText: "30 AI quote drafts / month",
     historyText: "30-day quote history",
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
@@ -81,7 +81,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     price: "$59/mo",
     summary: "For field teams that need stronger pipeline visibility and revision tracking.",
     seatText: "Up to 15 users",
-    aiQuoteText: "50 AI quote drafts / month",
+    aiQuoteText: "300 AI quote drafts / month",
     historyText: "180-day quote history",
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
@@ -97,7 +97,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     price: "$249/mo",
     summary: "For larger operations that need automation, governance, and integrations.",
     seatText: "Unlimited users",
-    aiQuoteText: "300 AI quote drafts / month",
+    aiQuoteText: "800 AI quote drafts / month",
     historyText: "Unlimited quote history",
     accentClassName: "border-slate-300 bg-slate-100",
     features: [
