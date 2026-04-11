@@ -31,6 +31,7 @@ declare module "fastify" {
 
 export function buildServer() {
   const app = Fastify({
+    bodyLimit: 6 * 1024 * 1024,
     logger: {
       transport:
         env.NODE_ENV === "development"

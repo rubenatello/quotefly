@@ -217,6 +217,74 @@ function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): Bran
   };
 }
 
+async function resizeLogoFile(file: File): Promise<string> {
+  const readAsDataUrl = () =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result;
+        if (typeof result === "string") {
+          resolve(result);
+          return;
+        }
+        reject(new Error("Could not read logo file."));
+      };
+      reader.onerror = () => reject(new Error("Could not read logo file."));
+      reader.readAsDataURL(file);
+    });
+
+  const dataUrl = await readAsDataUrl();
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const nextImage = new Image();
+    nextImage.onload = () => resolve(nextImage);
+    nextImage.onerror = () => reject(new Error("Could not process logo image."));
+    nextImage.src = dataUrl;
+  });
+
+  const maxDimension = 1200;
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  const targetWidth = Math.max(1, Math.round(image.width * scale));
+  const targetHeight = Math.max(1, Math.round(image.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Could not prepare logo image.");
+  }
+
+  context.clearRect(0, 0, targetWidth, targetHeight);
+  context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+  const pngDataUrl = canvas.toDataURL("image/png");
+  if (pngDataUrl.length <= 850_000) {
+    return pngDataUrl;
+  }
+
+  const smallerScale = Math.min(scale, 900 / Math.max(image.width, image.height));
+  const smallerWidth = Math.max(1, Math.round(image.width * smallerScale));
+  const smallerHeight = Math.max(1, Math.round(image.height * smallerScale));
+  canvas.width = smallerWidth;
+  canvas.height = smallerHeight;
+  context.clearRect(0, 0, smallerWidth, smallerHeight);
+  context.drawImage(image, 0, 0, smallerWidth, smallerHeight);
+  const smallerPngDataUrl = canvas.toDataURL("image/png");
+  if (smallerPngDataUrl.length <= 850_000) {
+    return smallerPngDataUrl;
+  }
+
+  context.save();
+  context.globalCompositeOperation = "destination-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, smallerWidth, smallerHeight);
+  context.restore();
+
+  return canvas.toDataURL("image/jpeg", 0.86);
+}
+
 interface BrandingSectionCardProps {
   id: BrandingSectionId;
   title: string;
@@ -407,15 +475,26 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     }
   };
 
-  const handleLogoUpload = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setSaveStatus("error");
+      setSaveErrorMessage("Logo file is too large. Keep it under 8 MB before upload.");
+      return;
+    }
 
-    const reader = new FileReader();
-    reader.onload = (readerEvent) => {
-      setLogo(readerEvent.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const normalizedLogo = await resizeLogoFile(file);
+      setLogo(normalizedLogo);
+      setSaveStatus("idle");
+      setSaveErrorMessage(null);
+    } catch (err) {
+      setSaveStatus("error");
+      setSaveErrorMessage(err instanceof Error ? err.message : "Could not process logo file.");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   const getComponentFallback = (key: keyof BrandingComponentColors): string =>
