@@ -457,28 +457,30 @@ export function QuoteDeskView() {
         )}
       </Card>
 
-      <QuickLookupCard
-        title="Switch Customer or Quote"
-        subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
-        customerActionLabel="New Quote"
-        customerActionVariant="secondary"
-        activeCustomerId={selectedQuote.customerId}
-        activeQuoteId={selectedQuote.id}
-        onCustomerAction={(customer) => {
-          setNotice(`${customer.fullName} is ready for a new quote.`);
-          navigateToBuilder(customer.id);
-        }}
-        onQuoteAction={(quote) => navigateToQuote(quote.id)}
-      />
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <QuickLookupCard
+          title="Switch Customer or Quote"
+          subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
+          customerActionLabel="New Quote"
+          customerActionVariant="secondary"
+          activeCustomerId={selectedQuote.customerId}
+          activeQuoteId={selectedQuote.id}
+          onCustomerAction={(customer) => {
+            setNotice(`${customer.fullName} is ready for a new quote.`);
+            navigateToBuilder(customer.id);
+          }}
+          onQuoteAction={(quote) => navigateToQuote(quote.id)}
+        />
 
-      <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
+        <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
+      </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_360px]">
         <div className="space-y-5">
           <Card variant="elevated" padding="lg">
             <CardHeader
               title="Quote Details"
-              subtitle="Keep the customer-facing scope clear while preserving the internal math behind the quote."
+              subtitle="Control customer-facing wording, stage, and tax without losing the internal quote math."
             />
             <form id="quote-desk-form" onSubmit={(event) => { track("quote_save"); void saveQuote(event); }} className="space-y-4">
               <div className="grid gap-3 lg:grid-cols-[1.1fr_1.1fr_0.8fr]">
@@ -561,7 +563,7 @@ export function QuoteDeskView() {
           <Card variant="elevated" padding="lg">
             <CardHeader
               title="Line Items"
-              subtitle={`${lineItemCount} line item${lineItemCount === 1 ? "" : "s"} currently attached to this quote.`}
+              subtitle={`${lineItemCount} line item${lineItemCount === 1 ? "" : "s"} attached. Keep labor, material, and service pricing readable and fast to edit.`}
             />
 
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
@@ -710,7 +712,7 @@ export function QuoteDeskView() {
                             />
                             <MiniMetric
                               label="Applied totals"
-                              value={`${money(selectedPresetCostTotal)} cost · ${money(selectedPresetPriceTotal)} price`}
+                              value={`${money(selectedPresetCostTotal)} cost Â· ${money(selectedPresetPriceTotal)} price`}
                             />
                           </div>
                         </div>
@@ -791,7 +793,7 @@ export function QuoteDeskView() {
           <Card variant="blue" padding="lg" className="overflow-hidden">
             <CardHeader
               title="Operator Actions"
-              subtitle="Save internal changes first, then move or send the quote."
+              subtitle="Save first, then move the deal, send the quote, or sync to accounting."
             />
 
             <div className="rounded-[26px] border border-white/70 bg-white/85 p-4 shadow-sm backdrop-blur">
@@ -806,6 +808,22 @@ export function QuoteDeskView() {
                   <EmailIcon size={14} />
                   {customerEmail ?? "Add customer email before sending by email"}
                 </p>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quote stage</p>
+                  <div className="mt-2">
+                    <QuoteStatusPill status={selectedQuote.status} compact />
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Job stage</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{formatJobStatusLabel(selectedQuote.jobStatus)}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">After-sale</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{formatAfterSaleStatusLabel(selectedQuote.afterSaleFollowUpStatus)}</p>
+                </div>
               </div>
             </div>
 
@@ -1008,7 +1026,7 @@ export function QuoteDeskView() {
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Review before push</p>
                         <ul className="mt-2 space-y-1 text-xs text-amber-900">
                           {quickBooksPreview.warnings.map((warning) => (
-                            <li key={warning}>• {warning}</li>
+                            <li key={warning}>- {warning}</li>
                           ))}
                         </ul>
                       </div>

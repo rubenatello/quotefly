@@ -23,6 +23,7 @@ import type {
   QuoteRevision,
   QuoteStatus,
 } from "../../lib/api";
+import { cn } from "../../lib/utils";
 
 export type DashboardMobileSection = "pipeline" | "builder" | "quote";
 
@@ -211,12 +212,14 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
 export function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300">
-      <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-quotefly-blue/[0.08] text-quotefly-blue">
-        {icon}
-      </span>
-      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
+    <div className="rounded-[28px] border border-slate-200/80 bg-white/95 p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_24px_52px_rgba(15,23,42,0.1)]">
+      <div className="flex items-start justify-between gap-3">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-[20px] bg-[linear-gradient(135deg,rgba(42,127,216,0.12),rgba(244,96,54,0.08))] text-quotefly-blue shadow-sm">
+          {icon}
+        </span>
+      </div>
+      <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</p>
     </div>
   );
 }
@@ -263,7 +266,7 @@ export function MobileSectionSwitcher({
               key={section.id}
               type="button"
               onClick={() => onChange(section.id)}
-              className={`rounded-lg border px-2 py-2.5 text-left transition ${
+              className={`rounded-[22px] border px-2 py-2.5 text-left transition ${
                 active
                   ? "border-quotefly-blue/30 bg-quotefly-blue/[0.06] text-quotefly-blue"
                   : "border-slate-200 bg-white text-slate-700"
@@ -294,7 +297,7 @@ export function PipelineFlow({
   afterSaleLeads: number;
 }) {
   return (
-    <div className="mb-4 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+    <div className="overflow-x-auto rounded-[28px] border border-slate-200/80 bg-white/92 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm sm:p-4">
       <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
@@ -321,22 +324,22 @@ function PipelineStage({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04] text-quotefly-blue"
+      ? "border-quotefly-blue/15 bg-[linear-gradient(180deg,rgba(42,127,216,0.10),rgba(255,255,255,0.95))] text-quotefly-blue"
       : tone === "orange"
-        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.04] text-quotefly-orange"
+        ? "border-quotefly-orange/15 bg-[linear-gradient(180deg,rgba(244,96,54,0.10),rgba(255,255,255,0.95))] text-quotefly-orange"
         : tone === "emerald"
-          ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04] text-quotefly-blue"
-          : "border-slate-200 bg-slate-50 text-slate-600";
+          ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.10),rgba(255,255,255,0.95))] text-emerald-700"
+          : "border-slate-200 bg-[linear-gradient(180deg,rgba(148,163,184,0.08),rgba(255,255,255,0.95))] text-slate-600";
 
   return (
-    <div className={`flex min-w-[184px] items-center justify-between rounded-lg border px-3 py-2.5 ${toneClass}`}>
+    <div className={`flex min-w-[192px] items-center justify-between rounded-[24px] border px-3.5 py-3 shadow-sm ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-current/10 bg-white">
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-current/10 bg-white shadow-sm">
           {icon}
         </span>
         {label}
       </p>
-      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold">{count}</span>
+      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold shadow-sm">{count}</span>
     </div>
   );
 }
@@ -371,16 +374,16 @@ export function PipelineColumn({
   money: (value: string | number) => string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded-[26px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
       <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-quotefly-blue">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-slate-200 bg-white text-quotefly-blue">
           {icon}
         </span>
         {title}
       </h3>
       <p className="mb-3 text-xs text-slate-500">{subtitle}</p>
       {leads.length === 0 ? (
-        <p className="rounded-md border border-dashed border-slate-300 bg-white px-2 py-3 text-xs text-slate-500">
+        <p className="rounded-[20px] border border-dashed border-slate-300 bg-white px-3 py-3 text-xs text-slate-500">
           {emptyLabel}
         </p>
       ) : (
@@ -391,7 +394,7 @@ export function PipelineColumn({
               type="button"
               onClick={() => onSelectLead(lead.quoteId)}
               disabled={!lead.quoteId}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
+              className="w-full rounded-[22px] border border-slate-200 bg-white px-3 py-3 text-left shadow-sm transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-90"
             >
               <p className="text-sm font-medium text-slate-900">{lead.customerName}</p>
               <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-600">
@@ -429,7 +432,7 @@ export function PipelineColumn({
                     onChange={(event) =>
                       onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
                     }
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800"
                   >
                     {FOLLOW_UP_STATUSES.map((status) => (
                       <option key={`${lead.customerId}-${status}`} value={status}>
@@ -526,7 +529,7 @@ export function FeatureLockedCard({
   showUpgradeHint: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <div className="rounded-[28px] border border-slate-200/80 bg-white/92 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
@@ -558,12 +561,12 @@ export function QuoteMathSummaryPanel({
   warning?: string;
   money: (value: string | number) => string;
 }) {
-  const profitTone = summary.estimatedProfit >= 0 ? "text-quotefly-blue" : "text-red-600";
-  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-quotefly-blue" : "text-amber-700";
+  const profitTone = summary.estimatedProfit >= 0 ? "text-emerald-700" : "text-red-600";
+  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-emerald-700" : "text-amber-700";
 
   return (
-    <div className={`rounded-lg border border-slate-200 bg-white ${compact ? "p-3" : "p-4"}`}>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Live Quote Math</p>
+    <div className={`rounded-[24px] border border-slate-200 bg-white shadow-sm ${compact ? "p-4" : "p-5"}`}>
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Live Quote Math</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Metric label="Internal Cost" value={money(summary.internalSubtotal)} />
         <Metric label="Customer Subtotal" value={money(summary.customerSubtotal)} />
@@ -573,7 +576,7 @@ export function QuoteMathSummaryPanel({
         <Metric label="Margin" value={`${summary.estimatedMarginPercent.toFixed(1)}%`} valueClassName={marginTone} />
       </div>
       {warning && (
-        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+        <p className="mt-3 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700">
           {warning}
         </p>
       )}
@@ -591,9 +594,9 @@ function Metric({
   valueClassName?: string;
 }) {
   return (
-    <div>
-      <p className="text-xs uppercase text-slate-500">{label}</p>
-      <p className={`text-base font-semibold ${valueClassName ?? "text-slate-900"}`}>{value}</p>
+    <div className={cn("rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3", valueClassName && "bg-white")}>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-2 text-base font-semibold ${valueClassName ?? "text-slate-900"}`}>{value}</p>
     </div>
   );
 }

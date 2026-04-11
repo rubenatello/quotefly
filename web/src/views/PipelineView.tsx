@@ -121,20 +121,27 @@ function PipelineRowsSection({
 }) {
   return (
     <Card variant="elevated">
-      <div className={`mb-4 rounded-lg px-4 py-3 ${sectionToneClass(tone)}`}>
-        <p className="text-[11px] font-medium uppercase tracking-wide">Pipeline Queue</p>
-        <h3 className="mt-1 text-base font-semibold text-slate-900">{title}</h3>
-        <p className="text-xs text-slate-600">{subtitle}</p>
+      <div className={`mb-4 rounded-[24px] px-4 py-4 shadow-sm ${sectionToneClass(tone)}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">Pipeline Queue</p>
+            <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
+            <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+          </div>
+          <Badge tone={tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue"}>
+            {leads.length} active
+          </Badge>
+        </div>
       </div>
 
       {leads.length === 0 ? (
         <EmptyState title={emptyTitle} description={emptyDescription} />
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {leads.map((lead, index) => (
             <div
               key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
-              className={`rounded-xl border border-slate-200 bg-white p-3.5 ${sectionBorderClass(tone)}`}
+              className={`rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.08)] ${sectionBorderClass(tone)}`}
             >
               <div className="grid gap-3 lg:grid-cols-[1.8fr_1fr_1fr_1fr_auto] lg:items-center">
                 <div className="min-w-0">
@@ -158,7 +165,7 @@ function PipelineRowsSection({
                   {lead.quoteTitle && (
                     <p className="truncate text-xs text-slate-700">
                       {lead.quoteTitle}
-                      {lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}
+                      {lead.totalAmount !== undefined ? ` | ${money(lead.totalAmount)}` : ""}
                     </p>
                   )}
                   {lead.afterSaleFollowUpDueAtUtc && (
@@ -282,10 +289,10 @@ export function PipelineView() {
   } = useDashboard();
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
         title={session?.fullName ? `Welcome, ${session.fullName.split(" ")[0]}` : "QuoteFly CRM"}
-        subtitle="Your lead pipeline from first contact through completed work and after-sale follow-up."
+        subtitle="Work top-down through your queue: untouched leads first, quoted jobs next, active work after that, then reviews and referrals."
       />
 
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
@@ -307,9 +314,26 @@ export function PipelineView() {
       </div>
 
       <Card variant="blue">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold text-slate-900">Lead Pipeline</h2>
-          <p className="text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Operator board</p>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-900">Lead Pipeline</h2>
+            <p className="mt-1 text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-[22px] border border-white/80 bg-white/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Needs attention</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{pipeline.totals.newLeads + pipeline.totals.quotedLeads}</p>
+            </div>
+            <div className="rounded-[22px] border border-white/80 bg-white/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Active work</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{pipeline.totals.closedLeads}</p>
+            </div>
+            <div className="rounded-[22px] border border-white/80 bg-white/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">After-sale</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{pipeline.totals.afterSaleLeads}</p>
+            </div>
+          </div>
         </div>
 
         <PipelineFlow

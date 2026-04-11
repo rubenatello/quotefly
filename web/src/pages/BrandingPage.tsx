@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -362,17 +362,17 @@ function TemplateMiniPreview({
     <button
       type="button"
       onClick={onSelect}
-      className={`rounded-xl border p-3 text-left transition ${
+      className={`min-w-[220px] rounded-[24px] border p-3 text-left shadow-sm transition ${
         active
-          ? "border-quotefly-primary bg-quotefly-primary/5"
-          : "border-slate-200 bg-white hover:border-quotefly-primary/30"
+          ? "border-quotefly-primary bg-[linear-gradient(180deg,rgba(42,127,216,0.08)_0%,rgba(255,255,255,1)_100%)] shadow-[0_18px_36px_rgba(42,127,216,0.12)]"
+          : "border-slate-200 bg-white hover:border-quotefly-primary/30 hover:shadow-[0_14px_28px_rgba(15,23,42,0.08)]"
       }`}
       aria-pressed={active}
     >
-      <div className={`rounded-lg border border-slate-200 p-3 ${template.preview}`}>
+      <div className={`rounded-[20px] border border-slate-200 p-3 ${template.preview}`}>
         {template.headerStyle === "bar" ? (
           <>
-            <div className="h-3 rounded-full bg-slate-800/80" />
+            <div className="h-3 rounded-full bg-[linear-gradient(90deg,#2a7fd8,#f46036)]" />
             <div className="mt-3 grid gap-2">
               <div className="h-2 rounded-full bg-slate-300/90" />
               <div className="h-2 w-4/5 rounded-full bg-slate-200/95" />
@@ -394,7 +394,7 @@ function TemplateMiniPreview({
           </>
         ) : template.headerStyle === "block" ? (
           <>
-            <div className="rounded-2xl bg-slate-900/85 p-3">
+            <div className="rounded-2xl bg-[linear-gradient(135deg,#2a7fd8,#f46036)] p-3">
               <div className="h-2 w-1/2 rounded-full bg-white/90" />
               <div className="mt-2 h-2 w-1/3 rounded-full bg-white/55" />
             </div>
@@ -420,6 +420,7 @@ function TemplateMiniPreview({
           ) : null}
         </div>
         <p className="mt-1 text-xs text-slate-500">{template.bestFor}</p>
+        <p className="mt-2 text-xs text-slate-600">{template.description}</p>
       </div>
     </button>
   );
@@ -941,23 +942,23 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               completionLabel={sectionCompletionLabel.templates}
               onToggle={() => toggleSection("templates")}
             >
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => moveTemplate(-1)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
                     aria-label="Previous template"
                   >
                     <ChevronLeft size={18} />
                   </button>
 
-                  <div className="flex-1 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex-1 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
-                        <p className="mt-1 text-xs text-slate-600">{activeTemplate.description}</p>
-                        <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        <p className="mt-1 text-sm text-slate-600">{activeTemplate.description}</p>
+                        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                           Best for: {activeTemplate.bestFor}
                         </p>
                       </div>
@@ -977,7 +978,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   </button>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div className="-mx-1 mt-4 flex gap-3 overflow-x-auto px-1 pb-1">
                   {TEMPLATE_OPTIONS.map((template) => (
                     <TemplateMiniPreview
                       key={template.id}
