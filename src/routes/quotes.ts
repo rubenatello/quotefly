@@ -12,7 +12,7 @@ import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { aiParseChatToQuotePrompt } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
-import { findBestStandardWorkPresetMatch } from "../services/work-preset-catalog";
+import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QuoteStatusSchema = z.enum([
@@ -569,8 +569,9 @@ function inferPresetQuantity(
   unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH",
   defaultQuantity: number,
   squareFeetEstimate: number | null,
+  quantityMode: "default" | "project_area" = "default",
 ): number {
-  if (unitType === "SQ_FT" && squareFeetEstimate && squareFeetEstimate > 0) {
+  if (quantityMode === "project_area" && unitType === "SQ_FT" && squareFeetEstimate && squareFeetEstimate > 0) {
     return Number(squareFeetEstimate.toFixed(2));
   }
 
@@ -723,6 +724,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const matchedStandardPreset = findBestStandardWorkPresetMatch(
       parsedDraft.serviceType,
       `${payload.prompt} ${parsedDraft.title} ${parsedDraft.scopeText}`,
+      { primaryOnly: true },
     );
     const matchedTenantPreset = matchedStandardPreset
       ? tenantPresets.find((preset) => preset.catalogKey === matchedStandardPreset.catalogKey) ?? null
@@ -735,6 +737,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           defaultQuantity: Number(matchedTenantPreset.defaultQuantity),
           unitCost: Number(matchedTenantPreset.unitCost),
           unitPrice: Number(matchedTenantPreset.unitPrice),
+          quantityMode: matchedStandardPreset?.quantityMode ?? "default",
         }
       : matchedStandardPreset
         ? {
@@ -744,8 +747,50 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             defaultQuantity: matchedStandardPreset.defaultQuantity,
             unitCost: matchedStandardPreset.unitCost,
             unitPrice: matchedStandardPreset.unitPrice,
+            quantityMode: matchedStandardPreset.quantityMode ?? "default",
           }
         : null;
+
+    const hasExplicitSubtotalTarget =
+      (parsedDraft.estimatedTotalAmount ?? 0) > 0 || (parsedDraft.estimatedInternalCostAmount ?? 0) > 0;
+
+    const supplementalPresetMatches =
+      matchedStandardPreset && !hasExplicitSubtotalTarget
+        ? findStandardWorkPresetMatches(
+            parsedDraft.serviceType,
+            `${payload.prompt} ${parsedDraft.title} ${parsedDraft.scopeText}`,
+            {
+              excludeCatalogKeys: [matchedStandardPreset.catalogKey],
+              minimumScore: 4,
+            },
+          )
+            .map((match) => match.preset)
+            .filter((preset) => !preset.isPrimaryJob)
+            .slice(0, 3)
+        : [];
+
+    const supplementalPresets = supplementalPresetMatches.map((preset) => {
+      const tenantPreset = tenantPresets.find((tenantItem) => tenantItem.catalogKey === preset.catalogKey);
+      return tenantPreset
+        ? {
+            name: tenantPreset.name,
+            description: tenantPreset.description,
+            unitType: tenantPreset.unitType,
+            defaultQuantity: Number(tenantPreset.defaultQuantity),
+            unitCost: Number(tenantPreset.unitCost),
+            unitPrice: Number(tenantPreset.unitPrice),
+            quantityMode: preset.quantityMode ?? "default",
+          }
+        : {
+            name: preset.name,
+            description: preset.description,
+            unitType: preset.unitType,
+            defaultQuantity: preset.defaultQuantity,
+            unitCost: preset.unitCost,
+            unitPrice: preset.unitPrice,
+            quantityMode: preset.quantityMode ?? "default",
+          };
+    });
 
     let customerPriceSubtotal = roundCurrency(parsedDraft.estimatedTotalAmount ?? 0);
     if (customerPriceSubtotal <= 0 && matchedPreset) {
@@ -753,8 +798,27 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
         parsedDraft.squareFeetEstimate,
+        matchedPreset.quantityMode,
       );
       customerPriceSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitPrice);
+    }
+    if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+      const primaryQuantity = inferPresetQuantity(
+        matchedPreset.unitType,
+        matchedPreset.defaultQuantity,
+        parsedDraft.squareFeetEstimate,
+        matchedPreset.quantityMode,
+      );
+      const supplementalSubtotal = supplementalPresets.reduce((sum, preset) => {
+        const quantity = inferPresetQuantity(
+          preset.unitType,
+          preset.defaultQuantity,
+          parsedDraft.squareFeetEstimate,
+          preset.quantityMode,
+        );
+        return sum + quantity * preset.unitPrice;
+      }, 0);
+      customerPriceSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitPrice + supplementalSubtotal);
     }
     if (customerPriceSubtotal <= 0) {
       const baselineInternalCost = roundCurrency(estimatedUnits * laborRate);
@@ -767,8 +831,27 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
         parsedDraft.squareFeetEstimate,
+        matchedPreset.quantityMode,
       );
       internalCostSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitCost);
+    }
+    if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+      const primaryQuantity = inferPresetQuantity(
+        matchedPreset.unitType,
+        matchedPreset.defaultQuantity,
+        parsedDraft.squareFeetEstimate,
+        matchedPreset.quantityMode,
+      );
+      const supplementalSubtotal = supplementalPresets.reduce((sum, preset) => {
+        const quantity = inferPresetQuantity(
+          preset.unitType,
+          preset.defaultQuantity,
+          parsedDraft.squareFeetEstimate,
+          preset.quantityMode,
+        );
+        return sum + quantity * preset.unitCost;
+      }, 0);
+      internalCostSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitCost + supplementalSubtotal);
     }
     if (internalCostSubtotal <= 0) {
       const divisor = 1 + Math.max(materialMarkup, 0.05);
@@ -785,19 +868,54 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     const lineItemDrafts = matchedPreset
       ? (() => {
-          const quantity = inferPresetQuantity(
+          const primaryQuantity = inferPresetQuantity(
             matchedPreset.unitType,
             matchedPreset.defaultQuantity,
             parsedDraft.squareFeetEstimate,
+            matchedPreset.quantityMode,
           );
-          return [
+          const primaryLineItems = [
             {
               description: matchedPreset.name,
-              quantity,
-              unitCost: roundCurrency(internalCostSubtotal / quantity),
-              unitPrice: roundCurrency(customerPriceSubtotal / quantity),
+              quantity: primaryQuantity,
+              unitCost: roundCurrency(matchedPreset.unitCost),
+              unitPrice: roundCurrency(matchedPreset.unitPrice),
             },
           ];
+
+          const supplementalLineItems = supplementalPresets.map((preset) => ({
+            description: preset.name,
+            quantity: inferPresetQuantity(
+              preset.unitType,
+              preset.defaultQuantity,
+              parsedDraft.squareFeetEstimate,
+              preset.quantityMode,
+            ),
+            unitCost: roundCurrency(preset.unitCost),
+            unitPrice: roundCurrency(preset.unitPrice),
+          }));
+
+          const allLineItems = [...primaryLineItems, ...supplementalLineItems];
+          const rawCustomerSubtotal = allLineItems.reduce(
+            (sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice,
+            0,
+          );
+          const rawInternalSubtotal = allLineItems.reduce(
+            (sum, lineItem) => sum + lineItem.quantity * lineItem.unitCost,
+            0,
+          );
+
+          return allLineItems.map((lineItem) => ({
+            ...lineItem,
+            unitCost:
+              rawInternalSubtotal > 0
+                ? roundCurrency(lineItem.unitCost * (internalCostSubtotal / rawInternalSubtotal))
+                : lineItem.unitCost,
+            unitPrice:
+              rawCustomerSubtotal > 0
+                ? roundCurrency(lineItem.unitPrice * (customerPriceSubtotal / rawCustomerSubtotal))
+                : lineItem.unitPrice,
+          }));
         })()
       : (() => {
           const laborPercent = laborSplit(parsedDraft.serviceType);

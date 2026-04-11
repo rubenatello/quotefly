@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import { FeatureLockedCard, QuoteMathSummaryPanel, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import {
   useDashboard,
@@ -70,6 +71,7 @@ export function QuoteBuilderView() {
     quoteForm,
     setQuoteForm,
     createQuote,
+    createQuoteDraftFromForm,
     createQuoteMath,
     // Duplicate modal
     duplicateModal,
@@ -102,6 +104,8 @@ export function QuoteBuilderView() {
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("");
+  const [appliedStarterPreset, setAppliedStarterPreset] = useState<{ presetId: string; quantity: number } | null>(null);
+  const [addStarterAsLineItem, setAddStarterAsLineItem] = useState(true);
   const [quickBooksChecklist, setQuickBooksChecklist] = useState<Record<QuickBooksChecklistId, boolean>>({
     quotes_selected: false,
     customer_verified: false,
@@ -202,7 +206,39 @@ export function QuoteBuilderView() {
       internalCostSubtotal: starterInternalTotal.toFixed(2),
       customerPriceSubtotal: starterCustomerTotal.toFixed(2),
     }));
+    setAppliedStarterPreset({ presetId: selectedPreset.id, quantity: starterQuantity });
+    setAddStarterAsLineItem(true);
     setNotice(`${selectedPreset.name} applied to the quote draft.`);
+  }
+
+  async function handleCreateQuote(event: FormEvent) {
+    event.preventDefault();
+
+    const shouldAttachStarterLine =
+      addStarterAsLineItem &&
+      selectedPreset &&
+      appliedStarterPreset?.presetId === selectedPreset.id;
+
+    if (!shouldAttachStarterLine) {
+      await createQuote(event);
+      return;
+    }
+
+    const createdQuote = await createQuoteDraftFromForm({
+      initialLineItems: [
+        {
+          description: selectedPreset.name,
+          quantity: appliedStarterPreset.quantity,
+          unitCost: Number(selectedPreset.unitCost),
+          unitPrice: Number(selectedPreset.unitPrice),
+        },
+      ],
+      successNotice: "Quote created with starter job attached.",
+    });
+
+    if (createdQuote) {
+      setAppliedStarterPreset(null);
+    }
   }
 
   function toggleQuoteSelection(quoteId: string, checked: boolean) {
@@ -347,7 +383,7 @@ export function QuoteBuilderView() {
       {/* Create Quote */}
       <Card>
         <CardHeader title="Create Quote" subtitle="Build a manual quote for an existing customer." />
-        <form onSubmit={createQuote} className="space-y-3">
+        <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -425,6 +461,17 @@ export function QuoteBuilderView() {
                       </div>
                     </div>
                   </div>
+                ) : null}
+
+                {selectedPreset ? (
+                  <label className="flex items-center gap-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={addStarterAsLineItem}
+                      onChange={(event) => setAddStarterAsLineItem(event.target.checked)}
+                    />
+                    Add this starter job as the first line item when the quote is created
+                  </label>
                 ) : null}
               </div>
             )}
@@ -792,4 +839,8 @@ function QuickBooksGuideModal({
     </Modal>
   );
 }
+
+
+
+
 

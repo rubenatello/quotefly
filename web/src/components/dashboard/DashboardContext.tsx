@@ -298,6 +298,10 @@ export interface DashboardContextValue {
   createDuplicateAsNew: () => Promise<void>;
   createQuoteFromChatPrompt: (event: FormEvent) => Promise<void>;
   applyTradeSetup: (event: FormEvent) => Promise<void>;
+  createQuoteDraftFromForm: (options?: {
+    initialLineItems?: CreateLineItemInput[];
+    successNotice?: string;
+  }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<void>;
   updateQuoteLifecycle: (quoteId: string, patch: {
@@ -616,8 +620,10 @@ export function DashboardProvider({
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving trade setup."); } finally { setSaving(false); }
   }, [setupTrade, setupSqFtMode, setupSqFtUnitCost, setupSqFtUnitPrice]);
 
-  const createQuote = useCallback(async (event: FormEvent) => {
-    event.preventDefault();
+  const createQuoteDraftFromForm = useCallback(async (options?: {
+    initialLineItems?: CreateLineItemInput[];
+    successNotice?: string;
+  }) => {
     setSaving(true); setError(null);
     try {
       const { quote } = await api.quotes.create({
@@ -629,12 +635,31 @@ export function DashboardProvider({
         customerPriceSubtotal: Number(quoteForm.customerPriceSubtotal),
         taxAmount: Number(quoteForm.taxAmount),
       });
+      if (options?.initialLineItems?.length) {
+        for (const lineItem of options.initialLineItems) {
+          await api.quotes.lineItems.create(quote.id, {
+            description: lineItem.description,
+            quantity: lineItem.quantity,
+            unitCost: lineItem.unitCost,
+            unitPrice: lineItem.unitPrice,
+          });
+        }
+      }
       setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId }));
       await loadQuotes();
       focusQuoteDesk(quote.id);
-      setNotice("Quote created.");
+      setNotice(options?.successNotice ?? "Quote created.");
       navigateToQuote(quote.id);
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed creating quote."); } finally { setSaving(false); }
+      return quote;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed creating quote.");
+      return null;
+    } finally { setSaving(false); }
+  }, [quoteForm]);
+
+  const createQuote = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    await createQuoteDraftFromForm();
   }, [quoteForm]);
 
   const persistSelectedQuote = useCallback(async () => {
@@ -992,7 +1017,7 @@ export function DashboardProvider({
     setDuplicateModal, setSendComposer,
     loadAll, loadQuotes, loadCustomers, loadQuoteHistory,
     focusQuoteDesk, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
-    createQuoteFromChatPrompt, applyTradeSetup, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
+    createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,
     addLineItem, addLineItemDraft, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,

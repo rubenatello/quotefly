@@ -113,7 +113,7 @@ function laborDescription(serviceType: ServiceCategory, squareFeetEstimate: numb
 }
 
 function inferTitle(serviceType: ServiceCategory, prompt: string): string {
-  const matchedStandardPreset = findBestStandardWorkPresetMatch(serviceType, prompt);
+  const matchedStandardPreset = findBestStandardWorkPresetMatch(serviceType, prompt, { primaryOnly: true });
   if (matchedStandardPreset) {
     return matchedStandardPreset.name;
   }
