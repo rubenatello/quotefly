@@ -877,6 +877,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
     const newLeads: LeadCardItem[] = [];
     const quotedLeads: LeadCardItem[] = [];
     const closedLeads: LeadCardItem[] = [];
+    const afterSaleLeads: LeadCardItem[] = [];
 
     for (const customer of customers) {
       const latestQuote = latestByCustomer.get(customer.id);
@@ -915,10 +916,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
       newLeads: newLeads.sort(byNewest).slice(0, 8),
       quotedLeads: quotedLeads.sort(byNewest).slice(0, 8),
       closedLeads: closedLeads.sort(byNewest).slice(0, 8),
+      afterSaleLeads,
       totals: {
         newLeads: newLeads.length,
         quotedLeads: quotedLeads.length,
         closedLeads: closedLeads.length,
+        afterSaleLeads: afterSaleLeads.length,
       },
     };
   }, [customers, quotes]);
@@ -965,6 +968,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
             newLeads={pipeline.totals.newLeads}
             quotedLeads={pipeline.totals.quotedLeads}
             closedLeads={pipeline.totals.closedLeads}
+            afterSaleLeads={pipeline.totals.afterSaleLeads}
           />
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <PipelineColumn

@@ -21,6 +21,17 @@ export type QuoteStatus =
   | "ACCEPTED"
   | "REJECTED";
 
+export type QuoteJobStatus =
+  | "NOT_STARTED"
+  | "SCHEDULED"
+  | "IN_PROGRESS"
+  | "COMPLETED";
+
+export type AfterSaleFollowUpStatus =
+  | "NOT_READY"
+  | "DUE"
+  | "COMPLETED";
+
 export type SmsMessageDirection = "INBOUND" | "OUTBOUND";
 
 export type QuoteDecisionStatus =
@@ -177,6 +188,8 @@ export interface QuoteRow {
   customerId: string;
   serviceType: ServiceCategory;
   status: QuoteStatus;
+  jobStatus: QuoteJobStatus;
+  afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
   internalCostSubtotal: DecimalValue;
@@ -185,6 +198,10 @@ export interface QuoteRow {
   totalAmount: DecimalValue;
   aiGeneratedAtUtc: UtcDate | null;
   sentAt: UtcDate | null;
+  closedAtUtc: UtcDate | null;
+  jobCompletedAtUtc: UtcDate | null;
+  afterSaleFollowUpDueAtUtc: UtcDate | null;
+  afterSaleFollowUpCompletedAtUtc: UtcDate | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
   deletedAtUtc: UtcDate | null;

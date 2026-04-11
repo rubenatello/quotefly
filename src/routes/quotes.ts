@@ -22,6 +22,19 @@ const QuoteStatusSchema = z.enum([
   "REJECTED",
 ]);
 
+const QuoteJobStatusSchema = z.enum([
+  "NOT_STARTED",
+  "SCHEDULED",
+  "IN_PROGRESS",
+  "COMPLETED",
+]);
+
+const AfterSaleFollowUpStatusSchema = z.enum([
+  "NOT_READY",
+  "DUE",
+  "COMPLETED",
+]);
+
 const CreateQuoteSchema = z.object({
   customerId: z.string().min(1),
   serviceType: ServiceTypeSchema,
@@ -37,6 +50,8 @@ const UpdateQuoteSchema = z
     customerId: z.string().min(1).optional(),
     serviceType: ServiceTypeSchema.optional(),
     status: QuoteStatusSchema.optional(),
+    jobStatus: QuoteJobStatusSchema.optional(),
+    afterSaleFollowUpStatus: AfterSaleFollowUpStatusSchema.optional(),
     title: z.string().min(3).optional(),
     scopeText: z.string().min(3).optional(),
     internalCostSubtotal: z.number().nonnegative().optional(),
@@ -162,6 +177,12 @@ function calculateQuoteTotal(customerPriceSubtotal: number, taxAmount: number): 
   return roundCurrency(customerPriceSubtotal + taxAmount);
 }
 
+function addDays(value: Date, days: number): Date {
+  const result = new Date(value);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
 function safeFileLabel(value: string): string {
   return value
     .toLowerCase()
@@ -249,11 +270,17 @@ interface RevisionSnapshot {
     title: string;
     serviceType: string;
     status: string;
+    jobStatus: string;
+    afterSaleFollowUpStatus: string;
     scopeText: string;
     internalCostSubtotal: number;
     customerPriceSubtotal: number;
     taxAmount: number;
     totalAmount: number;
+    closedAtUtc: string | null;
+    jobCompletedAtUtc: string | null;
+    afterSaleFollowUpDueAtUtc: string | null;
+    afterSaleFollowUpCompletedAtUtc: string | null;
   };
   customer: {
     id: string;
@@ -307,11 +334,17 @@ function buildQuoteRevisionSnapshot(
       title: context.title,
       serviceType: context.serviceType,
       status: context.status,
+      jobStatus: context.jobStatus,
+      afterSaleFollowUpStatus: context.afterSaleFollowUpStatus,
       scopeText: context.scopeText,
       internalCostSubtotal: Number(context.internalCostSubtotal),
       customerPriceSubtotal: Number(context.customerPriceSubtotal),
       taxAmount: Number(context.taxAmount),
       totalAmount: Number(context.totalAmount),
+      closedAtUtc: context.closedAtUtc?.toISOString() ?? null,
+      jobCompletedAtUtc: context.jobCompletedAtUtc?.toISOString() ?? null,
+      afterSaleFollowUpDueAtUtc: context.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
+      afterSaleFollowUpCompletedAtUtc: context.afterSaleFollowUpCompletedAtUtc?.toISOString() ?? null,
     },
     customer: {
       id: context.customer.id,
@@ -378,6 +411,94 @@ async function createQuoteRevision(
 function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[] {
   const fields = Object.keys(payload);
   return fields.length ? fields : ["manual_update"];
+}
+
+function resolveLifecycleUpdate(
+  existingQuote: {
+    status: z.infer<typeof QuoteStatusSchema>;
+    jobStatus: z.infer<typeof QuoteJobStatusSchema>;
+    afterSaleFollowUpStatus: z.infer<typeof AfterSaleFollowUpStatusSchema>;
+    closedAtUtc: Date | null;
+    jobCompletedAtUtc: Date | null;
+    afterSaleFollowUpDueAtUtc: Date | null;
+    afterSaleFollowUpCompletedAtUtc: Date | null;
+  },
+  payload: z.infer<typeof UpdateQuoteSchema>,
+) {
+  const now = new Date();
+  const data: Prisma.QuoteUncheckedUpdateInput = {};
+  const changedFields: string[] = [];
+
+  if (payload.status === "ACCEPTED" && !existingQuote.closedAtUtc) {
+    data.closedAtUtc = now;
+    changedFields.push("closedAtUtc");
+  }
+
+  if (payload.jobStatus !== undefined) {
+    data.jobStatus = payload.jobStatus;
+    changedFields.push("jobStatus");
+
+    if (payload.jobStatus === "COMPLETED") {
+      if (!existingQuote.jobCompletedAtUtc) {
+        data.jobCompletedAtUtc = now;
+        changedFields.push("jobCompletedAtUtc");
+      }
+
+      if (
+        payload.afterSaleFollowUpStatus === undefined &&
+        existingQuote.afterSaleFollowUpStatus === "NOT_READY"
+      ) {
+        data.afterSaleFollowUpStatus = "DUE";
+        data.afterSaleFollowUpDueAtUtc = existingQuote.afterSaleFollowUpDueAtUtc ?? addDays(now, 7);
+        data.afterSaleFollowUpCompletedAtUtc = null;
+        changedFields.push(
+          "afterSaleFollowUpStatus",
+          "afterSaleFollowUpDueAtUtc",
+          "afterSaleFollowUpCompletedAtUtc",
+        );
+      }
+    } else {
+      data.jobCompletedAtUtc = null;
+      changedFields.push("jobCompletedAtUtc");
+
+      if (payload.afterSaleFollowUpStatus === undefined) {
+        data.afterSaleFollowUpStatus = "NOT_READY";
+        data.afterSaleFollowUpDueAtUtc = null;
+        data.afterSaleFollowUpCompletedAtUtc = null;
+        changedFields.push(
+          "afterSaleFollowUpStatus",
+          "afterSaleFollowUpDueAtUtc",
+          "afterSaleFollowUpCompletedAtUtc",
+        );
+      }
+    }
+  }
+
+  if (payload.afterSaleFollowUpStatus !== undefined) {
+    data.afterSaleFollowUpStatus = payload.afterSaleFollowUpStatus;
+    changedFields.push("afterSaleFollowUpStatus");
+
+    if (payload.afterSaleFollowUpStatus === "NOT_READY") {
+      data.afterSaleFollowUpDueAtUtc = null;
+      data.afterSaleFollowUpCompletedAtUtc = null;
+      changedFields.push("afterSaleFollowUpDueAtUtc", "afterSaleFollowUpCompletedAtUtc");
+    } else if (payload.afterSaleFollowUpStatus === "DUE") {
+      data.afterSaleFollowUpDueAtUtc = existingQuote.afterSaleFollowUpDueAtUtc ?? addDays(now, 7);
+      data.afterSaleFollowUpCompletedAtUtc = null;
+      changedFields.push("afterSaleFollowUpDueAtUtc", "afterSaleFollowUpCompletedAtUtc");
+    } else {
+      data.afterSaleFollowUpDueAtUtc = existingQuote.afterSaleFollowUpDueAtUtc ?? now;
+      if (!existingQuote.afterSaleFollowUpCompletedAtUtc) {
+        data.afterSaleFollowUpCompletedAtUtc = now;
+      }
+      changedFields.push("afterSaleFollowUpDueAtUtc", "afterSaleFollowUpCompletedAtUtc");
+    }
+  }
+
+  return {
+    data,
+    changedFields,
+  };
 }
 
 function requiredPlanForFeature(
@@ -1215,40 +1336,49 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     const shouldRecalculateTotal =
       payload.customerPriceSubtotal !== undefined || payload.taxAmount !== undefined;
+    const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload);
 
     const revisionChangedFields = [
       ...quoteChangedFields(payload),
       ...(shouldRecalculateTotal ? ["totalAmount"] : []),
+      ...lifecycleUpdate.changedFields,
       ...(payload.status ? ["sentAt"] : []),
     ];
     const revisionEventType: QuoteRevisionEventType =
-      payload.status !== undefined ? "STATUS_CHANGED" : "UPDATED";
+      payload.status !== undefined || payload.jobStatus !== undefined || payload.afterSaleFollowUpStatus !== undefined
+        ? "STATUS_CHANGED"
+        : "UPDATED";
     const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
 
     const quote = await app.prisma.$transaction(async (tx) => {
+      const updateData: Prisma.QuoteUncheckedUpdateInput = {
+        ...(payload.customerId ? { customerId: payload.customerId } : {}),
+        serviceType: payload.serviceType,
+        status: payload.status,
+        title: payload.title,
+        scopeText: payload.scopeText,
+        internalCostSubtotal: payload.internalCostSubtotal,
+        customerPriceSubtotal: payload.customerPriceSubtotal,
+        taxAmount: payload.taxAmount,
+        ...(shouldRecalculateTotal
+          ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
+          : {}),
+        ...(payload.status
+          ? {
+              sentAt:
+                payload.status === "SENT_TO_CUSTOMER"
+                  ? existingQuote.sentAt ?? new Date()
+                  : payload.status === "DRAFT" || payload.status === "READY_FOR_REVIEW"
+                    ? null
+                    : existingQuote.sentAt,
+            }
+          : {}),
+        ...lifecycleUpdate.data,
+      };
+
       const updatedQuote = await tx.quote.update({
         where: { id: existingQuote.id },
-        data: {
-          customerId: payload.customerId,
-          serviceType: payload.serviceType,
-          status: payload.status,
-          title: payload.title,
-          scopeText: payload.scopeText,
-          internalCostSubtotal: payload.internalCostSubtotal,
-          customerPriceSubtotal: payload.customerPriceSubtotal,
-          taxAmount: payload.taxAmount,
-          ...(shouldRecalculateTotal
-            ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
-            : {}),
-          ...(payload.status
-            ? {
-                sentAt:
-                  payload.status === "SENT_TO_CUSTOMER"
-                    ? existingQuote.sentAt ?? new Date()
-                    : null,
-              }
-            : {}),
-        },
+        data: updateData,
       });
 
       await createQuoteRevision(tx, {

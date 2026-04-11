@@ -1,8 +1,8 @@
-import { CallIcon, CustomerIcon, EmailIcon, InvoiceIcon, QuoteIcon } from "../components/Icons";
+import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, InvoiceIcon, QuoteIcon } from "../components/Icons";
 import { Alert, Button, Card, EmptyState, PageHeader } from "../components/ui";
 import { FollowUpPill, PipelineFlow, QuoteStatusPill, StatCard } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import type { LeadFollowUpStatus } from "../lib/api";
+import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
 import { usePageView } from "../lib/analytics";
 
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
@@ -12,11 +12,54 @@ const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
   "LOST",
 ];
 
+const JOB_STATUSES: QuoteJobStatus[] = [
+  "NOT_STARTED",
+  "SCHEDULED",
+  "IN_PROGRESS",
+  "COMPLETED",
+];
+
+const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = [
+  "NOT_READY",
+  "DUE",
+  "COMPLETED",
+];
+
 function followUpLabel(status: LeadFollowUpStatus): string {
   if (status === "NEEDS_FOLLOW_UP") return "Needs Follow Up";
   if (status === "FOLLOWED_UP") return "Followed Up";
   if (status === "WON") return "Won";
   return "Lost";
+}
+
+function jobStatusLabel(status: QuoteJobStatus): string {
+  if (status === "NOT_STARTED") return "Not Started";
+  if (status === "IN_PROGRESS") return "In Progress";
+  return status.charAt(0) + status.slice(1).toLowerCase().replace("_", " ");
+}
+
+function afterSaleLabel(status: AfterSaleFollowUpStatus): string {
+  if (status === "NOT_READY") return "Not Ready";
+  return status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+function LifecyclePill({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "slate" | "blue" | "emerald" | "amber";
+}) {
+  const toneClass =
+    tone === "blue"
+      ? "border-blue-300 bg-blue-50 text-blue-700"
+      : tone === "emerald"
+        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+        : tone === "amber"
+          ? "border-amber-300 bg-amber-50 text-amber-700"
+          : "border-slate-300 bg-slate-100 text-slate-700";
+
+  return <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${toneClass}`}>{label}</span>;
 }
 
 function PipelineRowsSection({
@@ -27,7 +70,9 @@ function PipelineRowsSection({
   emptyDescription,
   saving,
   onNavigateToQuote,
+  actionKind,
   onUpdateFollowUp,
+  onUpdateQuoteLifecycle,
 }: {
   title: string;
   subtitle: string;
@@ -36,7 +81,12 @@ function PipelineRowsSection({
   emptyDescription: string;
   saving: boolean;
   onNavigateToQuote: (quoteId: string) => void;
-  onUpdateFollowUp: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
+  actionKind: "follow_up" | "job_status" | "after_sale" | "none";
+  onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
+  onUpdateQuoteLifecycle?: (
+    quoteId: string,
+    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+  ) => void;
 }) {
   return (
     <Card>
@@ -70,10 +120,16 @@ function PipelineRowsSection({
                       {lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}
                     </p>
                   )}
+                  {lead.afterSaleFollowUpDueAtUtc && (
+                    <p className="mt-1 inline-flex items-center gap-1 text-xs text-amber-700">
+                      <ClockIcon size={12} />
+                      Follow-up due {formatDateTime(lead.afterSaleFollowUpDueAtUtc)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-Up</p>
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Lead Follow-Up</p>
                   <FollowUpPill status={lead.followUpStatus} />
                 </div>
 
@@ -89,8 +145,22 @@ function PipelineRowsSection({
                 </div>
 
                 <div>
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last Touch</p>
-                  <p className="text-xs text-slate-700">{formatDateTime(lead.createdAt)}</p>
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {actionKind === "job_status" ? "Job Stage" : actionKind === "after_sale" ? "After-Sale" : "Last Touch"}
+                  </p>
+                  {actionKind === "job_status" && lead.jobStatus ? (
+                    <LifecyclePill
+                      label={jobStatusLabel(lead.jobStatus)}
+                      tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"}
+                    />
+                  ) : actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
+                    <LifecyclePill
+                      label={afterSaleLabel(lead.afterSaleFollowUpStatus)}
+                      tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"}
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-700">{formatDateTime(lead.createdAt)}</p>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-2">
@@ -106,25 +176,70 @@ function PipelineRowsSection({
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-[170px_1fr] sm:items-center">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Update Follow-Up
-                </p>
-                <select
-                  value={lead.followUpStatus}
-                  disabled={saving}
-                  onChange={(event) =>
-                    onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
-                  }
-                  className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
-                >
-                  {FOLLOW_UP_STATUSES.map((status) => (
-                    <option key={`${lead.customerId}-${status}`} value={status}>
-                      {followUpLabel(status)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {actionKind !== "none" && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-[170px_1fr] sm:items-center">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {actionKind === "follow_up"
+                      ? "Update Follow-Up"
+                      : actionKind === "job_status"
+                        ? "Update Job Stage"
+                        : "Update After-Sale"}
+                  </p>
+
+                  {actionKind === "follow_up" ? (
+                    <select
+                      value={lead.followUpStatus}
+                      disabled={saving}
+                      onChange={(event) =>
+                        onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)
+                      }
+                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                    >
+                      {FOLLOW_UP_STATUSES.map((status) => (
+                        <option key={`${lead.customerId}-${status}`} value={status}>
+                          {followUpLabel(status)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : actionKind === "job_status" ? (
+                    <select
+                      value={lead.jobStatus ?? "NOT_STARTED"}
+                      disabled={saving || !lead.quoteId}
+                      onChange={(event) =>
+                        lead.quoteId &&
+                        onUpdateQuoteLifecycle?.(lead.quoteId, {
+                          jobStatus: event.target.value as QuoteJobStatus,
+                        })
+                      }
+                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                    >
+                      {JOB_STATUSES.map((status) => (
+                        <option key={`${lead.customerId}-${status}`} value={status}>
+                          {jobStatusLabel(status)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      value={lead.afterSaleFollowUpStatus ?? "DUE"}
+                      disabled={saving || !lead.quoteId}
+                      onChange={(event) =>
+                        lead.quoteId &&
+                        onUpdateQuoteLifecycle?.(lead.quoteId, {
+                          afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus,
+                        })
+                      }
+                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                    >
+                      {AFTER_SALE_STATUSES.map((status) => (
+                        <option key={`${lead.customerId}-${status}`} value={status}>
+                          {afterSaleLabel(status)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -137,14 +252,14 @@ export function PipelineView() {
   usePageView("pipeline");
   const {
     session, stats, pipeline, saving, error, notice,
-    setError, setNotice, updateLeadFollowUpStatus, navigateToQuote,
+    setError, setNotice, updateLeadFollowUpStatus, updateQuoteLifecycle, navigateToQuote,
   } = useDashboard();
 
   return (
     <div className="space-y-5">
       <PageHeader
         title={session?.fullName ? `Welcome, ${session.fullName.split(" ")[0]}` : "QuoteFly CRM"}
-        subtitle="Your lead pipeline — new prospects, quoted jobs, and closed deals."
+        subtitle="Your lead pipeline from first contact through completed work and after-sale follow-up."
       />
 
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
@@ -152,20 +267,30 @@ export function PipelineView() {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard icon={<QuoteIcon size={24} />} label="Quotes This Month" value={String(stats.monthlyQuotes)} />
-        <StatCard icon={<CustomerIcon size={24} />} label="Active Customers" value={String(pipeline.totals.newLeads + pipeline.totals.quotedLeads + pipeline.totals.closedLeads)} />
+        <StatCard
+          icon={<CustomerIcon size={24} />}
+          label="Active Customers"
+          value={String(
+            pipeline.totals.newLeads +
+              pipeline.totals.quotedLeads +
+              pipeline.totals.closedLeads +
+              pipeline.totals.afterSaleLeads,
+          )}
+        />
         <StatCard icon={<InvoiceIcon size={24} />} label="Accepted Revenue" value={money(stats.acceptedRevenue)} />
       </div>
 
       <Card>
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-slate-900">Lead Pipeline</h2>
-          <p className="text-sm text-slate-600">New leads, quoted jobs, and closed work at a glance.</p>
+          <p className="text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
         </div>
 
         <PipelineFlow
           newLeads={pipeline.totals.newLeads}
           quotedLeads={pipeline.totals.quotedLeads}
           closedLeads={pipeline.totals.closedLeads}
+          afterSaleLeads={pipeline.totals.afterSaleLeads}
         />
       </Card>
 
@@ -178,6 +303,7 @@ export function PipelineView() {
           emptyDescription="No leads waiting for first quote."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          actionKind="follow_up"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
@@ -191,6 +317,7 @@ export function PipelineView() {
           emptyDescription="Quoted jobs will appear here."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          actionKind="follow_up"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
@@ -198,15 +325,26 @@ export function PipelineView() {
 
         <PipelineRowsSection
           title={`Closed Leads (${pipeline.totals.closedLeads})`}
-          subtitle="Sold/accepted work only."
+          subtitle="Sold work that is active, scheduled, or still being completed."
           leads={pipeline.closedLeads}
           emptyTitle="No closed leads"
           emptyDescription="Accepted jobs will appear here once marked as won."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
-          onUpdateFollowUp={(customerId, followUpStatus) =>
-            void updateLeadFollowUpStatus(customerId, followUpStatus)
-          }
+          actionKind="job_status"
+          onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
+        />
+
+        <PipelineRowsSection
+          title={`After-Sale Follow-Up (${pipeline.totals.afterSaleLeads})`}
+          subtitle="Completed jobs waiting on review, referral, or post-job check-in."
+          leads={pipeline.afterSaleLeads}
+          emptyTitle="No after-sale follow-up due"
+          emptyDescription="Completed jobs will appear here when they need a follow-up."
+          saving={saving}
+          onNavigateToQuote={navigateToQuote}
+          actionKind="after_sale"
+          onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
         />
 
         <PipelineRowsSection
@@ -217,6 +355,7 @@ export function PipelineView() {
           emptyDescription="Customer records will show here once created."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          actionKind="follow_up"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }

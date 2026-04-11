@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ChangeEvent } from "react";
-import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
+import type { ChangeEvent, ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  Building2,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  ImageIcon,
+  Palette,
+  SwatchBook,
+  Upload,
+} from "lucide-react";
 import { setSEOMetadata } from "../lib/seo";
 import {
   api,
@@ -14,6 +26,7 @@ interface BrandingPageProps {
   tenantId?: string;
 }
 
+type BrandingSectionId = "business" | "logo" | "colors" | "templates" | "preview";
 type TemplateHeaderStyle = "bar" | "card" | "block" | "minimal";
 
 interface TemplateOption {
@@ -22,6 +35,13 @@ interface TemplateOption {
   description: string;
   preview: string;
   headerStyle: TemplateHeaderStyle;
+}
+
+interface BrandingSectionConfig {
+  id: BrandingSectionId;
+  title: string;
+  description: string;
+  icon: LucideIcon;
 }
 
 const EMPTY_BUSINESS_PROFILE: BrandingBusinessProfile = {
@@ -91,6 +111,39 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
   },
 ];
 
+const BRANDING_SECTIONS: BrandingSectionConfig[] = [
+  {
+    id: "business",
+    title: "Business Info",
+    description: "Sender details and timezone",
+    icon: Building2,
+  },
+  {
+    id: "logo",
+    title: "Logo",
+    description: "Upload or remove your mark",
+    icon: ImageIcon,
+  },
+  {
+    id: "colors",
+    title: "Colors",
+    description: "Primary and component styling",
+    icon: Palette,
+  },
+  {
+    id: "templates",
+    title: "Templates",
+    description: "Switch quote layout style",
+    icon: SwatchBook,
+  },
+  {
+    id: "preview",
+    title: "Preview",
+    description: "See the customer-facing output",
+    icon: Eye,
+  },
+];
+
 function getBrowserTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -135,6 +188,64 @@ function formatBusinessAddress(profile: BrandingBusinessProfile): string[] {
   return lines;
 }
 
+interface BrandingSectionCardProps {
+  id: BrandingSectionId;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  isOpen: boolean;
+  completionLabel?: string;
+  onToggle: () => void;
+  children: ReactNode;
+}
+
+function BrandingSectionCard({
+  id,
+  title,
+  description,
+  icon: Icon,
+  isOpen,
+  completionLabel,
+  onToggle,
+  children,
+}: BrandingSectionCardProps) {
+  return (
+    <section
+      id={`branding-${id}`}
+      className="scroll-mt-24 rounded-3xl border border-slate-200 bg-white shadow-sm"
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-4 rounded-3xl px-5 py-4 text-left sm:px-6"
+        aria-expanded={isOpen}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-quotefly-primary/10 text-quotefly-primary">
+            <Icon size={18} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-display text-lg font-semibold text-slate-900">{title}</h2>
+              {completionLabel ? (
+                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                  {completionLabel}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-sm text-slate-500">{description}</p>
+          </div>
+        </div>
+        <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500">
+          <ChevronDown size={18} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+
+      {isOpen ? <div className="border-t border-slate-100 px-5 py-5 sm:px-6">{children}</div> : null}
+    </section>
+  );
+}
+
 export function BrandingPage({ tenantId }: BrandingPageProps) {
   useEffect(() => {
     setSEOMetadata({
@@ -157,6 +268,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const [componentColors, setComponentColors] = useState<BrandingComponentColors>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [openSections, setOpenSections] = useState<Record<BrandingSectionId, boolean>>({
+    business: true,
+    logo: false,
+    colors: false,
+    templates: true,
+    preview: true,
+  });
 
   useEffect(() => {
     if (!tenantId) return;
@@ -189,10 +307,43 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
   const activeTemplate = TEMPLATE_OPTIONS[selectedTemplateIndex];
   const businessAddressLines = formatBusinessAddress(businessProfile);
+  const hasBusinessInfo = Boolean(
+    businessProfile.businessEmail?.trim() ||
+      businessProfile.businessPhone?.trim() ||
+      businessProfile.addressLine1?.trim() ||
+      businessProfile.city?.trim() ||
+      businessProfile.state?.trim() ||
+      businessProfile.postalCode?.trim(),
+  );
+  const completedSectionCount = [hasBusinessInfo, Boolean(logo), Boolean(brandColor), Boolean(selectedTemplate)].filter(
+    Boolean,
+  ).length;
+  const sectionCompletionLabel: Partial<Record<BrandingSectionId, string>> = {
+    business: hasBusinessInfo ? "Ready" : undefined,
+    logo: logo ? "Uploaded" : undefined,
+    colors: brandColor ? "Set" : undefined,
+    templates: selectedTemplate ? "Selected" : undefined,
+    preview: "Live",
+  };
 
   const moveTemplate = (offset: -1 | 1) => {
     const nextIndex = (selectedTemplateIndex + offset + TEMPLATE_OPTIONS.length) % TEMPLATE_OPTIONS.length;
     setSelectedTemplate(TEMPLATE_OPTIONS[nextIndex].id);
+  };
+
+  const toggleSection = (sectionId: BrandingSectionId) => {
+    setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
+  };
+
+  const focusSection = (sectionId: BrandingSectionId) => {
+    setOpenSections((prev) => ({ ...prev, [sectionId]: true }));
+
+    window.requestAnimationFrame(() => {
+      document.getElementById(`branding-${sectionId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   };
 
   const handleSave = async () => {
@@ -264,7 +415,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
   return (
     <div className="min-h-screen bg-stone-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-7xl">
         <div className="mb-8">
           <h1 className="mb-2 text-4xl font-bold font-display text-slate-900">Quote Branding</h1>
           <p className="text-lg text-slate-500">
@@ -272,21 +423,90 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
           </p>
         </div>
 
-        <div className="grid gap-8 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-1">
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="mb-2 font-display font-semibold text-slate-900">Business Profile</h2>
-              <p className="mb-4 text-xs text-slate-500">
-                Customer PDFs will use this sender information. Timezone controls the local date shown on quotes.
-              </p>
+        <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="xl:sticky xl:top-24 xl:self-start">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Brand Setup</p>
+                  <h2 className="mt-2 font-display text-2xl font-semibold text-slate-900">{companyName}</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Manage sender identity, visual styling, and template output from one place.
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 px-3 py-2 text-right">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Progress</p>
+                  <p className="text-lg font-bold text-emerald-900">{completedSectionCount}/4</p>
+                </div>
+              </div>
 
-              <div className="space-y-3">
+              <div className="mt-5 space-y-2">
+                {BRANDING_SECTIONS.map((section) => {
+                  const Icon = section.icon;
+                  const completion = sectionCompletionLabel[section.id];
+
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      onClick={() => focusSection(section.id)}
+                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 px-3 py-3 text-left transition hover:border-quotefly-primary/40 hover:bg-slate-50"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                          <Icon size={18} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-900">{section.title}</p>
+                          <p className="truncate text-xs text-slate-500">{section.description}</p>
+                        </div>
+                      </div>
+                      {completion ? <CheckCircle2 size={16} className="shrink-0 text-emerald-500" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Save Status</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Branding controls how the PDF quote looks when the customer receives it.
+                </p>
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    onClick={handleSave}
+                    disabled={isSaving || !tenantId}
+                    className="flex-1 rounded-2xl bg-quotefly-primary px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSaving ? "Saving..." : "Save Branding"}
+                  </button>
+                </div>
+                <div className="mt-3 min-h-[20px] text-sm">
+                  {saveStatus === "saved" ? <span className="font-medium text-green-600">Saved</span> : null}
+                  {saveStatus === "error" ? <span className="font-medium text-red-500">Save failed</span> : null}
+                  {!tenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <div className="space-y-5">
+            <BrandingSectionCard
+              id="business"
+              title="Business Info"
+              description="Customer PDFs use this sender block and timezone."
+              icon={Building2}
+              isOpen={openSections.business}
+              completionLabel={sectionCompletionLabel.business}
+              onToggle={() => toggleSection("business")}
+            >
+              <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-600">Company Name</label>
                   <input
                     value={companyName}
                     disabled
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700"
+                    className="min-h-[44px] w-full rounded-2xl border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700"
                   />
                 </div>
                 <div>
@@ -296,7 +516,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     value={businessProfile.businessEmail ?? ""}
                     onChange={(event) => updateBusinessField("businessEmail", event.target.value)}
                     placeholder="office@yourcompany.com"
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[44px] w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                   />
                 </div>
                 <div>
@@ -380,162 +600,200 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   </select>
                 </div>
               </div>
-            </div>
+            </BrandingSectionCard>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="mb-4 font-display font-semibold text-slate-900">Your Logo</h2>
-
-              <div className="mb-4">
-                {logo ? (
-                  <div className="mb-4 flex h-32 items-center justify-center rounded-lg border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-4">
-                    <img src={logo} alt="Your logo" className="max-h-full max-w-full object-contain" />
-                  </div>
-                ) : (
-                  <label className="block">
-                    <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-                    <div className="cursor-pointer rounded-lg border-2 border-dashed border-slate-300 p-6 text-center transition-colors hover:border-quotefly-primary">
-                      <Upload size={24} className="mx-auto mb-2 text-slate-400" />
-                      <p className="text-sm font-medium text-slate-700">Click to upload logo</p>
-                      <p className="mt-1 text-xs text-slate-400">PNG, JPG up to 5MB</p>
+            <BrandingSectionCard
+              id="logo"
+              title="Logo"
+              description="Upload the mark that appears on customer-facing quote PDFs."
+              icon={ImageIcon}
+              isOpen={openSections.logo}
+              completionLabel={sectionCompletionLabel.logo}
+              onToggle={() => toggleSection("logo")}
+            >
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div>
+                  {logo ? (
+                    <div className="flex min-h-[180px] items-center justify-center rounded-3xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
+                      <img src={logo} alt="Your logo" className="max-h-28 max-w-full object-contain" />
                     </div>
-                  </label>
-                )}
-              </div>
-
-              {logo && (
-                <button
-                  onClick={() => setLogo(null)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:text-slate-900"
-                >
-                  Remove Logo
-                </button>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="mb-4 font-display font-semibold text-slate-900">Brand Color</h2>
-
-              <div className="space-y-3">
-                <input
-                  type="color"
-                  value={brandColor}
-                  onChange={(event) => setBrandColor(event.target.value)}
-                  className="h-12 w-full cursor-pointer rounded-lg"
-                />
-                <p className="text-center text-xs text-slate-500">{brandColor}</p>
-                <div style={{ backgroundColor: brandColor }} className="h-16 rounded-lg border border-slate-200" />
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="mb-4 font-display font-semibold text-slate-900">Component Colors</h2>
-              <p className="mb-4 text-xs text-slate-500">
-                Leave a component unassigned to let it follow your primary brand color.
-              </p>
-
-              <div className="space-y-4">
-                {COLOR_COMPONENTS.map((component) => {
-                  const value = getComponentColorValue(component.key);
-                  const hasOverride = componentColors[component.key] !== undefined;
-                  const resetLabel =
-                    component.key === "footerTextColor" ? "Use neutral default" : "Use brand color";
-
-                  return (
-                    <div key={component.key} className="rounded-lg border border-slate-200 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-800">{component.label}</p>
-                          <p className="text-xs text-slate-500">{component.description}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="color"
-                            value={value}
-                            onChange={(event) => updateComponentColor(component.key, event.target.value)}
-                            className="h-10 w-12 cursor-pointer rounded border border-slate-300"
-                          />
-                          <span className="w-20 text-right font-mono text-xs text-slate-500">{value}</span>
-                        </div>
+                  ) : (
+                    <label className="block">
+                      <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                      <div className="cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
+                        <Upload size={28} className="mx-auto mb-3 text-slate-400" />
+                        <p className="text-sm font-medium text-slate-700">Click to upload logo</p>
+                        <p className="mt-1 text-xs text-slate-400">PNG, JPG up to 5MB</p>
                       </div>
+                    </label>
+                  )}
+                </div>
 
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        <div className="h-2 flex-1 rounded" style={{ backgroundColor: value }} />
-                        <button
-                          type="button"
-                          onClick={() => clearComponentColorOverride(component.key)}
-                          disabled={!hasOverride}
-                          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {resetLabel}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Logo guidance</p>
+                  <ul className="mt-3 space-y-2 text-sm text-slate-600">
+                    <li>Use a transparent PNG if possible.</li>
+                    <li>Keep the logo wide enough for PDF headers.</li>
+                    <li>Test against lighter and darker template headers.</li>
+                  </ul>
+                  {logo && (
+                    <button
+                      onClick={() => setLogo(null)}
+                      className="mt-5 w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:text-slate-900"
+                    >
+                      Remove Logo
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
+            </BrandingSectionCard>
 
-          <div className="lg:col-span-2">
-            <div className="mb-6">
-              <h2 className="mb-4 font-display font-semibold text-slate-900">Quote Templates</h2>
-              <p className="mb-4 text-sm text-slate-500">
-                Use arrows to browse templates. Preview updates instantly and includes the sender block your customer will see.
-              </p>
-            </div>
+            <BrandingSectionCard
+              id="colors"
+              title="Colors"
+              description="Set the primary brand color and override PDF components only where needed."
+              icon={Palette}
+              isOpen={openSections.colors}
+              completionLabel={sectionCompletionLabel.colors}
+              onToggle={() => toggleSection("colors")}
+            >
+              <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="font-display text-lg font-semibold text-slate-900">Primary Brand Color</h3>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => moveTemplate(-1)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  aria-label="Previous template"
-                >
-                  <ChevronLeft size={18} />
-                </button>
-
-                <div className="flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
-                      <p className="mt-1 text-xs text-slate-600">{activeTemplate.description}</p>
-                    </div>
-                    <div className={`h-14 w-24 rounded-md border border-slate-200 ${activeTemplate.preview}`} />
+                  <div className="mt-4 space-y-3">
+                    <input
+                      type="color"
+                      value={brandColor}
+                      onChange={(event) => setBrandColor(event.target.value)}
+                      className="h-12 w-full cursor-pointer rounded-2xl"
+                    />
+                    <p className="text-center font-mono text-xs text-slate-500">{brandColor}</p>
+                    <div style={{ backgroundColor: brandColor }} className="h-20 rounded-2xl border border-slate-200" />
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => moveTemplate(1)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  aria-label="Next template"
-                >
-                  <ChevronRight size={18} />
-                </button>
-              </div>
+                <div className="rounded-3xl border border-slate-200 p-4">
+                  <div className="mb-4">
+                    <h3 className="font-display text-lg font-semibold text-slate-900">Component Overrides</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Leave a component unassigned to let it follow your primary brand color.
+                    </p>
+                  </div>
 
-              <div className="mt-3 flex items-center justify-center gap-2">
-                {TEMPLATE_OPTIONS.map((template) => (
+                  <div className="space-y-4">
+                    {COLOR_COMPONENTS.map((component) => {
+                      const value = getComponentColorValue(component.key);
+                      const hasOverride = componentColors[component.key] !== undefined;
+                      const resetLabel =
+                        component.key === "footerTextColor" ? "Use neutral default" : "Use brand color";
+
+                      return (
+                        <div key={component.key} className="rounded-2xl border border-slate-200 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">{component.label}</p>
+                              <p className="text-xs text-slate-500">{component.description}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={value}
+                                onChange={(event) => updateComponentColor(component.key, event.target.value)}
+                                className="h-10 w-12 cursor-pointer rounded border border-slate-300"
+                              />
+                              <span className="w-20 text-right font-mono text-xs text-slate-500">{value}</span>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="h-2 flex-1 rounded" style={{ backgroundColor: value }} />
+                            <button
+                              type="button"
+                              onClick={() => clearComponentColorOverride(component.key)}
+                              disabled={!hasOverride}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {resetLabel}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </BrandingSectionCard>
+
+            <BrandingSectionCard
+              id="templates"
+              title="Templates"
+              description="Use arrows to browse layouts. The preview updates instantly."
+              icon={SwatchBook}
+              isOpen={openSections.templates}
+              completionLabel={sectionCompletionLabel.templates}
+              onToggle={() => toggleSection("templates")}
+            >
+              <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center gap-3">
                   <button
-                    key={template.id}
                     type="button"
-                    onClick={() => setSelectedTemplate(template.id)}
-                    aria-label={`Select ${template.name} template`}
-                    className={`h-2.5 rounded-full transition-all ${
-                      selectedTemplate === template.id
-                        ? "w-6 bg-quotefly-primary"
-                        : "w-2.5 bg-slate-300 hover:bg-slate-400"
-                    }`}
-                  />
-                ))}
+                    onClick={() => moveTemplate(-1)}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    aria-label="Previous template"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+
+                  <div className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
+                        <p className="mt-1 text-xs text-slate-600">{activeTemplate.description}</p>
+                      </div>
+                      <div className={`h-14 w-24 rounded-md border border-slate-200 ${activeTemplate.preview}`} />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => moveTemplate(1)}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    aria-label="Next template"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  {TEMPLATE_OPTIONS.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => setSelectedTemplate(template.id)}
+                      aria-label={`Select ${template.name} template`}
+                      className={`h-2.5 rounded-full transition-all ${
+                        selectedTemplate === template.id
+                          ? "w-6 bg-quotefly-primary"
+                          : "w-2.5 bg-slate-300 hover:bg-slate-400"
+                      }`}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            </BrandingSectionCard>
 
-            <div className="mt-8 rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-              <h3 className="mb-4 font-display font-semibold text-slate-900">Preview</h3>
-
-              <div className={`rounded-lg p-8 text-black shadow-lg ${activeTemplate.preview}`}>
+            <BrandingSectionCard
+              id="preview"
+              title="Preview"
+              description="Review the customer-facing PDF layout with your sender details."
+              icon={Eye}
+              isOpen={openSections.preview}
+              completionLabel={sectionCompletionLabel.preview}
+              onToggle={() => toggleSection("preview")}
+            >
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-8">
+                <div className={`rounded-lg p-8 text-black shadow-lg ${activeTemplate.preview}`}>
                 {activeTemplate.headerStyle === "bar" && (
                   <div className="mb-6 rounded-lg p-4 text-white" style={{ backgroundColor: previewHeaderColor }}>
                     <div className="flex items-start justify-between">
@@ -672,22 +930,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   {businessProfile.businessEmail ? ` or ${businessProfile.businessEmail}` : ""} / Timezone: {timezone}
                 </p>
               </div>
-            </div>
-
-            <div className="mt-6 flex items-center gap-4">
-              <button
-                onClick={handleSave}
-                disabled={isSaving || !tenantId}
-                className="flex-1 rounded-lg bg-quotefly-primary px-6 py-3 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSaving ? "Saving..." : "Save Branding and Sender Info"}
-              </button>
-              {saveStatus === "saved" && <span className="text-sm font-medium text-green-500">Saved</span>}
-              {saveStatus === "error" && <span className="text-sm font-medium text-red-500">Save failed</span>}
-            </div>
-            {!tenantId && (
-              <p className="mt-2 text-center text-xs text-slate-400">Sign in to save your branding settings.</p>
-            )}
+              </div>
+            </BrandingSectionCard>
           </div>
         </div>
       </div>

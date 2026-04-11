@@ -3,6 +3,7 @@ import type { ReactNode, FormEvent } from "react";
 import {
   api,
   ApiError,
+  type AfterSaleFollowUpStatus,
   type ChatToQuoteParsed,
   type Customer,
   type CustomerDuplicateMatch,
@@ -10,6 +11,7 @@ import {
   type QuoteOutboundChannel,
   type QuoteOutboundEvent,
   type Quote,
+  type QuoteJobStatus,
   type QuoteRevision,
   type QuoteStatus,
   type ServiceType,
@@ -28,7 +30,15 @@ export type QuoteForm = {
   customerPriceSubtotal: string;
   taxAmount: string;
 };
-export type QuoteEditForm = { serviceType: ServiceType; status: QuoteStatus; title: string; scopeText: string; taxAmount: string };
+export type QuoteEditForm = {
+  serviceType: ServiceType;
+  status: QuoteStatus;
+  jobStatus: QuoteJobStatus;
+  afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
+  title: string;
+  scopeText: string;
+  taxAmount: string;
+};
 export type LineItemForm = { description: string; quantity: string; unitCost: string; unitPrice: string };
 export type HistoryMode = "quote" | "customer" | "all";
 export type SendChannel = "email" | "sms" | "copy";
@@ -65,6 +75,9 @@ export type LeadCardItem = {
   quoteTitle?: string;
   totalAmount?: number;
   status?: QuoteStatus;
+  jobStatus?: QuoteJobStatus;
+  afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
+  afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;
   createdAt: string;
 };
@@ -96,7 +109,15 @@ export const EMPTY_QUOTE: QuoteForm = {
   customerPriceSubtotal: "0",
   taxAmount: "0",
 };
-export const EMPTY_EDIT: QuoteEditForm = { serviceType: "HVAC", status: "DRAFT", title: "", scopeText: "", taxAmount: "0" };
+export const EMPTY_EDIT: QuoteEditForm = {
+  serviceType: "HVAC",
+  status: "DRAFT",
+  jobStatus: "NOT_STARTED",
+  afterSaleFollowUpStatus: "NOT_READY",
+  title: "",
+  scopeText: "",
+  taxAmount: "0",
+};
 export const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", unitCost: "0", unitPrice: "0" };
 export const CHAT_PROMPT_EXAMPLE =
   "New quote for Alan Johnson 818-233-4333. He has a roof that is about 1,250 square feet and wants to replace his roof-shingles. We will remove old and aged roofing and check for any damage underneath and apply new layer as needed. Whole job should cost about 8,500 using standard asphalt shingles.";
@@ -240,7 +261,8 @@ export interface DashboardContextValue {
     newLeads: LeadCardItem[];
     quotedLeads: LeadCardItem[];
     closedLeads: LeadCardItem[];
-    totals: { newLeads: number; quotedLeads: number; closedLeads: number };
+    afterSaleLeads: LeadCardItem[];
+    totals: { newLeads: number; quotedLeads: number; closedLeads: number; afterSaleLeads: number };
   };
   createQuoteMath: QuoteMathSummary;
   selectedQuoteMath: QuoteMathSummary | null;
@@ -277,6 +299,11 @@ export interface DashboardContextValue {
   applyTradeSetup: (event: FormEvent) => Promise<void>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<void>;
+  updateQuoteLifecycle: (quoteId: string, patch: {
+    status?: QuoteStatus;
+    jobStatus?: QuoteJobStatus;
+    afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
+  }) => Promise<void>;
   saveQuote: (event: FormEvent) => Promise<void>;
   sendDecision: (decision: "send" | "revise") => Promise<void>;
   openSendComposer: (channel: SendChannel) => void;
@@ -425,6 +452,8 @@ export function DashboardProvider({
       setQuoteEditForm({
         serviceType: quote.serviceType,
         status: quote.status,
+        jobStatus: quote.jobStatus,
+        afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus,
         title: quote.title,
         scopeText: quote.scopeText,
         taxAmount: String(Number(quote.taxAmount)),
@@ -613,6 +642,8 @@ export function DashboardProvider({
       await api.quotes.update(selectedQuote.id, {
         serviceType: quoteEditForm.serviceType,
         status: quoteEditForm.status,
+        jobStatus: quoteEditForm.jobStatus,
+        afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
         taxAmount: Number(quoteEditForm.taxAmount),
@@ -622,6 +653,25 @@ export function DashboardProvider({
       setNotice("Quote updated.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving quote."); } finally { setSaving(false); }
   }, [selectedQuote, quoteEditForm, canViewQuoteHistory]);
+
+  const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
+    status?: QuoteStatus;
+    jobStatus?: QuoteJobStatus;
+    afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
+  }) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.quotes.update(quoteId, patch);
+      await Promise.all([loadQuotes(), loadQuoteDetail(quoteId)]);
+      if (canViewQuoteHistory) await loadQuoteHistory();
+      setNotice("Quote lifecycle updated.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed updating quote lifecycle.");
+    } finally {
+      setSaving(false);
+    }
+  }, [canViewQuoteHistory]);
 
   const saveQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -799,17 +849,43 @@ export function DashboardProvider({
     const newLeads: LeadCardItem[] = [];
     const quotedLeads: LeadCardItem[] = [];
     const closedLeads: LeadCardItem[] = [];
+    const afterSaleLeads: LeadCardItem[] = [];
     for (const customer of customers) {
       const latestQuote = latestByCustomer.get(customer.id);
       const followUpStatus = effectiveFollowUpStatus(customer, latestQuote);
       const baseItem: LeadCardItem = {
         customerId: customer.id, customerName: customer.fullName, phone: customer.phone, email: customer.email ?? null,
         quoteId: latestQuote?.id, quoteTitle: latestQuote?.title, totalAmount: latestQuote ? Number(latestQuote.totalAmount) : undefined,
-        status: latestQuote?.status, followUpStatus, createdAt: latestQuote?.updatedAt ?? customer.createdAt,
+        status: latestQuote?.status,
+        jobStatus: latestQuote?.jobStatus,
+        afterSaleFollowUpStatus: latestQuote?.afterSaleFollowUpStatus,
+        afterSaleFollowUpDueAtUtc: latestQuote?.afterSaleFollowUpDueAtUtc ?? null,
+        followUpStatus,
+        createdAt: latestQuote?.updatedAt ?? customer.createdAt,
       };
-      if (followUpStatus === "WON") { closedLeads.push(baseItem); continue; }
-      if (followUpStatus === "LOST") { continue; }
-      if (!latestQuote || latestQuote.status === "DRAFT") { newLeads.push(baseItem); continue; }
+      if (!latestQuote || latestQuote.status === "DRAFT" || latestQuote.status === "READY_FOR_REVIEW") {
+        newLeads.push(baseItem);
+        continue;
+      }
+
+      if (latestQuote.status === "REJECTED" || followUpStatus === "LOST") {
+        continue;
+      }
+
+      if (latestQuote.status === "ACCEPTED") {
+        if (latestQuote.afterSaleFollowUpStatus === "DUE") {
+          afterSaleLeads.push(baseItem);
+          continue;
+        }
+
+        if (latestQuote.afterSaleFollowUpStatus === "COMPLETED") {
+          continue;
+        }
+
+        closedLeads.push(baseItem);
+        continue;
+      }
+
       quotedLeads.push(baseItem);
     }
 
@@ -829,12 +905,39 @@ export function DashboardProvider({
     const byOldestFirst = (left: LeadCardItem, right: LeadCardItem) =>
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
 
+    const jobPriority: Record<QuoteJobStatus, number> = {
+      NOT_STARTED: 0,
+      SCHEDULED: 1,
+      IN_PROGRESS: 2,
+      COMPLETED: 3,
+    };
+
+    const byJobStageThenOldest = (left: LeadCardItem, right: LeadCardItem) => {
+      const leftPriority = jobPriority[left.jobStatus ?? "NOT_STARTED"];
+      const rightPriority = jobPriority[right.jobStatus ?? "NOT_STARTED"];
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return byOldestFirst(left, right);
+    };
+
+    const byAfterSaleDueDate = (left: LeadCardItem, right: LeadCardItem) => {
+      const leftDue = left.afterSaleFollowUpDueAtUtc ? new Date(left.afterSaleFollowUpDueAtUtc).getTime() : 0;
+      const rightDue = right.afterSaleFollowUpDueAtUtc ? new Date(right.afterSaleFollowUpDueAtUtc).getTime() : 0;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+      return byOldestFirst(left, right);
+    };
+
     return {
       recentLeads,
       newLeads: newLeads.sort(byFollowUpOldestFirst).slice(0, 12),
       quotedLeads: quotedLeads.sort(byFollowUpOldestFirst).slice(0, 12),
-      closedLeads: closedLeads.sort(byOldestFirst).slice(0, 12),
-      totals: { newLeads: newLeads.length, quotedLeads: quotedLeads.length, closedLeads: closedLeads.length },
+      closedLeads: closedLeads.sort(byJobStageThenOldest).slice(0, 12),
+      afterSaleLeads: afterSaleLeads.sort(byAfterSaleDueDate).slice(0, 12),
+      totals: {
+        newLeads: newLeads.length,
+        quotedLeads: quotedLeads.length,
+        closedLeads: closedLeads.length,
+        afterSaleLeads: afterSaleLeads.length,
+      },
     };
   }, [customers, quotes]);
 
@@ -871,7 +974,7 @@ export function DashboardProvider({
     setDuplicateModal, setSendComposer,
     loadAll, loadQuotes, loadCustomers, loadQuoteHistory,
     focusQuoteDesk, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
-    createQuoteFromChatPrompt, applyTradeSetup, createQuote, persistSelectedQuote, saveQuote,
+    createQuoteFromChatPrompt, applyTradeSetup, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,
     addLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,

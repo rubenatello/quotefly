@@ -17,6 +17,7 @@ import { DataPrivacyPage } from "./pages/DataPrivacyPage";
 import { TermsPage } from "./pages/TermsPage";
 import { CookiePolicyPage } from "./pages/CookiePolicyPage";
 import { BrandingPage } from "./pages/BrandingPage";
+import { SetupPage } from "./pages/SetupPage";
 import { AdminPage } from "./pages/AdminPage";
 import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
 import { PipelineView } from "./views/PipelineView";
@@ -90,12 +91,27 @@ function toDashboardSession(s: Session): DashboardSession {
 
 /* ─── CRM Layout with DashboardProvider + BottomTabBar ─── */
 
-function CrmLayout({ session, onLogout }: { session: Session; onLogout: () => void }) {
+function CrmLayout({
+  session,
+  onLogout,
+  onRefreshSession,
+}: {
+  session: Session;
+  onLogout: () => void;
+  onRefreshSession: () => Promise<void>;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
 
+  useEffect(() => {
+    if (!session.onboardingCompletedAtUtc && !location.pathname.startsWith("/app/setup")) {
+      navigate("/app/setup", { replace: true });
+    }
+  }, [location.pathname, navigate, session.onboardingCompletedAtUtc]);
+
   // Map location to legacy "currentPage" for CrmShell sidebar highlighting
   const currentPage = (() => {
+    if (location.pathname.startsWith("/app/setup")) return "setup";
     if (location.pathname.startsWith("/app/branding")) return "branding";
     if (location.pathname.startsWith("/app/admin")) return "admin";
     return "dashboard";
@@ -103,6 +119,7 @@ function CrmLayout({ session, onLogout }: { session: Session; onLogout: () => vo
 
   const handleNavigate = (page: string) => {
     if (page === "dashboard") navigate("/app");
+    else if (page === "setup") navigate("/app/setup");
     else if (page === "branding") navigate("/app/branding");
     else if (page === "admin") navigate("/app/admin");
     else navigate("/app");
@@ -127,6 +144,7 @@ function CrmLayout({ session, onLogout }: { session: Session; onLogout: () => vo
           <div className="mx-auto max-w-7xl">
             <Routes>
               <Route index element={<PipelineView />} />
+              <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
               <Route path="build" element={<QuoteBuilderView />} />
               <Route path="quotes" element={<QuoteDeskView />} />
               <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
@@ -201,6 +219,13 @@ function AppRoutes() {
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const navigate = useNavigate();
 
+  async function refreshSessionState() {
+    const payload = await api.auth.me();
+    localStorage.setItem("qf_tenant_id", payload.tenant.id);
+    localStorage.setItem("qf_full_name", payload.user.fullName);
+    setSession(toSession(payload));
+  }
+
   useEffect(() => {
     let isMounted = true;
     const token = localStorage.getItem("qf_token");
@@ -237,11 +262,7 @@ function AppRoutes() {
     localStorage.setItem("qf_full_name", payload.user.fullName);
     setIsSessionChecking(true);
 
-    void api.auth
-      .me()
-      .then((sessionPayload) => {
-        setSession(toSession(sessionPayload));
-      })
+    void refreshSessionState()
       .catch((error) => {
         if (!(error instanceof ApiError && error.status === 401)) {
           console.error("Session hydration after auth failed", error);
@@ -275,7 +296,10 @@ function AppRoutes() {
     <>
       <Routes>
         {isLoggedIn && session ? (
-          <Route path="/app/*" element={<CrmLayout session={session} onLogout={handleLogout} />} />
+          <Route
+            path="/app/*"
+            element={<CrmLayout session={session} onLogout={handleLogout} onRefreshSession={refreshSessionState} />}
+          />
         ) : (
           <Route path="/app/*" element={<Navigate to="/" replace />} />
         )}

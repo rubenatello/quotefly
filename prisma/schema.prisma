@@ -28,6 +28,19 @@ enum QuoteStatus {
   REJECTED
 }
 
+enum QuoteJobStatus {
+  NOT_STARTED
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum AfterSaleFollowUpStatus {
+  NOT_READY
+  DUE
+  COMPLETED
+}
+
 enum SmsMessageDirection {
   INBOUND
   OUTBOUND
@@ -233,6 +246,8 @@ model Quote {
   customerId            String
   serviceType           ServiceCategory
   status                QuoteStatus            @default(DRAFT)
+  jobStatus             QuoteJobStatus         @default(NOT_STARTED)
+  afterSaleFollowUpStatus AfterSaleFollowUpStatus @default(NOT_READY)
   title                 String
   scopeText             String
   internalCostSubtotal  Decimal                @db.Decimal(10, 2)
@@ -241,6 +256,10 @@ model Quote {
   totalAmount           Decimal                @db.Decimal(10, 2)
   aiGeneratedAtUtc      DateTime?              @db.Timestamptz(3)
   sentAt                DateTime?              @db.Timestamptz(3)
+  closedAtUtc           DateTime?              @db.Timestamptz(3)
+  jobCompletedAtUtc     DateTime?              @db.Timestamptz(3)
+  afterSaleFollowUpDueAtUtc DateTime?          @db.Timestamptz(3)
+  afterSaleFollowUpCompletedAtUtc DateTime?    @db.Timestamptz(3)
   createdAt             DateTime               @default(now()) @db.Timestamptz(3)
   updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
   deletedAtUtc          DateTime?              @db.Timestamptz(3)
@@ -254,6 +273,8 @@ model Quote {
   @@unique([id, tenantId])
   @@index([tenantId, customerId])
   @@index([tenantId, status])
+  @@index([tenantId, jobStatus])
+  @@index([tenantId, afterSaleFollowUpStatus])
   @@index([tenantId, aiGeneratedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }

@@ -65,6 +65,7 @@ export function QuoteDeskView() {
     setNotice,
     saveQuote,
     sendDecision,
+    updateQuoteLifecycle,
     openSendComposer,
     confirmSendComposer,
     downloadQuotePdf,
@@ -106,6 +107,17 @@ export function QuoteDeskView() {
     value: status,
     label: formatQuoteStatusLabel(status),
   }));
+  const jobStatusOptions = [
+    { value: "NOT_STARTED", label: formatJobStatusLabel("NOT_STARTED") },
+    { value: "SCHEDULED", label: formatJobStatusLabel("SCHEDULED") },
+    { value: "IN_PROGRESS", label: formatJobStatusLabel("IN_PROGRESS") },
+    { value: "COMPLETED", label: formatJobStatusLabel("COMPLETED") },
+  ];
+  const afterSaleOptions = [
+    { value: "NOT_READY", label: formatAfterSaleStatusLabel("NOT_READY") },
+    { value: "DUE", label: formatAfterSaleStatusLabel("DUE") },
+    { value: "COMPLETED", label: formatAfterSaleStatusLabel("COMPLETED") },
+  ];
 
   const quoteMathWarning = useMemo(() => {
     if (!selectedQuoteMath || selectedQuoteMath.customerSubtotal <= 0) return undefined;
@@ -128,6 +140,9 @@ export function QuoteDeskView() {
   const customerPhone = selectedQuote.customer?.phone ?? "No phone yet";
   const customerEmail = selectedQuote.customer?.email ?? null;
   const lineItemCount = selectedQuote.lineItems?.length ?? 0;
+  const afterSaleDueLabel = selectedQuote.afterSaleFollowUpDueAtUtc
+    ? formatDateTime(selectedQuote.afterSaleFollowUpDueAtUtc)
+    : "Not scheduled";
 
   async function confirmDeleteLineItem() {
     if (!lineItemPendingDeleteId) return;
@@ -219,6 +234,34 @@ export function QuoteDeskView() {
                   value={quoteEditForm.taxAmount}
                   onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
                 />
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[1fr_1fr_0.9fr]">
+                <Select
+                  label="Job stage"
+                  value={quoteEditForm.jobStatus}
+                  disabled={quoteEditForm.status !== "ACCEPTED"}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({ ...prev, jobStatus: event.target.value as typeof prev.jobStatus }))
+                  }
+                  options={jobStatusOptions}
+                />
+                <Select
+                  label="After-sale follow-up"
+                  value={quoteEditForm.afterSaleFollowUpStatus}
+                  disabled={quoteEditForm.status !== "ACCEPTED"}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({
+                      ...prev,
+                      afterSaleFollowUpStatus: event.target.value as typeof prev.afterSaleFollowUpStatus,
+                    }))
+                  }
+                  options={afterSaleOptions}
+                />
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-up due</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{afterSaleDueLabel}</p>
+                </div>
               </div>
 
               <Input
@@ -388,6 +431,17 @@ export function QuoteDeskView() {
                 <Button type="button" loading={saving} onClick={() => void persistSelectedQuote()}>
                   Save Quote
                 </Button>
+                {selectedQuote.status !== "ACCEPTED" && (
+                  <Button
+                    type="button"
+                    variant="success"
+                    icon={<QuoteIcon size={14} />}
+                    onClick={() => { track("quote_mark_won"); void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" }); }}
+                    disabled={saving}
+                  >
+                    Mark Won
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -405,6 +459,39 @@ export function QuoteDeskView() {
                 >
                   Revise
                 </Button>
+                {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "IN_PROGRESS" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => { track("quote_job_in_progress"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "IN_PROGRESS" }); }}
+                    disabled={saving}
+                  >
+                    Start Job
+                  </Button>
+                )}
+                {selectedQuote.status === "ACCEPTED" && selectedQuote.jobStatus !== "COMPLETED" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => { track("quote_job_complete"); void updateQuoteLifecycle(selectedQuote.id, { jobStatus: "COMPLETED" }); }}
+                    disabled={saving}
+                  >
+                    Complete Job
+                  </Button>
+                )}
+                {selectedQuote.status === "ACCEPTED" && selectedQuote.afterSaleFollowUpStatus === "DUE" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      track("quote_after_sale_complete");
+                      void updateQuoteLifecycle(selectedQuote.id, { afterSaleFollowUpStatus: "COMPLETED" });
+                    }}
+                    disabled={saving}
+                  >
+                    Follow-Up Done
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -663,6 +750,17 @@ function formatQuoteStatusLabel(status: string) {
   if (status === "ACCEPTED") return "Won";
   if (status === "REJECTED") return "Lost";
   return "Draft";
+}
+
+function formatJobStatusLabel(status: string) {
+  if (status === "NOT_STARTED") return "Not started";
+  if (status === "IN_PROGRESS") return "In progress";
+  return status.charAt(0) + status.slice(1).toLowerCase().replace("_", " ");
+}
+
+function formatAfterSaleStatusLabel(status: string) {
+  if (status === "NOT_READY") return "Not ready";
+  return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
 function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {

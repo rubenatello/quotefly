@@ -4,6 +4,7 @@ import type { PlanCode, TenantEntitlements } from "../lib/api";
 import {
   ClockIcon,
   CustomerIcon,
+  EditIcon,
   InvoiceIcon,
   MessageIcon,
   QuoteIcon,
@@ -27,6 +28,7 @@ interface CrmShellProps {
 
 const OPERATIONS_LINKS: readonly CrmNavLink[] = [
   { label: "Dashboard", path: "dashboard", icon: <QuoteIcon size={14} /> },
+  { label: "Setup", path: "setup", icon: <EditIcon size={14} /> },
   { label: "Admin", path: "admin", icon: <SettingsIcon size={14} /> },
   { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
 ] as const;

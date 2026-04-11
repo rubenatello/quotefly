@@ -55,17 +55,6 @@ export function QuoteBuilderView() {
     createQuoteFromChatPrompt,
     currentPlanLabel,
     canAutoUpgradeMessage,
-    // Trade setup
-    setupTrade,
-    setupSqFtMode,
-    setupSqFtUnitCost,
-    setupSqFtUnitPrice,
-    recommendedPresetCount,
-    setSetupTrade,
-    setSetupSqFtMode,
-    setSetupSqFtUnitCost,
-    setSetupSqFtUnitPrice,
-    applyTradeSetup,
     // Customer
     customerForm,
     setCustomerForm,
@@ -232,55 +221,6 @@ export function QuoteBuilderView() {
           showUpgradeHint={canAutoUpgradeMessage}
         />
       )}
-
-      {/* Trade Setup */}
-      <Card variant="amber">
-        <CardHeader
-          title="Quick Trade Setup"
-          subtitle="Set your trade defaults and presets for faster quote creation."
-        />
-        <form onSubmit={applyTradeSetup} className="space-y-3">
-          <Select
-            value={setupTrade}
-            onChange={(event) => setSetupTrade(event.target.value as ServiceType)}
-            options={serviceOptions}
-          />
-          <label className="flex items-center gap-2 text-xs text-slate-700">
-            <input
-              type="checkbox"
-              checked={setupSqFtMode}
-              onChange={(event) => setSetupSqFtMode(event.target.checked)}
-            />
-            I price jobs by square foot (optional)
-          </label>
-          {setupSqFtMode && (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="SQ FT internal cost"
-                value={setupSqFtUnitCost}
-                onChange={(event) => setSetupSqFtUnitCost(event.target.value)}
-              />
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="SQ FT customer price"
-                value={setupSqFtUnitPrice}
-                onChange={(event) => setSetupSqFtUnitPrice(event.target.value)}
-              />
-            </div>
-          )}
-          <p className="text-[11px] text-amber-700">
-            Recommended presets for {setupTrade}: {recommendedPresetCount}
-          </p>
-          <Button type="submit" loading={saving} fullWidth>
-            Save Trade Presets
-          </Button>
-        </form>
-      </Card>
 
       {/* Quick Customer */}
       <Card>

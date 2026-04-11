@@ -136,6 +136,9 @@ export type QuoteStatus =
   | "ACCEPTED"
   | "REJECTED";
 
+export type QuoteJobStatus = "NOT_STARTED" | "SCHEDULED" | "IN_PROGRESS" | "COMPLETED";
+export type AfterSaleFollowUpStatus = "NOT_READY" | "DUE" | "COMPLETED";
+
 export type QuoteRevisionEventType =
   | "CREATED"
   | "UPDATED"
@@ -208,12 +211,18 @@ export type Quote = {
   customerId: string;
   serviceType: ServiceType;
   status: QuoteStatus;
+  jobStatus: QuoteJobStatus;
+  afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
   internalCostSubtotal: DecimalLike;
   customerPriceSubtotal: DecimalLike;
   taxAmount: DecimalLike;
   totalAmount: DecimalLike;
+  closedAtUtc?: string | null;
+  jobCompletedAtUtc?: string | null;
+  afterSaleFollowUpDueAtUtc?: string | null;
+  afterSaleFollowUpCompletedAtUtc?: string | null;
   sentAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -659,6 +668,8 @@ export const api = {
         customerId?: string;
         serviceType?: ServiceType;
         status?: QuoteStatus;
+        jobStatus?: QuoteJobStatus;
+        afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
         title?: string;
         scopeText?: string;
         internalCostSubtotal?: number;

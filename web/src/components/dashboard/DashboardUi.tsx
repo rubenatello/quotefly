@@ -16,8 +16,10 @@ import {
   SendIcon,
 } from "../Icons";
 import type {
+  AfterSaleFollowUpStatus,
   LeadFollowUpStatus,
   QuoteOutboundChannel,
+  QuoteJobStatus,
   QuoteRevision,
   QuoteStatus,
 } from "../../lib/api";
@@ -33,6 +35,9 @@ export type LeadCardItem = {
   quoteTitle?: string;
   totalAmount?: number;
   status?: QuoteStatus;
+  jobStatus?: QuoteJobStatus;
+  afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
+  afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;
   createdAt: string;
 };
@@ -227,7 +232,7 @@ export function MobileSectionSwitcher({
   onChange: (section: DashboardMobileSection) => void;
   selectedQuoteId: string | null;
   quoteCount: number;
-  totals: { newLeads: number; quotedLeads: number; closedLeads: number };
+  totals: { newLeads: number; quotedLeads: number; closedLeads: number; afterSaleLeads: number };
 }) {
   const sections: Array<{
     id: DashboardMobileSection;
@@ -238,7 +243,7 @@ export function MobileSectionSwitcher({
     {
       id: "pipeline",
       label: "Pipeline",
-      count: totals.newLeads + totals.quotedLeads + totals.closedLeads,
+      count: totals.newLeads + totals.quotedLeads + totals.closedLeads + totals.afterSaleLeads,
       icon: <CustomerIcon size={14} />,
     },
     { id: "builder", label: "Build", count: quoteCount, icon: <EditIcon size={14} /> },
@@ -281,10 +286,12 @@ export function PipelineFlow({
   newLeads,
   quotedLeads,
   closedLeads,
+  afterSaleLeads,
 }: {
   newLeads: number;
   quotedLeads: number;
   closedLeads: number;
+  afterSaleLeads: number;
 }) {
   return (
     <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4">
@@ -294,6 +301,8 @@ export function PipelineFlow({
         <PipelineStage icon={<SendIcon size={14} />} label="Quoted Leads" count={quotedLeads} tone="orange" />
         <FlowArrow />
         <PipelineStage icon={<CheckIcon size={14} />} label="Closed Leads" count={closedLeads} tone="emerald" />
+        <FlowArrow />
+        <PipelineStage icon={<ClockIcon size={14} />} label="After-Sale" count={afterSaleLeads} tone="slate" />
       </div>
     </div>
   );
@@ -308,14 +317,16 @@ function PipelineStage({
   icon: ReactNode;
   label: string;
   count: number;
-  tone: "blue" | "orange" | "emerald";
+  tone: "blue" | "orange" | "emerald" | "slate";
 }) {
   const toneClass =
     tone === "blue"
       ? "text-quotefly-blue border-quotefly-blue/30 bg-quotefly-blue/10"
       : tone === "orange"
         ? "text-quotefly-orange border-quotefly-orange/30 bg-quotefly-orange/10"
-        : "text-emerald-700 border-emerald-300 bg-emerald-50";
+        : tone === "emerald"
+          ? "text-emerald-700 border-emerald-300 bg-emerald-50"
+          : "text-slate-700 border-slate-300 bg-slate-100";
 
   return (
     <div className={`flex min-w-[170px] items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
