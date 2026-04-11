@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiError,
@@ -12,7 +12,7 @@ import {
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
-import { ConfirmModal } from "../components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, Select } from "../components/ui";
 
 interface AdminPageProps {
   session?: {
@@ -109,6 +109,12 @@ const PLAN_CARDS: readonly PlanCard[] = [
   },
 ] as const;
 
+const ROLE_OPTIONS: Array<{ value: OrgUserRole; label: string }> = [
+  { value: "member", label: "Member" },
+  { value: "admin", label: "Admin" },
+  { value: "owner", label: "Owner" },
+];
+
 function normalizeRole(role: string): OrgUserRole {
   const value = role.trim().toLowerCase();
   if (value === "owner" || value === "admin") return value;
@@ -163,6 +169,26 @@ function integrationNoticeText(code: string | null): string | null {
   return null;
 }
 
+function planTone(planCode: PlanCode | null | undefined): "blue" | "orange" | "slate" {
+  if (planCode === "starter") return "blue";
+  if (planCode === "professional") return "orange";
+  return "slate";
+}
+
+function subscriptionTone(status: string | null | undefined): "emerald" | "amber" | "red" | "slate" {
+  const normalized = (status ?? "").toLowerCase();
+  if (normalized === "active") return "emerald";
+  if (normalized === "trialing" || normalized === "past_due") return "amber";
+  if (normalized === "unpaid" || normalized === "canceled" || normalized === "incomplete") return "red";
+  return "slate";
+}
+
+function roleTone(role: OrgUserRole): "violet" | "sky" | "slate" {
+  if (role === "owner") return "violet";
+  if (role === "admin") return "sky";
+  return "slate";
+}
+
 export function AdminPage({ session }: AdminPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -182,6 +208,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
   const [quickBooksLoading, setQuickBooksLoading] = useState(true);
   const [quickBooksActionLoading, setQuickBooksActionLoading] = useState(false);
+  const [quickBooksActionMode, setQuickBooksActionMode] = useState<"connect" | "disconnect" | null>(null);
 
   const sessionRole = normalizeRole(session?.role ?? "member");
   const ownerView = sessionRole === "owner";
@@ -337,6 +364,7 @@ export function AdminPage({ session }: AdminPageProps) {
     if (!ownerView) return;
 
     setQuickBooksActionLoading(true);
+    setQuickBooksActionMode("connect");
     setError(null);
     try {
       const result = await api.integrations.quickbooks.connect();
@@ -344,6 +372,7 @@ export function AdminPage({ session }: AdminPageProps) {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed starting QuickBooks authorization.");
       setQuickBooksActionLoading(false);
+      setQuickBooksActionMode(null);
     }
   }
 
@@ -351,6 +380,7 @@ export function AdminPage({ session }: AdminPageProps) {
     if (!ownerView) return;
 
     setQuickBooksActionLoading(true);
+    setQuickBooksActionMode("disconnect");
     setError(null);
     try {
       await api.integrations.quickbooks.disconnect();
@@ -360,6 +390,7 @@ export function AdminPage({ session }: AdminPageProps) {
       setError(err instanceof ApiError ? err.message : "Failed disconnecting QuickBooks.");
     } finally {
       setQuickBooksActionLoading(false);
+      setQuickBooksActionMode(null);
     }
   }
 
@@ -390,399 +421,393 @@ export function AdminPage({ session }: AdminPageProps) {
   ]);
 
   if (loading) {
-    return <div className="min-h-screen bg-slate-50 p-6 text-slate-700">Loading organization settings...</div>;
+    return (
+      <div className="space-y-4">
+        <PageHeader
+          title="Organization Admin"
+          subtitle="Manage billing, team seats, and workspace access without leaving the CRM."
+        />
+        <Card variant="elevated" padding="lg" className="text-sm text-slate-600">
+          Loading organization settings...
+        </Card>
+      </div>
+    );
   }
 
+  const quickBooksConnected = Boolean(quickBooksStatus?.connection);
+  const quickBooksEnvironmentLabel = quickBooksStatus?.environment === "sandbox" ? "Sandbox" : "Production";
+
   return (
-    <div className="min-h-screen bg-slate-50 p-3 sm:p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
-              <h1 className="text-2xl font-bold text-slate-900">Organization Admin</h1>
-              <p className="mt-2 text-sm text-slate-600">
-                Manage billing, team seats, and workspace access without leaving the CRM.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  {effectivePlanName} access
-                </span>
-                {session?.isTrial && (
-                  <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
-                    Trial active
-                  </span>
-                )}
-                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                  Status: {sentenceCaseStatus(session?.subscriptionStatus)}
-                </span>
-              </div>
-              <p className="mt-3 text-sm text-slate-500">{billingSummaryText}</p>
-            </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Organization Admin"
+        subtitle="Manage billing, integrations, and team access without leaving the CRM."
+        actions={
+          ownerView && hasPortalAccess ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void openBillingPortal()}
+              disabled={billingAction !== null}
+              loading={billingAction === "portal"}
+            >
+              Manage Billing
+            </Button>
+          ) : undefined
+        }
+      />
 
-            <div className="grid gap-3 sm:grid-cols-3 lg:w-[420px]">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  <PriceIcon size={16} />
-                  Current access
-                </div>
-                <p className="mt-3 text-lg font-semibold text-slate-900">{effectivePlanName}</p>
-                <p className="mt-1 text-xs text-slate-500">{session?.isTrial ? "Trial access" : "Live plan access"}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  <ClockIcon size={16} />
-                  Billing state
-                </div>
-                <p className="mt-3 text-lg font-semibold text-slate-900">{sentenceCaseStatus(session?.subscriptionStatus)}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  <CustomerIcon size={16} />
-                  Team seats
-                </div>
-                <p className="mt-3 text-lg font-semibold text-slate-900">{seatUsageText}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {teamMembersLimit === null ? "No seat cap on this plan" : "Seats are enforced per plan"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
+      <div className="flex flex-wrap gap-2">
+        <Badge tone={planTone(effectivePlanCode)}>{effectivePlanName} access</Badge>
+        {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
+        <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
+          Status: {sentenceCaseStatus(session?.subscriptionStatus)}
+        </Badge>
+        <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
+          QuickBooks: {quickBooksConnected ? "Connected" : "Not linked"}
+        </Badge>
+      </div>
 
-        {error && (
-          <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700">
-            {error}
-          </p>
-        )}
-        {notice && (
-          <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-            {notice}
-          </p>
-        )}
+      {error ? (
+        <Alert tone="error" onDismiss={() => setError(null)}>
+          {error}
+        </Alert>
+      ) : null}
+      {notice ? (
+        <Alert tone="success" onDismiss={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      ) : null}
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
-              <h2 className="text-lg font-semibold text-slate-900">Billing and Plan Controls</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                Choose the plan that matches your crew size. Stripe handles billing, and QuoteFly enforces access by tenant.
-              </p>
-              {!ownerView && (
-                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                  <LockIcon size={14} />
-                  Only workspace owners can change billing
-                </div>
-              )}
+      <Card variant="blue" padding="lg">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-2xl space-y-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Workspace control center</p>
+              <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">Keep billing, integrations, and team access aligned.</h2>
             </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <button
-                type="button"
-                onClick={() => void openBillingPortal()}
-                disabled={!ownerView || !hasPortalAccess || billingAction !== null}
-                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {billingAction === "portal" ? "Opening portal..." : "Manage Billing"}
-              </button>
-            </div>
+            <p className="text-sm text-slate-600 sm:text-base">{billingSummaryText}</p>
+            {!ownerView ? (
+              <Badge tone="amber" icon={<LockIcon size={14} />}>
+                Only workspace owners can change billing and integrations
+              </Badge>
+            ) : null}
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-3">
-            {PLAN_CARDS.map((plan) => {
-              const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
-              const isCurrentAccessPlan = effectivePlanCode === plan.code;
+          <div className="grid gap-3 sm:grid-cols-3 xl:w-[460px]">
+            <AdminMetricCard
+              icon={<PriceIcon size={16} />}
+              label="Current access"
+              value={effectivePlanName}
+              hint={session?.isTrial ? "Trial access" : "Live plan access"}
+            />
+            <AdminMetricCard
+              icon={<ClockIcon size={16} />}
+              label="Billing state"
+              value={sentenceCaseStatus(session?.subscriptionStatus)}
+              hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+            />
+            <AdminMetricCard
+              icon={<CustomerIcon size={16} />}
+              label="Team seats"
+              value={seatUsageText}
+              hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
+            />
+          </div>
+        </div>
+      </Card>
 
-              return (
-                <article key={plan.code} className={`rounded-2xl border p-4 shadow-sm ${plan.accentClassName}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-lg font-semibold text-slate-900">{plan.name}</h3>
-                      <p className="mt-1 text-2xl font-bold text-slate-900">{plan.price}</p>
+      <Card variant="elevated" padding="lg">
+        <CardHeader
+          title="Billing and Plan Controls"
+          subtitle="Choose the plan that matches your crew size. Stripe handles billing and QuoteFly enforces tenant access."
+          actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
+        />
+        <div className="grid gap-4 xl:grid-cols-3">
+          {PLAN_CARDS.map((plan) => {
+            const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
+            const isCurrentAccessPlan = effectivePlanCode === plan.code;
+
+            return (
+              <article key={plan.code} className={`rounded-[26px] border p-4 shadow-sm ${plan.accentClassName}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">{plan.name}</h3>
+                    <p className="mt-1 text-2xl font-bold text-slate-900">{plan.price}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {isCurrentAccessPlan ? <Badge tone="blue">Current access</Badge> : null}
+                    {isCurrentPaidPlan ? <Badge tone="emerald">Active billing</Badge> : null}
+                  </div>
+                </div>
+
+                <p className="mt-3 text-sm text-slate-600">{plan.summary}</p>
+
+                <div className="mt-4 grid gap-2 rounded-[22px] border border-white/80 bg-white/80 p-3 text-xs font-medium text-slate-700">
+                  <div>{plan.seatText}</div>
+                  <div>{plan.aiQuoteText}</div>
+                  <div>{plan.historyText}</div>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {plan.features.map((feature) => (
+                    <div key={feature} className="flex items-start gap-2 text-sm text-slate-700">
+                      <CheckIcon size={14} className="mt-0.5 text-emerald-600" />
+                      <span>{feature}</span>
                     </div>
-                    <div className="flex flex-col items-end gap-2">
-                      {isCurrentAccessPlan && (
-                        <span className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700">
-                          Current access
-                        </span>
-                      )}
-                      {isCurrentPaidPlan && (
-                        <span className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-                          Active billing plan
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  ))}
+                </div>
 
-                  <p className="mt-3 text-sm text-slate-600">{plan.summary}</p>
+                <Button
+                  type="button"
+                  fullWidth
+                  className="mt-5"
+                  onClick={() => void startCheckout(plan.code)}
+                  disabled={!ownerView || isCurrentPaidPlan || billingAction !== null}
+                  loading={billingAction === plan.code}
+                >
+                  {isCurrentPaidPlan ? "Current Paid Plan" : `Choose ${plan.name}`}
+                </Button>
+              </article>
+            );
+          })}
+        </div>
 
-                  <div className="mt-4 grid gap-2 rounded-xl border border-white/80 bg-white/80 p-3 text-xs font-medium text-slate-700">
-                    <div>{plan.seatText}</div>
-                    <div>{plan.aiQuoteText}</div>
-                    <div>{plan.historyText}</div>
-                  </div>
+        <Card variant="default" padding="md" className="mt-4 bg-slate-50/80">
+          <p className="text-sm font-semibold text-slate-900">Operational note</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocks based on the plan attached to this workspace.
+          </p>
+        </Card>
+      </Card>
 
-                  <div className="mt-4 space-y-2">
-                    {plan.features.map((feature) => (
-                      <div key={feature} className="flex items-start gap-2 text-sm text-slate-700">
-                        <CheckIcon size={14} className="mt-0.5 text-emerald-600" />
-                        <span>{feature}</span>
-                      </div>
-                    ))}
-                  </div>
+      <Card variant="elevated" padding="lg">
+        <CardHeader
+          title="QuickBooks Online"
+          subtitle="Link one QuickBooks company to this tenant so accepted quotes can move into invoice workflows."
+          actions={<Badge tone={quickBooksStatus?.environment === "sandbox" ? "amber" : "slate"}>{quickBooksEnvironmentLabel}</Badge>}
+        />
 
-                  <button
-                    type="button"
-                    onClick={() => void startCheckout(plan.code)}
-                    disabled={!ownerView || isCurrentPaidPlan || billingAction !== null}
-                    className="mt-5 w-full rounded-xl bg-quotefly-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    {billingAction === plan.code
-                      ? "Redirecting..."
-                      : isCurrentPaidPlan
-                        ? "Current Paid Plan"
-                        : `Choose ${plan.name}`}
-                  </button>
-                </article>
-              );
-            })}
-          </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
+            {quickBooksConnected ? quickBooksStatus?.connection?.status ?? "Connected" : "Not linked"}
+          </Badge>
+          <Badge tone={quickBooksStatus?.enabled ? "blue" : "amber"}>
+            {quickBooksStatus?.enabled ? "API configured" : "API setup missing"}
+          </Badge>
+        </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-            <p className="font-semibold text-slate-900">Operational note</p>
-            <p className="mt-1">
-              Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocking based on the plan attached to this workspace.
-            </p>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
-              <h2 className="text-lg font-semibold text-slate-900">QuickBooks Online</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                Link one QuickBooks Online company to this tenant. QuoteFly can then map customers and service items, push accepted quotes into invoices, and refresh invoice balance status.
-              </p>
-              <p className="mt-3 text-xs text-slate-500">
-                Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                {quickBooksStatus?.environment === "sandbox" ? "Sandbox" : "Production"}
-              </span>
-              {quickBooksStatus?.connection ? (
-                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  {quickBooksStatus.connection.status}
-                </span>
-              ) : (
-                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                  Not linked
-                </span>
-              )}
-            </div>
-          </div>
-
-          {quickBooksLoading ? (
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Loading QuickBooks status...
-            </div>
-          ) : (
-            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_320px]">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Connection Summary</p>
-                {quickBooksStatus?.connection ? (
-                  <div className="mt-3 space-y-2 text-sm text-slate-700">
-                    <p><span className="font-semibold text-slate-900">Company:</span> {quickBooksStatus.connection.companyName ?? "Connected company"}</p>
-                    <p><span className="font-semibold text-slate-900">Realm ID:</span> {quickBooksStatus.connection.realmId}</p>
-                    <p><span className="font-semibold text-slate-900">Connected:</span> {dateText(quickBooksStatus.connection.connectedAtUtc)}</p>
-                    <p><span className="font-semibold text-slate-900">Customer maps:</span> {quickBooksStatus.connection.counts.customerMaps}</p>
-                    <p><span className="font-semibold text-slate-900">Item maps:</span> {quickBooksStatus.connection.counts.itemMaps}</p>
-                    <p><span className="font-semibold text-slate-900">Invoice sync records:</span> {quickBooksStatus.connection.counts.invoiceSyncs}</p>
-                    {quickBooksStatus.connection.lastError ? (
-                      <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        {quickBooksStatus.connection.lastError}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="mt-3 space-y-2 text-sm text-slate-600">
-                    <p>No QuickBooks company is linked to this tenant yet.</p>
-                    <p>
-                      Once linked, QuoteFly can keep customer, item, and invoice sync state isolated by tenant.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Owner Actions</p>
-                {!quickBooksStatus?.enabled ? (
-                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                    QuickBooks credentials are not configured on the API yet.
-                  </div>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
+          <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Connection Summary</p>
+            {quickBooksLoading ? (
+              <p className="mt-3 text-sm text-slate-600">Loading QuickBooks status...</p>
+            ) : quickBooksStatus?.connection ? (
+              <div className="mt-3 grid gap-2 text-sm text-slate-700">
+                <p><span className="font-semibold text-slate-900">Company:</span> {quickBooksStatus.connection.companyName ?? "Connected company"}</p>
+                <p><span className="font-semibold text-slate-900">Realm ID:</span> {quickBooksStatus.connection.realmId}</p>
+                <p><span className="font-semibold text-slate-900">Connected:</span> {dateText(quickBooksStatus.connection.connectedAtUtc)}</p>
+                <p><span className="font-semibold text-slate-900">Customer maps:</span> {quickBooksStatus.connection.counts.customerMaps}</p>
+                <p><span className="font-semibold text-slate-900">Item maps:</span> {quickBooksStatus.connection.counts.itemMaps}</p>
+                <p><span className="font-semibold text-slate-900">Invoice sync records:</span> {quickBooksStatus.connection.counts.invoiceSyncs}</p>
+                {quickBooksStatus.connection.lastError ? (
+                  <Alert tone="error">{quickBooksStatus.connection.lastError}</Alert>
                 ) : null}
-
-                <div className="mt-4 grid gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void connectQuickBooks()}
-                    disabled={!ownerView || !quickBooksStatus?.enabled || quickBooksActionLoading}
-                    className="inline-flex items-center justify-center rounded-2xl border border-transparent bg-[linear-gradient(135deg,#2f78bf_0%,#5B85AA_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(47,120,191,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {quickBooksStatus?.connection ? "Reconnect QuickBooks" : "Connect QuickBooks"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void disconnectQuickBooks()}
-                    disabled={!ownerView || !quickBooksStatus?.connection || quickBooksActionLoading}
-                    className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-
-                {!ownerView && (
-                  <p className="mt-3 text-xs text-slate-500">
-                    Only workspace owners can change billing and integration connections.
-                  </p>
-                )}
               </div>
-            </div>
-          )}
-        </section>
+            ) : (
+              <div className="mt-3 space-y-2 text-sm text-slate-600">
+                <p>No QuickBooks company is linked to this tenant yet.</p>
+                <p>Once linked, QuoteFly keeps customer, item, and invoice sync state isolated by tenant.</p>
+              </div>
+            )}
+          </div>
 
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <form onSubmit={createMember} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Add Team Member</h2>
-            <p className="text-sm text-slate-500">
-              Invite field users and office staff into the same workspace.
-            </p>
-            <input
+          <Card variant="default" padding="md">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Owner Actions</p>
+            {!quickBooksStatus?.enabled ? (
+              <Alert tone="warning">
+                QuickBooks credentials are not configured on the API yet.
+              </Alert>
+            ) : null}
+
+            <div className="mt-4 grid gap-2">
+              <Button
+                type="button"
+                onClick={() => void connectQuickBooks()}
+                disabled={!ownerView || !quickBooksStatus?.enabled || quickBooksActionLoading}
+                loading={quickBooksActionLoading && quickBooksActionMode === "connect"}
+              >
+                {quickBooksConnected ? "Reconnect QuickBooks" : "Connect QuickBooks"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void disconnectQuickBooks()}
+                disabled={!ownerView || !quickBooksConnected || quickBooksActionLoading}
+                loading={quickBooksActionLoading && quickBooksActionMode === "disconnect"}
+              >
+                Disconnect
+              </Button>
+            </div>
+
+            {!ownerView ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Only workspace owners can change billing and integration connections.
+              </p>
+            ) : null}
+            <p className="mt-3 text-xs text-slate-500">Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}</p>
+          </Card>
+        </div>
+      </Card>
+
+      <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Card variant="elevated" padding="lg">
+          <CardHeader
+            title="Add Team Member"
+            subtitle="Invite field users and office staff into the same workspace."
+            actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
+          />
+          <form onSubmit={createMember} className="space-y-3">
+            <Input
+              label="Full name"
               placeholder="Full name"
               value={form.fullName}
               onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
-            <input
+            <Input
+              label="Email"
               type="email"
               placeholder="Email"
               value={form.email}
               onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
-            <input
+            <Input
+              label="Temporary password"
               type="password"
               minLength={8}
-              placeholder="Temporary password (min 8)"
+              placeholder="Minimum 8 characters"
               value={form.password}
               onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
-            <select
+            <Select
+              label="Role"
               value={form.role}
               onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value as OrgUserRole }))}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+              options={ROLE_OPTIONS}
               disabled={!canManageUsers || saving || seatLimitReached}
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-              <option value="owner">Owner</option>
-            </select>
-            <button
+            />
+            <Button
               type="submit"
+              fullWidth
               disabled={!canManageUsers || saving || seatLimitReached}
-              className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              loading={saving}
             >
-              {saving ? "Saving..." : "Add User"}
-            </button>
-            {!canManageUsers && (
-              <p className="text-xs text-slate-500">
-                Your role cannot add users. Ask an owner or admin.
-              </p>
-            )}
-            {seatLimitReached && (
-              <p className="text-xs text-amber-700">
-                Seat limit reached. Upgrade the workspace plan to add more users.
-              </p>
-            )}
+              Add User
+            </Button>
           </form>
+          {!canManageUsers ? (
+            <p className="mt-3 text-xs text-slate-500">Your role cannot add users. Ask an owner or admin.</p>
+          ) : null}
+          {seatLimitReached ? (
+            <div className="mt-3">
+              <Alert tone="warning">Seat limit reached. Upgrade the workspace plan to add more users.</Alert>
+            </div>
+          ) : null}
+        </Card>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="mb-1 text-lg font-semibold text-slate-900">Organization Users</h2>
-            <p className="mb-4 text-sm text-slate-500">
-              Role permissions: owner can edit roles and remove members. Admin can add members. Member is read-only.
-            </p>
-            <div className="space-y-3">
-              {members.map((member) => (
+        <Card variant="elevated" padding="lg">
+          <CardHeader
+            title="Organization Users"
+            subtitle="Owners can edit roles and remove members. Admins can add members. Members are read-only."
+            actions={<Badge tone="slate">{members.length} users</Badge>}
+          />
+          <div className="space-y-3">
+            {members.length ? (
+              members.map((member) => (
                 <div
                   key={member.id}
-                  className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex sm:items-center sm:justify-between"
+                  className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4"
                 >
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">{member.user.fullName}</p>
-                    <p className="text-xs text-slate-600">{member.user.email}</p>
-                    <p className="text-[11px] text-slate-500">Joined {dateText(member.createdAt)}</p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2 sm:mt-0 sm:justify-end">
-                    <select
-                      value={member.role}
-                      disabled={!ownerView || saving}
-                      onChange={(event) =>
-                        void updateMemberRole(member.id, event.target.value as OrgUserRole)
-                      }
-                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 disabled:opacity-60"
-                    >
-                      <option value="member">Member</option>
-                      <option value="admin">Admin</option>
-                      <option value="owner">Owner</option>
-                    </select>
-                    <span className="rounded-full border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700">
-                      {roleLabel(member.role)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPendingRemovalMember(member)}
-                      disabled={!ownerView || member.role === "owner" || saving}
-                      className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 disabled:opacity-60"
-                    >
-                      Remove
-                    </button>
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{member.user.fullName}</p>
+                        <Badge tone={roleTone(member.role)}>{roleLabel(member.role)}</Badge>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-slate-600">{member.user.email}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">Joined {dateText(member.createdAt)}</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[160px_auto] lg:min-w-[310px]">
+                      <Select
+                        aria-label={`Role for ${member.user.fullName}`}
+                        value={member.role}
+                        disabled={!ownerView || saving}
+                        onChange={(event) => void updateMemberRole(member.id, event.target.value as OrgUserRole)}
+                        options={ROLE_OPTIONS}
+                      />
+                      <Button
+                        type="button"
+                        variant="danger"
+                        onClick={() => setPendingRemovalMember(member)}
+                        disabled={!ownerView || member.role === "owner" || saving}
+                      >
+                        Remove
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              ))}
-              {!members.length && (
-                <p className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm text-slate-500">
-                  No organization users found.
-                </p>
-              )}
-            </div>
-          </section>
-        </div>
-
-        <ConfirmModal
-          open={pendingRemovalMember !== null}
-          onClose={() => setPendingRemovalMember(null)}
-          onConfirm={() => void removeMember()}
-          title="Remove team member"
-          description={
-            pendingRemovalMember
-              ? `Remove ${pendingRemovalMember.user.fullName} from this workspace? They will lose access immediately.`
-              : "Remove this member from the workspace?"
-          }
-          confirmLabel="Remove member"
-          loading={saving}
-        />
+              ))
+            ) : (
+              <Card variant="default" padding="md" className="bg-slate-50/80 text-sm text-slate-500">
+                No organization users found.
+              </Card>
+            )}
+          </div>
+        </Card>
       </div>
+
+      <ConfirmModal
+        open={pendingRemovalMember !== null}
+        onClose={() => setPendingRemovalMember(null)}
+        onConfirm={() => void removeMember()}
+        title="Remove team member"
+        description={
+          pendingRemovalMember
+            ? `Remove ${pendingRemovalMember.user.fullName} from this workspace? They will lose access immediately.`
+            : "Remove this member from the workspace?"
+        }
+        confirmLabel="Remove member"
+        loading={saving}
+      />
+    </div>
+  );
+}
+
+function AdminMetricCard({
+  icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-[24px] border border-white/75 bg-white/85 p-4 shadow-sm backdrop-blur">
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+        {icon}
+        {label}
+      </div>
+      <p className="mt-3 text-lg font-semibold text-slate-900">{value}</p>
+      <p className="mt-1 text-xs text-slate-500">{hint}</p>
     </div>
   );
 }
