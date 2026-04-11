@@ -14,6 +14,8 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "start:prod": "npm run prisma:migrate:deploy && node dist/server.js",
     "prisma:studio": "prisma studio"
   },
   "keywords": [],

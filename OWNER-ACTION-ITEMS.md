@@ -117,6 +117,16 @@ npx tsc --noEmit
 npm run dev
 ```
 
+### Railway Production Command
+
+Use this as the Railway start command for the API service:
+
+```bash
+npm run start:prod
+```
+
+That command runs `prisma migrate deploy` before starting the API so production schema changes are applied explicitly instead of relying on manual steps.
+
 ## 9. Cost Estimation (AI Usage)
 
 Each Chat-to-Quote AI call uses ~500-800 tokens. At `gpt-4o-mini` pricing:
