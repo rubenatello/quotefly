@@ -355,6 +355,71 @@ export type BillingPortalSession = {
   url: string;
 };
 
+export type QuickBooksConnectionStatus = "CONNECTED" | "NEEDS_REAUTH" | "ERROR" | "DISCONNECTED";
+
+export type QuickBooksStatusPayload = {
+  enabled: boolean;
+  canManage: boolean;
+  environment: "sandbox" | "production";
+  redirectUri: string;
+  connection: null | {
+    id: string;
+    realmId: string;
+    environment: string;
+    companyName?: string | null;
+    status: QuickBooksConnectionStatus;
+    scopes: string[];
+    connectedAtUtc: string;
+    disconnectedAtUtc?: string | null;
+    lastTokenRefreshAtUtc?: string | null;
+    lastSyncAtUtc?: string | null;
+    lastWebhookAtUtc?: string | null;
+    lastError?: string | null;
+    counts: {
+      customerMaps: number;
+      itemMaps: number;
+      invoiceSyncs: number;
+    };
+  };
+};
+
+export type QuickBooksSyncPreview = {
+  connection: {
+    realmId: string;
+    companyName?: string | null;
+  };
+  customer: {
+    quoteFlyCustomerId: string;
+    fullName: string;
+    email?: string | null;
+    phone: string;
+    quickBooksCustomerId?: string | null;
+    quickBooksDisplayName?: string | null;
+    createPayload: Record<string, unknown>;
+  };
+  invoice: {
+    quoteId: string;
+    quoteTitle: string;
+    docNumber: string;
+    invoiceDate: string;
+    dueDate: string;
+    totalAmount: number;
+    payload: Record<string, unknown>;
+  };
+  lineItems: Array<{
+    sourceLineId: string;
+    description: string;
+    itemKey: string;
+    quickBooksItemId?: string | null;
+    quickBooksItemName?: string | null;
+    quantity: number;
+    unitPrice: number;
+    amount: number;
+    payload: Record<string, unknown>;
+  }>;
+  warnings: string[];
+};
+
 export const api = {
   auth: {
     signup: (body: {
@@ -384,6 +449,25 @@ export const api = {
       request<BillingPortalSession>(`/v1/billing/portal-session`, {
         method: "POST",
       }),
+  },
+
+  integrations: {
+    quickbooks: {
+      status: () => request<QuickBooksStatusPayload>(`/v1/integrations/quickbooks/status`),
+
+      connect: () =>
+        request<{ authorizationUrl: string }>(`/v1/integrations/quickbooks/connect`, {
+          method: "POST",
+        }),
+
+      disconnect: () =>
+        request<{ disconnected: boolean }>(`/v1/integrations/quickbooks/disconnect`, {
+          method: "POST",
+        }),
+
+      syncPreview: (quoteId: string) =>
+        request<QuickBooksSyncPreview>(`/v1/integrations/quickbooks/quotes/${quoteId}/sync-preview`),
+    },
   },
 
   branding: {

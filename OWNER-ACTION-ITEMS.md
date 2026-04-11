@@ -31,6 +31,13 @@ JWT_SECRET=your-secure-random-secret
 # Optional — enables AI-powered Chat-to-Quote via OpenAI
 OPENAI_API_KEY=sk-...your-openai-api-key...
 OPENAI_MODEL=gpt-4o-mini   # default if omitted
+
+# Optional — required for direct QuickBooks OAuth linking
+QUICKBOOKS_CLIENT_ID=...
+QUICKBOOKS_CLIENT_SECRET=...
+QUICKBOOKS_ENVIRONMENT=production
+QUICKBOOKS_REDIRECT_URI=https://api.quotefly.us/v1/integrations/quickbooks/callback
+QUICKBOOKS_WEBHOOK_VERIFIER=...
 ```
 
 ### Getting your OpenAI API key
@@ -38,6 +45,13 @@ OPENAI_MODEL=gpt-4o-mini   # default if omitted
 2. Create a new secret key
 3. Add it to `.env` as `OPENAI_API_KEY`
 4. The AI service gracefully falls back to the regex parser if the key is missing
+
+### QuickBooks app setup
+1. Create an Intuit developer app
+2. Enable QuickBooks Online Accounting scope
+3. Set the redirect URI to `https://api.quotefly.us/v1/integrations/quickbooks/callback`
+4. Put the client id/secret into Railway env vars
+5. Use `production` once the Intuit app is approved/live; use `sandbox` only for testing
 
 ### AI Model Options (set via `OPENAI_MODEL`)
 | Model | Cost (input/output per 1M tokens) | Speed | Best For |

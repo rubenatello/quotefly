@@ -7,6 +7,7 @@ import {
   type OrganizationUser,
   type OrgUserRole,
   type PlanCode,
+  type QuickBooksStatusPayload,
   type TenantEntitlements,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
@@ -152,6 +153,16 @@ function billingNoticeText(code: string | null): string | null {
   return null;
 }
 
+function integrationNoticeText(code: string | null): string | null {
+  if (code === "quickbooks_connected") return "QuickBooks connected successfully.";
+  if (code === "quickbooks_denied") return "QuickBooks connection was canceled before authorization completed.";
+  if (code === "quickbooks_invalid_state") return "QuickBooks authorization expired or became invalid. Start the connection again.";
+  if (code === "quickbooks_realm_in_use") return "That QuickBooks company is already linked to another QuoteFly tenant.";
+  if (code === "quickbooks_not_configured") return "QuickBooks integration is not configured on the API yet.";
+  if (code === "quickbooks_error") return "QuickBooks connection failed. Review your Intuit app configuration and try again.";
+  return null;
+}
+
 export function AdminPage({ session }: AdminPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -168,6 +179,9 @@ export function AdminPage({ session }: AdminPageProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState<NewUserForm>(EMPTY_NEW_USER);
   const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
+  const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
+  const [quickBooksLoading, setQuickBooksLoading] = useState(true);
+  const [quickBooksActionLoading, setQuickBooksActionLoading] = useState(false);
 
   const sessionRole = normalizeRole(session?.role ?? "member");
   const ownerView = sessionRole === "owner";
@@ -187,15 +201,18 @@ export function AdminPage({ session }: AdminPageProps) {
       description: "Manage team members, billing, and workspace access settings.",
     });
     void loadMembers();
+    void loadQuickBooksStatus();
   }, []);
 
   useEffect(() => {
     const billingState = new URLSearchParams(location.search).get("billing");
     const nextNotice = billingNoticeText(billingState);
+    const integrationsState = new URLSearchParams(location.search).get("integrations");
+    const nextIntegrationNotice = integrationNoticeText(integrationsState);
 
-    if (!nextNotice) return;
+    if (!nextNotice && !nextIntegrationNotice) return;
 
-    setNotice(nextNotice);
+    setNotice(nextNotice ?? nextIntegrationNotice);
     setError(null);
     navigate("/app/admin", { replace: true });
   }, [location.search, navigate]);
@@ -213,6 +230,18 @@ export function AdminPage({ session }: AdminPageProps) {
       setError(err instanceof ApiError ? err.message : "Failed loading organization users.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadQuickBooksStatus() {
+    setQuickBooksLoading(true);
+    try {
+      const result = await api.integrations.quickbooks.status();
+      setQuickBooksStatus(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed loading QuickBooks integration status.");
+    } finally {
+      setQuickBooksLoading(false);
     }
   }
 
@@ -301,6 +330,36 @@ export function AdminPage({ session }: AdminPageProps) {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed opening billing portal.");
       setBillingAction(null);
+    }
+  }
+
+  async function connectQuickBooks() {
+    if (!ownerView) return;
+
+    setQuickBooksActionLoading(true);
+    setError(null);
+    try {
+      const result = await api.integrations.quickbooks.connect();
+      window.location.assign(result.authorizationUrl);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed starting QuickBooks authorization.");
+      setQuickBooksActionLoading(false);
+    }
+  }
+
+  async function disconnectQuickBooks() {
+    if (!ownerView) return;
+
+    setQuickBooksActionLoading(true);
+    setError(null);
+    try {
+      await api.integrations.quickbooks.disconnect();
+      await loadQuickBooksStatus();
+      setNotice("QuickBooks disconnected from this workspace.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed disconnecting QuickBooks.");
+    } finally {
+      setQuickBooksActionLoading(false);
     }
   }
 
@@ -497,6 +556,103 @@ export function AdminPage({ session }: AdminPageProps) {
               Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocking based on the plan attached to this workspace.
             </p>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <h2 className="text-lg font-semibold text-slate-900">QuickBooks Online</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Link one QuickBooks Online company to this tenant. This is the launch foundation for direct quote-to-invoice sync after customer and item mapping are completed.
+              </p>
+              <p className="mt-3 text-xs text-slate-500">
+                Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                {quickBooksStatus?.environment === "sandbox" ? "Sandbox" : "Production"}
+              </span>
+              {quickBooksStatus?.connection ? (
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  {quickBooksStatus.connection.status}
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                  Not linked
+                </span>
+              )}
+            </div>
+          </div>
+
+          {quickBooksLoading ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Loading QuickBooks status...
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_320px]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Connection Summary</p>
+                {quickBooksStatus?.connection ? (
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <p><span className="font-semibold text-slate-900">Company:</span> {quickBooksStatus.connection.companyName ?? "Connected company"}</p>
+                    <p><span className="font-semibold text-slate-900">Realm ID:</span> {quickBooksStatus.connection.realmId}</p>
+                    <p><span className="font-semibold text-slate-900">Connected:</span> {dateText(quickBooksStatus.connection.connectedAtUtc)}</p>
+                    <p><span className="font-semibold text-slate-900">Customer maps:</span> {quickBooksStatus.connection.counts.customerMaps}</p>
+                    <p><span className="font-semibold text-slate-900">Item maps:</span> {quickBooksStatus.connection.counts.itemMaps}</p>
+                    <p><span className="font-semibold text-slate-900">Invoice sync records:</span> {quickBooksStatus.connection.counts.invoiceSyncs}</p>
+                    {quickBooksStatus.connection.lastError ? (
+                      <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        {quickBooksStatus.connection.lastError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-2 text-sm text-slate-600">
+                    <p>No QuickBooks company is linked to this tenant yet.</p>
+                    <p>
+                      Once linked, QuoteFly can keep customer, item, and invoice sync state isolated by tenant.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Owner Actions</p>
+                {!quickBooksStatus?.enabled ? (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                    QuickBooks credentials are not configured on the API yet.
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void connectQuickBooks()}
+                    disabled={!ownerView || !quickBooksStatus?.enabled || quickBooksActionLoading}
+                    className="inline-flex items-center justify-center rounded-2xl border border-transparent bg-[linear-gradient(135deg,#2f78bf_0%,#5B85AA_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(47,120,191,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {quickBooksStatus?.connection ? "Reconnect QuickBooks" : "Connect QuickBooks"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void disconnectQuickBooks()}
+                    disabled={!ownerView || !quickBooksStatus?.connection || quickBooksActionLoading}
+                    className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+
+                {!ownerView && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Only workspace owners can change billing and integration connections.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </section>
 
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">

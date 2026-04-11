@@ -69,6 +69,17 @@ export type PresetUnitType =
   | "HOUR"
   | "EACH";
 
+export type QuickBooksConnectionStatus =
+  | "CONNECTED"
+  | "NEEDS_REAUTH"
+  | "ERROR"
+  | "DISCONNECTED";
+
+export type QuickBooksInvoiceSyncStatus =
+  | "PENDING"
+  | "SYNCED"
+  | "FAILED";
+
 export interface BrandingComponentColors {
   headerBgColor?: string;
   headerTextColor?: string;
@@ -302,6 +313,87 @@ export interface BillingWebhookEventRow {
   processedAtUtc: UtcDate;
 }
 
+export interface QuickBooksConnectionRow {
+  id: string;
+  tenantId: string;
+  realmId: string;
+  environment: string;
+  companyName: string | null;
+  status: QuickBooksConnectionStatus;
+  scopes: string[];
+  accessTokenEncrypted: string | null;
+  refreshTokenEncrypted: string | null;
+  accessTokenExpiresAtUtc: UtcDate | null;
+  refreshTokenRotatedAtUtc: UtcDate | null;
+  connectedAtUtc: UtcDate;
+  disconnectedAtUtc: UtcDate | null;
+  lastTokenRefreshAtUtc: UtcDate | null;
+  lastSyncAtUtc: UtcDate | null;
+  lastWebhookAtUtc: UtcDate | null;
+  lastError: string | null;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface QuickBooksCustomerMapRow {
+  id: string;
+  tenantId: string;
+  quickBooksConnectionId: string;
+  customerId: string;
+  quickBooksCustomerId: string;
+  quickBooksDisplayName: string | null;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface QuickBooksItemMapRow {
+  id: string;
+  tenantId: string;
+  quickBooksConnectionId: string;
+  itemKey: string;
+  quickBooksItemId: string;
+  quickBooksItemName: string;
+  sourceType: string;
+  workPresetId: string | null;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface QuickBooksInvoiceSyncRow {
+  id: string;
+  tenantId: string;
+  quickBooksConnectionId: string;
+  quoteId: string;
+  quickBooksInvoiceId: string | null;
+  quickBooksDocNumber: string | null;
+  requestId: string | null;
+  status: QuickBooksInvoiceSyncStatus;
+  payloadSnapshot: Record<string, unknown> | null;
+  lastError: string | null;
+  lastAttemptedAtUtc: UtcDate | null;
+  syncedAtUtc: UtcDate | null;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface QuickBooksWebhookEventRow {
+  id: string;
+  tenantId: string | null;
+  quickBooksConnectionId: string | null;
+  webhookEventId: string;
+  realmId: string;
+  eventType: string;
+  entityId: string | null;
+  payload: Record<string, unknown>;
+  receivedAtUtc: UtcDate;
+  processedAtUtc: UtcDate | null;
+  lastError: string | null;
+}
+
 export const TABLE_RELATION_MAP = {
   TenantBranding: {
     belongsTo: ["Tenant"],
@@ -320,6 +412,11 @@ export const TABLE_RELATION_MAP = {
       "QuoteOutboundEvent",
       "BillingWebhookEvent",
       "WorkPreset",
+      "QuickBooksConnection",
+      "QuickBooksCustomerMap",
+      "QuickBooksItemMap",
+      "QuickBooksInvoiceSync",
+      "QuickBooksWebhookEvent",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -334,7 +431,7 @@ export const TABLE_RELATION_MAP = {
   },
   Customer: {
     belongsTo: ["Tenant"],
-    hasMany: ["Quote", "QuoteRevision", "QuoteOutboundEvent"],
+    hasMany: ["Quote", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksCustomerMap"],
   },
   PricingProfile: {
     belongsTo: ["Tenant"],
@@ -344,7 +441,7 @@ export const TABLE_RELATION_MAP = {
   },
   Quote: {
     belongsTo: ["Tenant", "Customer"],
-    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision", "QuoteOutboundEvent"],
+    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksInvoiceSync"],
   },
   QuoteLineItem: {
     belongsTo: ["Tenant", "Quote"],
@@ -364,7 +461,24 @@ export const TABLE_RELATION_MAP = {
   BillingWebhookEvent: {
     belongsTo: ["Tenant"],
   },
+  QuickBooksConnection: {
+    belongsTo: ["Tenant"],
+    hasMany: ["QuickBooksCustomerMap", "QuickBooksItemMap", "QuickBooksInvoiceSync", "QuickBooksWebhookEvent"],
+  },
+  QuickBooksCustomerMap: {
+    belongsTo: ["Tenant", "QuickBooksConnection", "Customer"],
+  },
+  QuickBooksItemMap: {
+    belongsTo: ["Tenant", "QuickBooksConnection", "WorkPreset"],
+  },
+  QuickBooksInvoiceSync: {
+    belongsTo: ["Tenant", "QuickBooksConnection", "Quote"],
+  },
+  QuickBooksWebhookEvent: {
+    belongsTo: ["Tenant", "QuickBooksConnection"],
+  },
   WorkPreset: {
     belongsTo: ["Tenant"],
+    hasMany: ["QuickBooksItemMap"],
   },
 } as const;

@@ -110,6 +110,11 @@ Use Tailwind utility classes directly in React components.
 - `STRIPE_PRICE_ID_ENTERPRISE`: Stripe enterprise plan price id (`price_...`)
 - `APP_URL`: frontend URL (e.g. `http://localhost:5173`, `https://quotefly.us`)
 - `API_URL`: API URL (e.g. `http://localhost:4000`, `https://api.quotefly.us`)
+- `QUICKBOOKS_CLIENT_ID`: Intuit app client id for QuickBooks OAuth
+- `QUICKBOOKS_CLIENT_SECRET`: Intuit app client secret
+- `QUICKBOOKS_ENVIRONMENT`: `sandbox` or `production`
+- `QUICKBOOKS_REDIRECT_URI`: optional override for the OAuth callback URL (defaults to `${API_URL}/v1/integrations/quickbooks/callback`)
+- `QUICKBOOKS_WEBHOOK_VERIFIER`: reserved for direct QuickBooks webhook verification
 - `ENABLE_TWILIO_SMS`: set `true` to enable Twilio SMS webhook routes (default `false`)
 - `TWILIO_ACCOUNT_SID`: optional for SMS features
 - `TWILIO_AUTH_TOKEN`: optional for SMS features
@@ -129,6 +134,8 @@ Use Tailwind utility classes directly in React components.
 
 - QuickBooks-friendly invoice CSV export guide:
   - `docs/integrations/quickbooks-csv-import.md`
+- QuickBooks direct connection and sync foundation:
+  - `docs/integrations/quickbooks-oauth-sync-plan.md`
 
 ## Backend-first scope included
 
