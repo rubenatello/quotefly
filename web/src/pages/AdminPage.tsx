@@ -595,6 +595,9 @@ export function AdminPage({ session }: AdminPageProps) {
           <Badge tone={quickBooksStatus?.enabled ? "blue" : "amber"}>
             {quickBooksStatus?.enabled ? "API configured" : "API setup missing"}
           </Badge>
+          <Badge tone={quickBooksStatus?.webhookConfigured ? "emerald" : "amber"}>
+            {quickBooksStatus?.webhookConfigured ? "Webhook ready" : "Webhook verifier missing"}
+          </Badge>
         </div>
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
@@ -656,6 +659,7 @@ export function AdminPage({ session }: AdminPageProps) {
               </p>
             ) : null}
             <p className="mt-3 text-xs text-slate-500">Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}</p>
+            <p className="mt-1 text-xs text-slate-500">Webhook URL: {quickBooksStatus?.webhookUrl ?? "Loading..."}</p>
           </Card>
         </div>
       </Card>

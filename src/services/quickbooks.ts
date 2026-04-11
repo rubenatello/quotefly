@@ -82,6 +82,10 @@ export function isQuickBooksConfigured(runtimeEnv: RuntimeEnv): boolean {
   return runtimeEnv.QUICKBOOKS_CLIENT_ID.trim().length > 0 && runtimeEnv.QUICKBOOKS_CLIENT_SECRET.trim().length > 0;
 }
 
+export function isQuickBooksWebhookConfigured(runtimeEnv: RuntimeEnv): boolean {
+  return runtimeEnv.QUICKBOOKS_WEBHOOK_VERIFIER.trim().length > 0;
+}
+
 export function getQuickBooksRedirectUri(runtimeEnv: RuntimeEnv): string {
   if (runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim()) {
     return runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim();
@@ -572,6 +576,22 @@ export function decryptQuickBooksSecret(runtimeEnv: RuntimeEnv, encryptedValue: 
 
 export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {
   return `${runtimeEnv.APP_URL.replace(/\/$/, "")}/app/admin?integrations=${encodeURIComponent(state)}`;
+}
+
+export function verifyQuickBooksWebhookSignature(
+  runtimeEnv: RuntimeEnv,
+  payload: string,
+  signature: string,
+): boolean {
+  if (!isQuickBooksWebhookConfigured(runtimeEnv)) {
+    return false;
+  }
+
+  const computed = createHmac("sha256", runtimeEnv.QUICKBOOKS_WEBHOOK_VERIFIER)
+    .update(payload, "utf8")
+    .digest("base64");
+
+  return computed === signature;
 }
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = ACCOUNTING_SCOPE;

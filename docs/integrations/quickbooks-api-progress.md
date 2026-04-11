@@ -22,6 +22,9 @@ Track exactly what QuoteFly already supports for QuickBooks, what is partially i
 - QuickBooks service item creation when missing
 - direct invoice push from accepted/won quotes
 - remote invoice status refresh
+- webhook signature verification
+- webhook event intake and storage
+- invoice webhook refresh for existing synced invoice ids
 - QuickBooks-friendly CSV export fallback
 
 ### Current supported workflow
@@ -94,6 +97,7 @@ Reserved for webhook replay, verification, and debugging.
 - QuoteFly connects to QuickBooks Online
 - accepted quotes can be pushed into QuickBooks invoices
 - QuoteFly can refresh invoice balance status from QuickBooks
+- QuoteFly can accept and verify QuickBooks webhook notifications
 - QuoteFly still offers CSV fallback if a tenant prefers import
 
 ### What we should not claim yet
@@ -137,21 +141,21 @@ This is good for v1 but still needs user-controlled mapping tools later.
 
 ### Payment visibility
 
-Current invoice payment visibility is refresh-based, not webhook-based.
+Current invoice payment visibility is still primarily refresh-based.
 
 That means:
 
 - user can see current balance when they ask for it
-- QuoteFly is not yet passively updated the moment a payment is recorded in QuickBooks
+- invoice webhook intake now exists, but full payment reconciliation is not finished
 
 ## Immediate Next Steps
 
 ### Launch-critical
 
-1. Add webhook verification and processing for QuickBooks Online
-2. Subscribe to invoice and payment changes
-3. Update `QuickBooksInvoiceSync` automatically when invoices are edited or paid
-4. Add visible local invoice state in QuoteFly UI
+1. Expand webhook processing for payment events
+2. Update `QuickBooksInvoiceSync` automatically when payments settle invoices
+3. Add visible local invoice state in QuoteFly UI
+4. Add replay/recovery path for missed events
 
 ### Post-launch but important
 

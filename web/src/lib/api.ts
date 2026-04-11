@@ -359,9 +359,11 @@ export type QuickBooksConnectionStatus = "CONNECTED" | "NEEDS_REAUTH" | "ERROR" 
 
 export type QuickBooksStatusPayload = {
   enabled: boolean;
+  webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";
   redirectUri: string;
+  webhookUrl: string;
   connection: null | {
     id: string;
     realmId: string;

@@ -13,10 +13,13 @@ Connect one QuickBooks Online company to one QuoteFly tenant, then push accepted
 - automatic QuickBooks service item creation when missing
 - direct invoice push from accepted QuoteFly quotes
 - refresh remote invoice status to see whether the invoice is still open or effectively paid
+- webhook endpoint with signature verification
+- webhook intake and storage for QuickBooks notifications
+- invoice webhook refresh for already-synced invoice ids
 
 ## What Is Not Finished Yet
 
-- webhook-driven invoice/payment updates back into QuoteFly
+- full webhook-driven payment reconciliation back into QuoteFly
 - automatic tax mapping into QuickBooks tax codes
 - bulk invoice push
 - two-way sync for QuickBooks customer edits
@@ -35,7 +38,14 @@ https://api.quotefly.us/v1/integrations/quickbooks/callback
 4. Copy these values:
    - Client ID
    - Client Secret
-5. If you plan to use sandbox first, repeat the same redirect URI under the Development environment too.
+5. Add this webhook endpoint:
+
+```text
+https://api.quotefly.us/v1/integrations/quickbooks/webhook
+```
+
+6. Copy the webhook **Verifier Token**.
+7. If you plan to use sandbox first, repeat the same redirect URI and webhook endpoint under the Development environment too.
 
 ## Railway Env Vars
 
@@ -51,8 +61,8 @@ QUICKBOOKS_WEBHOOK_VERIFIER=
 
 Notes:
 
-- `QUICKBOOKS_WEBHOOK_VERIFIER` is not blocking the current invoice-push flow.
-- It will be needed when webhook-based payment and invoice change tracking is enabled.
+- `QUICKBOOKS_WEBHOOK_VERIFIER` is now required for webhook validation.
+- without it, the webhook endpoint will reject QuickBooks notifications.
 
 ## First Connection Test
 
@@ -109,6 +119,12 @@ Do **not** claim:
 - fully automatic payment reconciliation
 - automatic tax sync
 - full accounting sync
+
+## Owner Test Matrix
+
+Run the full owner-side verification flow here:
+
+- [quickbooks-owner-testing-checklist.md](c:\Users\rcazarez\Projects\quotefly\docs\integrations\quickbooks-owner-testing-checklist.md)
 
 ## Next Engineering Step After This
 

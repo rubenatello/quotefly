@@ -1,5 +1,7 @@
 import { randomUUID } from "crypto";
+import type { Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
+import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import {
@@ -18,9 +20,11 @@ import {
   findQuickBooksItemByName,
   getQuickBooksRedirectUri,
   isQuickBooksConfigured,
+  isQuickBooksWebhookConfigured,
   normalizeQuickBooksName,
   resolveQuickBooksIncomeAccount,
   summarizeQuickBooksInvoice,
+  verifyQuickBooksWebhookSignature,
   verifySignedQuickBooksState,
 } from "../services/quickbooks";
 
@@ -43,6 +47,20 @@ const QuickBooksPushInvoiceBodySchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+const QuickBooksWebhookNotificationSchema = z.object({
+  specversion: z.string().optional(),
+  id: z.string().min(1),
+  source: z.string().optional(),
+  type: z.string().min(1),
+  datacontenttype: z.string().optional(),
+  time: z.string().optional(),
+  intuitentityid: z.string().optional(),
+  intuitaccountid: z.string().min(1),
+  data: z.record(z.string(), z.unknown()).optional().default({}),
+});
+
+const QuickBooksWebhookBodySchema = z.array(QuickBooksWebhookNotificationSchema);
+
 function canManageQuickBooks(role: string): boolean {
   const normalized = role.trim().toLowerCase();
   return normalized === "owner" || normalized === "admin";
@@ -54,6 +72,18 @@ function quickBooksDocNumber(quoteId: string): string {
 
 function normalizeItemKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 120);
+}
+
+function getRawBody(request: FastifyRequest): string | null {
+  const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody;
+  return typeof rawBody === "string" ? rawBody : null;
+}
+
+function getQuickBooksWebhookSignature(request: FastifyRequest): string | null {
+  const signature = request.headers["intuit-signature"];
+  if (typeof signature === "string" && signature.trim()) return signature.trim();
+  if (Array.isArray(signature) && typeof signature[0] === "string" && signature[0].trim()) return signature[0].trim();
+  return null;
 }
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
@@ -253,6 +283,198 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     });
   }
 
+  async function processQuickBooksWebhookNotifications(
+    notifications: z.infer<typeof QuickBooksWebhookBodySchema>,
+  ) {
+    for (const notification of notifications) {
+      try {
+        const realmId = notification.intuitaccountid;
+        const entityId = notification.intuitentityid ?? null;
+        const now = new Date();
+
+        const connection = await app.prisma.quickBooksConnection.findFirst({
+          where: {
+            realmId,
+            deletedAtUtc: null,
+          },
+          select: {
+            id: true,
+            tenantId: true,
+            realmId: true,
+            accessTokenEncrypted: true,
+            refreshTokenEncrypted: true,
+            accessTokenExpiresAtUtc: true,
+          },
+        });
+
+        const eventRecord = await app.prisma.quickBooksWebhookEvent.upsert({
+          where: {
+            webhookEventId_realmId: {
+              webhookEventId: notification.id,
+              realmId,
+            },
+          },
+          create: {
+            tenantId: connection?.tenantId ?? null,
+            quickBooksConnectionId: connection?.id ?? null,
+            webhookEventId: notification.id,
+            realmId,
+            eventType: notification.type,
+            entityId,
+            payload: notification as unknown as Prisma.InputJsonValue,
+            receivedAtUtc: notification.time ? new Date(notification.time) : now,
+          },
+          update: {
+            tenantId: connection?.tenantId ?? null,
+            quickBooksConnectionId: connection?.id ?? null,
+            eventType: notification.type,
+            entityId,
+            payload: notification as unknown as Prisma.InputJsonValue,
+            lastError: null,
+          },
+        });
+
+        if (!connection) {
+          await app.prisma.quickBooksWebhookEvent.update({
+            where: { id: eventRecord.id },
+            data: {
+              processedAtUtc: now,
+            },
+          });
+          continue;
+        }
+
+        await app.prisma.quickBooksConnection.update({
+          where: { id: connection.id },
+          data: {
+            lastWebhookAtUtc: now,
+            status: "CONNECTED",
+            lastError: null,
+          },
+        });
+
+        if (!notification.type.toLowerCase().includes(".invoice.") || !entityId) {
+          await app.prisma.quickBooksWebhookEvent.update({
+            where: { id: eventRecord.id },
+            data: {
+              processedAtUtc: now,
+            },
+          });
+          continue;
+        }
+
+        const existingSync = await app.prisma.quickBooksInvoiceSync.findFirst({
+          where: {
+            quickBooksConnectionId: connection.id,
+            quickBooksInvoiceId: entityId,
+            deletedAtUtc: null,
+          },
+          select: {
+            id: true,
+            syncedAtUtc: true,
+          },
+        });
+
+        if (!existingSync) {
+          await app.prisma.quickBooksWebhookEvent.update({
+            where: { id: eventRecord.id },
+            data: {
+              processedAtUtc: now,
+            },
+          });
+          continue;
+        }
+
+        const accessToken = await getAccessToken(connection);
+        const invoice = await fetchQuickBooksInvoice(app.env, realmId, accessToken, entityId);
+        const invoiceStatus = summarizeQuickBooksInvoice(invoice);
+
+        await Promise.all([
+          app.prisma.quickBooksInvoiceSync.update({
+            where: { id: existingSync.id },
+            data: {
+              status: "SYNCED",
+              lastError: null,
+              lastAttemptedAtUtc: now,
+              syncedAtUtc: existingSync.syncedAtUtc ?? now,
+              payloadSnapshot: {
+                webhookEventType: notification.type,
+                webhookReceivedAtUtc: notification.time ?? now.toISOString(),
+                invoice: invoiceStatus,
+              } as unknown as Prisma.InputJsonValue,
+            },
+          }),
+          app.prisma.quickBooksWebhookEvent.update({
+            where: { id: eventRecord.id },
+            data: {
+              processedAtUtc: now,
+              lastError: null,
+            },
+          }),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "QuickBooks webhook processing failed.";
+        app.log.error(error);
+
+        await app.prisma.quickBooksWebhookEvent.upsert({
+          where: {
+            webhookEventId_realmId: {
+              webhookEventId: notification.id,
+              realmId: notification.intuitaccountid,
+            },
+          },
+          create: {
+            tenantId: null,
+            quickBooksConnectionId: null,
+            webhookEventId: notification.id,
+            realmId: notification.intuitaccountid,
+            eventType: notification.type,
+            entityId: notification.intuitentityid ?? null,
+            payload: notification as unknown as Prisma.InputJsonValue,
+            lastError: message.slice(0, 4000),
+          },
+          update: {
+            lastError: message.slice(0, 4000),
+          },
+        });
+      }
+    }
+  }
+
+  app.post(
+    "/integrations/quickbooks/webhook",
+    { config: { rawBody: true } },
+    async (request, reply) => {
+      if (!isQuickBooksWebhookConfigured(app.env)) {
+        return reply.code(503).send({ error: "QuickBooks webhook verifier is not configured." });
+      }
+
+      const signature = getQuickBooksWebhookSignature(request);
+      if (!signature) {
+        return reply.code(400).send({ error: "Missing QuickBooks webhook signature." });
+      }
+
+      const rawBody = getRawBody(request);
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing raw webhook body." });
+      }
+
+      if (!verifyQuickBooksWebhookSignature(app.env, rawBody, signature)) {
+        return reply.code(401).send({ error: "Invalid QuickBooks webhook signature." });
+      }
+
+      let notifications: z.infer<typeof QuickBooksWebhookBodySchema>;
+      try {
+        notifications = QuickBooksWebhookBodySchema.parse(JSON.parse(rawBody));
+      } catch {
+        return reply.code(400).send({ error: "Invalid QuickBooks webhook payload." });
+      }
+
+      void processQuickBooksWebhookNotifications(notifications);
+      return { received: true, count: notifications.length };
+    },
+  );
+
   app.get(
     "/integrations/quickbooks/status",
     { preHandler: [app.authenticate] },
@@ -289,9 +511,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         enabled: isQuickBooksConfigured(app.env),
+        webhookConfigured: isQuickBooksWebhookConfigured(app.env),
         canManage: canManageQuickBooks(claims.role),
         environment: app.env.QUICKBOOKS_ENVIRONMENT,
         redirectUri: getQuickBooksRedirectUri(app.env),
+        webhookUrl: `${app.env.API_URL.replace(/\/$/, "")}/v1/integrations/quickbooks/webhook`,
         connection: connection
           ? {
               id: connection.id,
