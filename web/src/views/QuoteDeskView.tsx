@@ -15,6 +15,7 @@ import {
   QuoteMathSummaryPanel,
   QuoteStatusPill,
 } from "../components/dashboard/DashboardUi";
+import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
 import {
   CopyIcon,
   CustomerIcon,
@@ -39,6 +40,7 @@ import {
   ModalFooter,
   ModalHeader,
   PageHeader,
+  ProgressBar,
   Select,
   Textarea,
 } from "../components/ui";
@@ -103,6 +105,8 @@ export function QuoteDeskView() {
     customers,
     loadQuoteHistory,
     loadOutboundEvents,
+    navigateToBuilder,
+    navigateToQuote,
   } = useDashboard();
   const { quoteId } = useParams<{ quoteId: string }>();
 
@@ -237,11 +241,24 @@ export function QuoteDeskView() {
 
   if (!selectedQuote) {
     return (
-      <EmptyState
-        icon={<QuoteIcon size={18} />}
-        title="No quote selected"
-        description="Select a quote from the Builder tab or create a new one."
-      />
+      <div className="space-y-5">
+        <EmptyState
+          icon={<QuoteIcon size={18} />}
+          title="No quote selected"
+          description="Search for an existing quote or jump into a fresh quote for an existing customer."
+        />
+        <QuickLookupCard
+          title="Find Customer or Quote"
+          subtitle="Open an existing quote or jump to a new quote for an existing customer."
+          customerActionLabel="New Quote"
+          customerActionVariant="secondary"
+          onCustomerAction={(customer) => {
+            setNotice(`${customer.fullName} is ready for a new quote.`);
+            navigateToBuilder(customer.id);
+          }}
+          onQuoteAction={(quote) => navigateToQuote(quote.id)}
+        />
+      </div>
     );
   }
 
@@ -252,6 +269,39 @@ export function QuoteDeskView() {
   const afterSaleDueLabel = selectedQuote.afterSaleFollowUpDueAtUtc
     ? formatDateTime(selectedQuote.afterSaleFollowUpDueAtUtc)
     : "Not scheduled";
+  const quoteSent = selectedQuote.status === "SENT_TO_CUSTOMER" || selectedQuote.status === "ACCEPTED" || selectedQuote.status === "REJECTED";
+  const deskSteps = [
+    {
+      label: "Quote selected",
+      description: selectedQuote.title,
+      complete: true,
+      icon: <QuoteIcon size={14} />,
+    },
+    {
+      label: "Scope reviewed",
+      description:
+        quoteEditForm.title.trim() && quoteEditForm.scopeText.trim()
+          ? "Customer-facing title and scope are filled in"
+          : "Finish the title and scope details",
+      complete: Boolean(quoteEditForm.title.trim() && quoteEditForm.scopeText.trim()),
+      icon: <CustomerIcon size={14} />,
+    },
+    {
+      label: "Line items priced",
+      description: lineItemCount > 0 ? `${lineItemCount} line item${lineItemCount === 1 ? "" : "s"} attached` : "Add labor, material, or service lines",
+      complete: lineItemCount > 0,
+      icon: <InvoiceIcon size={14} />,
+    },
+    {
+      label: "Send or export",
+      description: quoteSent ? "Quote is already out with the customer or closed" : "Use Email, Text, Copy, or PDF when ready",
+      complete: quoteSent,
+      icon: <SendIcon size={14} />,
+    },
+  ];
+  const deskCompletionPercent = Math.round((deskSteps.filter((step) => step.complete).length / deskSteps.length) * 100);
+  const nextDeskStep =
+    deskSteps.find((step) => !step.complete)?.description ?? "Quote is fully staged. Send it or move job status forward.";
 
   async function confirmDeleteLineItem() {
     if (!lineItemPendingDeleteId) return;
@@ -308,6 +358,22 @@ export function QuoteDeskView() {
           </div>
         )}
       </Card>
+
+      <QuickLookupCard
+        title="Switch Customer or Quote"
+        subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
+        customerActionLabel="New Quote"
+        customerActionVariant="secondary"
+        activeCustomerId={selectedQuote.customerId}
+        activeQuoteId={selectedQuote.id}
+        onCustomerAction={(customer) => {
+          setNotice(`${customer.fullName} is ready for a new quote.`);
+          navigateToBuilder(customer.id);
+        }}
+        onQuoteAction={(quote) => navigateToQuote(quote.id)}
+      />
+
+      <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_360px]">
         <div className="space-y-5">
@@ -1022,6 +1088,53 @@ function DeskMetricCard({
       </div>
       <p className="mt-3 text-2xl font-bold">{value}</p>
     </div>
+  );
+}
+
+function DeskWorkflowCard({
+  steps,
+  progress,
+  nextStep,
+}: {
+  steps: Array<{ label: string; description: string; complete: boolean; icon: ReactNode }>;
+  progress: number;
+  nextStep: string;
+}) {
+  return (
+    <Card variant="elevated" padding="lg">
+      <CardHeader
+        title="Quote Desk Workflow"
+        subtitle="Keep the work ordered: verify scope, price the job, then send or export."
+      />
+      <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
+      <div className="mt-4 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-4 py-3 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Next step</p>
+        <p className="mt-1 text-sm font-semibold text-slate-900">{nextStep}</p>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-4">
+        {steps.map((step, index) => (
+          <div
+            key={step.label}
+            className={`rounded-[24px] border px-4 py-3 shadow-sm ${
+              step.complete
+                ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.12)_0%,rgba(255,255,255,1)_100%)]"
+                : "border-slate-200 bg-white"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                {step.icon}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                {index + 1}
+              </span>
+            </div>
+            <p className="mt-3 text-sm font-semibold text-slate-900">{step.label}</p>
+            <p className="mt-1 text-xs text-slate-600">{step.description}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

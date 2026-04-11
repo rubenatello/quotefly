@@ -71,8 +71,10 @@ export type PresetUnitType =
 
 export interface BrandingComponentColors {
   headerBgColor?: string;
+  headerTextColor?: string;
   sectionTitleColor?: string;
   tableHeaderBgColor?: string;
+  tableHeaderTextColor?: string;
   totalsColor?: string;
   footerTextColor?: string;
 }

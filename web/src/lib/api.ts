@@ -153,8 +153,10 @@ export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDEN
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
 export type BrandingComponentColors = {
   headerBgColor?: string;
+  headerTextColor?: string;
   sectionTitleColor?: string;
   tableHeaderBgColor?: string;
+  tableHeaderTextColor?: string;
   totalsColor?: string;
   footerTextColor?: string;
 };

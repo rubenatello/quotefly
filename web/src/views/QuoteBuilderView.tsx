@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { FeatureLockedCard, QuoteMathSummaryPanel, QuoteStatusPill } from "../components/dashboard/DashboardUi";
+import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
 import {
   useDashboard,
   money,
@@ -9,7 +10,7 @@ import {
   QUOTE_STATUSES,
 } from "../components/dashboard/DashboardContext";
 import { api, type QuoteStatus, type ServiceType, type WorkPreset } from "../lib/api";
-import { InvoiceIcon } from "../components/Icons";
+import { CustomerIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import {
   Alert,
   Button,
@@ -21,6 +22,7 @@ import {
   ModalFooter,
   ModalHeader,
   PageHeader,
+  ProgressBar,
   Select,
   Textarea,
 } from "../components/ui";
@@ -86,6 +88,7 @@ export function QuoteBuilderView() {
     setStatusFilter,
     loadQuotes,
     navigateToQuote,
+    selectQuoteCustomer,
     selectedQuoteId,
     exportQuotesAsInvoicesCsv,
   } = useDashboard();
@@ -132,6 +135,46 @@ export function QuoteBuilderView() {
     [quotes],
   );
   const customerCount = customers.length;
+  const activeCustomer = useMemo(
+    () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
+    [customers, quoteForm.customerId],
+  );
+  const builderSteps = useMemo(
+    () => [
+      {
+        label: "Customer ready",
+        description: activeCustomer ? activeCustomer.fullName : "Select or create a customer first",
+        complete: Boolean(activeCustomer),
+        icon: <CustomerIcon size={14} />,
+      },
+      {
+        label: "Scope drafted",
+        description: quoteForm.title.trim() && quoteForm.scopeText.trim() ? "Title and scope are filled in" : "Add a title and scope of work",
+        complete: Boolean(quoteForm.title.trim() && quoteForm.scopeText.trim()),
+        icon: <QuoteIcon size={14} />,
+      },
+      {
+        label: "Pricing set",
+        description:
+          Number(quoteForm.customerPriceSubtotal) > 0
+            ? `${money(quoteForm.customerPriceSubtotal)} customer subtotal`
+            : "Add cost, price, and tax before creating the quote",
+        complete: Number(quoteForm.customerPriceSubtotal) > 0,
+        icon: <InvoiceIcon size={14} />,
+      },
+      {
+        label: "Quote desk open",
+        description: selectedQuoteId ? "Existing quote is ready in the desk" : "Create the quote, then open it in the desk",
+        complete: Boolean(selectedQuoteId),
+        icon: <SendIcon size={14} />,
+      },
+    ],
+    [activeCustomer, quoteForm.title, quoteForm.scopeText, quoteForm.customerPriceSubtotal, selectedQuoteId],
+  );
+  const builderCompletionPercent = useMemo(
+    () => Math.round((builderSteps.filter((step) => step.complete).length / builderSteps.length) * 100),
+    [builderSteps],
+  );
 
   useEffect(() => {
     setSelectedQuoteIds((current) => current.filter((quoteId) => visibleQuoteIds.includes(quoteId)));
@@ -309,6 +352,19 @@ export function QuoteBuilderView() {
         <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
       </div>
 
+      <BuilderWorkflowCard steps={builderSteps} progress={builderCompletionPercent} />
+
+      <QuickLookupCard
+        customerActionLabel="Use Customer"
+        activeCustomerId={quoteForm.customerId}
+        activeQuoteId={selectedQuoteId}
+        onCustomerAction={(customer) => {
+          selectQuoteCustomer(customer.id);
+          setNotice(`${customer.fullName} is ready for a new quote.`);
+        }}
+        onQuoteAction={(quote) => navigateToQuote(quote.id)}
+      />
+
       {/* Chat to Quote (AI) */}
       {canUseChatToQuote ? (
         <Card variant="blue" padding="lg">
@@ -406,6 +462,25 @@ export function QuoteBuilderView() {
       <Card variant="elevated" padding="lg">
         <CardHeader title="Create Quote" subtitle="Use a saved starter job, then tune the scope and math before opening the desk." />
         <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
+          <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current customer</p>
+                <p className="mt-1 text-base font-semibold text-slate-900">
+                  {activeCustomer ? activeCustomer.fullName : "No customer selected yet"}
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  {activeCustomer
+                    ? `${activeCustomer.phone}${activeCustomer.email ? ` · ${activeCustomer.email}` : ""}`
+                    : "Use the lookup or quick customer form first so the quote attaches cleanly."}
+                </p>
+              </div>
+              <div className="rounded-full border border-quotefly-blue/20 bg-quotefly-blue/5 px-3 py-1.5 text-xs font-semibold text-quotefly-blue">
+                {activeCustomer ? "Ready to quote" : "Customer needed"}
+              </div>
+            </div>
+          </div>
+
           <div className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -809,6 +884,47 @@ function BuilderSnapshotCard({
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">{label}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
     </div>
+  );
+}
+
+function BuilderWorkflowCard({
+  steps,
+  progress,
+}: {
+  steps: Array<{ label: string; description: string; complete: boolean; icon: ReactNode }>;
+  progress: number;
+}) {
+  return (
+    <Card variant="blue" padding="lg">
+      <CardHeader
+        title="Builder Workflow"
+        subtitle="Follow this order on phone or desktop so customers and quotes stay clean."
+      />
+      <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
+      <div className="mt-4 grid gap-3 lg:grid-cols-4">
+        {steps.map((step, index) => (
+          <div
+            key={step.label}
+            className={`rounded-[24px] border px-4 py-3 shadow-sm ${
+              step.complete
+                ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.12)_0%,rgba(255,255,255,1)_100%)]"
+                : "border-slate-200 bg-white"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                {step.icon}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                {index + 1}
+              </span>
+            </div>
+            <p className="mt-3 text-sm font-semibold text-slate-900">{step.label}</p>
+            <p className="mt-1 text-xs text-slate-600">{step.description}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

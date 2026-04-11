@@ -4,8 +4,10 @@ export type QuotePdfTemplateId = "modern" | "professional" | "bold" | "minimal" 
 
 export interface QuoteComponentColors {
   headerBgColor?: string;
+  headerTextColor?: string;
   sectionTitleColor?: string;
   tableHeaderBgColor?: string;
+  tableHeaderTextColor?: string;
   totalsColor?: string;
   footerTextColor?: string;
 }
@@ -56,8 +58,10 @@ export interface QuotePdfData {
 
 interface ResolvedComponentColors {
   headerBgColor: string;
+  headerTextColor: string;
   sectionTitleColor: string;
   tableHeaderBgColor: string;
+  tableHeaderTextColor: string;
   totalsColor: string;
   footerTextColor: string;
 }
@@ -179,14 +183,34 @@ function safeHexColor(color: string, fallback: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : fallback;
 }
 
+function getContrastingTextColor(color: string): string {
+  const safe = safeHexColor(color, "#5B85AA");
+  const red = Number.parseInt(safe.slice(1, 3), 16);
+  const green = Number.parseInt(safe.slice(3, 5), 16);
+  const blue = Number.parseInt(safe.slice(5, 7), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.62 ? "#111111" : "#ffffff";
+}
+
 function resolveComponentColors(
   overrides: QuoteComponentColors | null | undefined,
   accentColor: string,
 ): ResolvedComponentColors {
+  const headerBgColor = safeHexColor(overrides?.headerBgColor ?? accentColor, accentColor);
+  const tableHeaderBgColor = safeHexColor(overrides?.tableHeaderBgColor ?? accentColor, accentColor);
+
   return {
-    headerBgColor: safeHexColor(overrides?.headerBgColor ?? accentColor, accentColor),
+    headerBgColor,
+    headerTextColor: safeHexColor(
+      overrides?.headerTextColor ?? getContrastingTextColor(headerBgColor),
+      getContrastingTextColor(headerBgColor),
+    ),
     sectionTitleColor: safeHexColor(overrides?.sectionTitleColor ?? accentColor, accentColor),
-    tableHeaderBgColor: safeHexColor(overrides?.tableHeaderBgColor ?? accentColor, accentColor),
+    tableHeaderBgColor,
+    tableHeaderTextColor: safeHexColor(
+      overrides?.tableHeaderTextColor ?? getContrastingTextColor(tableHeaderBgColor),
+      getContrastingTextColor(tableHeaderBgColor),
+    ),
     totalsColor: safeHexColor(overrides?.totalsColor ?? accentColor, accentColor),
     footerTextColor: safeHexColor(overrides?.footerTextColor ?? "#666666", "#666666"),
   };
@@ -241,7 +265,7 @@ function writeHeader(
         // Ignore bad image payloads and continue without logo rendering.
       }
     }
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(21).text(data.tenant.name, left + (logoBuffer ? 100 : 0), 28);
+    doc.fillColor(colors.headerTextColor).font("Helvetica-Bold").fontSize(21).text(data.tenant.name, left + (logoBuffer ? 100 : 0), 28);
     doc.font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 0), 58);
     doc.text(`Prepared ${createdDate}`, left + (logoBuffer ? 100 : 0), 74);
     doc.fillColor("#111111");
@@ -250,7 +274,7 @@ function writeHeader(
 
   if (theme.headerStyle === "block") {
     doc.rect(0, 0, doc.page.width, 150).fill(colors.headerBgColor);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(26).text("QUOTE", left, 30);
+    doc.fillColor(colors.headerTextColor).font("Helvetica-Bold").fontSize(26).text("QUOTE", left, 30);
     doc.font("Helvetica").fontSize(11).text(`${data.tenant.name}`, left, 66);
     doc.text(quoteLabel, left, 82);
     doc.text(`Prepared: ${createdDate}`, left, 98);
@@ -337,6 +361,7 @@ function drawLineItemsTable(
   yStart: number,
   items: QuotePdfLineItem[],
   tableHeaderColor: string,
+  tableHeaderTextColor: string,
 ): number {
   let y = yStart;
   const normalizedItems =
@@ -350,7 +375,7 @@ function drawLineItemsTable(
   const xTotal = 494;
 
   doc.rect(48, y, 516, 24).fill(tableHeaderColor);
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(10);
+  doc.fillColor(tableHeaderTextColor).font("Helvetica-Bold").fontSize(10);
   doc.text("Description", xDescription + 8, y + 8, { width: 280 });
   doc.text("Qty", xQty + 8, y + 8, { width: 42, align: "right" });
   doc.text("Unit", xUnit + 8, y + 8, { width: 66, align: "right" });
@@ -442,7 +467,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     y = doc.y + 16;
 
     y = drawSectionTitle(doc, y, "Line Items", componentColors.sectionTitleColor);
-    y = drawLineItemsTable(doc, y, data.lineItems, componentColors.tableHeaderBgColor);
+    y = drawLineItemsTable(doc, y, data.lineItems, componentColors.tableHeaderBgColor, componentColors.tableHeaderTextColor);
     y = drawTotals(doc, y, data, componentColors.totalsColor);
 
     y = ensureSpace(doc, y, 60);

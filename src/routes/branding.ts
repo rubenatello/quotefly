@@ -4,12 +4,35 @@ import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+const DataImageUrlSchema = z.string().regex(/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/);
+
+function nullableTrimmedStringSchema(max: number) {
+  return z.preprocess(
+    (value) => {
+      if (typeof value !== "string") return value;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? null : trimmed;
+    },
+    z.string().max(max).nullable().optional(),
+  );
+}
+
+const NullableEmailSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? null : trimmed;
+  },
+  z.string().email().nullable().optional(),
+);
 
 const BrandingComponentColorsSchema = z
   .object({
     headerBgColor: HexColorSchema.optional(),
+    headerTextColor: HexColorSchema.optional(),
     sectionTitleColor: HexColorSchema.optional(),
     tableHeaderBgColor: HexColorSchema.optional(),
+    tableHeaderTextColor: HexColorSchema.optional(),
     totalsColor: HexColorSchema.optional(),
     footerTextColor: HexColorSchema.optional(),
   })
@@ -18,18 +41,18 @@ const BrandingComponentColorsSchema = z
 
 const BusinessProfileSchema = z
   .object({
-    businessEmail: z.string().trim().email().optional().nullable(),
-    businessPhone: z.string().trim().max(50).optional().nullable(),
-    addressLine1: z.string().trim().max(120).optional().nullable(),
-    addressLine2: z.string().trim().max(120).optional().nullable(),
-    city: z.string().trim().max(80).optional().nullable(),
-    state: z.string().trim().max(80).optional().nullable(),
-    postalCode: z.string().trim().max(20).optional().nullable(),
+    businessEmail: NullableEmailSchema,
+    businessPhone: nullableTrimmedStringSchema(50),
+    addressLine1: nullableTrimmedStringSchema(120),
+    addressLine2: nullableTrimmedStringSchema(120),
+    city: nullableTrimmedStringSchema(80),
+    state: nullableTrimmedStringSchema(80),
+    postalCode: nullableTrimmedStringSchema(20),
   })
   .default({});
 
 const UpsertBrandingSchema = z.object({
-  logoUrl: z.string().url().optional().nullable(),
+  logoUrl: z.union([z.string().url(), DataImageUrlSchema]).optional().nullable(),
   primaryColor: HexColorSchema.default("#5B85AA"),
   templateId: z.enum(["modern", "professional", "bold", "minimal", "classic"]).default("modern"),
   timezone: z.string().trim().min(1).max(100).default("UTC"),

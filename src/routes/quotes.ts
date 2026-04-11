@@ -1503,8 +1503,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           (quote.tenant.branding?.componentColors as
             | {
                 headerBgColor?: string;
+                headerTextColor?: string;
                 sectionTitleColor?: string;
                 tableHeaderBgColor?: string;
+                tableHeaderTextColor?: string;
                 totalsColor?: string;
                 footerTextColor?: string;
               }

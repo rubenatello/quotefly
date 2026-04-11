@@ -293,6 +293,8 @@ export interface DashboardContextValue {
   loadCustomers: () => Promise<void>;
   loadQuoteHistory: () => Promise<void>;
   focusQuoteDesk: (quoteId: string | null) => void;
+  selectQuoteCustomer: (customerId: string) => void;
+  navigateToBuilder: (customerId?: string | null) => void;
   createCustomer: (event: FormEvent) => Promise<void>;
   mergeDuplicateCustomer: () => Promise<void>;
   createDuplicateAsNew: () => Promise<void>;
@@ -337,10 +339,12 @@ export function DashboardProvider({
   session,
   children,
   onNavigateToQuote,
+  onNavigateToBuilder,
 }: {
   session: DashboardSession | null;
   children: ReactNode;
   onNavigateToQuote?: (quoteId: string) => void;
+  onNavigateToBuilder?: () => void;
 }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -518,6 +522,17 @@ export function DashboardProvider({
   function navigateToQuote(quoteId: string) {
     setSelectedQuoteId(quoteId);
     onNavigateToQuote?.(quoteId);
+  }
+
+  function selectQuoteCustomer(customerId: string) {
+    setQuoteForm((prev) => ({ ...prev, customerId }));
+  }
+
+  function navigateToBuilder(customerId?: string | null) {
+    if (customerId) {
+      setQuoteForm((prev) => ({ ...prev, customerId }));
+    }
+    onNavigateToBuilder?.();
   }
 
   /* ─── Customer actions ─── */
@@ -1016,7 +1031,7 @@ export function DashboardProvider({
     setChatPrompt, setChatParsed, setSetupTrade, setSetupSqFtMode, setSetupSqFtUnitCost, setSetupSqFtUnitPrice,
     setDuplicateModal, setSendComposer,
     loadAll, loadQuotes, loadCustomers, loadQuoteHistory,
-    focusQuoteDesk, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
+    focusQuoteDesk, selectQuoteCustomer, navigateToBuilder, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
     createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,

@@ -68,8 +68,10 @@ const FALLBACK_TIMEZONES = [
 
 const COLOR_COMPONENTS: Array<{ key: keyof BrandingComponentColors; label: string; description: string }> = [
   { key: "headerBgColor", label: "Header Background", description: "Top header block color in the PDF quote." },
+  { key: "headerTextColor", label: "Header Text", description: "Text color used on colored quote headers." },
   { key: "sectionTitleColor", label: "Section Titles", description: "Color for section labels like Scope and Customer." },
   { key: "tableHeaderBgColor", label: "Table Header", description: "Line-item table header background color." },
+  { key: "tableHeaderTextColor", label: "Table Header Text", description: "Text color used inside the line-item table header." },
   { key: "totalsColor", label: "Totals", description: "Subtotal, tax, and total emphasis color." },
   { key: "footerTextColor", label: "Footer Text", description: "Footer and metadata text color." },
 ];
@@ -189,6 +191,32 @@ function formatBusinessAddress(profile: BrandingBusinessProfile): string[] {
   return lines;
 }
 
+function getContrastingTextColor(color: string): string {
+  const safe = /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#5B85AA";
+  const red = Number.parseInt(safe.slice(1, 3), 16);
+  const green = Number.parseInt(safe.slice(3, 5), 16);
+  const blue = Number.parseInt(safe.slice(5, 7), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.62 ? "#111111" : "#ffffff";
+}
+
+function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): BrandingBusinessProfile {
+  const normalize = (value?: string | null) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : null;
+  };
+
+  return {
+    businessEmail: normalize(profile.businessEmail),
+    businessPhone: normalize(profile.businessPhone),
+    addressLine1: normalize(profile.addressLine1),
+    addressLine2: normalize(profile.addressLine2),
+    city: normalize(profile.city),
+    state: normalize(profile.state),
+    postalCode: normalize(profile.postalCode),
+  };
+}
+
 interface BrandingSectionCardProps {
   id: BrandingSectionId;
   title: string;
@@ -257,6 +285,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     });
   }, []);
 
+  const effectiveTenantId = tenantId ?? localStorage.getItem("qf_tenant_id") ?? undefined;
   const browserTimezone = useMemo(() => getBrowserTimezone(), []);
   const timezoneOptions = useMemo(() => getSupportedTimezones(), []);
 
@@ -269,6 +298,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const [componentColors, setComponentColors] = useState<BrandingComponentColors>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Record<BrandingSectionId, boolean>>({
     business: true,
     logo: false,
@@ -278,10 +308,10 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   });
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!effectiveTenantId) return;
 
     api.branding
-      .get(tenantId)
+      .get(effectiveTenantId)
       .then(({ tenant, branding }) => {
         setCompanyName(tenant.name);
         setTimezone(tenant.timezone === "UTC" ? browserTimezone : tenant.timezone);
@@ -299,7 +329,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       .catch(() => {
         // Silently ignore while auth/session is not ready yet.
       });
-  }, [browserTimezone, tenantId]);
+  }, [browserTimezone, effectiveTenantId]);
 
   const selectedTemplateIndex = useMemo(() => {
     const index = TEMPLATE_OPTIONS.findIndex((template) => template.id === selectedTemplate);
@@ -348,20 +378,21 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const handleSave = async () => {
-    if (!tenantId) return;
+    if (!effectiveTenantId) return;
 
     setIsSaving(true);
     setSaveStatus("idle");
+    setSaveErrorMessage(null);
 
     try {
       const componentColorPayload = Object.keys(componentColors).length > 0 ? componentColors : null;
 
-      await api.branding.save(tenantId, {
+      await api.branding.save(effectiveTenantId, {
         logoUrl: logo ?? null,
         primaryColor: brandColor,
         templateId: selectedTemplate,
         timezone,
-        businessProfile,
+        businessProfile: normalizeBusinessProfileForSave(businessProfile),
         componentColors: componentColorPayload,
       });
 
@@ -369,6 +400,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (err) {
       setSaveStatus("error");
+      setSaveErrorMessage(err instanceof ApiError ? err.message : "Failed to save branding.");
       console.error("Failed to save branding:", err instanceof ApiError ? err.message : err);
     } finally {
       setIsSaving(false);
@@ -387,7 +419,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const getComponentFallback = (key: keyof BrandingComponentColors): string =>
-    key === "footerTextColor" ? "#666666" : brandColor;
+    key === "footerTextColor"
+      ? "#666666"
+      : key === "headerTextColor"
+        ? getContrastingTextColor(getComponentColorValue("headerBgColor"))
+        : key === "tableHeaderTextColor"
+          ? getContrastingTextColor(getComponentColorValue("tableHeaderBgColor"))
+          : brandColor;
 
   const getComponentColorValue = (key: keyof BrandingComponentColors): string =>
     componentColors[key] ?? getComponentFallback(key);
@@ -409,8 +447,10 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const previewHeaderColor = getComponentColorValue("headerBgColor");
+  const previewHeaderTextColor = getComponentColorValue("headerTextColor");
   const previewSectionTitleColor = getComponentColorValue("sectionTitleColor");
   const previewTableHeaderColor = getComponentColorValue("tableHeaderBgColor");
+  const previewTableHeaderTextColor = getComponentColorValue("tableHeaderTextColor");
   const previewTotalsColor = getComponentColorValue("totalsColor");
   const previewFooterColor = getComponentColorValue("footerTextColor");
 
@@ -481,14 +521,14 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   Branding controls how the PDF quote looks when the customer receives it.
                 </p>
                 <div className="mt-4 flex items-center gap-3">
-                  <Button onClick={handleSave} disabled={isSaving || !tenantId} loading={isSaving} fullWidth>
+                  <Button onClick={handleSave} disabled={isSaving || !effectiveTenantId} loading={isSaving} fullWidth>
                     {isSaving ? "Saving..." : "Save Branding"}
                   </Button>
                 </div>
                 <div className="mt-3 min-h-[20px] text-sm">
                   {saveStatus === "saved" ? <span className="font-medium text-green-600">Saved</span> : null}
-                  {saveStatus === "error" ? <span className="font-medium text-red-500">Save failed</span> : null}
-                  {!tenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
+                  {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? "Save failed"}</span> : null}
+                  {!effectiveTenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
                 </div>
               </div>
             </div>
@@ -801,7 +841,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)] sm:p-8">
                 <div className={`rounded-[24px] p-8 text-black shadow-lg ${activeTemplate.preview}`}>
                 {activeTemplate.headerStyle === "bar" && (
-                  <div className="mb-6 rounded-lg p-4 text-white" style={{ backgroundColor: previewHeaderColor }}>
+                  <div className="mb-6 rounded-lg p-4" style={{ backgroundColor: previewHeaderColor, color: previewHeaderTextColor }}>
                     <div className="flex items-start justify-between">
                       <div>
                         {logo ? (
@@ -813,7 +853,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       </div>
                       <div className="text-right text-sm">
                         <p className="font-semibold">Quote #12345</p>
-                        <p className="text-white/80">April 10, 2026</p>
+                        <p style={{ color: `${previewHeaderTextColor}CC` }}>April 10, 2026</p>
                       </div>
                     </div>
                   </div>
@@ -841,12 +881,12 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 )}
 
                 {activeTemplate.headerStyle === "block" && (
-                  <div className="mb-6 rounded-lg p-5 text-white" style={{ backgroundColor: previewHeaderColor }}>
+                  <div className="mb-6 rounded-lg p-5" style={{ backgroundColor: previewHeaderColor, color: previewHeaderTextColor }}>
                     <div className="flex items-center justify-between">
                       <h4 className="text-xl font-bold tracking-wide">{companyName}</h4>
                       <p className="text-sm">Quote #12345</p>
                     </div>
-                    <p className="mt-2 text-sm text-white/80">Prepared on April 10, 2026</p>
+                    <p className="mt-2 text-sm" style={{ color: `${previewHeaderTextColor}CC` }}>Prepared on April 10, 2026</p>
                   </div>
                 )}
 
@@ -904,9 +944,9 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
                 <table className="mb-6 w-full text-sm">
                   <thead>
-                    <tr style={{ backgroundColor: previewTableHeaderColor }}>
-                      <th className="py-2 pl-2 text-left font-semibold text-white">Description</th>
-                      <th className="py-2 pr-2 text-right font-semibold text-white">Amount</th>
+                    <tr style={{ backgroundColor: previewTableHeaderColor, color: previewTableHeaderTextColor }}>
+                      <th className="py-2 pl-2 text-left font-semibold">Description</th>
+                      <th className="py-2 pr-2 text-right font-semibold">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
