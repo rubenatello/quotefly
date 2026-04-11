@@ -36,6 +36,7 @@ interface TemplateOption {
   description: string;
   preview: string;
   headerStyle: TemplateHeaderStyle;
+  bestFor: string;
 }
 
 interface BrandingSectionConfig {
@@ -83,6 +84,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     description: "Top bar layout with clean spacing for fast readability.",
     preview: "bg-gradient-to-br from-blue-50 to-slate-50",
     headerStyle: "bar",
+    bestFor: "Fast field quotes",
   },
   {
     id: "professional",
@@ -90,6 +92,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     description: "Structured card header for a formal business look.",
     preview: "bg-gradient-to-br from-emerald-50 to-slate-50",
     headerStyle: "card",
+    bestFor: "Office-ready estimates",
   },
   {
     id: "bold",
@@ -97,6 +100,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     description: "High-contrast block header that stands out immediately.",
     preview: "bg-gradient-to-br from-orange-50 to-rose-50",
     headerStyle: "block",
+    bestFor: "Sales-forward proposals",
   },
   {
     id: "minimal",
@@ -104,6 +108,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     description: "Minimal ink style for no-friction, text-first quoting.",
     preview: "bg-white",
     headerStyle: "minimal",
+    bestFor: "Clean no-frills estimates",
   },
   {
     id: "classic",
@@ -111,6 +116,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     description: "Balanced card style with a timeless proposal feel.",
     preview: "bg-gradient-to-br from-amber-50 to-stone-100",
     headerStyle: "card",
+    bestFor: "Traditional contractors",
   },
 ];
 
@@ -340,6 +346,82 @@ function BrandingSectionCard({
 
       {isOpen ? <div className="border-t border-slate-100 px-5 py-5 sm:px-6">{children}</div> : null}
     </section>
+  );
+}
+
+function TemplateMiniPreview({
+  template,
+  active,
+  onSelect,
+}: {
+  template: TemplateOption;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`rounded-[24px] border p-3 text-left transition ${
+        active
+          ? "border-quotefly-primary bg-quotefly-primary/5 shadow-[0_14px_32px_rgba(47,120,191,0.12)]"
+          : "border-slate-200 bg-white hover:border-quotefly-primary/30 hover:shadow-sm"
+      }`}
+      aria-pressed={active}
+    >
+      <div className={`rounded-[18px] border border-slate-200 p-3 shadow-sm ${template.preview}`}>
+        {template.headerStyle === "bar" ? (
+          <>
+            <div className="h-3 rounded-full bg-slate-800/80" />
+            <div className="mt-3 grid gap-2">
+              <div className="h-2 rounded-full bg-slate-300/90" />
+              <div className="h-2 w-4/5 rounded-full bg-slate-200/95" />
+              <div className="h-12 rounded-2xl border border-slate-200 bg-white/90" />
+            </div>
+          </>
+        ) : template.headerStyle === "card" ? (
+          <>
+            <div className="rounded-2xl border border-slate-200 bg-white/95 p-2.5">
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-7 rounded-xl bg-slate-200" />
+                <div className="flex-1">
+                  <div className="h-2 rounded-full bg-slate-700/80" />
+                  <div className="mt-1 h-2 w-2/3 rounded-full bg-slate-300" />
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 h-14 rounded-2xl border border-slate-200 bg-white/85" />
+          </>
+        ) : template.headerStyle === "block" ? (
+          <>
+            <div className="rounded-2xl bg-slate-900/85 p-3">
+              <div className="h-2 w-1/2 rounded-full bg-white/90" />
+              <div className="mt-2 h-2 w-1/3 rounded-full bg-white/55" />
+            </div>
+            <div className="mt-3 h-14 rounded-2xl border border-slate-200 bg-white/85" />
+          </>
+        ) : (
+          <>
+            <div className="border-b border-slate-300 pb-2">
+              <div className="h-2 w-1/2 rounded-full bg-slate-700/80" />
+            </div>
+            <div className="mt-3 h-14 rounded-2xl border border-slate-200 bg-white" />
+          </>
+        )}
+      </div>
+
+      <div className="mt-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-slate-900">{template.name}</p>
+          {active ? (
+            <span className="rounded-full bg-quotefly-primary/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-quotefly-primary">
+              Selected
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-1 text-xs text-slate-500">{template.bestFor}</p>
+      </div>
+    </button>
   );
 }
 
@@ -875,8 +957,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
                         <p className="mt-1 text-xs text-slate-600">{activeTemplate.description}</p>
+                        <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Best for: {activeTemplate.bestFor}
+                        </p>
                       </div>
-                      <div className={`h-14 w-24 rounded-xl border border-slate-200 ${activeTemplate.preview}`} />
+                      <div className="hidden sm:block">
+                        <TemplateMiniPreview template={activeTemplate} active onSelect={() => undefined} />
+                      </div>
                     </div>
                   </div>
 
@@ -890,18 +977,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   </button>
                 </div>
 
-                <div className="mt-3 flex items-center justify-center gap-2">
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   {TEMPLATE_OPTIONS.map((template) => (
-                    <button
+                    <TemplateMiniPreview
                       key={template.id}
-                      type="button"
-                      onClick={() => setSelectedTemplate(template.id)}
-                      aria-label={`Select ${template.name} template`}
-                      className={`h-2.5 rounded-full transition-all ${
-                        selectedTemplate === template.id
-                          ? "w-6 bg-quotefly-primary"
-                          : "w-2.5 bg-slate-300 hover:bg-slate-400"
-                      }`}
+                      template={template}
+                      active={selectedTemplate === template.id}
+                      onSelect={() => setSelectedTemplate(template.id)}
                     />
                   ))}
                 </div>
@@ -918,6 +1000,17 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               onToggle={() => toggleSection("preview")}
             >
               <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)] sm:p-8">
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Customer-facing output</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      This is the style your customer will open, print, or forward.
+                    </p>
+                  </div>
+                  <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+                    {activeTemplate.name}
+                  </div>
+                </div>
                 <div className={`rounded-[24px] p-8 text-black shadow-lg ${activeTemplate.preview}`}>
                 {activeTemplate.headerStyle === "bar" && (
                   <div className="mb-6 rounded-lg p-4" style={{ backgroundColor: previewHeaderColor, color: previewHeaderTextColor }}>

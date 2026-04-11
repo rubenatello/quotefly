@@ -1,5 +1,5 @@
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, InvoiceIcon, QuoteIcon } from "../components/Icons";
-import { Alert, Button, Card, EmptyState, PageHeader } from "../components/ui";
+import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select } from "../components/ui";
 import { FollowUpPill, PipelineFlow, QuoteStatusPill, StatCard } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
@@ -24,6 +24,21 @@ const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = [
   "DUE",
   "COMPLETED",
 ];
+
+const FOLLOW_UP_OPTIONS = FOLLOW_UP_STATUSES.map((status) => ({
+  value: status,
+  label: followUpLabel(status),
+}));
+
+const JOB_STATUS_OPTIONS = JOB_STATUSES.map((status) => ({
+  value: status,
+  label: jobStatusLabel(status),
+}));
+
+const AFTER_SALE_OPTIONS = AFTER_SALE_STATUSES.map((status) => ({
+  value: status,
+  label: afterSaleLabel(status),
+}));
 
 function followUpLabel(status: LeadFollowUpStatus): string {
   if (status === "NEEDS_FOLLOW_UP") return "Needs Follow Up";
@@ -69,6 +84,13 @@ function sectionToneClass(tone: "blue" | "orange" | "emerald" | "slate"): string
   return "bg-[linear-gradient(90deg,rgba(148,163,184,0.18)_0%,rgba(148,163,184,0)_100%)] text-slate-700";
 }
 
+function sectionBorderClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
+  if (tone === "blue") return "border-l-4 border-l-quotefly-blue";
+  if (tone === "orange") return "border-l-4 border-l-quotefly-orange";
+  if (tone === "emerald") return "border-l-4 border-l-emerald-500";
+  return "border-l-4 border-l-slate-400";
+}
+
 function PipelineRowsSection({
   title,
   subtitle,
@@ -109,13 +131,19 @@ function PipelineRowsSection({
         <EmptyState title={emptyTitle} description={emptyDescription} />
       ) : (
         <div className="space-y-2">
-          {leads.map((lead) => (
+          {leads.map((lead, index) => (
             <div
               key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
-              className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3.5 shadow-sm"
+              className={`rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3.5 shadow-sm ${sectionBorderClass(tone)}`}
             >
               <div className="grid gap-3 lg:grid-cols-[1.8fr_1fr_1fr_1fr_auto] lg:items-center">
                 <div className="min-w-0">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <Badge tone={tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue"}>
+                      Queue #{index + 1}
+                    </Badge>
+                    <Badge tone="slate">Created {formatDateTime(lead.createdAt)}</Badge>
+                  </div>
                   <p className="truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
                   <p className="mt-1 inline-flex items-center gap-1 text-xs text-slate-600">
                     <CallIcon size={12} />
@@ -147,7 +175,7 @@ function PipelineRowsSection({
                 </div>
 
                 <div>
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quote</p>
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quote Status</p>
                   {lead.status ? (
                     <QuoteStatusPill status={lead.status} />
                   ) : (
@@ -179,7 +207,7 @@ function PipelineRowsSection({
                 <div className="flex flex-col gap-2">
                   {lead.quoteId ? (
                     <Button size="sm" variant="outline" onClick={() => onNavigateToQuote(lead.quoteId!)}>
-                      Open
+                      Open Quote Desk
                     </Button>
                   ) : (
                     <Button size="sm" variant="outline" disabled>
@@ -200,22 +228,18 @@ function PipelineRowsSection({
                   </p>
 
                   {actionKind === "follow_up" ? (
-                    <select
+                    <Select
+                      aria-label={`Update follow-up for ${lead.customerName}`}
                       value={lead.followUpStatus}
                       disabled={saving}
                       onChange={(event) =>
                         onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)
                       }
-                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
-                    >
-                      {FOLLOW_UP_STATUSES.map((status) => (
-                        <option key={`${lead.customerId}-${status}`} value={status}>
-                          {followUpLabel(status)}
-                        </option>
-                      ))}
-                    </select>
+                      options={FOLLOW_UP_OPTIONS}
+                    />
                   ) : actionKind === "job_status" ? (
-                    <select
+                    <Select
+                      aria-label={`Update job stage for ${lead.customerName}`}
                       value={lead.jobStatus ?? "NOT_STARTED"}
                       disabled={saving || !lead.quoteId}
                       onChange={(event) =>
@@ -224,16 +248,11 @@ function PipelineRowsSection({
                           jobStatus: event.target.value as QuoteJobStatus,
                         })
                       }
-                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
-                    >
-                      {JOB_STATUSES.map((status) => (
-                        <option key={`${lead.customerId}-${status}`} value={status}>
-                          {jobStatusLabel(status)}
-                        </option>
-                      ))}
-                    </select>
+                      options={JOB_STATUS_OPTIONS}
+                    />
                   ) : (
-                    <select
+                    <Select
+                      aria-label={`Update after-sale for ${lead.customerName}`}
                       value={lead.afterSaleFollowUpStatus ?? "DUE"}
                       disabled={saving || !lead.quoteId}
                       onChange={(event) =>
@@ -242,14 +261,8 @@ function PipelineRowsSection({
                           afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus,
                         })
                       }
-                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
-                    >
-                      {AFTER_SALE_STATUSES.map((status) => (
-                        <option key={`${lead.customerId}-${status}`} value={status}>
-                          {afterSaleLabel(status)}
-                        </option>
-                      ))}
-                    </select>
+                      options={AFTER_SALE_OPTIONS}
+                    />
                   )}
                 </div>
               )}
