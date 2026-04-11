@@ -21,6 +21,7 @@ import {
   type BrandingComponentColors,
   type BrandingTemplateId,
 } from "../lib/api";
+import { Button, ProgressBar } from "../components/ui";
 
 interface BrandingPageProps {
   tenantId?: string;
@@ -414,7 +415,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const previewFooterColor = getComponentColorValue("footerTextColor");
 
   return (
-    <div className="min-h-screen bg-stone-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(91,133,170,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(244,96,54,0.08),transparent_20%),linear-gradient(180deg,#f8fafc_0%,#eef4fb_100%)] p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-8">
           <h1 className="mb-2 text-4xl font-bold font-display text-slate-900">Quote Branding</h1>
@@ -425,7 +426,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
         <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
           <aside className="xl:sticky xl:top-24 xl:self-start">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(247,250,255,1)_100%)] p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Brand Setup</p>
@@ -440,6 +441,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 </div>
               </div>
 
+              <ProgressBar
+                value={(completedSectionCount / 4) * 100}
+                label="Branding completion"
+                hint={`${completedSectionCount}/4 ready`}
+                className="mt-5"
+              />
+
               <div className="mt-5 space-y-2">
                 {BRANDING_SECTIONS.map((section) => {
                   const Icon = section.icon;
@@ -450,7 +458,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       key={section.id}
                       type="button"
                       onClick={() => focusSection(section.id)}
-                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 px-3 py-3 text-left transition hover:border-quotefly-primary/40 hover:bg-slate-50"
+                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/85 px-3 py-3 text-left transition hover:border-quotefly-primary/40 hover:bg-white hover:shadow-sm"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
@@ -467,19 +475,15 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 })}
               </div>
 
-              <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+              <div className="mt-5 rounded-2xl bg-[linear-gradient(180deg,rgba(91,133,170,0.08)_0%,rgba(255,255,255,1)_100%)] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Save Status</p>
                 <p className="mt-2 text-sm text-slate-600">
                   Branding controls how the PDF quote looks when the customer receives it.
                 </p>
                 <div className="mt-4 flex items-center gap-3">
-                  <button
-                    onClick={handleSave}
-                    disabled={isSaving || !tenantId}
-                    className="flex-1 rounded-2xl bg-quotefly-primary px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
+                  <Button onClick={handleSave} disabled={isSaving || !tenantId} loading={isSaving} fullWidth>
                     {isSaving ? "Saving..." : "Save Branding"}
-                  </button>
+                  </Button>
                 </div>
                 <div className="mt-3 min-h-[20px] text-sm">
                   {saveStatus === "saved" ? <span className="font-medium text-green-600">Saved</span> : null}
@@ -506,7 +510,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   <input
                     value={companyName}
                     disabled
-                    className="min-h-[44px] w-full rounded-2xl border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-sm text-slate-700"
                   />
                 </div>
                 <div>
@@ -516,7 +520,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     value={businessProfile.businessEmail ?? ""}
                     onChange={(event) => updateBusinessField("businessEmail", event.target.value)}
                     placeholder="office@yourcompany.com"
-                    className="min-h-[44px] w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                   />
                 </div>
                 <div>
@@ -526,7 +530,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     value={businessProfile.businessPhone ?? ""}
                     onChange={(event) => updateBusinessField("businessPhone", event.target.value)}
                     placeholder="(555) 123-4567"
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                   />
                 </div>
                 <div>
@@ -535,7 +539,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     value={businessProfile.addressLine1 ?? ""}
                     onChange={(event) => updateBusinessField("addressLine1", event.target.value)}
                     placeholder="123 Main Street"
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                   />
                 </div>
                 <div>
@@ -544,7 +548,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     value={businessProfile.addressLine2 ?? ""}
                     onChange={(event) => updateBusinessField("addressLine2", event.target.value)}
                     placeholder="Suite 200"
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                   />
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
@@ -554,7 +558,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       value={businessProfile.city ?? ""}
                       onChange={(event) => updateBusinessField("city", event.target.value)}
                       placeholder="Charlotte"
-                      className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                     />
                   </div>
                   <div>
@@ -563,7 +567,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       value={businessProfile.state ?? ""}
                       onChange={(event) => updateBusinessField("state", event.target.value)}
                       placeholder="NC"
-                      className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                     />
                   </div>
                   <div>
@@ -572,7 +576,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       value={businessProfile.postalCode ?? ""}
                       onChange={(event) => updateBusinessField("postalCode", event.target.value)}
                       placeholder="28202"
-                      className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                     />
                   </div>
                 </div>
@@ -582,7 +586,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     <button
                       type="button"
                       onClick={() => setTimezone(browserTimezone)}
-                      className="text-xs font-medium text-quotefly-primary hover:text-blue-700"
+                      className="text-xs font-semibold text-quotefly-primary hover:text-blue-700"
                     >
                       Use local timezone ({browserTimezone})
                     </button>
@@ -590,7 +594,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   <select
                     value={timezone}
                     onChange={(event) => setTimezone(event.target.value)}
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    className="min-h-[46px] w-full rounded-2xl border border-slate-300 bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]"
                   >
                     {timezoneOptions.map((option) => (
                       <option key={option} value={option}>
@@ -637,12 +641,14 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     <li>Test against lighter and darker template headers.</li>
                   </ul>
                   {logo && (
-                    <button
+                    <Button
                       onClick={() => setLogo(null)}
-                      className="mt-5 w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:text-slate-900"
+                      variant="outline"
+                      fullWidth
+                      className="mt-5"
                     >
                       Remove Logo
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -739,26 +745,26 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   <button
                     type="button"
                     onClick={() => moveTemplate(-1)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
                     aria-label="Previous template"
                   >
                     <ChevronLeft size={18} />
                   </button>
 
-                  <div className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex-1 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
                         <p className="mt-1 text-xs text-slate-600">{activeTemplate.description}</p>
                       </div>
-                      <div className={`h-14 w-24 rounded-md border border-slate-200 ${activeTemplate.preview}`} />
+                      <div className={`h-14 w-24 rounded-xl border border-slate-200 ${activeTemplate.preview}`} />
                     </div>
                   </div>
 
                   <button
                     type="button"
                     onClick={() => moveTemplate(1)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
                     aria-label="Next template"
                   >
                     <ChevronRight size={18} />
@@ -792,8 +798,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               completionLabel={sectionCompletionLabel.preview}
               onToggle={() => toggleSection("preview")}
             >
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-8">
-                <div className={`rounded-lg p-8 text-black shadow-lg ${activeTemplate.preview}`}>
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)] sm:p-8">
+                <div className={`rounded-[24px] p-8 text-black shadow-lg ${activeTemplate.preview}`}>
                 {activeTemplate.headerStyle === "bar" && (
                   <div className="mb-6 rounded-lg p-4 text-white" style={{ backgroundColor: previewHeaderColor }}>
                     <div className="flex items-start justify-between">
@@ -938,3 +944,4 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     </div>
   );
 }
+

@@ -91,7 +91,7 @@ export function CrmShell({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(91,133,170,0.12),transparent_22%),radial-gradient(circle_at_top_right,rgba(244,96,54,0.08),transparent_18%),linear-gradient(180deg,#f8fafc_0%,#eef4fb_100%)]">
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         onToggleMobile={() => setMobileOpen((open) => !open)}

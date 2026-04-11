@@ -15,19 +15,22 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: "bg-quotefly-blue text-white hover:bg-quotefly-blue/90 active:bg-quotefly-blue/80 border-transparent",
-  secondary: "bg-quotefly-orange text-white hover:bg-quotefly-orange/90 active:bg-quotefly-orange/80 border-transparent",
-  outline: "bg-white text-slate-700 border-slate-300 hover:bg-slate-50 active:bg-slate-100",
-  ghost: "bg-transparent text-slate-700 border-transparent hover:bg-slate-100 active:bg-slate-200",
+  primary:
+    "border-transparent bg-[linear-gradient(135deg,#2f78bf_0%,#5B85AA_100%)] text-white shadow-[0_12px_24px_rgba(47,120,191,0.22)] hover:brightness-[1.04] active:brightness-[0.97]",
+  secondary:
+    "border-transparent bg-[linear-gradient(135deg,#F46036_0%,#ff855f_100%)] text-white shadow-[0_12px_24px_rgba(244,96,54,0.22)] hover:brightness-[1.03] active:brightness-[0.97]",
+  outline:
+    "border-slate-300 bg-white/95 text-slate-700 hover:border-quotefly-blue/30 hover:bg-quotefly-blue/5 active:bg-quotefly-blue/10",
+  ghost: "border-transparent bg-transparent text-slate-700 hover:bg-slate-100 active:bg-slate-200",
   danger: "bg-red-50 text-red-700 border-red-300 hover:bg-red-100 active:bg-red-200",
   success: "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 active:bg-emerald-200",
   warning: "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 active:bg-amber-200",
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: "min-h-[36px] px-3 py-1.5 text-xs gap-1.5",
-  md: "min-h-[44px] px-4 py-2 text-sm gap-2",
-  lg: "min-h-[48px] px-5 py-2.5 text-base gap-2.5",
+  sm: "min-h-[38px] px-3.5 py-2 text-xs gap-1.5",
+  md: "min-h-[46px] px-4.5 py-2.5 text-sm gap-2",
+  lg: "min-h-[50px] px-5.5 py-3 text-base gap-2.5",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -35,7 +38,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       disabled={disabled || loading}
-      className={`inline-flex items-center justify-center rounded-lg border font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${fullWidth ? "w-full" : ""} ${className}`}
+      className={`inline-flex items-center justify-center rounded-2xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${fullWidth ? "w-full" : ""} ${className}`}
       {...rest}
     >
       {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon}
@@ -72,7 +75,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
-            className={`min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-quotefly-blue focus:ring-1 focus:ring-quotefly-blue/30 focus:outline-none ${icon ? "pl-10" : ""} ${error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-300"} ${className}`}
+            className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${icon ? "pl-10" : ""} ${error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-300"} ${className}`}
             {...rest}
           />
         </div>
@@ -105,7 +108,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
         <select
           ref={ref}
           id={selectId}
-          className={`min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-colors focus:border-quotefly-blue focus:ring-1 focus:ring-quotefly-blue/30 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
+          className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
           {...rest}
         >
           {placeholder && <option value="">{placeholder}</option>}
@@ -140,7 +143,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
         <textarea
           ref={ref}
           id={areaId}
-          className={`min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-quotefly-blue focus:ring-1 focus:ring-quotefly-blue/30 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
+          className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
           {...rest}
         />
         {error && <p className="text-xs text-red-600">{error}</p>}
@@ -161,9 +164,9 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 
 const CARD_VARIANTS: Record<CardVariant, string> = {
   default: "border-slate-200 bg-white shadow-sm",
-  blue: "border-blue-200 bg-gradient-to-b from-blue-50 to-white shadow-sm",
-  amber: "border-amber-200 bg-amber-50 shadow-sm",
-  elevated: "border-slate-200 bg-white shadow-md ring-1 ring-slate-100",
+  blue: "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] shadow-sm",
+  amber: "border-quotefly-orange/20 bg-[linear-gradient(180deg,rgba(244,96,54,0.12)_0%,rgba(255,255,255,1)_100%)] shadow-sm",
+  elevated: "border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.08)] ring-1 ring-slate-100",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -176,7 +179,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ variant = "default", padding = "md", className = "", children, ...rest }, ref) => (
     <div
       ref={ref}
-      className={`rounded-xl border ${CARD_VARIANTS[variant]} ${CARD_PADDING[padding]} ${className}`}
+      className={`rounded-[28px] border ${CARD_VARIANTS[variant]} ${CARD_PADDING[padding]} ${className}`}
       {...rest}
     >
       {children}
@@ -237,7 +240,7 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 export function EmptyState({ icon, title, description }: { icon?: ReactNode; title: string; description?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 py-10 px-6 text-center">
+    <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-slate-300 bg-slate-50/50 px-6 py-10 text-center">
       {icon && <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
         {icon}
       </span>}
@@ -250,12 +253,12 @@ export function EmptyState({ icon, title, description }: { icon?: ReactNode; tit
 /* ─────────────────────────── SKELETON ─────────────────────────── */
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-slate-200 ${className}`} />;
+  return <div className={`animate-pulse rounded-2xl bg-slate-200 ${className}`} />;
 }
 
 export function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
       <Skeleton className="mb-3 h-4 w-24" />
       <Skeleton className="mb-2 h-3 w-full" />
       <Skeleton className="h-3 w-3/4" />
@@ -282,7 +285,7 @@ const ALERT_TONES: Record<AlertTone, string> = {
 
 export function Alert({ tone, children, onDismiss }: AlertProps) {
   return (
-    <div role={tone === "error" ? "alert" : "status"} className={`rounded-lg border px-4 py-2 text-sm ${ALERT_TONES[tone]} flex items-center justify-between gap-2`}>
+    <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
       <span>{children}</span>
       {onDismiss && (
         <button type="button" onClick={onDismiss} className="text-current opacity-60 hover:opacity-100 text-lg leading-none">&times;</button>
@@ -467,6 +470,37 @@ export function Spinner({ size = 16 }: { size?: number }) {
 
 /* ─────────────────────────── PAGE HEADER ─────────────────────────── */
 
+export function ProgressBar({
+  value,
+  label,
+  hint,
+  className = "",
+}: {
+  value: number;
+  label?: string;
+  hint?: string;
+  className?: string;
+}) {
+  const clampedValue = Math.max(0, Math.min(100, value));
+
+  return (
+    <div className={`space-y-2 ${className}`}>
+      {(label || hint) && (
+        <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          <span>{label}</span>
+          {hint ? <span>{hint}</span> : null}
+        </div>
+      )}
+      <div className="h-3 overflow-hidden rounded-full bg-slate-200/90">
+        <div
+          className="h-full rounded-full bg-[linear-gradient(90deg,#2f78bf_0%,#5B85AA_45%,#F46036_100%)] transition-[width] duration-300 ease-out"
+          style={{ width: `${clampedValue}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -478,3 +512,4 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
     </div>
   );
 }
+

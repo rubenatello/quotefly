@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
-import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, Select, Textarea } from "../components/ui";
+import { Check, ChevronRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
+import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import {
   ApiError,
   api,
@@ -234,6 +234,15 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   const canSaveSetup =
     presetDrafts.length > 0 &&
     presetDrafts.every((preset) => preset.name.trim().length >= 2 && Number(preset.defaultQuantity) > 0);
+  const pricingConfigured = !chargeBySquareFoot || (sqFtUnitCost.trim().length > 0 && sqFtUnitPrice.trim().length > 0);
+  const setupChecklist = [
+    { label: "Trade selected", complete: Boolean(trade) },
+    { label: "Pricing model configured", complete: pricingConfigured },
+    { label: "Starter jobs ready", complete: canSaveSetup },
+    { label: "Workspace saved", complete: Boolean(session?.onboardingCompletedAtUtc) },
+  ];
+  const completedStepCount = setupChecklist.filter((step) => step.complete).length;
+  const setupProgressPercent = Math.round((completedStepCount / setupChecklist.length) * 100);
 
   function resetPresetDraftsToDefaults() {
     setPresetDrafts((current) => {
@@ -323,6 +332,62 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+
+      <Card variant="blue" padding="lg" className="overflow-hidden">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)] lg:items-center">
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-quotefly-blue">Setup Progress</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-900 sm:text-3xl">Build the quoting baseline once, then move fast.</h2>
+              <p className="mt-2 max-w-2xl text-sm text-slate-600 sm:text-base">
+                These are starting defaults, not market truth. Lock in your trade, adjust pricing, and save a clean starter pack your team can reuse.
+              </p>
+            </div>
+
+            <ProgressBar
+              value={setupProgressPercent}
+              label="Workspace completion"
+              hint={`${completedStepCount}/${setupChecklist.length} complete`}
+            />
+
+            <div className="flex flex-wrap gap-2">
+              {setupChecklist.map((step) => (
+                <span
+                  key={step.label}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                    step.complete
+                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                      : "border-slate-300 bg-white/85 text-slate-600"
+                  }`}
+                >
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/90">
+                    {step.complete ? <Check size={12} /> : <span className="h-2 w-2 rounded-full bg-current" />}
+                  </span>
+                  {step.label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[26px] border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Snapshot</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Primary Trade</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Starter Jobs</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{presetDrafts.length}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Area Pricing</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{chargeBySquareFoot ? "Enabled" : "Optional"}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card variant="blue">
@@ -595,7 +660,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
               </div>
               <Button variant="outline" fullWidth onClick={() => navigate("/app/branding")}>
                 Continue to Branding
-                <ArrowRight size={16} />
+                <ChevronRight size={16} />
               </Button>
             </div>
           </Card>

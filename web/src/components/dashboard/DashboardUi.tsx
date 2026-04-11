@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import {
-  ArrowRightIcon,
   CallIcon,
   CheckIcon,
   ClockIcon,
@@ -211,11 +211,11 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
 export function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-slate-100 transition hover:border-slate-300 hover:shadow-md">
-      <span className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-orange-100 text-quotefly-blue">
+    <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(245,248,252,1)_100%)] p-4 shadow-[0_14px_36px_rgba(15,23,42,0.06)] ring-1 ring-white transition hover:border-quotefly-blue/20 hover:shadow-[0_18px_44px_rgba(15,23,42,0.1)]">
+      <span className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,rgba(91,133,170,0.16)_0%,rgba(244,96,54,0.16)_100%)] text-quotefly-blue">
         {icon}
       </span>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
     </div>
   );
@@ -251,7 +251,7 @@ export function MobileSectionSwitcher({
   ];
 
   return (
-    <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
+    <div className="space-y-2 rounded-[28px] border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
       <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
         Mobile Workflow
       </p>
@@ -265,7 +265,7 @@ export function MobileSectionSwitcher({
               onClick={() => onChange(section.id)}
               className={`rounded-lg border px-2 py-2.5 text-left transition ${
                 active
-                  ? "border-quotefly-blue bg-blue-50 text-blue-700"
+                  ? "border-quotefly-blue/30 bg-[linear-gradient(180deg,rgba(91,133,170,0.16)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue shadow-sm"
                   : "border-slate-200 bg-white text-slate-700"
               }`}
             >
@@ -294,8 +294,8 @@ export function PipelineFlow({
   afterSaleLeads: number;
 }) {
   return (
-    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4">
-      <div className="flex flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
+    <div className="mb-4 overflow-x-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 sm:p-4">
+      <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
         <PipelineStage icon={<SendIcon size={14} />} label="Quoted Leads" count={quotedLeads} tone="orange" />
@@ -321,30 +321,30 @@ function PipelineStage({
 }) {
   const toneClass =
     tone === "blue"
-      ? "text-quotefly-blue border-quotefly-blue/30 bg-quotefly-blue/10"
+      ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
       : tone === "orange"
-        ? "text-quotefly-orange border-quotefly-orange/30 bg-quotefly-orange/10"
+        ? "border-quotefly-orange/25 bg-[linear-gradient(180deg,rgba(244,96,54,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-orange"
         : tone === "emerald"
-          ? "text-emerald-700 border-emerald-300 bg-emerald-50"
-          : "text-slate-700 border-slate-300 bg-slate-100";
+          ? "border-emerald-300 bg-[linear-gradient(180deg,rgba(16,185,129,0.14)_0%,rgba(255,255,255,1)_100%)] text-emerald-700"
+          : "border-slate-300 bg-[linear-gradient(180deg,rgba(148,163,184,0.12)_0%,rgba(255,255,255,1)_100%)] text-slate-700";
 
   return (
-    <div className={`flex min-w-[170px] items-center justify-between rounded-lg border px-3 py-2 ${toneClass}`}>
+    <div className={`flex min-w-[184px] items-center justify-between rounded-2xl border px-3.5 py-2.5 shadow-sm ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/30 bg-white/70">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-current/20 bg-white/85">
           {icon}
         </span>
         {label}
       </p>
-      <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold">{count}</span>
+      <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-bold shadow-sm">{count}</span>
     </div>
   );
 }
 
 function FlowArrow() {
   return (
-    <span className="inline-flex justify-center text-slate-400 rotate-90 sm:rotate-0">
-      <ArrowRightIcon size={14} />
+    <span className="inline-flex justify-center text-slate-300 rotate-90 sm:rotate-0">
+      <ChevronRight size={18} strokeWidth={2.25} />
     </span>
   );
 }

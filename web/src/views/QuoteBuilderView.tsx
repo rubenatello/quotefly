@@ -20,6 +20,7 @@ import {
   ModalBody,
   ModalFooter,
   ModalHeader,
+  PageHeader,
   Select,
   Textarea,
 } from "../components/ui";
@@ -125,6 +126,12 @@ export function QuoteBuilderView() {
     () => QUICKBOOKS_CHECKLIST_ITEMS.every((item) => quickBooksChecklist[item.id]),
     [quickBooksChecklist],
   );
+  const draftQuotesCount = useMemo(() => quotes.filter((quote) => quote.status === "DRAFT").length, [quotes]);
+  const quotedQuotesCount = useMemo(
+    () => quotes.filter((quote) => quote.status === "SENT_TO_CUSTOMER").length,
+    [quotes],
+  );
+  const customerCount = customers.length;
 
   useEffect(() => {
     setSelectedQuoteIds((current) => current.filter((quoteId) => visibleQuoteIds.includes(quoteId)));
@@ -288,12 +295,23 @@ export function QuoteBuilderView() {
 
   return (
     <div className="space-y-5">
+      <PageHeader
+        title="Quote Builder"
+        subtitle="Create customers, draft quotes, and prep exports from one operator workflow built for phone-first teams."
+      />
+
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
+      <div className="grid gap-4 sm:grid-cols-3">
+        <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
+        <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
+        <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
+      </div>
+
       {/* Chat to Quote (AI) */}
       {canUseChatToQuote ? (
-        <Card variant="blue">
+        <Card variant="blue" padding="lg">
           <CardHeader
             title="Chat to Quote"
             subtitle="Describe customer, scope, and pricing in one message. QuoteFly AI builds the draft."
@@ -305,8 +323,8 @@ export function QuoteBuilderView() {
             }}
             className="space-y-3"
           >
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-blue-700">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-quotefly-blue shadow-sm">
                 AI generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}
               </p>
               <Button
@@ -328,7 +346,7 @@ export function QuoteBuilderView() {
               placeholder="New quote for..."
             />
             {chatParsed && (
-              <div className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-slate-700">
+              <div className="rounded-2xl border border-quotefly-blue/20 bg-white/90 px-3 py-2.5 text-xs text-slate-700 shadow-sm">
                 Last parse: {chatParsed.serviceType}
                 {chatParsed.squareFeetEstimate ? ` · ${chatParsed.squareFeetEstimate.toLocaleString()} sq ft` : ""}
                 {chatParsed.estimatedTotalAmount ? ` · Est. ${money(chatParsed.estimatedTotalAmount)}` : ""}
@@ -349,11 +367,13 @@ export function QuoteBuilderView() {
         />
       )}
 
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
       {/* Quick Customer */}
-      <Card>
-        <CardHeader title="Quick Customer" subtitle="Add a new customer to your pipeline." />
+      <Card variant="elevated" padding="lg">
+        <CardHeader title="Quick Customer" subtitle="Add a lead fast, then move directly into quoting." />
         <form onSubmit={createCustomer} className="space-y-3">
           <Input
+            label="Customer name"
             placeholder="Full name"
             required
             value={customerForm.fullName}
@@ -362,6 +382,7 @@ export function QuoteBuilderView() {
             }
           />
           <Input
+            label="Phone"
             type="tel"
             placeholder="Phone"
             required
@@ -369,6 +390,7 @@ export function QuoteBuilderView() {
             onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))}
           />
           <Input
+            label="Email"
             type="email"
             placeholder="Email (optional)"
             value={customerForm.email}
@@ -381,10 +403,10 @@ export function QuoteBuilderView() {
       </Card>
 
       {/* Create Quote */}
-      <Card>
-        <CardHeader title="Create Quote" subtitle="Build a manual quote for an existing customer." />
+      <Card variant="elevated" padding="lg">
+        <CardHeader title="Create Quote" subtitle="Use a saved starter job, then tune the scope and math before opening the desk." />
         <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-slate-900">Starter Job</p>
@@ -441,19 +463,19 @@ export function QuoteBuilderView() {
                 </div>
 
                 {selectedPreset ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-3 text-xs text-slate-600 shadow-sm">
                     <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
                     <p className="mt-1">{selectedPreset.description ?? "No default description yet."}</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Default cost</p>
                         <p className="mt-1 font-semibold text-slate-900">{money(Number(selectedPreset.unitCost))} / {formatPresetUnitLabel(selectedPreset.unitType)}</p>
                       </div>
-                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Default price</p>
                         <p className="mt-1 font-semibold text-slate-900">{money(Number(selectedPreset.unitPrice))} / {formatPresetUnitLabel(selectedPreset.unitType)}</p>
                       </div>
-                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Applied totals</p>
                         <p className="mt-1 font-semibold text-slate-900">
                           {money(starterInternalTotal)} cost · {money(starterCustomerTotal)} price
@@ -478,6 +500,7 @@ export function QuoteBuilderView() {
           </div>
 
           <Select
+            label="Customer"
             value={quoteForm.customerId}
             required
             onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerId: event.target.value }))}
@@ -485,6 +508,7 @@ export function QuoteBuilderView() {
             placeholder="Select customer"
           />
           <Select
+            label="Trade"
             value={quoteForm.serviceType}
             onChange={(event) =>
               setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))
@@ -492,12 +516,14 @@ export function QuoteBuilderView() {
             options={serviceOptions}
           />
           <Input
+            label="Quote title"
             placeholder="Title"
             required
             value={quoteForm.title}
             onChange={(event) => setQuoteForm((prev) => ({ ...prev, title: event.target.value }))}
           />
           <Textarea
+            label="Scope details"
             placeholder="Scope details"
             required
             rows={3}
@@ -506,6 +532,7 @@ export function QuoteBuilderView() {
           />
           <div className="grid gap-2 sm:grid-cols-3">
             <Input
+              label="Internal cost"
               type="number"
               min="0"
               step="0.01"
@@ -516,6 +543,7 @@ export function QuoteBuilderView() {
               }
             />
             <Input
+              label="Customer subtotal"
               type="number"
               min="0"
               step="0.01"
@@ -526,6 +554,7 @@ export function QuoteBuilderView() {
               }
             />
             <Input
+              label="Tax amount"
               type="number"
               min="0"
               step="0.01"
@@ -551,9 +580,11 @@ export function QuoteBuilderView() {
           </Button>
         </form>
       </Card>
+      </div>
 
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
       {/* Quote List */}
-      <Card>
+      <Card variant="elevated" padding="lg">
         <CardHeader
           title="Quote List"
           subtitle="Select one or more quotes and export as QuickBooks invoice CSV rows."
@@ -571,7 +602,7 @@ export function QuoteBuilderView() {
           Apply Filters
         </Button>
 
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
           <Button
             type="button"
             size="sm"
@@ -590,7 +621,7 @@ export function QuoteBuilderView() {
           >
             Clear
           </Button>
-          <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700">
+          <label className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
             Due in
             <input
               type="number"
@@ -633,10 +664,10 @@ export function QuoteBuilderView() {
           {quotes.map((quote) => (
             <div
               key={quote.id}
-              className={`rounded-lg border p-3 transition ${
+              className={`rounded-[24px] border p-3 transition ${
                 selectedQuoteId === quote.id
-                  ? "border-quotefly-blue bg-quotefly-blue/10"
-                  : "border-slate-200 bg-slate-50"
+                  ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] shadow-sm"
+                  : "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)]"
               }`}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
@@ -675,7 +706,7 @@ export function QuoteBuilderView() {
         </div>
       </Card>
 
-      <Card variant="blue">
+      <Card variant="blue" padding="lg">
         <CardHeader
           title="QuickBooks Import Workspace"
           subtitle="Open the full step-by-step guide and checklist before importing."
@@ -691,6 +722,7 @@ export function QuoteBuilderView() {
           </Button>
         </div>
       </Card>
+      </div>
 
       <QuickBooksGuideModal
         open={showQuickBooksGuide}
@@ -712,10 +744,10 @@ export function QuoteBuilderView() {
               {duplicateModal.matches.map((match) => (
                 <label
                   key={match.id}
-                  className={`block cursor-pointer rounded-lg border px-3 py-2 ${
+                  className={`block cursor-pointer rounded-[22px] border px-3 py-2.5 shadow-sm ${
                     duplicateModal.selectedMatchId === match.id
-                      ? "border-quotefly-blue bg-quotefly-blue/10"
-                      : "border-slate-200 bg-slate-50"
+                      ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)]"
+                      : "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)]"
                   }`}
                 >
                   <input
@@ -756,6 +788,30 @@ export function QuoteBuilderView() {
   );
 }
 
+function BuilderSnapshotCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "blue" | "orange" | "slate";
+}) {
+  const toneClass =
+    tone === "blue"
+      ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
+      : tone === "orange"
+        ? "border-quotefly-orange/20 bg-[linear-gradient(180deg,rgba(244,96,54,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-orange"
+        : "border-slate-200 bg-[linear-gradient(180deg,rgba(148,163,184,0.1)_0%,rgba(255,255,255,1)_100%)] text-slate-700";
+
+  return (
+    <div className={`rounded-[26px] border px-4 py-4 shadow-sm ${toneClass}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">{label}</p>
+      <p className="mt-2 text-3xl font-bold">{value}</p>
+    </div>
+  );
+}
+
 function QuickBooksGuideModal({
   open,
   checklist,
@@ -777,7 +833,7 @@ function QuickBooksGuideModal({
         onClose={onClose}
       />
       <ModalBody className="max-h-[80vh] space-y-4">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4">
           <p className="text-sm font-semibold text-slate-900">Step-by-step</p>
           <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-700">
             <li>In QuoteFly, select quotes and export QuickBooks CSV.</li>
@@ -789,7 +845,7 @@ function QuickBooksGuideModal({
           </ol>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-sm font-semibold text-slate-900">Field mapping reference</p>
           <div className="mt-2 overflow-auto">
             <table className="w-full text-xs">
@@ -813,7 +869,7 @@ function QuickBooksGuideModal({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4">
           <p className="text-sm font-semibold text-slate-900">Pre-import checklist</p>
           <div className="mt-2 space-y-2">
             {QUICKBOOKS_CHECKLIST_ITEMS.map((item) => (

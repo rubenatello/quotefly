@@ -62,6 +62,13 @@ function LifecyclePill({
   return <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${toneClass}`}>{label}</span>;
 }
 
+function sectionToneClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
+  if (tone === "blue") return "bg-[linear-gradient(90deg,rgba(91,133,170,0.18)_0%,rgba(91,133,170,0)_100%)] text-quotefly-blue";
+  if (tone === "orange") return "bg-[linear-gradient(90deg,rgba(244,96,54,0.18)_0%,rgba(244,96,54,0)_100%)] text-quotefly-orange";
+  if (tone === "emerald") return "bg-[linear-gradient(90deg,rgba(16,185,129,0.18)_0%,rgba(16,185,129,0)_100%)] text-emerald-700";
+  return "bg-[linear-gradient(90deg,rgba(148,163,184,0.18)_0%,rgba(148,163,184,0)_100%)] text-slate-700";
+}
+
 function PipelineRowsSection({
   title,
   subtitle,
@@ -71,6 +78,7 @@ function PipelineRowsSection({
   saving,
   onNavigateToQuote,
   actionKind,
+  tone,
   onUpdateFollowUp,
   onUpdateQuoteLifecycle,
 }: {
@@ -82,6 +90,7 @@ function PipelineRowsSection({
   saving: boolean;
   onNavigateToQuote: (quoteId: string) => void;
   actionKind: "follow_up" | "job_status" | "after_sale" | "none";
+  tone: "blue" | "orange" | "emerald" | "slate";
   onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
   onUpdateQuoteLifecycle?: (
     quoteId: string,
@@ -89,9 +98,10 @@ function PipelineRowsSection({
   ) => void;
 }) {
   return (
-    <Card>
-      <div className="mb-3">
-        <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+    <Card variant="elevated">
+      <div className={`mb-4 rounded-2xl px-4 py-3 ${sectionToneClass(tone)}`}>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">Pipeline Queue</p>
+        <h3 className="mt-1 text-base font-semibold text-slate-900">{title}</h3>
         <p className="text-xs text-slate-600">{subtitle}</p>
       </div>
 
@@ -100,7 +110,10 @@ function PipelineRowsSection({
       ) : (
         <div className="space-y-2">
           {leads.map((lead) => (
-            <div key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div
+              key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
+              className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3.5 shadow-sm"
+            >
               <div className="grid gap-3 lg:grid-cols-[1.8fr_1fr_1fr_1fr_auto] lg:items-center">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
@@ -193,7 +206,7 @@ function PipelineRowsSection({
                       onChange={(event) =>
                         onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)
                       }
-                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
                     >
                       {FOLLOW_UP_STATUSES.map((status) => (
                         <option key={`${lead.customerId}-${status}`} value={status}>
@@ -211,7 +224,7 @@ function PipelineRowsSection({
                           jobStatus: event.target.value as QuoteJobStatus,
                         })
                       }
-                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
                     >
                       {JOB_STATUSES.map((status) => (
                         <option key={`${lead.customerId}-${status}`} value={status}>
@@ -229,7 +242,7 @@ function PipelineRowsSection({
                           afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus,
                         })
                       }
-                      className="min-h-[40px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                      className="min-h-[40px] rounded-2xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800"
                     >
                       {AFTER_SALE_STATUSES.map((status) => (
                         <option key={`${lead.customerId}-${status}`} value={status}>
@@ -280,7 +293,7 @@ export function PipelineView() {
         <StatCard icon={<InvoiceIcon size={24} />} label="Accepted Revenue" value={money(stats.acceptedRevenue)} />
       </div>
 
-      <Card>
+      <Card variant="blue">
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-slate-900">Lead Pipeline</h2>
           <p className="text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
@@ -304,6 +317,7 @@ export function PipelineView() {
           saving={saving}
           onNavigateToQuote={navigateToQuote}
           actionKind="follow_up"
+          tone="blue"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
@@ -318,6 +332,7 @@ export function PipelineView() {
           saving={saving}
           onNavigateToQuote={navigateToQuote}
           actionKind="follow_up"
+          tone="orange"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
@@ -332,6 +347,7 @@ export function PipelineView() {
           saving={saving}
           onNavigateToQuote={navigateToQuote}
           actionKind="job_status"
+          tone="emerald"
           onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
         />
 
@@ -344,6 +360,7 @@ export function PipelineView() {
           saving={saving}
           onNavigateToQuote={navigateToQuote}
           actionKind="after_sale"
+          tone="slate"
           onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
         />
 
@@ -356,6 +373,7 @@ export function PipelineView() {
           saving={saving}
           onNavigateToQuote={navigateToQuote}
           actionKind="follow_up"
+          tone="blue"
           onUpdateFollowUp={(customerId, followUpStatus) =>
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
