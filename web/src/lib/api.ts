@@ -314,6 +314,7 @@ export type WorkPreset = {
   id: string;
   tenantId: string;
   serviceType: ServiceType;
+  catalogKey?: string | null;
   category: WorkPresetCategory;
   unitType: WorkPresetUnitType;
   name: string;
@@ -473,6 +474,8 @@ export const api = {
       request<{
         serviceType: ServiceType;
         presets: Array<{
+          id?: string;
+          catalogKey?: string | null;
           name: string;
           description?: string;
           category: WorkPresetCategory;
@@ -493,6 +496,8 @@ export const api = {
       sqFtUnitCost?: number;
       sqFtUnitPrice?: number;
       presets?: Array<{
+        id?: string;
+        catalogKey?: string | null;
         name: string;
         description?: string;
         category: WorkPresetCategory;

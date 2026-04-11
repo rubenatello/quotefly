@@ -392,6 +392,7 @@ model WorkPreset {
   id              String         @id @default(cuid())
   tenantId        String
   serviceType     ServiceCategory
+  catalogKey      String?
   category        PresetCategory
   unitType        PresetUnitType @default(FLAT)
   name            String
@@ -405,6 +406,6 @@ model WorkPreset {
   deletedAtUtc    DateTime?      @db.Timestamptz(3)
   tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, serviceType, name])
+  @@unique([tenantId, serviceType, catalogKey])
   @@index([tenantId, serviceType, deletedAtUtc])
 }

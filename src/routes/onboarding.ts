@@ -32,6 +32,8 @@ const PresetUnitTypeEnum = z.enum([
 ]);
 
 const OnboardingPresetSchema = z.object({
+  id: z.string().trim().min(1).max(120).optional(),
+  catalogKey: z.string().trim().min(2).max(120).optional(),
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(500).optional(),
   category: PresetCategoryEnum,
@@ -85,7 +87,6 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       where: {
         tenantId: claims.tenantId,
         deletedAtUtc: null,
-        ...(tenant.primaryTrade ? { serviceType: tenant.primaryTrade } : {}),
       },
       orderBy: [{ serviceType: "asc" }, { category: "asc" }, { name: "asc" }],
       take: 200,

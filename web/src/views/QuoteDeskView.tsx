@@ -42,12 +42,25 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
+import { api, type WorkPreset } from "../lib/api";
 import { usePageView, useTrack } from "../lib/analytics";
+
+function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
+  if (unitType === "SQ_FT") return "SQ FT";
+  if (unitType === "HOUR") return "Hours";
+  if (unitType === "EACH") return "Units";
+  return "Qty";
+}
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
   const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
+  const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("");
   const {
     selectedQuoteId,
     focusQuoteDesk,
@@ -70,6 +83,7 @@ export function QuoteDeskView() {
     confirmSendComposer,
     downloadQuotePdf,
     addLineItem,
+    addLineItemDraft,
     deleteLineItem,
     persistSelectedQuote,
     sendComposer,
@@ -99,6 +113,30 @@ export function QuoteDeskView() {
     }
   }, [quoteId, selectedQuoteId, focusQuoteDesk]);
 
+  useEffect(() => {
+    let mounted = true;
+    setPresetsLoading(true);
+    setPresetLoadError(null);
+
+    api.onboarding
+      .getSetup()
+      .then((result) => {
+        if (!mounted) return;
+        setPresetLibrary(result.presets);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setPresetLoadError("Saved jobs could not be loaded.");
+      })
+      .finally(() => {
+        if (mounted) setPresetsLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const serviceOptions = SERVICE_TYPES.map((serviceType) => ({
     value: serviceType,
     label: formatServiceTypeLabel(serviceType),
@@ -125,6 +163,77 @@ export function QuoteDeskView() {
     if (selectedQuoteMath.estimatedMarginPercent < 10) return "Margin is below 10 percent.";
     return undefined;
   }, [selectedQuoteMath]);
+
+  const activeServiceType = quoteEditForm.serviceType || selectedQuote?.serviceType || "HVAC";
+  const availablePresets = useMemo(
+    () =>
+      presetLibrary
+        .filter((preset) => preset.serviceType === activeServiceType)
+        .sort((left, right) => {
+          const leftIsStandard = Boolean(left.catalogKey);
+          const rightIsStandard = Boolean(right.catalogKey);
+          if (leftIsStandard !== rightIsStandard) return leftIsStandard ? -1 : 1;
+          return left.name.localeCompare(right.name);
+        }),
+    [presetLibrary, activeServiceType],
+  );
+
+  useEffect(() => {
+    if (availablePresets.length === 0) {
+      setSelectedPresetId("");
+      setSelectedPresetQuantity("");
+      return;
+    }
+
+    const activePreset = availablePresets.find((preset) => preset.id === selectedPresetId) ?? availablePresets[0];
+    setSelectedPresetId(activePreset.id);
+    setSelectedPresetQuantity(String(Number(activePreset.defaultQuantity)));
+  }, [availablePresets, selectedPresetId]);
+
+  const selectedPreset = useMemo(
+    () => availablePresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [availablePresets, selectedPresetId],
+  );
+
+  const selectedPresetQuantityValue = useMemo(() => {
+    if (!selectedPreset) return 0;
+    const parsed = Number(selectedPresetQuantity);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return Number(selectedPreset.defaultQuantity);
+    }
+    return parsed;
+  }, [selectedPreset, selectedPresetQuantity]);
+
+  const selectedPresetCostTotal = selectedPreset ? selectedPresetQuantityValue * Number(selectedPreset.unitCost) : 0;
+  const selectedPresetPriceTotal = selectedPreset ? selectedPresetQuantityValue * Number(selectedPreset.unitPrice) : 0;
+
+  function applyPresetToLineItemForm() {
+    if (!selectedPreset) return;
+    setLineItemForm({
+      description: selectedPreset.name,
+      quantity: selectedPresetQuantityValue.toFixed(2).replace(/\.00$/, ""),
+      unitCost: Number(selectedPreset.unitCost).toFixed(2),
+      unitPrice: Number(selectedPreset.unitPrice).toFixed(2),
+    });
+    setNotice(`${selectedPreset.name} loaded into the line item form.`);
+  }
+
+  async function addPresetAsLineItem() {
+    if (!selectedPreset) return;
+    track("line_item_preset_add");
+    await addLineItemDraft(
+      {
+        description: selectedPreset.name,
+        quantity: selectedPresetQuantityValue,
+        unitCost: Number(selectedPreset.unitCost),
+        unitPrice: Number(selectedPreset.unitPrice),
+      },
+      {
+        resetForm: false,
+        notice: `${selectedPreset.name} added to the quote.`,
+      },
+    );
+  }
 
   if (!selectedQuote) {
     return (
@@ -344,6 +453,114 @@ export function QuoteDeskView() {
                 <p className="mt-1 text-xs text-slate-500">
                   Build labor, materials, and service charges with cost and sell price separated.
                 </p>
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Saved Jobs</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Tap a standard or custom job to load it fast, then add it straight into this quote.
+                      </p>
+                    </div>
+                    {selectedPreset ? (
+                      <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${selectedPreset.catalogKey ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"}`}>
+                        {selectedPreset.catalogKey ? "Standard" : "Custom"}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {presetLoadError ? (
+                    <div className="mt-3">
+                      <Alert tone="warning">{presetLoadError}</Alert>
+                    </div>
+                  ) : presetsLoading ? (
+                    <div className="mt-3 space-y-2">
+                      <div className="h-10 animate-pulse rounded-xl bg-slate-200" />
+                      <div className="h-24 animate-pulse rounded-xl bg-slate-200" />
+                    </div>
+                  ) : availablePresets.length === 0 ? (
+                    <div className="mt-3">
+                      <Alert tone="info">No saved jobs are ready for {formatServiceTypeLabel(activeServiceType)} yet. Add them in Setup first.</Alert>
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                        {availablePresets.map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPresetId(preset.id);
+                              setSelectedPresetQuantity(String(Number(preset.defaultQuantity)));
+                            }}
+                            className={`min-w-[180px] rounded-2xl border px-3 py-2 text-left transition ${
+                              preset.id === selectedPresetId
+                                ? "border-quotefly-blue bg-quotefly-blue/10"
+                                : "border-slate-200 bg-white"
+                            }`}
+                          >
+                            <p className="text-sm font-semibold text-slate-900">{preset.name}</p>
+                            <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+                              {preset.description ?? "No default description yet."}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-3">
+                        <Select
+                          label="Saved job"
+                          value={selectedPresetId}
+                          onChange={(event) => setSelectedPresetId(event.target.value)}
+                          options={availablePresets.map((preset) => ({
+                            value: preset.id,
+                            label: `${preset.name}${preset.catalogKey ? "" : " (Custom)"}`,
+                          }))}
+                        />
+                        <Input
+                          label={selectedPreset ? formatPresetUnitLabel(selectedPreset.unitType) : "Qty"}
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={selectedPresetQuantity}
+                          onChange={(event) => setSelectedPresetQuantity(event.target.value)}
+                        />
+                      </div>
+
+                      {selectedPreset ? (
+                        <div className="rounded-xl border border-slate-200 bg-white p-3">
+                          <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
+                          <p className="mt-1 text-xs text-slate-600">
+                            {selectedPreset.description ?? "No default description yet."}
+                          </p>
+                          <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3 xl:grid-cols-1">
+                            <MiniMetric
+                              label="Default unit cost"
+                              value={`${money(Number(selectedPreset.unitCost))} / ${formatPresetUnitLabel(selectedPreset.unitType)}`}
+                            />
+                            <MiniMetric
+                              label="Default unit price"
+                              value={`${money(Number(selectedPreset.unitPrice))} / ${formatPresetUnitLabel(selectedPreset.unitType)}`}
+                            />
+                            <MiniMetric
+                              label="Applied totals"
+                              value={`${money(selectedPresetCostTotal)} cost · ${money(selectedPresetPriceTotal)} price`}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                        <Button type="button" variant="outline" onClick={applyPresetToLineItemForm} disabled={!selectedPreset || saving}>
+                          Load Into Form
+                        </Button>
+                        <Button type="button" onClick={() => void addPresetAsLineItem()} disabled={!selectedPreset || saving}>
+                          Add Saved Job Now
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <form onSubmit={(event) => { track("line_item_add"); void addLineItem(event); }} className="mt-4 space-y-3">
                   <Input
                     label="Description"

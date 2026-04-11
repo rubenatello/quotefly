@@ -1,13 +1,20 @@
 import {
-  Prisma,
-  PrismaClient,
   PresetCategory,
   PresetUnitType,
+  Prisma,
+  PrismaClient,
   ServiceCategory,
 } from "@prisma/client";
 import { generateMinimalLogoDataUrl } from "./logo-generator";
+import {
+  buildSquareFootBaselinePreset,
+  getStandardWorkPresetCatalog,
+  getStandardWorkPresetDefinition,
+} from "./work-preset-catalog";
 
 export interface OnboardingPresetInput {
+  id?: string;
+  catalogKey?: string | null;
   name: string;
   description?: string;
   category: PresetCategory;
@@ -40,97 +47,37 @@ const DEFAULT_PRICING_BY_TRADE: Record<ServiceCategory, { laborRate: number; mat
   CONSTRUCTION: { laborRate: 3.1, materialMarkup: 0.34 },
 };
 
-function preset(
-  name: string,
-  category: PresetCategory,
-  unitType: PresetUnitType,
-  unitCost: number,
-  unitPrice: number,
-  description?: string,
-  defaultQuantity = 1,
-): OnboardingPresetInput {
-  return {
-    name,
-    category,
-    unitType,
-    unitCost,
-    unitPrice,
-    description,
-    defaultQuantity,
-    isDefault: true,
-  };
+function normalizePresetName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 export function recommendedPresetsForTrade(serviceType: ServiceCategory): OnboardingPresetInput[] {
-  if (serviceType === "PLUMBING") {
-    return [
-      preset("Minor Clog", "SERVICE", "FLAT", 45, 120, "Drain unclogging / minor blockage resolution."),
-      preset("Pipe Replacement", "SERVICE", "FLAT", 180, 450, "Standard replacement section with fittings."),
-      preset("Pipe Burst Repair", "SERVICE", "FLAT", 260, 700, "Emergency burst repair including access and sealing."),
-      preset("Priority Work Fee", "FEE", "FLAT", 0, 75, "After-hours or urgent response fee."),
-      preset("Labor Hour", "LABOR", "HOUR", 55, 110, "Hourly plumbing labor.", 1),
-    ];
-  }
-
-  if (serviceType === "ROOFING") {
-    return [
-      preset("Asphalt Shingle Removal + Replace", "SERVICE", "SQ_FT", 3.8, 7.9, "Tear-off, prep, install shingles.", 100),
-      preset("Underlayment Layer", "MATERIAL", "SQ_FT", 0.35, 0.85, "Synthetic underlayment.", 100),
-      preset("Roof Deck Repair Allowance", "SERVICE", "SQ_FT", 1.2, 2.8, "Deck repair when damage is discovered.", 25),
-      preset("Flashing Package", "MATERIAL", "FLAT", 80, 185, "Valley and edge flashing package."),
-      preset("Disposal Fee", "FEE", "FLAT", 90, 220, "Dump/disposal and haul-away."),
-    ];
-  }
-
-  if (serviceType === "FLOORING") {
-    return [
-      preset("Floor Demo + Disposal", "SERVICE", "SQ_FT", 1.1, 2.5, "Removal and disposal of old flooring.", 100),
-      preset("LVP Install", "SERVICE", "SQ_FT", 2.6, 5.9, "Install luxury vinyl plank.", 100),
-      preset("Tile Install", "SERVICE", "SQ_FT", 4.5, 9.5, "Tile setting and grout finish.", 100),
-      preset("Underlayment", "MATERIAL", "SQ_FT", 0.42, 0.95, "Subfloor prep underlayment.", 100),
-      preset("Trim/Transition Kit", "MATERIAL", "EACH", 18, 45, "Transition strips and trim."),
-    ];
-  }
-
-  if (serviceType === "HVAC") {
-    return [
-      preset("System Tune-Up", "SERVICE", "FLAT", 65, 145, "Routine maintenance and performance check."),
-      preset("AC Condenser Replacement", "SERVICE", "FLAT", 1400, 3300, "Remove and replace condenser unit."),
-      preset("Furnace Install", "SERVICE", "FLAT", 1800, 4200, "Install/replace furnace unit."),
-      preset("Ductwork Repair", "SERVICE", "HOUR", 70, 145, "Duct repair labor hour."),
-      preset("Priority Dispatch Fee", "FEE", "FLAT", 0, 95, "After-hours dispatch fee."),
-    ];
-  }
-
-  if (serviceType === "GARDENING") {
-    return [
-      preset("Lawn Maintenance Visit", "SERVICE", "FLAT", 30, 75, "Mow, edge, cleanup."),
-      preset("Mulch Install", "MATERIAL", "SQ_FT", 0.35, 1.0, "Mulch supply and install.", 100),
-      preset("Irrigation Repair", "SERVICE", "HOUR", 45, 105, "Sprinkler and irrigation labor hour."),
-      preset("Seasonal Cleanup", "SERVICE", "FLAT", 80, 195, "Debris and overgrowth cleanup."),
-      preset("Green Waste Disposal", "FEE", "FLAT", 20, 55, "Dump/disposal fee."),
-    ];
-  }
-
-  return [
-    preset("General Labor", "LABOR", "HOUR", 65, 140, "Construction labor hour."),
-    preset("Site Prep", "SERVICE", "FLAT", 120, 320, "Site setup and preparation."),
-    preset("Framing Package", "MATERIAL", "FLAT", 650, 1450, "Lumber and framing materials."),
-    preset("Demo + Haul Away", "SERVICE", "FLAT", 220, 540, "Demolition and disposal service."),
-    preset("Project Management Fee", "FEE", "FLAT", 0, 250, "Coordination and scheduling fee."),
-  ];
+  return getStandardWorkPresetCatalog(serviceType).map((preset) => ({
+    catalogKey: preset.catalogKey,
+    name: preset.name,
+    description: preset.description,
+    category: preset.category,
+    unitType: preset.unitType,
+    defaultQuantity: preset.defaultQuantity,
+    unitCost: preset.unitCost,
+    unitPrice: preset.unitPrice,
+    isDefault: preset.isDefault ?? true,
+  }));
 }
 
 function sqFtPreset(serviceType: ServiceCategory, unitCost: number, unitPrice: number): OnboardingPresetInput {
-  return preset(
-    `${serviceType} SQ FT Base`,
-    "SERVICE",
-    "SQ_FT",
-    unitCost,
-    unitPrice,
-    "Square-foot baseline pricing preset.",
-    100,
-  );
+  const preset = buildSquareFootBaselinePreset(serviceType, unitCost, unitPrice);
+  return {
+    catalogKey: preset.catalogKey,
+    name: preset.name,
+    description: preset.description,
+    category: preset.category,
+    unitType: preset.unitType,
+    defaultQuantity: preset.defaultQuantity,
+    unitCost: preset.unitCost,
+    unitPrice: preset.unitPrice,
+    isDefault: preset.isDefault ?? true,
+  };
 }
 
 function clampMoney(value: number | undefined, fallback: number): number {
@@ -178,11 +125,12 @@ export async function applyOnboardingSetup(
     input.generateLogoIfMissing ?? true,
   );
 
-  const recommendedPresets = input.customPresets?.length
+  const submittedPresets = input.customPresets?.length
     ? input.customPresets
     : recommendedPresetsForTrade(input.primaryTrade);
 
-  const presetsToApply = [...recommendedPresets];
+  const standardPresets = recommendedPresetsForTrade(input.primaryTrade);
+  const presetsToApply = [...standardPresets];
   if (
     input.chargeBySquareFoot &&
     Number.isFinite(input.sqFtUnitCost) &&
@@ -196,6 +144,53 @@ export async function applyOnboardingSetup(
       ),
     );
   }
+
+  const matchedPresetIndexes = new Set<number>();
+  const resolvedPresetsToApply = presetsToApply.map((presetItem) => {
+    const matchedIndex = submittedPresets.findIndex((candidate) => {
+      if (presetItem.catalogKey && candidate.catalogKey === presetItem.catalogKey) {
+        return true;
+      }
+
+      return !candidate.catalogKey && normalizePresetName(candidate.name) === normalizePresetName(presetItem.name);
+    });
+
+    const matchedPreset = matchedIndex >= 0 ? submittedPresets[matchedIndex] : undefined;
+    if (matchedIndex >= 0) matchedPresetIndexes.add(matchedIndex);
+
+    const catalogPreset = presetItem.catalogKey
+      ? getStandardWorkPresetDefinition(input.primaryTrade, presetItem.catalogKey) ?? presetItem
+      : presetItem;
+
+    return {
+      id: matchedPreset?.id,
+      catalogKey: catalogPreset.catalogKey ?? null,
+      name: catalogPreset.name,
+      description: matchedPreset?.description?.trim() || catalogPreset.description,
+      category: catalogPreset.category,
+      unitType: catalogPreset.unitType,
+      defaultQuantity: clampMoney(matchedPreset?.defaultQuantity, catalogPreset.defaultQuantity),
+      unitCost: clampMoney(matchedPreset?.unitCost, catalogPreset.unitCost),
+      unitPrice: clampMoney(matchedPreset?.unitPrice, catalogPreset.unitPrice),
+      isDefault: matchedPreset?.isDefault ?? catalogPreset.isDefault ?? true,
+    } satisfies OnboardingPresetInput;
+  });
+
+  const customPresetsToApply = submittedPresets
+    .filter((_, index) => !matchedPresetIndexes.has(index))
+    .filter((presetItem) => !presetItem.catalogKey)
+    .map((presetItem) => ({
+      id: presetItem.id,
+      catalogKey: null,
+      name: presetItem.name.trim(),
+      description: presetItem.description?.trim() || undefined,
+      category: presetItem.category,
+      unitType: presetItem.unitType,
+      defaultQuantity: clampMoney(presetItem.defaultQuantity, 1),
+      unitCost: clampMoney(presetItem.unitCost, 0),
+      unitPrice: clampMoney(presetItem.unitPrice, 0),
+      isDefault: presetItem.isDefault ?? true,
+    } satisfies OnboardingPresetInput));
 
   await prisma.tenant.update({
     where: { id: input.tenantId },
@@ -250,42 +245,141 @@ export async function applyOnboardingSetup(
     });
   }
 
-  for (const presetItem of presetsToApply) {
-    await prisma.workPreset.upsert({
-      where: {
-        tenantId_serviceType_name: {
+  const existingPresets = await prisma.workPreset.findMany({
+    where: {
+      tenantId: input.tenantId,
+      serviceType: input.primaryTrade,
+      deletedAtUtc: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      catalogKey: true,
+    },
+  });
+
+  const keptPresetIds = new Set<string>();
+
+  for (const presetItem of resolvedPresetsToApply) {
+    const legacyMatch = existingPresets.find(
+      (existingPreset) =>
+        !existingPreset.catalogKey &&
+        normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
+    );
+
+    if (presetItem.catalogKey) {
+      const catalogMatch = existingPresets.find((existingPreset) => existingPreset.catalogKey === presetItem.catalogKey);
+      const targetPreset = catalogMatch ?? legacyMatch;
+
+      if (targetPreset) {
+        const updated = await prisma.workPreset.update({
+          where: { id: targetPreset.id },
+          data: {
+            catalogKey: presetItem.catalogKey,
+            category: presetItem.category,
+            unitType: presetItem.unitType,
+            name: presetItem.name,
+            description: presetItem.description,
+            defaultQuantity: presetItem.defaultQuantity,
+            unitCost: presetItem.unitCost,
+            unitPrice: presetItem.unitPrice,
+            isDefault: presetItem.isDefault ?? true,
+            deletedAtUtc: null,
+          },
+          select: { id: true },
+        });
+        keptPresetIds.add(updated.id);
+        continue;
+      }
+
+      const created = await prisma.workPreset.create({
+        data: {
           tenantId: input.tenantId,
           serviceType: input.primaryTrade,
+          catalogKey: presetItem.catalogKey,
+          category: presetItem.category,
+          unitType: presetItem.unitType,
           name: presetItem.name,
+          description: presetItem.description,
+          defaultQuantity: presetItem.defaultQuantity,
+          unitCost: presetItem.unitCost,
+          unitPrice: presetItem.unitPrice,
+          isDefault: presetItem.isDefault ?? true,
         },
-      },
-      create: {
+        select: { id: true },
+      });
+      keptPresetIds.add(created.id);
+    }
+  }
+
+  for (const presetItem of customPresetsToApply) {
+    const targetPreset =
+      (presetItem.id
+        ? existingPresets.find((existingPreset) => existingPreset.id === presetItem.id)
+        : undefined) ??
+      existingPresets.find(
+        (existingPreset) =>
+          !existingPreset.catalogKey &&
+          normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
+      );
+
+    if (targetPreset) {
+      const updated = await prisma.workPreset.update({
+        where: { id: targetPreset.id },
+        data: {
+          catalogKey: null,
+          category: presetItem.category,
+          unitType: presetItem.unitType,
+          name: presetItem.name,
+          description: presetItem.description,
+          defaultQuantity: presetItem.defaultQuantity,
+          unitCost: presetItem.unitCost,
+          unitPrice: presetItem.unitPrice,
+          isDefault: presetItem.isDefault ?? true,
+          deletedAtUtc: null,
+        },
+        select: { id: true },
+      });
+      keptPresetIds.add(updated.id);
+      continue;
+    }
+
+    const created = await prisma.workPreset.create({
+      data: {
         tenantId: input.tenantId,
         serviceType: input.primaryTrade,
         category: presetItem.category,
         unitType: presetItem.unitType,
         name: presetItem.name,
         description: presetItem.description,
-        defaultQuantity: clampMoney(presetItem.defaultQuantity, 1),
-        unitCost: clampMoney(presetItem.unitCost, 0),
-        unitPrice: clampMoney(presetItem.unitPrice, 0),
+        defaultQuantity: presetItem.defaultQuantity,
+        unitCost: presetItem.unitCost,
+        unitPrice: presetItem.unitPrice,
         isDefault: presetItem.isDefault ?? true,
       },
-      update: {
-        category: presetItem.category,
-        unitType: presetItem.unitType,
-        description: presetItem.description,
-        defaultQuantity: clampMoney(presetItem.defaultQuantity, 1),
-        unitCost: clampMoney(presetItem.unitCost, 0),
-        unitPrice: clampMoney(presetItem.unitPrice, 0),
-        isDefault: presetItem.isDefault ?? true,
-        deletedAtUtc: null,
+      select: { id: true },
+    });
+    keptPresetIds.add(created.id);
+  }
+
+  const presetIdsToDelete = existingPresets
+    .filter((presetItem) => !keptPresetIds.has(presetItem.id))
+    .map((presetItem) => presetItem.id);
+
+  if (presetIdsToDelete.length > 0) {
+    await prisma.workPreset.updateMany({
+      where: {
+        tenantId: input.tenantId,
+        id: { in: presetIdsToDelete },
+      },
+      data: {
+        deletedAtUtc: new Date(),
       },
     });
   }
 
   return {
-    presetsCreatedOrUpdated: presetsToApply.length,
+    presetsCreatedOrUpdated: resolvedPresetsToApply.length + customPresetsToApply.length,
   };
 }
 

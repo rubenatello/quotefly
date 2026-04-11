@@ -12,6 +12,7 @@ import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { aiParseChatToQuotePrompt } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
+import { findBestStandardWorkPresetMatch } from "../services/work-preset-catalog";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QuoteStatusSchema = z.enum([
@@ -547,6 +548,35 @@ function normalizeNullablePhone(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeTextForComparison(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function resolveChatQuoteScopeText(
+  parsedScopeText: string,
+  rawPrompt: string,
+  fallbackDescription?: string | null,
+): string {
+  const normalizedScope = normalizeTextForComparison(parsedScopeText);
+  const normalizedPrompt = normalizeTextForComparison(rawPrompt);
+  if (!normalizedScope || normalizedScope === normalizedPrompt) {
+    return fallbackDescription?.trim() || parsedScopeText;
+  }
+  return parsedScopeText;
+}
+
+function inferPresetQuantity(
+  unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH",
+  defaultQuantity: number,
+  squareFeetEstimate: number | null,
+): number {
+  if (unitType === "SQ_FT" && squareFeetEstimate && squareFeetEstimate > 0) {
+    return Number(squareFeetEstimate.toFixed(2));
+  }
+
+  return Number(Math.max(defaultQuantity, 1).toFixed(2));
+}
+
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteFromChatSchema.parse(request.body);
@@ -674,6 +704,15 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    const tenantPresets = await app.prisma.workPreset.findMany({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: parsedDraft.serviceType,
+        deletedAtUtc: null,
+      },
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+    });
+
     const laborRate = Number(pricingProfile?.laborRate ?? defaultLaborRate(parsedDraft.serviceType));
     const materialMarkup = Number(
       pricingProfile?.materialMarkup ?? defaultMaterialMarkup(parsedDraft.serviceType),
@@ -681,33 +720,116 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const estimatedUnits = parsedDraft.squareFeetEstimate ?? 100;
     const taxAmount = roundCurrency(parsedDraft.estimatedTaxAmount ?? 0);
 
+    const matchedStandardPreset = findBestStandardWorkPresetMatch(
+      parsedDraft.serviceType,
+      `${payload.prompt} ${parsedDraft.title} ${parsedDraft.scopeText}`,
+    );
+    const matchedTenantPreset = matchedStandardPreset
+      ? tenantPresets.find((preset) => preset.catalogKey === matchedStandardPreset.catalogKey) ?? null
+      : null;
+    const matchedPreset = matchedTenantPreset
+      ? {
+          name: matchedTenantPreset.name,
+          description: matchedTenantPreset.description,
+          unitType: matchedTenantPreset.unitType,
+          defaultQuantity: Number(matchedTenantPreset.defaultQuantity),
+          unitCost: Number(matchedTenantPreset.unitCost),
+          unitPrice: Number(matchedTenantPreset.unitPrice),
+        }
+      : matchedStandardPreset
+        ? {
+            name: matchedStandardPreset.name,
+            description: matchedStandardPreset.description,
+            unitType: matchedStandardPreset.unitType,
+            defaultQuantity: matchedStandardPreset.defaultQuantity,
+            unitCost: matchedStandardPreset.unitCost,
+            unitPrice: matchedStandardPreset.unitPrice,
+          }
+        : null;
+
     let customerPriceSubtotal = roundCurrency(parsedDraft.estimatedTotalAmount ?? 0);
+    if (customerPriceSubtotal <= 0 && matchedPreset) {
+      const matchedQuantity = inferPresetQuantity(
+        matchedPreset.unitType,
+        matchedPreset.defaultQuantity,
+        parsedDraft.squareFeetEstimate,
+      );
+      customerPriceSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitPrice);
+    }
     if (customerPriceSubtotal <= 0) {
       const baselineInternalCost = roundCurrency(estimatedUnits * laborRate);
       customerPriceSubtotal = roundCurrency(baselineInternalCost * (1 + materialMarkup));
     }
 
     let internalCostSubtotal = roundCurrency(parsedDraft.estimatedInternalCostAmount ?? 0);
+    if (internalCostSubtotal <= 0 && matchedPreset) {
+      const matchedQuantity = inferPresetQuantity(
+        matchedPreset.unitType,
+        matchedPreset.defaultQuantity,
+        parsedDraft.squareFeetEstimate,
+      );
+      internalCostSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitCost);
+    }
     if (internalCostSubtotal <= 0) {
       const divisor = 1 + Math.max(materialMarkup, 0.05);
       internalCostSubtotal = roundCurrency(customerPriceSubtotal / divisor);
     }
-
-    const laborPercent = laborSplit(parsedDraft.serviceType);
-    const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
-    const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
-    const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
-    const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
-
-    const laborSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "LABOR");
-    const materialSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "MATERIAL");
-    const laborQuantity = Number(Math.max(1, laborSuggestion?.quantity ?? 1).toFixed(2));
-    const materialQuantity = Number(Math.max(1, materialSuggestion?.quantity ?? 1).toFixed(2));
-    const laborUnitCost = roundCurrency(laborInternalTotal / laborQuantity);
-    const laborUnitPrice = roundCurrency(laborCustomerTotal / laborQuantity);
-    const materialUnitCost = roundCurrency(materialInternalTotal / materialQuantity);
-    const materialUnitPrice = roundCurrency(materialCustomerTotal / materialQuantity);
     const totalAmount = calculateQuoteTotal(customerPriceSubtotal, taxAmount);
+
+    const title = matchedPreset?.name ?? parsedDraft.title;
+    const scopeText = resolveChatQuoteScopeText(
+      parsedDraft.scopeText,
+      payload.prompt,
+      matchedPreset?.description,
+    );
+
+    const lineItemDrafts = matchedPreset
+      ? (() => {
+          const quantity = inferPresetQuantity(
+            matchedPreset.unitType,
+            matchedPreset.defaultQuantity,
+            parsedDraft.squareFeetEstimate,
+          );
+          return [
+            {
+              description: matchedPreset.name,
+              quantity,
+              unitCost: roundCurrency(internalCostSubtotal / quantity),
+              unitPrice: roundCurrency(customerPriceSubtotal / quantity),
+            },
+          ];
+        })()
+      : (() => {
+          const laborPercent = laborSplit(parsedDraft.serviceType);
+          const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
+          const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
+          const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
+          const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
+
+          const laborSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "LABOR");
+          const materialSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "MATERIAL");
+          const laborQuantity = Number(Math.max(1, laborSuggestion?.quantity ?? 1).toFixed(2));
+          const materialQuantity = Number(Math.max(1, materialSuggestion?.quantity ?? 1).toFixed(2));
+          const laborUnitCost = roundCurrency(laborInternalTotal / laborQuantity);
+          const laborUnitPrice = roundCurrency(laborCustomerTotal / laborQuantity);
+          const materialUnitCost = roundCurrency(materialInternalTotal / materialQuantity);
+          const materialUnitPrice = roundCurrency(materialCustomerTotal / materialQuantity);
+
+          return [
+            {
+              description: laborSuggestion?.description ?? `${parsedDraft.serviceType} labor`,
+              quantity: laborQuantity,
+              unitCost: laborUnitCost,
+              unitPrice: laborUnitPrice,
+            },
+            {
+              description: materialSuggestion?.description ?? "Materials and install supplies",
+              quantity: materialQuantity,
+              unitCost: materialUnitCost,
+              unitPrice: materialUnitPrice,
+            },
+          ];
+        })();
 
     const quote = await app.prisma.$transaction(async (tx) => {
       const createdQuote = await tx.quote.create({
@@ -716,8 +838,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           customerId: customer.id,
           serviceType: parsedDraft.serviceType,
           status: "READY_FOR_REVIEW",
-          title: parsedDraft.title,
-          scopeText: parsedDraft.scopeText,
+          title,
+          scopeText,
           internalCostSubtotal,
           customerPriceSubtotal,
           taxAmount,
@@ -727,24 +849,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
 
       await tx.quoteLineItem.createMany({
-        data: [
-          {
-            tenantId: claims.tenantId,
-            quoteId: createdQuote.id,
-            description: laborSuggestion?.description ?? `${parsedDraft.serviceType} labor`,
-            quantity: laborQuantity,
-            unitCost: laborUnitCost,
-            unitPrice: laborUnitPrice,
-          },
-          {
-            tenantId: claims.tenantId,
-            quoteId: createdQuote.id,
-            description: materialSuggestion?.description ?? "Materials and install supplies",
-            quantity: materialQuantity,
-            unitCost: materialUnitCost,
-            unitPrice: materialUnitPrice,
-          },
-        ],
+        data: lineItemDrafts.map((lineItem) => ({
+          tenantId: claims.tenantId,
+          quoteId: createdQuote.id,
+          description: lineItem.description,
+          quantity: lineItem.quantity,
+          unitCost: lineItem.unitCost,
+          unitPrice: lineItem.unitPrice,
+        })),
       });
 
       await recalculateQuoteFromLineItems(tx, createdQuote.id, claims.tenantId);

@@ -276,6 +276,7 @@ export interface WorkPresetRow {
   id: string;
   tenantId: string;
   serviceType: ServiceCategory;
+  catalogKey: string | null;
   category: PresetCategory;
   unitType: PresetUnitType;
   name: string;

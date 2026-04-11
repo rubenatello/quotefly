@@ -40,6 +40,7 @@ export type QuoteEditForm = {
   taxAmount: string;
 };
 export type LineItemForm = { description: string; quantity: string; unitCost: string; unitPrice: string };
+export type CreateLineItemInput = { description: string; quantity: number; unitCost: number; unitPrice: number };
 export type HistoryMode = "quote" | "customer" | "all";
 export type SendChannel = "email" | "sms" | "copy";
 export type CreateCustomerPayload = { fullName: string; phone: string; email: string | null };
@@ -311,6 +312,7 @@ export interface DashboardContextValue {
   downloadQuotePdf: (options?: { inline?: boolean; afterSend?: boolean }) => Promise<void>;
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
+  addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<void>;
   deleteLineItem: (lineItemId: string) => Promise<void>;
   updateLeadFollowUpStatus: (customerId: string, followUpStatus: LeadFollowUpStatus) => Promise<void>;
   loadOutboundEvents: (quoteId: string) => Promise<void>;
@@ -787,21 +789,37 @@ export function DashboardProvider({
     [],
   );
 
-  const addLineItem = useCallback(async (event: FormEvent) => {
-    event.preventDefault();
+  const addLineItemDraft = useCallback(async (
+    input: CreateLineItemInput,
+    options?: { resetForm?: boolean; notice?: string },
+  ) => {
     if (!selectedQuote) return;
     setSaving(true); setError(null);
     try {
       await api.quotes.lineItems.create(selectedQuote.id, {
-        description: lineItemForm.description, quantity: Number(lineItemForm.quantity),
-        unitCost: Number(lineItemForm.unitCost), unitPrice: Number(lineItemForm.unitPrice),
+        description: input.description,
+        quantity: input.quantity,
+        unitCost: input.unitCost,
+        unitPrice: input.unitPrice,
       });
-      setLineItemForm(EMPTY_LINE_ITEM);
+      if (options?.resetForm !== false) {
+        setLineItemForm(EMPTY_LINE_ITEM);
+      }
       await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
       if (canViewQuoteHistory) await loadQuoteHistory();
-      setNotice("Line item added.");
+      setNotice(options?.notice ?? "Line item added.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed adding line item."); } finally { setSaving(false); }
-  }, [selectedQuote, lineItemForm, canViewQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory]);
+
+  const addLineItem = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    await addLineItemDraft({
+      description: lineItemForm.description,
+      quantity: Number(lineItemForm.quantity),
+      unitCost: Number(lineItemForm.unitCost),
+      unitPrice: Number(lineItemForm.unitPrice),
+    });
+  }, [lineItemForm, addLineItemDraft]);
 
   const deleteLineItem = useCallback(async (lineItemId: string) => {
     if (!selectedQuote) return;
@@ -977,7 +995,7 @@ export function DashboardProvider({
     createQuoteFromChatPrompt, applyTradeSetup, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,
-    addLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
+    addLineItem, addLineItemDraft, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

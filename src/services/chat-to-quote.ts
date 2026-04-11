@@ -1,4 +1,5 @@
 import { ServiceCategory, inferServiceType } from "./quote-generator";
+import { findBestStandardWorkPresetMatch } from "./work-preset-catalog";
 
 export interface ChatQuoteLineItemSuggestion {
   kind: "LABOR" | "MATERIAL";
@@ -112,6 +113,11 @@ function laborDescription(serviceType: ServiceCategory, squareFeetEstimate: numb
 }
 
 function inferTitle(serviceType: ServiceCategory, prompt: string): string {
+  const matchedStandardPreset = findBestStandardWorkPresetMatch(serviceType, prompt);
+  if (matchedStandardPreset) {
+    return matchedStandardPreset.name;
+  }
+
   const lower = prompt.toLowerCase();
   if (serviceType === "ROOFING" && (lower.includes("replace") || lower.includes("replacement"))) {
     return "Roof Replacement Quote";

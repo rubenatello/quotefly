@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
-import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, Select } from "../components/ui";
+import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, Select, Textarea } from "../components/ui";
 import {
   ApiError,
   api,
@@ -22,6 +22,7 @@ interface SetupPageProps {
 
 interface SetupPresetDraft {
   id: string;
+  catalogKey?: string | null;
   name: string;
   description: string;
   category: WorkPresetCategory;
@@ -62,13 +63,21 @@ function formatUnitType(value: WorkPreset["unitType"]): string {
   return "Flat";
 }
 
-function inferSquareFootPreset(presets: WorkPreset[], trade: ServiceType) {
-  return presets.find((preset) => preset.serviceType === trade && preset.unitType === "SQ_FT") ?? null;
+function normalizePresetName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function toPresetDraft(preset: WorkPreset): SetupPresetDraft {
+function inferSquareFootPreset(presets: WorkPreset[], trade: ServiceType) {
+  return presets.find((preset) => preset.serviceType === trade && preset.catalogKey === "sq_ft_base") ?? null;
+}
+
+function toPresetDraft(
+  preset: WorkPreset,
+  recommendedCatalogMap: Map<string, string>,
+): SetupPresetDraft {
   return {
     id: preset.id,
+    catalogKey: preset.catalogKey ?? recommendedCatalogMap.get(normalizePresetName(preset.name)) ?? null,
     name: preset.name,
     description: preset.description ?? "",
     category: preset.category,
@@ -92,6 +101,10 @@ function createEmptyPresetDraft(trade: ServiceType, index: number): SetupPresetD
     unitPrice: "0",
     isDefault: true,
   };
+}
+
+function isStandardPresetDraft(preset: SetupPresetDraft): boolean {
+  return Boolean(preset.catalogKey);
 }
 
 export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
@@ -161,6 +174,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
             id: `recommended-${trade}-${index}`,
             tenantId: "recommended",
             serviceType: result.serviceType,
+            catalogKey: preset.catalogKey ?? null,
             category: preset.category,
             unitType: preset.unitType,
             name: preset.name,
@@ -189,13 +203,28 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
   const currentPresetSummary = useMemo(() => {
     const tradePresets = existingPresets.filter((preset) => preset.serviceType === trade);
-    if (tradePresets.length > 0) return tradePresets;
-    return recommendedPresets;
+    const source = tradePresets.length > 0 ? tradePresets : recommendedPresets;
+    return [...source].sort((left, right) => {
+      const leftIsStandard = Boolean(left.catalogKey);
+      const rightIsStandard = Boolean(right.catalogKey);
+      if (leftIsStandard !== rightIsStandard) return leftIsStandard ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
   }, [existingPresets, recommendedPresets, trade]);
 
+  const recommendedCatalogMap = useMemo(
+    () =>
+      new Map(
+        recommendedPresets
+          .filter((preset) => preset.catalogKey)
+          .map((preset) => [normalizePresetName(preset.name), preset.catalogKey ?? ""]),
+      ),
+    [recommendedPresets],
+  );
+
   useEffect(() => {
-    setPresetDrafts(currentPresetSummary.map(toPresetDraft));
-  }, [currentPresetSummary]);
+    setPresetDrafts(currentPresetSummary.map((preset) => toPresetDraft(preset, recommendedCatalogMap)));
+  }, [currentPresetSummary, recommendedCatalogMap]);
 
   const visiblePresetDrafts = useMemo(
     () => presetDrafts.filter((preset) => !(chargeBySquareFoot && preset.unitType === "SQ_FT")),
@@ -207,7 +236,12 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     presetDrafts.every((preset) => preset.name.trim().length >= 2 && Number(preset.defaultQuantity) > 0);
 
   function resetPresetDraftsToDefaults() {
-    setPresetDrafts(recommendedPresets.map(toPresetDraft));
+    setPresetDrafts((current) => {
+      const customPresets = current.filter((preset) => !isStandardPresetDraft(preset));
+      const squareFootPreset = current.find((preset) => preset.catalogKey === "sq_ft_base");
+      const nextStandardPresets = recommendedPresets.map((preset) => toPresetDraft(preset, recommendedCatalogMap));
+      return [...(squareFootPreset ? [squareFootPreset] : []), ...nextStandardPresets, ...customPresets];
+    });
   }
 
   function updatePresetDraft(
@@ -243,6 +277,8 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
       const normalizedPresets = presetDrafts
         .filter((preset) => preset.name.trim().length >= 2)
         .map((preset) => ({
+          id: preset.id,
+          catalogKey: preset.catalogKey ?? undefined,
           name: preset.name.trim(),
           description: preset.description.trim() || undefined,
           category: preset.category,
@@ -422,6 +458,17 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
               {visiblePresetDrafts.map((preset, index) => (
                 <div key={preset.id} className="rounded-xl border border-slate-200 p-3">
+                  {isStandardPresetDraft(preset) ? (
+                    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <Badge tone="blue">Standard Catalog</Badge>
+                      <span>Standard line title stays locked. Description and pricing can be tailored for this tenant.</span>
+                    </div>
+                  ) : (
+                    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <Badge tone="slate">Custom</Badge>
+                      <span>Custom items stay private to this tenant and can be renamed or removed.</span>
+                    </div>
+                  )}
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-medium text-slate-900">Preset {index + 1}</p>
@@ -429,36 +476,46 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                         This becomes a reusable starting line in quote creation.
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removePresetDraft(preset.id)}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                      aria-label={`Remove preset ${index + 1}`}
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    {isStandardPresetDraft(preset) ? null : (
+                      <button
+                        type="button"
+                        onClick={() => removePresetDraft(preset.id)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                        aria-label={`Remove preset ${index + 1}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
                   </div>
 
                   <div className="mt-3 grid gap-3">
                     <Input
+                      label="Line title"
                       value={preset.name}
+                      disabled={isStandardPresetDraft(preset)}
                       onChange={(event) => updatePresetDraft(preset.id, "name", event.target.value)}
-                      placeholder="Preset name"
+                      placeholder="Line title"
                     />
-                    <Input
+                    <Textarea
+                      label="Line description"
                       value={preset.description}
                       onChange={(event) => updatePresetDraft(preset.id, "description", event.target.value)}
-                      placeholder="Description (optional)"
+                      placeholder="Explain the scope, materials, exclusions, or service details."
+                      rows={3}
                     />
 
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Select
+                        label="Category"
                         value={preset.category}
+                        disabled={isStandardPresetDraft(preset)}
                         onChange={(event) => updatePresetDraft(preset.id, "category", event.target.value as WorkPresetCategory)}
                         options={PRESET_CATEGORY_OPTIONS}
                       />
                       <Select
+                        label="Unit type"
                         value={preset.unitType}
+                        disabled={isStandardPresetDraft(preset)}
                         onChange={(event) => updatePresetDraft(preset.id, "unitType", event.target.value as WorkPresetUnitType)}
                         options={PRESET_UNIT_OPTIONS}
                       />
@@ -466,6 +523,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Input
+                        label="Default qty"
                         type="number"
                         min="0.01"
                         step="0.01"
@@ -474,6 +532,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                         placeholder="Qty"
                       />
                       <Input
+                        label="Unit cost"
                         type="number"
                         min="0"
                         step="0.01"
@@ -482,6 +541,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                         placeholder="Unit cost"
                       />
                       <Input
+                        label="Unit price"
                         type="number"
                         min="0"
                         step="0.01"
