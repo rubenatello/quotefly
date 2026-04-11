@@ -212,12 +212,12 @@ Card.displayName = "Card";
 
 export function CardHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-3">
-      <div>
+    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
         <h2 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
         {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
       </div>
-      {actions}
+      {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
     </div>
   );
 }
@@ -527,12 +527,12 @@ export function ProgressBar({
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <div>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
         <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-slate-600 sm:text-base">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
     </div>
   );
 }

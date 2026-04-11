@@ -13,6 +13,7 @@ import {
 import { setSEOMetadata } from "../lib/seo";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, Select } from "../components/ui";
+import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 
 interface AdminPageProps {
   session?: {
@@ -398,6 +399,12 @@ export function AdminPage({ session }: AdminPageProps) {
     if (teamMembersLimit === null) return `${teamMembersUsed} seats in use`;
     return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
+  const adminLinks = [
+    { id: "admin-overview", label: "Overview", hint: "Plan + status" },
+    { id: "admin-billing", label: "Billing", hint: "Plans + Stripe" },
+    { id: "admin-quickbooks", label: "QuickBooks", hint: "Accounting sync" },
+    { id: "admin-team", label: "Team", hint: "Users + roles" },
+  ];
 
   const billingSummaryText = useMemo(() => {
     if (session?.isTrial) {
@@ -457,17 +464,6 @@ export function AdminPage({ session }: AdminPageProps) {
         }
       />
 
-      <div className="flex flex-wrap gap-2">
-        <Badge tone={planTone(effectivePlanCode)}>{effectivePlanName} access</Badge>
-        {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
-        <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
-          Status: {sentenceCaseStatus(session?.subscriptionStatus)}
-        </Badge>
-        <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
-          QuickBooks: {quickBooksConnected ? "Connected" : "Not linked"}
-        </Badge>
-      </div>
-
       {error ? (
         <Alert tone="error" onDismiss={() => setError(null)}>
           {error}
@@ -479,7 +475,87 @@ export function AdminPage({ session }: AdminPageProps) {
         </Alert>
       ) : null}
 
-      <Card variant="blue" padding="lg">
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+          <WorkspaceRailCard
+            eyebrow="Admin"
+            title="Workspace Control"
+            description="Billing, accounting, and team settings should be obvious and fast to scan on mobile or desktop."
+          >
+            <div className="flex flex-wrap gap-2">
+              <Badge tone={planTone(effectivePlanCode)}>{effectivePlanName} access</Badge>
+              {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
+              <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
+                {sentenceCaseStatus(session?.subscriptionStatus)}
+              </Badge>
+              <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
+                QB {quickBooksConnected ? "Connected" : "Not linked"}
+              </Badge>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <AdminMetricCard
+                icon={<PriceIcon size={16} />}
+                label="Current access"
+                value={effectivePlanName}
+                hint={session?.isTrial ? "Trial access" : "Live plan access"}
+              />
+              <AdminMetricCard
+                icon={<ClockIcon size={16} />}
+                label="Billing state"
+                value={sentenceCaseStatus(session?.subscriptionStatus)}
+                hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+              />
+              <AdminMetricCard
+                icon={<CustomerIcon size={16} />}
+                label="Team seats"
+                value={seatUsageText}
+                hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
+              />
+            </div>
+            <WorkspaceJumpBar links={adminLinks} className="mt-4" />
+          </WorkspaceRailCard>
+
+          <WorkspaceRailCard
+            eyebrow="Owner actions"
+            title={ownerView ? "You can manage billing" : "Read-only access"}
+            description={ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
+          >
+            <div className="grid gap-2">
+              {ownerView && hasPortalAccess ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void openBillingPortal()}
+                  disabled={billingAction !== null}
+                  loading={billingAction === "portal"}
+                  fullWidth
+                >
+                  Manage Billing
+                </Button>
+              ) : null}
+              {ownerView ? (
+                <Button
+                  type="button"
+                  onClick={() => void connectQuickBooks()}
+                  disabled={!quickBooksStatus?.enabled || quickBooksActionLoading}
+                  loading={quickBooksActionLoading && quickBooksActionMode === "connect"}
+                  fullWidth
+                >
+                  {quickBooksConnected ? "Reconnect QuickBooks" : "Connect QuickBooks"}
+                </Button>
+              ) : null}
+            </div>
+          </WorkspaceRailCard>
+        </aside>
+
+        <div className="space-y-6">
+          <WorkspaceSection
+            id="admin-overview"
+            step="Step 1"
+            title="Overview"
+            description="Keep billing, integrations, and team access aligned from one operator surface."
+          >
+            <Card variant="blue" padding="lg">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="max-w-2xl space-y-3">
             <div>
@@ -515,13 +591,20 @@ export function AdminPage({ session }: AdminPageProps) {
             />
           </div>
         </div>
-      </Card>
+            </Card>
+          </WorkspaceSection>
 
-      <Card variant="elevated" padding="lg">
+          <WorkspaceSection
+            id="admin-billing"
+            step="Step 2"
+            title="Billing"
+            description="Choose the plan that matches your crew size. Stripe handles billing and QuoteFly enforces access."
+            actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
+          >
+            <Card variant="elevated" padding="lg">
         <CardHeader
           title="Billing and Plan Controls"
           subtitle="Choose the plan that matches your crew size. Stripe handles billing and QuoteFly enforces tenant access."
-          actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
         />
         <div className="grid gap-4 xl:grid-cols-3">
           {PLAN_CARDS.map((plan) => {
@@ -579,13 +662,20 @@ export function AdminPage({ session }: AdminPageProps) {
             Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocks based on the plan attached to this workspace.
           </p>
         </Card>
-      </Card>
+            </Card>
+          </WorkspaceSection>
 
-      <Card variant="elevated" padding="lg">
+          <WorkspaceSection
+            id="admin-quickbooks"
+            step="Step 3"
+            title="QuickBooks"
+            description="Link one QuickBooks company to this tenant so accepted quotes can move into invoice workflows."
+            actions={<Badge tone={quickBooksStatus?.environment === "sandbox" ? "amber" : "slate"}>{quickBooksEnvironmentLabel}</Badge>}
+          >
+            <Card variant="elevated" padding="lg">
         <CardHeader
           title="QuickBooks Online"
           subtitle="Link one QuickBooks company to this tenant so accepted quotes can move into invoice workflows."
-          actions={<Badge tone={quickBooksStatus?.environment === "sandbox" ? "amber" : "slate"}>{quickBooksEnvironmentLabel}</Badge>}
         />
 
         <div className="flex flex-wrap gap-2">
@@ -662,14 +752,21 @@ export function AdminPage({ session }: AdminPageProps) {
             <p className="mt-1 text-xs text-slate-500">Webhook URL: {quickBooksStatus?.webhookUrl ?? "Loading..."}</p>
           </Card>
         </div>
-      </Card>
+            </Card>
+          </WorkspaceSection>
 
-      <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <WorkspaceSection
+            id="admin-team"
+            step="Step 4"
+            title="Team"
+            description="Invite field users and office staff into the same workspace and keep role controls obvious."
+            actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
+          >
+            <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Card variant="elevated" padding="lg">
           <CardHeader
             title="Add Team Member"
             subtitle="Invite field users and office staff into the same workspace."
-            actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
           />
           <form onSubmit={createMember} className="space-y-3">
             <Input
@@ -774,6 +871,9 @@ export function AdminPage({ session }: AdminPageProps) {
             )}
           </div>
         </Card>
+            </div>
+          </WorkspaceSection>
+        </div>
       </div>
 
       <ConfirmModal

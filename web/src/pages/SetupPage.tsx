@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, ChevronRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
+import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import {
   ApiError,
   api,
@@ -105,6 +106,15 @@ function createEmptyPresetDraft(trade: ServiceType, index: number): SetupPresetD
 
 function isStandardPresetDraft(preset: SetupPresetDraft): boolean {
   return Boolean(preset.catalogKey);
+}
+
+function SetupRailStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
+    </div>
+  );
 }
 
 export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
@@ -243,6 +253,12 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   ];
   const completedStepCount = setupChecklist.filter((step) => step.complete).length;
   const setupProgressPercent = Math.round((completedStepCount / setupChecklist.length) * 100);
+  const setupLinks = [
+    { id: "setup-overview", label: "Overview", hint: "Progress + snapshot" },
+    { id: "setup-defaults", label: "Defaults", hint: "Trade + pricing" },
+    { id: "setup-presets", label: "Presets", hint: "Starter jobs" },
+    { id: "setup-next", label: "Next Steps", hint: "Branding + first quote" },
+  ];
 
   function resetPresetDraftsToDefaults() {
     setPresetDrafts((current) => {
@@ -333,84 +349,136 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
-      <Card variant="blue" padding="lg" className="overflow-hidden">
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)] lg:items-center">
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-quotefly-blue">Setup Progress</p>
-              <h2 className="mt-2 text-2xl font-semibold text-slate-900 sm:text-3xl">Build the quoting baseline once, then move fast.</h2>
-              <p className="mt-2 max-w-2xl text-sm text-slate-600 sm:text-base">
-                These are starting defaults, not market truth. Lock in your trade, adjust pricing, and save a clean starter pack your team can reuse.
-              </p>
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+          <WorkspaceRailCard
+            eyebrow="Setup"
+            title="First-run baseline"
+            description="Keep trade defaults, starter jobs, and next steps obvious so a new tenant can finish setup quickly."
+          >
+            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <SetupRailStat label="Trade" value={TRADE_LABELS[trade]} />
+              <SetupRailStat label="Starter jobs" value={String(presetDrafts.length)} />
+              <SetupRailStat label="Area pricing" value={chargeBySquareFoot ? "Enabled" : "Optional"} />
             </div>
+            <WorkspaceJumpBar links={setupLinks} className="mt-4" />
+          </WorkspaceRailCard>
 
+          <WorkspaceRailCard
+            eyebrow="Current state"
+            title={`${setupProgressPercent}% ready`}
+            description={`${completedStepCount}/${setupChecklist.length} setup items complete`}
+          >
             <ProgressBar
               value={setupProgressPercent}
               label="Workspace completion"
               hint={`${completedStepCount}/${setupChecklist.length} complete`}
             />
-
-            <div className="flex flex-wrap gap-2">
-              {setupChecklist.map((step) => (
-                <span
-                  key={step.label}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                    step.complete
-                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                      : "border-slate-300 bg-white/85 text-slate-600"
-                  }`}
-                >
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/90">
-                    {step.complete ? <Check size={12} /> : <span className="h-2 w-2 rounded-full bg-current" />}
-                  </span>
-                  {step.label}
-                </span>
-              ))}
+            <div className="mt-4 grid gap-2">
+              <Button onClick={() => void saveSetup()} loading={saving} disabled={!canSaveSetup} fullWidth>
+                Save Setup
+              </Button>
+              <Button variant="outline" onClick={() => navigate("/app/branding")} fullWidth>
+                Next: Branding
+              </Button>
+              <Button variant="ghost" onClick={() => navigate("/app/build")} fullWidth>
+                Quote Builder
+              </Button>
             </div>
-          </div>
+          </WorkspaceRailCard>
+        </aside>
 
-          <div className="rounded-[26px] border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Snapshot</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Primary Trade</p>
-                <p className="mt-1 text-lg font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
+        <div className="space-y-6">
+          <WorkspaceSection
+            id="setup-overview"
+            step="Step 1"
+            title="Overview"
+            description="Build the quoting baseline once, then move fast."
+          >
+            <Card variant="blue" padding="lg" className="overflow-hidden">
+              <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)] lg:items-center">
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-quotefly-blue">Setup Progress</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-900 sm:text-3xl">Build the quoting baseline once, then move fast.</h2>
+                    <p className="mt-2 max-w-2xl text-sm text-slate-600 sm:text-base">
+                      These are starting defaults, not market truth. Lock in your trade, adjust pricing, and save a clean starter pack your team can reuse.
+                    </p>
+                  </div>
+
+                  <ProgressBar
+                    value={setupProgressPercent}
+                    label="Workspace completion"
+                    hint={`${completedStepCount}/${setupChecklist.length} complete`}
+                  />
+
+                  <div className="flex flex-wrap gap-2">
+                    {setupChecklist.map((step) => (
+                      <span
+                        key={step.label}
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                          step.complete
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                            : "border-slate-300 bg-white/85 text-slate-600"
+                        }`}
+                      >
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/90">
+                          {step.complete ? <Check size={12} /> : <span className="h-2 w-2 rounded-full bg-current" />}
+                        </span>
+                        {step.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[26px] border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Snapshot</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Primary Trade</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Starter Jobs</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">{presetDrafts.length}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Area Pricing</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">{chargeBySquareFoot ? "Enabled" : "Optional"}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Starter Jobs</p>
-                <p className="mt-1 text-lg font-semibold text-slate-900">{presetDrafts.length}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Area Pricing</p>
-                <p className="mt-1 text-lg font-semibold text-slate-900">{chargeBySquareFoot ? "Enabled" : "Optional"}</p>
-              </div>
+            </Card>
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <Card variant="blue">
+                <CardHeader title="Trade Focus" subtitle="Primary service type used for defaults" />
+                <p className="text-2xl font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
+                <p className="mt-1 text-sm text-slate-600">This drives pricing defaults, presets, and faster quote creation.</p>
+              </Card>
+              <Card>
+                <CardHeader title="Preset Pack" subtitle="Jobs and line items ready to start from" />
+                <p className="text-2xl font-semibold text-slate-900">{recommendedPresets.length}</p>
+                <p className="mt-1 text-sm text-slate-600">Recommended presets will be saved or refreshed for the selected trade.</p>
+              </Card>
+              <Card>
+                <CardHeader title="Status" subtitle="Workspace readiness" />
+                <Badge tone={session?.onboardingCompletedAtUtc ? "emerald" : "amber"}>{completionText}</Badge>
+                <p className="mt-3 text-sm text-slate-600">
+                  Finish setup here, then move to branding and quote creation.
+                </p>
+              </Card>
             </div>
-          </div>
-        </div>
-      </Card>
+          </WorkspaceSection>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card variant="blue">
-          <CardHeader title="Trade Focus" subtitle="Primary service type used for defaults" />
-          <p className="text-2xl font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
-          <p className="mt-1 text-sm text-slate-600">This drives pricing defaults, presets, and faster quote creation.</p>
-        </Card>
-        <Card>
-          <CardHeader title="Preset Pack" subtitle="Jobs and line items ready to start from" />
-          <p className="text-2xl font-semibold text-slate-900">{recommendedPresets.length}</p>
-          <p className="mt-1 text-sm text-slate-600">Recommended presets will be saved or refreshed for the selected trade.</p>
-        </Card>
-        <Card>
-          <CardHeader title="Status" subtitle="Workspace readiness" />
-          <Badge tone={session?.onboardingCompletedAtUtc ? "emerald" : "amber"}>{completionText}</Badge>
-          <p className="mt-3 text-sm text-slate-600">
-            Finish setup here, then move to branding and quote creation.
-          </p>
-        </Card>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-        <Card variant="elevated">
+          <WorkspaceSection
+            id="setup-defaults"
+            step="Step 2"
+            title="Trade Defaults"
+            description="Choose your core trade and optionally set a square-foot baseline."
+          >
+            <Card variant="elevated">
           <CardHeader
             title="Trade Defaults"
             subtitle="Choose your core trade and optionally set a square-foot baseline."
@@ -490,10 +558,17 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
               </div>
             </div>
           )}
-        </Card>
+            </Card>
+          </WorkspaceSection>
 
-        <div className="space-y-5">
-          <Card>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <WorkspaceSection
+              id="setup-presets"
+              step="Step 3"
+              title="Preset Builder"
+              description={`Edit the starter pricing pack for ${TRADE_LABELS[trade]} before your crew starts quoting.`}
+            >
+              <Card>
             <CardHeader
               title="Preset Builder"
               subtitle={`Edit the starter pricing pack for ${TRADE_LABELS[trade]} before your crew starts quoting.`}
@@ -626,11 +701,18 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 </div>
               ))}
             </div>
-          </Card>
+              </Card>
+            </WorkspaceSection>
 
-          <Card>
-            <CardHeader title="Recommended Next Steps" subtitle="Keep the first-run flow short and useful." />
-            <div className="space-y-3">
+            <WorkspaceSection
+              id="setup-next"
+              step="Step 4"
+              title="Next Steps"
+              description="Keep the first-run path short and useful after the baseline is saved."
+            >
+              <Card>
+                <CardHeader title="Recommended Next Steps" subtitle="Keep the first-run flow short and useful." />
+                <div className="space-y-3">
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
                 <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
                   <Palette size={18} />
@@ -662,8 +744,10 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 Continue to Branding
                 <ChevronRight size={16} />
               </Button>
-            </div>
-          </Card>
+                </div>
+              </Card>
+            </WorkspaceSection>
+          </div>
         </div>
       </div>
     </div>

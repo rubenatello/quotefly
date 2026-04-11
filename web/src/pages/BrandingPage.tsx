@@ -21,7 +21,8 @@ import {
   type BrandingComponentColors,
   type BrandingTemplateId,
 } from "../lib/api";
-import { Button, ProgressBar } from "../components/ui";
+import { Badge, Button, Input, PageHeader, ProgressBar, Select } from "../components/ui";
+import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 
 interface BrandingPageProps {
   tenantId?: string;
@@ -315,16 +316,16 @@ function BrandingSectionCard({
   return (
     <section
       id={`branding-${id}`}
-      className="scroll-mt-24 rounded-xl border border-slate-200 bg-white"
+      className="scroll-mt-24 rounded-[28px] border border-slate-200 bg-white shadow-sm"
     >
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-4 rounded-xl px-5 py-4 text-left sm:px-6"
+        className="flex w-full items-center justify-between gap-4 rounded-[28px] px-5 py-5 text-left sm:px-6"
         aria-expanded={isOpen}
       >
         <div className="flex min-w-0 items-start gap-3">
-          <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-quotefly-primary/10 text-quotefly-primary">
+          <div className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-quotefly-primary">
             <Icon size={18} />
           </div>
           <div className="min-w-0">
@@ -339,7 +340,7 @@ function BrandingSectionCard({
             <p className="mt-1 text-sm text-slate-500">{description}</p>
           </div>
         </div>
-        <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500">
+        <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500">
           <ChevronDown size={18} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
         </div>
       </button>
@@ -509,6 +510,11 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     templates: selectedTemplate ? "Selected" : undefined,
     preview: "Live",
   };
+  const brandingLinks = BRANDING_SECTIONS.map((section) => ({
+    id: `branding-${section.id}`,
+    label: section.title,
+    hint: section.description,
+  }));
 
   const moveTemplate = (offset: -1 | 1) => {
     const nextIndex = (selectedTemplateIndex + offset + TEMPLATE_OPTIONS.length) % TEMPLATE_OPTIONS.length;
@@ -620,81 +626,75 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-8">
-          <h1 className="mb-2 text-4xl font-bold font-display text-slate-900">Quote Branding</h1>
-          <p className="text-lg text-slate-500">
-            Set the sender identity, timezone, colors, and template your customers will actually see.
-          </p>
-        </div>
+        <PageHeader
+          title="Quote Branding"
+          subtitle="Set the sender identity, colors, and template your customers actually see."
+          actions={<Badge tone="blue">{completedSectionCount}/4 ready</Badge>}
+        />
 
         <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="xl:sticky xl:top-24 xl:self-start">
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Brand Setup</p>
-                  <h2 className="mt-2 font-display text-2xl font-semibold text-slate-900">{companyName}</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Manage sender identity, visual styling, and template output from one place.
-                  </p>
+          <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+            <WorkspaceRailCard
+              eyebrow="Brand Setup"
+              title={companyName}
+              description="Manage sender identity, visual styling, and quote layout from one operator surface."
+            >
+              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Timezone</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{timezone}</p>
                 </div>
-                <div className="rounded-lg bg-quotefly-blue/[0.06] px-3 py-2 text-right">
-                  <p className="text-xs font-medium uppercase tracking-wide text-quotefly-blue">Progress</p>
-                  <p className="text-lg font-bold text-quotefly-blue">{completedSectionCount}/4</p>
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Template</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
+                </div>
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Logo</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? "Uploaded" : "Optional"}</p>
                 </div>
               </div>
-
               <ProgressBar
                 value={(completedSectionCount / 4) * 100}
                 label="Branding completion"
                 hint={`${completedSectionCount}/4 ready`}
-                className="mt-5"
+                className="mt-4"
               />
+              <WorkspaceJumpBar links={brandingLinks} className="mt-4" />
+            </WorkspaceRailCard>
 
-              <div className="mt-5 space-y-2">
-                {BRANDING_SECTIONS.map((section) => {
-                  const Icon = section.icon;
-                  const completion = sectionCompletionLabel[section.id];
+            <WorkspaceRailCard
+              eyebrow="Save"
+              title="Customer-facing output"
+              description="Branding changes affect the quote PDF your customer opens, prints, or forwards."
+            >
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {BRANDING_SECTIONS.map((section) => {
+                    const completion = sectionCompletionLabel[section.id];
 
-                  return (
-                    <button
-                      key={section.id}
-                      type="button"
-                      onClick={() => focusSection(section.id)}
-                      className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-quotefly-primary/30"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                          <Icon size={18} />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900">{section.title}</p>
-                          <p className="truncate text-xs text-slate-500">{section.description}</p>
-                        </div>
-                      </div>
-                      {completion ? <CheckCircle2 size={16} className="shrink-0 text-quotefly-blue" /> : null}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-5 rounded-lg bg-slate-50 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Save Status</p>
-                <p className="mt-2 text-sm text-slate-600">
-                  Branding controls how the PDF quote looks when the customer receives it.
-                </p>
-                <div className="mt-4 flex items-center gap-3">
-                  <Button onClick={handleSave} disabled={isSaving || !effectiveTenantId} loading={isSaving} fullWidth>
-                    {isSaving ? "Saving..." : "Save Branding"}
-                  </Button>
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => focusSection(section.id)}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                      >
+                        {completion ? <CheckCircle2 size={14} className="text-emerald-600" /> : <span className="h-2 w-2 rounded-full bg-slate-300" />}
+                        {section.title}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="mt-3 min-h-[20px] text-sm">
+                <Button onClick={handleSave} disabled={isSaving || !effectiveTenantId} loading={isSaving} fullWidth>
+                  {isSaving ? "Saving..." : "Save Branding"}
+                </Button>
+                <div className="min-h-[20px] text-sm">
                   {saveStatus === "saved" ? <span className="font-medium text-quotefly-blue">Saved</span> : null}
                   {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? "Save failed"}</span> : null}
                   {!effectiveTenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
                 </div>
               </div>
-            </div>
+            </WorkspaceRailCard>
           </aside>
 
           <div className="space-y-5">
@@ -708,103 +708,73 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               onToggle={() => toggleSection("business")}
             >
               <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Company Name</label>
-                  <input
-                    value={companyName}
-                    disabled
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-sm text-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Business Email</label>
-                  <input
-                    type="email"
-                    value={businessProfile.businessEmail ?? ""}
-                    onChange={(event) => updateBusinessField("businessEmail", event.target.value)}
-                    placeholder="office@yourcompany.com"
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Business Phone</label>
-                  <input
-                    type="tel"
-                    value={businessProfile.businessPhone ?? ""}
-                    onChange={(event) => updateBusinessField("businessPhone", event.target.value)}
-                    placeholder="(555) 123-4567"
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Address Line 1</label>
-                  <input
-                    value={businessProfile.addressLine1 ?? ""}
-                    onChange={(event) => updateBusinessField("addressLine1", event.target.value)}
-                    placeholder="123 Main Street"
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Address Line 2</label>
-                  <input
-                    value={businessProfile.addressLine2 ?? ""}
-                    onChange={(event) => updateBusinessField("addressLine2", event.target.value)}
-                    placeholder="Suite 200"
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                  />
-                </div>
+                <Input value={companyName} disabled label="Company Name" className="bg-slate-100 text-slate-700" />
+                <Input
+                  label="Business Email"
+                  type="email"
+                  value={businessProfile.businessEmail ?? ""}
+                  onChange={(event) => updateBusinessField("businessEmail", event.target.value)}
+                  placeholder="office@yourcompany.com"
+                />
+                <Input
+                  label="Business Phone"
+                  type="tel"
+                  value={businessProfile.businessPhone ?? ""}
+                  onChange={(event) => updateBusinessField("businessPhone", event.target.value)}
+                  placeholder="(555) 123-4567"
+                />
+                <Input
+                  label="Address Line 1"
+                  value={businessProfile.addressLine1 ?? ""}
+                  onChange={(event) => updateBusinessField("addressLine1", event.target.value)}
+                  placeholder="123 Main Street"
+                />
+                <Input
+                  label="Address Line 2"
+                  value={businessProfile.addressLine2 ?? ""}
+                  onChange={(event) => updateBusinessField("addressLine2", event.target.value)}
+                  placeholder="Suite 200"
+                />
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-1">
-                    <label className="mb-1 block text-xs font-medium text-slate-600">City</label>
-                    <input
+                    <Input
+                      label="City"
                       value={businessProfile.city ?? ""}
                       onChange={(event) => updateBusinessField("city", event.target.value)}
                       placeholder="Charlotte"
-                      className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
                     />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">State</label>
-                    <input
+                  <Input
+                    label="State"
                       value={businessProfile.state ?? ""}
                       onChange={(event) => updateBusinessField("state", event.target.value)}
                       placeholder="NC"
-                      className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">ZIP</label>
-                    <input
+                  />
+                  <Input
+                    label="ZIP"
                       value={businessProfile.postalCode ?? ""}
                       onChange={(event) => updateBusinessField("postalCode", event.target.value)}
                       placeholder="28202"
-                      className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                    />
-                  </div>
+                  />
                 </div>
                 <div>
                   <div className="mb-1 flex items-center justify-between gap-3">
                     <label className="block text-xs font-medium text-slate-600">Timezone</label>
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setTimezone(browserTimezone)}
-                      className="text-xs font-semibold text-quotefly-primary hover:text-blue-700"
                     >
                       Use local timezone ({browserTimezone})
-                    </button>
+                    </Button>
                   </div>
-                  <select
+                  <Select
+                    label=""
                     value={timezone}
                     onChange={(event) => setTimezone(event.target.value)}
-                    className="min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
-                  >
-                    {timezoneOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                    options={timezoneOptions.map((option) => ({ value: option, label: option }))}
+                  />
                 </div>
               </div>
             </BrandingSectionCard>
