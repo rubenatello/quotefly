@@ -1,4 +1,23 @@
-# QuoteFly — Owner Action Items
+# QuoteFly -- Owner Action Items
+
+## Launch Window
+
+Target launch date: `2026-05-01`
+
+Reference plan:
+
+- `docs/plan/development-plan.md`
+
+## Immediate Launch Blockers
+
+These are the owner-side items that still matter most before launch:
+
+1. Confirm `support@quotefly.us` mailbox is live
+2. Confirm `quotefly.us` and `api.quotefly.us` are resolving correctly in production
+3. Confirm Stripe production products, prices, and webhook destination are correct
+4. Confirm Railway and Vercel env vars match production values
+5. Run one real QuickBooks Online CSV import test if you have access
+6. Review final legal/support copy before public launch
 
 ## 1. Environment Variables
 
@@ -112,3 +131,4 @@ The existing regex parser continues to work as a free fallback.
 - Use `App > Build > Quote List` to select one or more quotes.
 - Click **Export QuickBooks CSV** to download invoice-style rows.
 - Import guide: `docs/integrations/quickbooks-csv-import.md`
+
