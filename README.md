@@ -134,8 +134,10 @@ Use Tailwind utility classes directly in React components.
 
 - QuickBooks-friendly invoice CSV export guide:
   - `docs/integrations/quickbooks-csv-import.md`
-- QuickBooks direct connection and sync foundation:
+- QuickBooks direct connection and sync design:
   - `docs/integrations/quickbooks-oauth-sync-plan.md`
+- QuickBooks owner setup checklist:
+  - `docs/integrations/quickbooks-owner-setup.md`
 
 ## Backend-first scope included
 

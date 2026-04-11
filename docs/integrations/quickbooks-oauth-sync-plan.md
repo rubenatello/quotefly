@@ -6,20 +6,25 @@ Move QuoteFly from CSV-only QuickBooks support to a tenant-linked QuickBooks Onl
 
 ## V1 Integration Scope
 
-This foundation covers:
+Current implemented scope covers:
 
 - tenant-level QuickBooks Online connection
 - OAuth 2.0 connect and disconnect flow
 - encrypted token storage
 - admin status visibility
+- quote sync preview
+- automatic QuickBooks customer creation when missing
+- automatic QuickBooks service item creation when missing
+- direct invoice push for accepted quotes
+- remote invoice balance refresh
 - data model for customer, item, invoice, and webhook tracking
 
-This foundation does **not** yet complete:
+Still not complete:
 
-- invoice push execution
-- customer auto-create in QuickBooks
-- item auto-create in QuickBooks
 - webhook signature verification and processing
+- webhook-driven payment status updates
+- direct tax-code/tax-line mapping
+- bulk invoice push
 
 ## Tenant Model
 

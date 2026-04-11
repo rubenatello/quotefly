@@ -16,7 +16,7 @@ These are the owner-side items that still matter most before launch:
 2. Confirm `quotefly.us` and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values
-5. Run one real QuickBooks Online CSV import test if you have access
+5. Run one real QuickBooks Online sync test and one CSV fallback import test if you have access
 6. Review final legal/support copy before public launch
 
 ## 1. Environment Variables
@@ -52,6 +52,7 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 3. Set the redirect URI to `https://api.quotefly.us/v1/integrations/quickbooks/callback`
 4. Put the client id/secret into Railway env vars
 5. Use `production` once the Intuit app is approved/live; use `sandbox` only for testing
+6. Full owner checklist: `docs/integrations/quickbooks-owner-setup.md`
 
 ### AI Model Options (set via `OPENAI_MODEL`)
 | Model | Cost (input/output per 1M tokens) | Speed | Best For |

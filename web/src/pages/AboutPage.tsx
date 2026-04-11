@@ -34,7 +34,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
     },
     {
       title: "Made to integrate",
-      description: "Stripe billing works now. QuickBooks-friendly export is live. Deeper integrations come next.",
+      description: "Stripe billing works now. QuickBooks Online connection, invoice push, and CSV fallback are live.",
     },
     {
       title: "Customer-obsessed",

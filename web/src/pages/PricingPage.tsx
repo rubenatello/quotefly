@@ -27,7 +27,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         "10 AI quote drafts/month",
         "Quick customer intake and lead pipeline",
         "PDF quote generation",
-        "QuickBooks-friendly invoice CSV export",
+        "QuickBooks Online invoice sync plus CSV fallback",
         "7 team members",
         "30-day quote history",
       ],
@@ -87,7 +87,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Do you support QuickBooks?",
-      a: "V1 supports QuickBooks-friendly invoice CSV export. Direct QuickBooks sync is planned next.",
+      a: "QuoteFly supports QuickBooks-friendly CSV export and direct QuickBooks Online invoice sync. Webhook-driven payment automation is the next layer.",
     },
     {
       q: "Do you offer annual billing?",

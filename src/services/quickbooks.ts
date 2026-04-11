@@ -16,6 +16,60 @@ export type QuickBooksTokenResponse = {
   x_refresh_token_expires_in?: number;
 };
 
+export type QuickBooksApiRef = {
+  value: string;
+  name?: string | null;
+};
+
+export type QuickBooksCustomerEntity = {
+  Id: string;
+  DisplayName?: string;
+  Active?: boolean;
+  PrimaryEmailAddr?: { Address?: string };
+  PrimaryPhone?: { FreeFormNumber?: string };
+};
+
+export type QuickBooksItemEntity = {
+  Id: string;
+  Name?: string;
+  Active?: boolean;
+  Type?: string;
+  IncomeAccountRef?: QuickBooksApiRef;
+};
+
+export type QuickBooksAccountEntity = {
+  Id: string;
+  Name?: string;
+  AccountType?: string;
+  AccountSubType?: string;
+  Active?: boolean;
+};
+
+export type QuickBooksInvoiceEntity = {
+  Id: string;
+  DocNumber?: string;
+  TxnDate?: string;
+  DueDate?: string;
+  TotalAmt?: number;
+  Balance?: number;
+  EmailStatus?: string;
+  CurrencyRef?: { name?: string };
+  LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
+};
+
+export type QuickBooksInvoiceStatus = {
+  invoiceId: string;
+  docNumber: string | null;
+  txnDate: string | null;
+  dueDate: string | null;
+  totalAmount: number;
+  balance: number;
+  currency: string | null;
+  emailStatus: string | null;
+  linkedPayments: Array<{ txnId: string; txnType: string }>;
+  paid: boolean;
+};
+
 type SignedStatePayload = {
   tenantId: string;
   userId: string;
@@ -40,6 +94,264 @@ export function getQuickBooksApiBaseUrl(runtimeEnv: RuntimeEnv): string {
   return runtimeEnv.QUICKBOOKS_ENVIRONMENT === "sandbox"
     ? "https://sandbox-quickbooks.api.intuit.com"
     : "https://quickbooks.api.intuit.com";
+}
+
+export function escapeQuickBooksQueryValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+export function normalizeQuickBooksName(value: string, maxLength = 100): string {
+  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+async function quickBooksApiRequest<T>(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers ?? {}),
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const responseBody = await response.text();
+  if (!response.ok) {
+    throw new Error(`QuickBooks API request failed: ${response.status} ${responseBody}`);
+  }
+
+  return responseBody ? (JSON.parse(responseBody) as T) : (undefined as T);
+}
+
+export async function queryQuickBooksEntity<T>(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  query: string,
+  entityName: string,
+): Promise<T[]> {
+  const response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}/query`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/text",
+    },
+    body: query,
+  });
+
+  const responseBody = await response.text();
+  if (!response.ok) {
+    throw new Error(`QuickBooks query failed: ${response.status} ${responseBody}`);
+  }
+
+  const payload = responseBody
+    ? (JSON.parse(responseBody) as { QueryResponse?: Record<string, T[] | undefined> })
+    : {};
+
+  const results = payload.QueryResponse?.[entityName];
+  return Array.isArray(results) ? results : [];
+}
+
+export async function findQuickBooksCustomerByDisplayName(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  displayName: string,
+): Promise<QuickBooksCustomerEntity | null> {
+  const normalizedName = normalizeQuickBooksName(displayName);
+  const activeCustomers = await queryQuickBooksEntity<QuickBooksCustomerEntity>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    `SELECT * FROM Customer WHERE DisplayName = '${escapeQuickBooksQueryValue(normalizedName)}' AND Active = true MAXRESULTS 1`,
+    "Customer",
+  );
+
+  if (activeCustomers[0]) {
+    return activeCustomers[0];
+  }
+
+  return null;
+}
+
+export async function createQuickBooksCustomer(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  input: {
+    displayName: string;
+    email?: string | null;
+    phone?: string | null;
+  },
+): Promise<QuickBooksCustomerEntity> {
+  const payload = await quickBooksApiRequest<{ Customer: QuickBooksCustomerEntity }>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    "/customer",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        DisplayName: normalizeQuickBooksName(input.displayName),
+        ...(input.email ? { PrimaryEmailAddr: { Address: input.email.trim().toLowerCase() } } : {}),
+        ...(input.phone ? { PrimaryPhone: { FreeFormNumber: input.phone.trim() } } : {}),
+      }),
+    },
+  );
+
+  return payload.Customer;
+}
+
+export async function findQuickBooksItemByName(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  itemName: string,
+): Promise<QuickBooksItemEntity | null> {
+  const normalizedName = normalizeQuickBooksName(itemName);
+  const activeItems = await queryQuickBooksEntity<QuickBooksItemEntity>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    `SELECT * FROM Item WHERE Name = '${escapeQuickBooksQueryValue(normalizedName)}' AND Active = true MAXRESULTS 1`,
+    "Item",
+  );
+
+  if (activeItems[0]) {
+    return activeItems[0];
+  }
+
+  return null;
+}
+
+export async function resolveQuickBooksIncomeAccount(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+): Promise<QuickBooksApiRef> {
+  const preferredAccounts = await queryQuickBooksEntity<QuickBooksAccountEntity>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    "SELECT * FROM Account WHERE AccountSubType = 'SalesOfProductIncome' AND Active = true MAXRESULTS 1",
+    "Account",
+  );
+
+  const fallbackAccounts =
+    preferredAccounts[0]
+      ? preferredAccounts
+      : await queryQuickBooksEntity<QuickBooksAccountEntity>(
+          runtimeEnv,
+          realmId,
+          accessToken,
+          "SELECT * FROM Account WHERE AccountType = 'Income' AND Active = true MAXRESULTS 1",
+          "Account",
+        );
+
+  const account = fallbackAccounts[0];
+  if (!account?.Id) {
+    throw new Error("QuickBooks income account not found. Create or enable an income account in QuickBooks first.");
+  }
+
+  return {
+    value: account.Id,
+    name: account.Name ?? null,
+  };
+}
+
+export async function createQuickBooksServiceItem(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  input: {
+    name: string;
+    description?: string | null;
+    unitPrice?: number | null;
+    incomeAccountRef: QuickBooksApiRef;
+  },
+): Promise<QuickBooksItemEntity> {
+  const payload = await quickBooksApiRequest<{ Item: QuickBooksItemEntity }>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    "/item",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        Name: normalizeQuickBooksName(input.name),
+        Active: true,
+        Type: "Service",
+        ...(input.description ? { Description: input.description.slice(0, 4000) } : {}),
+        ...(typeof input.unitPrice === "number" && Number.isFinite(input.unitPrice)
+          ? { UnitPrice: Number(input.unitPrice.toFixed(2)) }
+          : {}),
+        IncomeAccountRef: input.incomeAccountRef,
+      }),
+    },
+  );
+
+  return payload.Item;
+}
+
+export async function createQuickBooksInvoice(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  payload: Record<string, unknown>,
+): Promise<QuickBooksInvoiceEntity> {
+  const response = await quickBooksApiRequest<{ Invoice: QuickBooksInvoiceEntity }>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    "/invoice",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+
+  return response.Invoice;
+}
+
+export async function fetchQuickBooksInvoice(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  invoiceId: string,
+): Promise<QuickBooksInvoiceEntity> {
+  const response = await quickBooksApiRequest<{ Invoice: QuickBooksInvoiceEntity }>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    `/invoice/${invoiceId}`,
+  );
+
+  return response.Invoice;
+}
+
+export function summarizeQuickBooksInvoice(invoice: QuickBooksInvoiceEntity): QuickBooksInvoiceStatus {
+  const balance = Number(invoice.Balance ?? 0);
+  return {
+    invoiceId: invoice.Id,
+    docNumber: invoice.DocNumber ?? null,
+    txnDate: invoice.TxnDate ?? null,
+    dueDate: invoice.DueDate ?? null,
+    totalAmount: Number(invoice.TotalAmt ?? 0),
+    balance,
+    currency: invoice.CurrencyRef?.name ?? null,
+    emailStatus: invoice.EmailStatus ?? null,
+    linkedPayments: (invoice.LinkedTxn ?? [])
+      .filter((txn) => txn.TxnId && txn.TxnType)
+      .map((txn) => ({ txnId: txn.TxnId as string, txnType: txn.TxnType as string })),
+    paid: balance <= 0,
+  };
 }
 
 export function buildQuickBooksAuthorizationUrl(runtimeEnv: RuntimeEnv, state: string): string {

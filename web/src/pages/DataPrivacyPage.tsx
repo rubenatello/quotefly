@@ -33,7 +33,7 @@ export function DataPrivacyPage() {
     {
       title: "Retention and export",
       text:
-        "Customers control the records they add to QuoteFly. Data export paths such as PDF quotes and QuickBooks-friendly CSV are part of the product so you can keep operational portability from the beginning.",
+        "Customers control the records they add to QuoteFly. Data export and accounting paths such as PDF quotes, QuickBooks CSV, and direct QuickBooks invoice sync are part of the product so you keep operational portability from the beginning.",
     },
     {
       title: "Reporting a concern",

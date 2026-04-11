@@ -21,7 +21,7 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
     },
     {
       title: "Quote workflow help",
-      text: "Customer setup, quote drafting, template questions, PDF output, and QuickBooks-friendly CSV export.",
+      text: "Customer setup, quote drafting, template questions, PDF output, QuickBooks invoice sync, and QuickBooks CSV fallback export.",
     },
     {
       title: "Technical troubleshooting",

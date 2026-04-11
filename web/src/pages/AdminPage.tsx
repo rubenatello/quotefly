@@ -72,7 +72,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
       "600 quotes per month",
       "Quick customer intake and pipeline tracking",
       "PDF quote generation",
-      "QuickBooks-friendly invoice CSV export",
+      "QuickBooks Online invoice sync and CSV fallback",
     ],
   },
   {
@@ -563,7 +563,7 @@ export function AdminPage({ session }: AdminPageProps) {
             <div className="max-w-2xl">
               <h2 className="text-lg font-semibold text-slate-900">QuickBooks Online</h2>
               <p className="mt-2 text-sm text-slate-600">
-                Link one QuickBooks Online company to this tenant. This is the launch foundation for direct quote-to-invoice sync after customer and item mapping are completed.
+                Link one QuickBooks Online company to this tenant. QuoteFly can then map customers and service items, push accepted quotes into invoices, and refresh invoice balance status.
               </p>
               <p className="mt-3 text-xs text-slate-500">
                 Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}
