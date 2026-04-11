@@ -67,28 +67,28 @@ function LifecyclePill({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-blue-300 bg-blue-50 text-blue-700"
+      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
       : tone === "emerald"
-        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+        ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
         : tone === "amber"
-          ? "border-amber-300 bg-amber-50 text-amber-700"
-          : "border-slate-300 bg-slate-100 text-slate-700";
+          ? "border-amber-200 bg-amber-50 text-amber-700"
+          : "border-slate-200 bg-slate-50 text-slate-600";
 
-  return <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${toneClass}`}>{label}</span>;
+  return <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}>{label}</span>;
 }
 
 function sectionToneClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
-  if (tone === "blue") return "bg-[linear-gradient(90deg,rgba(91,133,170,0.18)_0%,rgba(91,133,170,0)_100%)] text-quotefly-blue";
-  if (tone === "orange") return "bg-[linear-gradient(90deg,rgba(244,96,54,0.18)_0%,rgba(244,96,54,0)_100%)] text-quotefly-orange";
-  if (tone === "emerald") return "bg-[linear-gradient(90deg,rgba(16,185,129,0.18)_0%,rgba(16,185,129,0)_100%)] text-emerald-700";
-  return "bg-[linear-gradient(90deg,rgba(148,163,184,0.18)_0%,rgba(148,163,184,0)_100%)] text-slate-700";
+  if (tone === "blue") return "bg-quotefly-blue/[0.06] text-quotefly-blue";
+  if (tone === "orange") return "bg-quotefly-orange/[0.06] text-quotefly-orange";
+  if (tone === "emerald") return "bg-quotefly-blue/[0.06] text-quotefly-blue";
+  return "bg-slate-50 text-slate-600";
 }
 
 function sectionBorderClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
-  if (tone === "blue") return "border-l-4 border-l-quotefly-blue";
-  if (tone === "orange") return "border-l-4 border-l-quotefly-orange";
-  if (tone === "emerald") return "border-l-4 border-l-emerald-500";
-  return "border-l-4 border-l-slate-400";
+  if (tone === "blue") return "border-l-2 border-l-quotefly-blue";
+  if (tone === "orange") return "border-l-2 border-l-quotefly-orange";
+  if (tone === "emerald") return "border-l-2 border-l-quotefly-blue";
+  return "border-l-2 border-l-slate-300";
 }
 
 function PipelineRowsSection({
@@ -121,8 +121,8 @@ function PipelineRowsSection({
 }) {
   return (
     <Card variant="elevated">
-      <div className={`mb-4 rounded-2xl px-4 py-3 ${sectionToneClass(tone)}`}>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">Pipeline Queue</p>
+      <div className={`mb-4 rounded-lg px-4 py-3 ${sectionToneClass(tone)}`}>
+        <p className="text-[11px] font-medium uppercase tracking-wide">Pipeline Queue</p>
         <h3 className="mt-1 text-base font-semibold text-slate-900">{title}</h3>
         <p className="text-xs text-slate-600">{subtitle}</p>
       </div>
@@ -134,7 +134,7 @@ function PipelineRowsSection({
           {leads.map((lead, index) => (
             <div
               key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
-              className={`rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3.5 shadow-sm ${sectionBorderClass(tone)}`}
+              className={`rounded-xl border border-slate-200 bg-white p-3.5 ${sectionBorderClass(tone)}`}
             >
               <div className="grid gap-3 lg:grid-cols-[1.8fr_1fr_1fr_1fr_auto] lg:items-center">
                 <div className="min-w-0">

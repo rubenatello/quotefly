@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { CheckCircle2 as CheckCircleIcon } from "lucide-react";
 import { FeatureLockedCard, QuoteMathSummaryPanel, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
 import {
@@ -462,10 +463,10 @@ export function QuoteBuilderView() {
       <Card variant="elevated" padding="lg">
         <CardHeader title="Create Quote" subtitle="Use a saved starter job, then tune the scope and math before opening the desk." />
         <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
-          <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current customer</p>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Current customer</p>
                 <p className="mt-1 text-base font-semibold text-slate-900">
                   {activeCustomer ? activeCustomer.fullName : "No customer selected yet"}
                 </p>
@@ -475,13 +476,13 @@ export function QuoteBuilderView() {
                     : "Use the lookup or quick customer form first so the quote attaches cleanly."}
                 </p>
               </div>
-              <div className="rounded-full border border-quotefly-blue/20 bg-quotefly-blue/5 px-3 py-1.5 text-xs font-semibold text-quotefly-blue">
+              <div className="rounded-full border border-quotefly-blue/20 bg-quotefly-blue/[0.06] px-3 py-1 text-xs font-medium text-quotefly-blue">
                 {activeCustomer ? "Ready to quote" : "Customer needed"}
               </div>
             </div>
           </div>
 
-          <div className="rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-slate-900">Starter Job</p>
@@ -538,19 +539,19 @@ export function QuoteBuilderView() {
                 </div>
 
                 {selectedPreset ? (
-                  <div className="rounded-[22px] border border-slate-200 bg-white p-3 text-xs text-slate-600 shadow-sm">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
                     <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
                     <p className="mt-1">{selectedPreset.description ?? "No default description yet."}</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Default cost</p>
                         <p className="mt-1 font-semibold text-slate-900">{money(Number(selectedPreset.unitCost))} / {formatPresetUnitLabel(selectedPreset.unitType)}</p>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Default price</p>
                         <p className="mt-1 font-semibold text-slate-900">{money(Number(selectedPreset.unitPrice))} / {formatPresetUnitLabel(selectedPreset.unitType)}</p>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Applied totals</p>
                         <p className="mt-1 font-semibold text-slate-900">
                           {money(starterInternalTotal)} cost · {money(starterCustomerTotal)} price
@@ -677,7 +678,7 @@ export function QuoteBuilderView() {
           Apply Filters
         </Button>
 
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
           <Button
             type="button"
             size="sm"
@@ -730,7 +731,7 @@ export function QuoteBuilderView() {
             {selectedQuoteIds.length} selected = {selectedQuoteIds.length} invoice{selectedQuoteIds.length === 1 ? "" : "s"}
           </span>
           <span className="text-[11px] text-slate-500">Max {MAX_QUICKBOOKS_EXPORT_QUOTES} per export</span>
-          <span className={`text-[11px] ${allChecklistComplete ? "text-emerald-700" : "text-amber-700"}`}>
+          <span className={`text-[11px] ${allChecklistComplete ? "text-quotefly-blue" : "text-amber-700"}`}>
             Checklist: {allChecklistComplete ? "Ready" : "Review before import"}
           </span>
         </div>
@@ -739,10 +740,10 @@ export function QuoteBuilderView() {
           {quotes.map((quote) => (
             <div
               key={quote.id}
-              className={`rounded-[24px] border p-3 transition ${
+              className={`rounded-xl border p-3 transition ${
                 selectedQuoteId === quote.id
-                  ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] shadow-sm"
-                  : "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)]"
+                  ? "border-quotefly-blue/25 bg-quotefly-blue/[0.04]"
+                  : "border-slate-200 bg-white"
               }`}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
@@ -819,10 +820,10 @@ export function QuoteBuilderView() {
               {duplicateModal.matches.map((match) => (
                 <label
                   key={match.id}
-                  className={`block cursor-pointer rounded-[22px] border px-3 py-2.5 shadow-sm ${
+                  className={`block cursor-pointer rounded-xl border px-3 py-2.5 ${
                     duplicateModal.selectedMatchId === match.id
-                      ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)]"
-                      : "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)]"
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.04]"
+                      : "border-slate-200 bg-white"
                   }`}
                 >
                   <input
@@ -874,13 +875,13 @@ function BuilderSnapshotCard({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
+      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04] text-quotefly-blue"
       : tone === "orange"
-        ? "border-quotefly-orange/20 bg-[linear-gradient(180deg,rgba(244,96,54,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-orange"
-        : "border-slate-200 bg-[linear-gradient(180deg,rgba(148,163,184,0.1)_0%,rgba(255,255,255,1)_100%)] text-slate-700";
+        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.04] text-quotefly-orange"
+        : "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
-    <div className={`rounded-[26px] border px-4 py-4 shadow-sm ${toneClass}`}>
+    <div className={`rounded-xl border px-4 py-4 ${toneClass}`}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">{label}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
     </div>
@@ -905,17 +906,17 @@ function BuilderWorkflowCard({
         {steps.map((step, index) => (
           <div
             key={step.label}
-            className={`rounded-[24px] border px-4 py-3 shadow-sm ${
+            className={`rounded-xl border px-4 py-3 ${
               step.complete
-                ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.12)_0%,rgba(255,255,255,1)_100%)]"
+                ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04]"
                 : "border-slate-200 bg-white"
             }`}
           >
             <div className="flex items-start justify-between gap-3">
-              <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                {step.icon}
+              <span className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${step.complete ? "bg-quotefly-blue/10 text-quotefly-blue" : "bg-slate-100 text-slate-500"}`}>
+                {step.complete ? <CheckCircleIcon size={16} /> : step.icon}
               </span>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
                 {index + 1}
               </span>
             </div>
@@ -949,7 +950,7 @@ function QuickBooksGuideModal({
         onClose={onClose}
       />
       <ModalBody className="max-h-[80vh] space-y-4">
-        <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-sm font-semibold text-slate-900">Step-by-step</p>
           <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-700">
             <li>In QuoteFly, select quotes and export QuickBooks CSV.</li>
@@ -961,7 +962,7 @@ function QuickBooksGuideModal({
           </ol>
         </div>
 
-        <div className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-sm font-semibold text-slate-900">Field mapping reference</p>
           <div className="mt-2 overflow-auto">
             <table className="w-full text-xs">
@@ -985,7 +986,7 @@ function QuickBooksGuideModal({
           </div>
         </div>
 
-        <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-sm font-semibold text-slate-900">Pre-import checklist</p>
           <div className="mt-2 space-y-2">
             {QUICKBOOKS_CHECKLIST_ITEMS.map((item) => (

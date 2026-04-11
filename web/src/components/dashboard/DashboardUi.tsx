@@ -59,11 +59,11 @@ const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
 ];
 
 function statusClass(status: QuoteStatus): string {
-  if (status === "ACCEPTED") return "text-emerald-700 border-emerald-300 bg-emerald-50";
-  if (status === "REJECTED") return "text-rose-700 border-rose-300 bg-rose-50";
-  if (status === "SENT_TO_CUSTOMER") return "text-sky-700 border-sky-300 bg-sky-50";
-  if (status === "READY_FOR_REVIEW") return "text-amber-700 border-amber-300 bg-amber-50";
-  return "text-slate-700 border-slate-300 bg-slate-100";
+  if (status === "ACCEPTED") return "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]";
+  if (status === "REJECTED") return "text-red-600 border-red-200 bg-red-50";
+  if (status === "SENT_TO_CUSTOMER") return "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]";
+  if (status === "READY_FOR_REVIEW") return "text-amber-700 border-amber-200 bg-amber-50";
+  return "text-slate-600 border-slate-200 bg-slate-50";
 }
 
 function quoteStatusMeta(status: QuoteStatus): { label: string; className: string; icon: ReactNode } {
@@ -117,7 +117,7 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
   if (status === "FOLLOWED_UP") {
     return {
       label: "Followed Up",
-      className: "text-sky-700 border-sky-300 bg-sky-50",
+      className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <MessageIcon size={12} />,
     };
   }
@@ -125,7 +125,7 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
   if (status === "WON") {
     return {
       label: "Won",
-      className: "text-emerald-700 border-emerald-300 bg-emerald-50",
+      className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <CheckIcon size={12} />,
     };
   }
@@ -133,14 +133,14 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
   if (status === "LOST") {
     return {
       label: "Lost",
-      className: "text-rose-700 border-rose-300 bg-rose-50",
+      className: "text-red-600 border-red-200 bg-red-50",
       icon: <CloseIcon size={12} />,
     };
   }
 
   return {
     label: "Needs Follow-Up",
-    className: "text-amber-700 border-amber-300 bg-amber-50",
+    className: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
     icon: <ClockIcon size={12} />,
   };
 }
@@ -149,7 +149,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
   if (eventType === "CREATED") {
     return {
       label: "Created",
-      className: "text-blue-700 border-blue-300 bg-blue-50",
+      className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <QuoteIcon size={12} />,
     };
   }
@@ -157,7 +157,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
   if (eventType === "STATUS_CHANGED") {
     return {
       label: "Status",
-      className: "text-violet-700 border-violet-300 bg-violet-50",
+      className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <CheckIcon size={12} />,
     };
   }
@@ -165,7 +165,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
   if (eventType === "LINE_ITEM_CHANGED") {
     return {
       label: "Line Items",
-      className: "text-orange-700 border-orange-300 bg-orange-50",
+      className: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
       icon: <InvoiceIcon size={12} />,
     };
   }
@@ -173,14 +173,14 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
   if (eventType === "DECISION") {
     return {
       label: "Decision",
-      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
+      className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <SendIcon size={12} />,
     };
   }
 
   return {
     label: "Updated",
-    className: "text-slate-700 border-slate-300 bg-slate-100",
+    className: "text-slate-600 border-slate-200 bg-slate-50",
     icon: <EditIcon size={12} />,
   };
 }
@@ -189,7 +189,7 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
   if (channel === "EMAIL_APP") {
     return {
       label: "Email",
-      className: "text-cyan-700 border-cyan-300 bg-cyan-50",
+      className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <EmailIcon size={12} />,
     };
   }
@@ -197,25 +197,25 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
   if (channel === "SMS_APP") {
     return {
       label: "Text",
-      className: "text-indigo-700 border-indigo-300 bg-indigo-50",
+      className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <MessageIcon size={12} />,
     };
   }
 
   return {
     label: "Copy",
-    className: "text-violet-700 border-violet-300 bg-violet-50",
+    className: "text-slate-600 border-slate-200 bg-slate-50",
     icon: <CopyIcon size={12} />,
   };
 }
 
 export function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(245,248,252,1)_100%)] p-4 shadow-[0_14px_36px_rgba(15,23,42,0.06)] ring-1 ring-white transition hover:border-quotefly-blue/20 hover:shadow-[0_18px_44px_rgba(15,23,42,0.1)]">
-      <span className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,rgba(91,133,170,0.16)_0%,rgba(244,96,54,0.16)_100%)] text-quotefly-blue">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300">
+      <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-quotefly-blue/[0.08] text-quotefly-blue">
         {icon}
       </span>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
     </div>
   );
@@ -265,7 +265,7 @@ export function MobileSectionSwitcher({
               onClick={() => onChange(section.id)}
               className={`rounded-lg border px-2 py-2.5 text-left transition ${
                 active
-                  ? "border-quotefly-blue/30 bg-[linear-gradient(180deg,rgba(91,133,170,0.16)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue shadow-sm"
+                  ? "border-quotefly-blue/30 bg-quotefly-blue/[0.06] text-quotefly-blue"
                   : "border-slate-200 bg-white text-slate-700"
               }`}
             >
@@ -294,7 +294,7 @@ export function PipelineFlow({
   afterSaleLeads: number;
 }) {
   return (
-    <div className="mb-4 overflow-x-auto rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 sm:p-4">
+    <div className="mb-4 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
       <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
@@ -321,22 +321,22 @@ function PipelineStage({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
+      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04] text-quotefly-blue"
       : tone === "orange"
-        ? "border-quotefly-orange/25 bg-[linear-gradient(180deg,rgba(244,96,54,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-orange"
+        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.04] text-quotefly-orange"
         : tone === "emerald"
-          ? "border-emerald-300 bg-[linear-gradient(180deg,rgba(16,185,129,0.14)_0%,rgba(255,255,255,1)_100%)] text-emerald-700"
-          : "border-slate-300 bg-[linear-gradient(180deg,rgba(148,163,184,0.12)_0%,rgba(255,255,255,1)_100%)] text-slate-700";
+          ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04] text-quotefly-blue"
+          : "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
-    <div className={`flex min-w-[184px] items-center justify-between rounded-2xl border px-3.5 py-2.5 shadow-sm ${toneClass}`}>
+    <div className={`flex min-w-[184px] items-center justify-between rounded-lg border px-3 py-2.5 ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-current/20 bg-white/85">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-current/10 bg-white">
           {icon}
         </span>
         {label}
       </p>
-      <span className="rounded-full bg-white/90 px-2.5 py-1 text-xs font-bold shadow-sm">{count}</span>
+      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold">{count}</span>
     </div>
   );
 }
@@ -526,20 +526,20 @@ export function FeatureLockedCard({
   showUpgradeHint: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-amber-900">{title}</h3>
-          <p className="mt-1 text-xs text-amber-800">{description}</p>
+          <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+          <p className="mt-1 text-xs text-slate-600">{description}</p>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500">
           <LockIcon size={10} />
           {requiredPlanLabel}
         </span>
       </div>
-      <p className="mt-2 text-[11px] text-amber-700">Current plan: {currentPlanLabel}</p>
+      <p className="mt-2 text-[11px] text-slate-500">Current plan: {currentPlanLabel}</p>
       {showUpgradeHint && (
-        <p className="mt-1 text-[11px] text-amber-700">
+        <p className="mt-1 text-[11px] text-slate-500">
           Upgrade plan to unlock this module for your whole workspace.
         </p>
       )}
@@ -558,8 +558,8 @@ export function QuoteMathSummaryPanel({
   warning?: string;
   money: (value: string | number) => string;
 }) {
-  const profitTone = summary.estimatedProfit >= 0 ? "text-emerald-700" : "text-red-700";
-  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-emerald-700" : "text-amber-700";
+  const profitTone = summary.estimatedProfit >= 0 ? "text-quotefly-blue" : "text-red-600";
+  const marginTone = summary.estimatedMarginPercent >= 10 ? "text-quotefly-blue" : "text-amber-700";
 
   return (
     <div className={`rounded-lg border border-slate-200 bg-white ${compact ? "p-3" : "p-4"}`}>

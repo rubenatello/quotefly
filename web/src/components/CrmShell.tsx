@@ -91,7 +91,7 @@ export function CrmShell({
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(91,133,170,0.12),transparent_22%),radial-gradient(circle_at_top_right,rgba(244,96,54,0.08),transparent_18%),linear-gradient(180deg,#f8fafc_0%,#eef4fb_100%)]">
+    <div className="min-h-screen bg-slate-50">
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         onToggleMobile={() => setMobileOpen((open) => !open)}
@@ -100,7 +100,7 @@ export function CrmShell({
 
       <div
         className={`mx-auto w-full max-w-[1600px] lg:grid ${
-          sidebarCollapsed ? "lg:grid-cols-[96px_1fr]" : "lg:grid-cols-[280px_1fr]"
+          sidebarCollapsed ? "lg:grid-cols-[80px_1fr]" : "lg:grid-cols-[260px_1fr]"
         }`}
       >
         <CrmSidebar

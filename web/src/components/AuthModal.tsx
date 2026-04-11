@@ -9,6 +9,18 @@ interface AuthModalProps {
   onSuccess?: (payload: AuthPayload) => void;
 }
 
+const TRADE_OPTIONS: { value: ServiceType; label: string }[] = [
+  { value: "HVAC", label: "HVAC" },
+  { value: "ROOFING", label: "Roofing" },
+  { value: "FLOORING", label: "Flooring" },
+  { value: "GARDENING", label: "Gardening" },
+  { value: "PLUMBING", label: "Plumbing" },
+  { value: "CONSTRUCTION", label: "Construction" },
+];
+
+const inputClass =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-2 focus:ring-quotefly-blue/20";
+
 export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [mode, setMode] = useState<"signin" | "signup">("signup");
   const [email, setEmail] = useState("");
@@ -84,101 +96,118 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   return (
     <Modal open={isOpen} onClose={onClose} size="md" ariaLabel={mode === "signin" ? "Sign in" : "Start free trial"}>
       <ModalHeader
-        title={mode === "signin" ? "Sign In" : "Start Free Trial"}
-        description={mode === "signin" ? "Access your QuoteFly workspace." : "Create your workspace and start quoting fast."}
+        title={mode === "signin" ? "Welcome Back" : "Start Your Free Trial"}
+        description={
+          mode === "signin"
+            ? "Sign in to your QuoteFly workspace."
+            : "Set up your account in under a minute."
+        }
         onClose={onClose}
       />
 
       <ModalBody>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <svg className="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                <path fillRule="evenodd" d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14zm.75-9.25a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 0 1.5 0v-2.5zM8 11a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" clipRule="evenodd" />
+              </svg>
+              <span>{error}</span>
             </div>
           )}
 
           {mode === "signup" && (
-            <div>
-              <label htmlFor="fullName" className="mb-2 block text-sm font-medium text-slate-700">
-                Your Name
-              </label>
-              <input
-                id="fullName"
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Jane Smith"
-                autoComplete="name"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-quotefly-blue focus:outline-none focus:ring-1 focus:ring-quotefly-blue/30"
-                required
-              />
-            </div>
-          )}
-
-          {mode === "signup" && (
-            <div>
-              <label htmlFor="business" className="mb-2 block text-sm font-medium text-slate-700">
-                Business Name
-              </label>
-              <input
-                id="business"
-                type="text"
-                value={businessName}
-                onChange={(e) => setBusinessName(e.target.value)}
-                placeholder="Your Contracting Company"
-                autoComplete="organization"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-quotefly-blue focus:outline-none focus:ring-1 focus:ring-quotefly-blue/30"
-                required
-              />
-            </div>
-          )}
-
-          {mode === "signup" && (
-            <div>
-              <label htmlFor="primaryTrade" className="mb-2 block text-sm font-medium text-slate-700">
-                What kind of work do you do?
-              </label>
-              <select
-                id="primaryTrade"
-                value={primaryTrade}
-                onChange={(event) => setPrimaryTrade(event.target.value as ServiceType)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-quotefly-blue focus:outline-none focus:ring-1 focus:ring-quotefly-blue/30"
-              >
-                <option value="HVAC">HVAC</option>
-                <option value="ROOFING">Roofing</option>
-                <option value="FLOORING">Flooring</option>
-                <option value="GARDENING">Gardening</option>
-                <option value="PLUMBING">Plumbing</option>
-                <option value="CONSTRUCTION">Construction</option>
-              </select>
-            </div>
-          )}
-
-          {mode === "signup" && (
-            <div>
-              <label htmlFor="logoUpload" className="mb-2 block text-sm font-medium text-slate-700">
-                Logo (optional)
-              </label>
-              <input
-                id="logoUpload"
-                type="file"
-                accept="image/*"
-                onChange={handleLogoUpload}
-                className="w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:text-slate-700"
-              />
-              <p className="mt-1 text-xs text-slate-500">
-                If skipped, QuoteFly generates a minimal transparent logo you can replace later.
-              </p>
-              {logoDataUrl && (
-                <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                  <img src={logoDataUrl} alt="Uploaded logo preview" className="max-h-20 max-w-full object-contain" />
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="fullName" className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Your Name
+                  </label>
+                  <input
+                    id="fullName"
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Jane Smith"
+                    autoComplete="name"
+                    className={inputClass}
+                    required
+                  />
                 </div>
-              )}
-            </div>
+                <div>
+                  <label htmlFor="business" className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Business Name
+                  </label>
+                  <input
+                    id="business"
+                    type="text"
+                    value={businessName}
+                    onChange={(e) => setBusinessName(e.target.value)}
+                    placeholder="Your Contracting Co."
+                    autoComplete="organization"
+                    className={inputClass}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="primaryTrade" className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Primary Trade
+                </label>
+                <select
+                  id="primaryTrade"
+                  value={primaryTrade}
+                  onChange={(event) => setPrimaryTrade(event.target.value as ServiceType)}
+                  className={inputClass}
+                >
+                  {TRADE_OPTIONS.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="logoUpload" className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Logo <span className="text-slate-400">(optional)</span>
+                </label>
+                <div className="flex items-center gap-3">
+                  {logoDataUrl ? (
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-1">
+                      <img src={logoDataUrl} alt="Logo preview" className="max-h-full max-w-full object-contain" />
+                    </div>
+                  ) : (
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-400">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+                      </svg>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <input
+                      id="logoUpload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoUpload}
+                      className="w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                    />
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      We&apos;ll generate one if you skip this.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">Account Credentials</p>
+              </div>
+            </>
           )}
 
           <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
+            <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-slate-700">
               Email Address
             </label>
             <input
@@ -188,33 +217,40 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@company.com"
               autoComplete={mode === "signin" ? "email" : "username"}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-quotefly-blue focus:outline-none focus:ring-1 focus:ring-quotefly-blue/30"
+              className={inputClass}
               required
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
-              Password {mode === "signup" && <span className="text-slate-500">(min 8 chars)</span>}
+            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Password{" "}
+              {mode === "signup" && (
+                <span className="font-normal text-slate-400">(min 8 characters)</span>
+              )}
             </label>
             <input
               id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="********"
+              placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
               autoComplete={mode === "signin" ? "current-password" : "new-password"}
               minLength={mode === "signup" ? 8 : 1}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-quotefly-blue focus:outline-none focus:ring-1 focus:ring-quotefly-blue/30"
+              className={inputClass}
               required
             />
           </div>
 
-          <Button type="submit" disabled={isLoading} loading={isLoading} fullWidth>
-            {isLoading ? "Loading..." : mode === "signin" ? "Sign In" : "Start Free Trial"}
+          <Button type="submit" disabled={isLoading} loading={isLoading} fullWidth size="lg">
+            {isLoading
+              ? "Please wait..."
+              : mode === "signin"
+                ? "Sign In"
+                : "Create Account"}
           </Button>
 
-          <div className="border-t border-slate-200 pt-4 text-center text-sm text-slate-500">
+          <p className="text-center text-sm text-slate-500">
             {mode === "signin" ? (
               <>
                 Don&apos;t have an account?{" "}
@@ -238,25 +274,21 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
                 </button>
               </>
             )}
-          </div>
+          </p>
         </form>
       </ModalBody>
 
-      <ModalFooter className="justify-between bg-slate-50 text-xs text-slate-500">
-        <div>
-          <p className="mb-2">14-day free trial | No credit card required</p>
-          <p>
-            By signing up, you agree to our{" "}
-            <Link to="/terms" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
-              Terms of Service
-            </Link>{" "}
-            and{" "}
-            <Link to="/privacy" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
-              Privacy Policy
-            </Link>
-            .
-          </p>
-        </div>
+      <ModalFooter className="justify-center bg-slate-50 text-center text-xs text-slate-400">
+        <p>
+          14-day free trial &middot; No credit card required &middot;{" "}
+          <Link to="/terms" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
+            Terms
+          </Link>{" "}
+          &amp;{" "}
+          <Link to="/privacy" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
+            Privacy
+          </Link>
+        </p>
       </ModalFooter>
     </Modal>
   );

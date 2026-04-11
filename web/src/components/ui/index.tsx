@@ -16,21 +16,21 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "border-transparent bg-[linear-gradient(135deg,#2f78bf_0%,#5B85AA_100%)] text-white shadow-[0_12px_24px_rgba(47,120,191,0.22)] hover:brightness-[1.04] active:brightness-[0.97]",
+    "border-transparent bg-quotefly-blue text-white shadow-sm hover:bg-[#4a7499] active:bg-[#3f6585]",
   secondary:
-    "border-transparent bg-[linear-gradient(135deg,#F46036_0%,#ff855f_100%)] text-white shadow-[0_12px_24px_rgba(244,96,54,0.22)] hover:brightness-[1.03] active:brightness-[0.97]",
+    "border-transparent bg-quotefly-orange text-white shadow-sm hover:bg-[#e5522a] active:bg-[#d44820]",
   outline:
-    "border-slate-300 bg-white/95 text-slate-700 hover:border-quotefly-blue/30 hover:bg-quotefly-blue/5 active:bg-quotefly-blue/10",
+    "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 active:bg-slate-100",
   ghost: "border-transparent bg-transparent text-slate-700 hover:bg-slate-100 active:bg-slate-200",
-  danger: "bg-red-50 text-red-700 border-red-300 hover:bg-red-100 active:bg-red-200",
-  success: "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 active:bg-emerald-200",
-  warning: "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 active:bg-amber-200",
+  danger: "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 active:bg-red-200",
+  success: "bg-quotefly-blue/10 text-quotefly-blue border-quotefly-blue/20 hover:bg-quotefly-blue/15 active:bg-quotefly-blue/20",
+  warning: "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 active:bg-amber-200",
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: "min-h-[38px] px-3.5 py-2 text-xs gap-1.5",
-  md: "min-h-[46px] px-4.5 py-2.5 text-sm gap-2",
-  lg: "min-h-[50px] px-5.5 py-3 text-base gap-2.5",
+  sm: "min-h-[34px] px-4 py-1.5 text-xs gap-1.5",
+  md: "min-h-[40px] px-5 py-2 text-sm gap-2",
+  lg: "min-h-[46px] px-6 py-2.5 text-base gap-2.5",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -38,7 +38,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       disabled={disabled || loading}
-      className={`inline-flex items-center justify-center rounded-2xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${fullWidth ? "w-full" : ""} ${className}`}
+      className={`inline-flex items-center justify-center rounded-full border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${fullWidth ? "w-full" : ""} ${className}`}
       {...rest}
     >
       {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon}
@@ -75,7 +75,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
-            className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${icon ? "pl-10" : ""} ${error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-300"} ${className}`}
+            className={`min-h-[40px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-2 focus:ring-quotefly-blue/10 focus:outline-none ${icon ? "pl-10" : ""} ${error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-300"} ${className}`}
             {...rest}
           />
         </div>
@@ -108,7 +108,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
         <select
           ref={ref}
           id={selectId}
-          className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
+          className={`min-h-[40px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-all focus:border-quotefly-blue focus:ring-2 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
           {...rest}
         >
           {placeholder && <option value="">{placeholder}</option>}
@@ -143,7 +143,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
         <textarea
           ref={ref}
           id={areaId}
-          className={`min-h-[46px] w-full rounded-2xl border bg-white/95 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition-all focus:border-quotefly-blue/60 focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
+          className={`min-h-[40px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-2 focus:ring-quotefly-blue/10 focus:outline-none ${error ? "border-red-300" : "border-slate-300"} ${className}`}
           {...rest}
         />
         {error && <p className="text-xs text-red-600">{error}</p>}
@@ -163,10 +163,10 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const CARD_VARIANTS: Record<CardVariant, string> = {
-  default: "border-slate-200 bg-white shadow-sm",
-  blue: "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] shadow-sm",
-  amber: "border-quotefly-orange/20 bg-[linear-gradient(180deg,rgba(244,96,54,0.12)_0%,rgba(255,255,255,1)_100%)] shadow-sm",
-  elevated: "border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.08)] ring-1 ring-slate-100",
+  default: "border-slate-200 bg-white",
+  blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.03]",
+  amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.03]",
+  elevated: "border-slate-200 bg-white shadow-sm",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -179,7 +179,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ variant = "default", padding = "md", className = "", children, ...rest }, ref) => (
     <div
       ref={ref}
-      className={`rounded-[28px] border ${CARD_VARIANTS[variant]} ${CARD_PADDING[padding]} ${className}`}
+      className={`rounded-xl border ${CARD_VARIANTS[variant]} ${CARD_PADDING[padding]} ${className}`}
       {...rest}
     >
       {children}
@@ -214,17 +214,17 @@ interface BadgeProps {
 }
 
 const BADGE_TONES: Record<BadgeTone, string> = {
-  blue: "text-blue-700 border-blue-300 bg-blue-50",
-  orange: "text-orange-700 border-orange-300 bg-orange-50",
-  emerald: "text-emerald-700 border-emerald-300 bg-emerald-50",
-  red: "text-rose-700 border-rose-300 bg-rose-50",
-  amber: "text-amber-700 border-amber-300 bg-amber-50",
-  slate: "text-slate-700 border-slate-300 bg-slate-100",
-  purple: "text-purple-700 border-purple-300 bg-purple-50",
-  cyan: "text-cyan-700 border-cyan-300 bg-cyan-50",
-  indigo: "text-indigo-700 border-indigo-300 bg-indigo-50",
-  violet: "text-violet-700 border-violet-300 bg-violet-50",
-  sky: "text-sky-700 border-sky-300 bg-sky-50",
+  blue: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
+  orange: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
+  emerald: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
+  red: "text-red-600 border-red-200 bg-red-50",
+  amber: "text-amber-700 border-amber-200 bg-amber-50",
+  slate: "text-slate-600 border-slate-200 bg-slate-50",
+  purple: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
+  cyan: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
+  indigo: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
+  violet: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
+  sky: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
 };
 
 export function Badge({ tone = "slate", icon, children, className = "" }: BadgeProps) {
@@ -240,8 +240,8 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 export function EmptyState({ icon, title, description }: { icon?: ReactNode; title: string; description?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-slate-300 bg-slate-50/50 px-6 py-10 text-center">
-      {icon && <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-10 text-center">
+      {icon && <span className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
         {icon}
       </span>}
       <p className="text-sm font-medium text-slate-600">{title}</p>
@@ -253,12 +253,12 @@ export function EmptyState({ icon, title, description }: { icon?: ReactNode; tit
 /* ─────────────────────────── SKELETON ─────────────────────────── */
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-2xl bg-slate-200 ${className}`} />;
+  return <div className={`animate-pulse rounded-lg bg-slate-200 ${className}`} />;
 }
 
 export function SkeletonCard() {
   return (
-    <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <Skeleton className="mb-3 h-4 w-24" />
       <Skeleton className="mb-2 h-3 w-full" />
       <Skeleton className="h-3 w-3/4" />
@@ -277,15 +277,15 @@ interface AlertProps {
 }
 
 const ALERT_TONES: Record<AlertTone, string> = {
-  error: "border-red-300 bg-red-50 text-red-700",
-  success: "border-emerald-300 bg-emerald-50 text-emerald-700",
-  info: "border-blue-300 bg-blue-50 text-blue-700",
-  warning: "border-amber-300 bg-amber-50 text-amber-700",
+  error: "border-red-200 bg-red-50 text-red-700",
+  success: "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue",
+  info: "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue",
+  warning: "border-amber-200 bg-amber-50 text-amber-700",
 };
 
 export function Alert({ tone, children, onDismiss }: AlertProps) {
   return (
-    <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
+    <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
       <span>{children}</span>
       {onDismiss && (
         <button type="button" onClick={onDismiss} className="text-current opacity-60 hover:opacity-100 text-lg leading-none">&times;</button>
@@ -357,7 +357,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={ariaLabel ? undefined : titleId}
         aria-label={ariaLabel}
-        className={`max-h-[90vh] w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.24)] ${MODAL_SIZES[size]} ${panelClassName}`}
+        className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg ${MODAL_SIZES[size]} ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div id={titleId} className="sr-only">
@@ -401,7 +401,7 @@ export function ModalHeader({
 }
 
 export function ModalBody({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`overflow-auto px-5 py-5 sm:px-6 ${className}`}>{children}</div>;
+  return <div className={`min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6 ${className}`}>{children}</div>;
 }
 
 export function ModalFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -484,16 +484,16 @@ export function ProgressBar({
   const clampedValue = Math.max(0, Math.min(100, value));
 
   return (
-    <div className={`space-y-2 ${className}`}>
+    <div className={`space-y-1.5 ${className}`}>
       {(label || hint) && (
-        <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500">
           <span>{label}</span>
           {hint ? <span>{hint}</span> : null}
         </div>
       )}
-      <div className="h-3 overflow-hidden rounded-full bg-slate-200/90">
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
         <div
-          className="h-full rounded-full bg-[linear-gradient(90deg,#2f78bf_0%,#5B85AA_45%,#F46036_100%)] transition-[width] duration-300 ease-out"
+          className="h-full rounded-full bg-quotefly-blue transition-[width] duration-500 ease-out"
           style={{ width: `${clampedValue}%` }}
         />
       </div>
