@@ -76,38 +76,43 @@ interface ThemeDefinition {
 const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
   modern: {
     headerStyle: "bar",
-    accentColor: "#1f4b70",
-    secondaryColor: "#e8f0f7",
-    textDark: "#1b2b3a",
+    accentColor: "#2a7fd8",
+    secondaryColor: "#f8fafc",
+    textDark: "#0f172a",
   },
   professional: {
     headerStyle: "card",
-    accentColor: "#2d4f2b",
-    secondaryColor: "#eef6ee",
-    textDark: "#1f2a1f",
+    accentColor: "#2a7fd8",
+    secondaryColor: "#f8fafc",
+    textDark: "#0f172a",
   },
   bold: {
     headerStyle: "block",
-    accentColor: "#7f2a10",
-    secondaryColor: "#fff0ea",
-    textDark: "#2f120a",
+    accentColor: "#2a7fd8",
+    secondaryColor: "#111827",
+    textDark: "#0f172a",
   },
   minimal: {
     headerStyle: "minimal",
-    accentColor: "#2a2a2a",
-    secondaryColor: "#f3f3f3",
-    textDark: "#121212",
+    accentColor: "#2a7fd8",
+    secondaryColor: "#ffffff",
+    textDark: "#0f172a",
   },
   classic: {
     headerStyle: "card",
-    accentColor: "#4d3d2a",
-    secondaryColor: "#f8f4ec",
-    textDark: "#2f2418",
+    accentColor: "#f46036",
+    secondaryColor: "#fff7ed",
+    textDark: "#0f172a",
   },
 };
 
 function formatMoney(value: number): string {
   return `$${value.toFixed(2)}`;
+}
+
+function formatQuantity(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function formatLocalDate(value: Date | null, timeZone: string): string {
@@ -247,7 +252,6 @@ function writeHeader(
   data: QuotePdfData,
   theme: ThemeDefinition,
   colors: ResolvedComponentColors,
-  accentColor: string,
   logoBuffer: Buffer | null,
 ): number {
   const left = 48;
@@ -257,71 +261,81 @@ function writeHeader(
   const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
 
   if (theme.headerStyle === "bar") {
-    doc.rect(0, 0, doc.page.width, 110).fill(colors.headerBgColor);
+    doc.rect(0, 0, doc.page.width, 8).fill(colors.headerBgColor);
     if (logoBuffer) {
       try {
-        doc.image(logoBuffer, left, 26, { fit: [88, 56] });
+        doc.image(logoBuffer, left, 26, { fit: [84, 52] });
       } catch {
         // Ignore bad image payloads and continue without logo rendering.
       }
     }
-    doc.fillColor(colors.headerTextColor).font("Helvetica-Bold").fontSize(21).text(data.tenant.name, left + (logoBuffer ? 100 : 0), 28);
-    doc.font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 0), 58);
-    doc.text(`Prepared ${createdDate}`, left + (logoBuffer ? 100 : 0), 74);
-    doc.fillColor("#111111");
-    return 132;
+    const contentLeft = left + (logoBuffer ? 98 : 0);
+    doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(20).text(data.tenant.name, contentLeft, 28);
+    doc.fillColor("#475569").font("Helvetica").fontSize(10).text("Customer quote", contentLeft, 54);
+    doc.font("Helvetica").fontSize(10).text(quoteLabel, right - 110, 30, { width: 110, align: "right" });
+    doc.text(`Prepared ${createdDate}`, right - 110, 46, { width: 110, align: "right" });
+    doc.moveTo(left, 94).lineTo(right, 94).stroke("#dbe3ef");
+    return 112;
   }
 
   if (theme.headerStyle === "block") {
-    doc.rect(0, 0, doc.page.width, 150).fill(colors.headerBgColor);
-    doc.fillColor(colors.headerTextColor).font("Helvetica-Bold").fontSize(26).text("QUOTE", left, 30);
-    doc.font("Helvetica").fontSize(11).text(`${data.tenant.name}`, left, 66);
-    doc.text(quoteLabel, left, 82);
-    doc.text(`Prepared: ${createdDate}`, left, 98);
+    doc.roundedRect(left, 28, width, 92, 12).fill(theme.secondaryColor);
+    doc.rect(left, 28, width, 6).fill(colors.headerBgColor);
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(18).text(data.tenant.name, left + 16, 46);
+    doc.font("Helvetica").fontSize(10).text(quoteLabel, left + 16, 72);
+    doc.text(`Prepared ${createdDate}`, left + 16, 88);
     if (logoBuffer) {
       try {
-        doc.image(logoBuffer, right - 105, 25, { fit: [92, 92] });
+        doc.image(logoBuffer, right - 92, 46, { fit: [76, 42] });
       } catch {
         // Ignore bad image payloads and continue without logo rendering.
       }
     }
     doc.fillColor("#111111");
-    return 170;
+    return 144;
   }
 
   if (theme.headerStyle === "card") {
-    doc.roundedRect(left, 30, width, 86, 10).fill(theme.secondaryColor);
+    doc.roundedRect(left, 30, width, 86, 12).fillAndStroke(theme.secondaryColor, "#dbe3ef");
+    doc.roundedRect(left, 30, 6, 86, 3).fill(colors.headerBgColor);
     if (logoBuffer) {
       try {
-        doc.image(logoBuffer, left + 12, 43, { fit: [76, 58] });
+        doc.image(logoBuffer, left + 20, 44, { fit: [68, 46] });
       } catch {
         // Ignore bad image payloads and continue without logo rendering.
       }
     }
-    doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(19).text(data.tenant.name, left + (logoBuffer ? 100 : 14), 46);
-    doc.fillColor(theme.textDark).font("Helvetica").fontSize(11).text(quoteLabel, left + (logoBuffer ? 100 : 14), 72);
-    doc.text(`Prepared ${createdDate}`, left + (logoBuffer ? 100 : 14), 88);
+    const contentLeft = left + (logoBuffer ? 100 : 22);
+    doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(18).text(data.tenant.name, contentLeft, 46);
+    doc.fillColor("#475569").font("Helvetica").fontSize(10).text("Customer quote", contentLeft, 68);
+    doc.fillColor(theme.textDark).font("Helvetica").fontSize(10).text(quoteLabel, right - 110, 46, { width: 96, align: "right" });
+    doc.fillColor("#475569").text(`Prepared ${createdDate}`, right - 110, 64, { width: 96, align: "right" });
     doc.fillColor("#111111");
     return 136;
   }
 
-  doc.fillColor(colors.headerBgColor).font("Helvetica-Bold").fontSize(23).text(data.tenant.name, left, 42);
-  doc.font("Helvetica").fontSize(11).fillColor("#555555").text(quoteLabel, left, 72);
-  doc.text(`Prepared ${createdDate}`, left, 88);
+  doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(22).text(data.tenant.name, left, 40);
+  doc.font("Helvetica").fontSize(10).fillColor("#475569").text(quoteLabel, right - 110, 42, {
+    width: 110,
+    align: "right",
+  });
+  doc.text(`Prepared ${createdDate}`, right - 110, 58, { width: 110, align: "right" });
   if (logoBuffer) {
     try {
-      doc.image(logoBuffer, right - 96, 38, { fit: [84, 56] });
+      doc.image(logoBuffer, right - 96, 72, { fit: [84, 52] });
     } catch {
       // Ignore bad image payloads and continue without logo rendering.
     }
   }
+  doc.moveTo(left, 84).lineTo(right, 84).stroke(colors.headerBgColor);
   doc.fillColor("#111111");
-  return 126;
+  return 108;
 }
 
 function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, sectionTitleColor: string): number {
   doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(12).text(title, 48, y);
-  return y + 18;
+  doc.moveTo(48, y + 16).lineTo(564, y + 16).stroke("#e2e8f0");
+  return y + 24;
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, y: number, minSpace: number): number {
@@ -374,49 +388,69 @@ function drawLineItemsTable(
   const xUnit = 408;
   const xTotal = 494;
 
-  doc.rect(48, y, 516, 24).fill(tableHeaderColor);
-  doc.fillColor(tableHeaderTextColor).font("Helvetica-Bold").fontSize(10);
-  doc.text("Description", xDescription + 8, y + 8, { width: 280 });
-  doc.text("Qty", xQty + 8, y + 8, { width: 42, align: "right" });
-  doc.text("Unit", xUnit + 8, y + 8, { width: 66, align: "right" });
-  doc.text("Total", xTotal + 8, y + 8, { width: 58, align: "right" });
+  const drawTableHeader = (top: number) => {
+    doc.rect(48, top, 516, 24).fill(tableHeaderColor);
+    doc.fillColor(tableHeaderTextColor).font("Helvetica-Bold").fontSize(10);
+    doc.text("Description", xDescription + 8, top + 8, { width: 280 });
+    doc.text("Qty", xQty + 8, top + 8, { width: 42, align: "right" });
+    doc.text("Unit", xUnit + 8, top + 8, { width: 66, align: "right" });
+    doc.text("Total", xTotal + 8, top + 8, { width: 58, align: "right" });
+  };
 
+  drawTableHeader(y);
   y += 24;
-  doc.font("Helvetica").fillColor("#222222");
 
   normalizedItems.forEach((item, index) => {
-    y = ensureSpace(doc, y, 34);
+    doc.font("Helvetica").fontSize(10);
+    const descriptionHeight = doc.heightOfString(item.description, {
+      width: 280,
+      align: "left",
+    });
+    const rowHeight = Math.max(28, Math.ceil(descriptionHeight) + 12);
 
-    if (index % 2 === 0) {
-      doc.rect(48, y, 516, 28).fill("#f7f7f7");
-      doc.fillColor("#222222");
+    if (y + rowHeight > doc.page.height - 72) {
+      doc.addPage();
+      y = 56;
+      drawTableHeader(y);
+      y += 24;
     }
 
+    if (index % 2 === 0) {
+      doc.rect(48, y, 516, rowHeight).fill("#f8fafc");
+    }
+
+    doc.fillColor("#222222").font("Helvetica").fontSize(10);
+    const textY = y + 7;
     const total = item.quantity * item.unitPrice;
-    doc.text(item.description, xDescription + 8, y + 8, { width: 280 });
-    doc.text(String(item.quantity), xQty + 8, y + 8, { width: 42, align: "right" });
-    doc.text(formatMoney(item.unitPrice), xUnit + 8, y + 8, { width: 66, align: "right" });
-    doc.text(formatMoney(total), xTotal + 8, y + 8, { width: 58, align: "right" });
-    y += 28;
+    doc.text(item.description, xDescription + 8, textY, { width: 280 });
+    doc.text(formatQuantity(item.quantity), xQty + 8, textY, { width: 42, align: "right" });
+    doc.text(formatMoney(item.unitPrice), xUnit + 8, textY, { width: 66, align: "right" });
+    doc.text(formatMoney(total), xTotal + 8, textY, { width: 58, align: "right" });
+    doc.moveTo(48, y + rowHeight).lineTo(564, y + rowHeight).stroke("#e2e8f0");
+    y += rowHeight;
   });
 
   return y + 12;
 }
 
 function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, totalsColor: string): number {
-  const xLabel = 386;
-  const xValue = 492;
-  doc.font("Helvetica").fontSize(10).fillColor("#333333");
-  doc.text("Subtotal", xLabel, y, { width: 90, align: "right" });
-  doc.text(formatMoney(data.customerPriceSubtotal), xValue, y, { width: 72, align: "right" });
-  y += 16;
-  doc.text("Tax", xLabel, y, { width: 90, align: "right" });
-  doc.text(formatMoney(data.taxAmount), xValue, y, { width: 72, align: "right" });
-  y += 20;
+  y = ensureSpace(doc, y, 88);
+  const boxX = 360;
+  const boxWidth = 204;
+  doc.roundedRect(boxX, y, boxWidth, 72, 10).fillAndStroke("#ffffff", "#dbe3ef");
+  doc.font("Helvetica").fontSize(10).fillColor("#334155");
+  doc.text("Subtotal", boxX + 16, y + 14, { width: 90 });
+  doc.text(formatMoney(data.customerPriceSubtotal), boxX + 112, y + 14, {
+    width: 76,
+    align: "right",
+  });
+  doc.text("Tax", boxX + 16, y + 30, { width: 90 });
+  doc.text(formatMoney(data.taxAmount), boxX + 112, y + 30, { width: 76, align: "right" });
+  doc.moveTo(boxX + 16, y + 48).lineTo(boxX + boxWidth - 16, y + 48).stroke("#e2e8f0");
   doc.font("Helvetica-Bold").fontSize(12).fillColor(totalsColor);
-  doc.text("Total", xLabel, y, { width: 90, align: "right" });
-  doc.text(formatMoney(data.totalAmount), xValue, y, { width: 72, align: "right" });
-  return y + 28;
+  doc.text("Total", boxX + 16, y + 54, { width: 90 });
+  doc.text(formatMoney(data.totalAmount), boxX + 112, y + 54, { width: 76, align: "right" });
+  return y + 88;
 }
 
 export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer> {
@@ -442,7 +476,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     doc.on("error", reject);
     doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-    let y = writeHeader(doc, data, theme, componentColors, accentColor, logoBuffer);
+    let y = writeHeader(doc, data, theme, componentColors, logoBuffer);
 
     doc.fillColor("#222222").font("Helvetica-Bold").fontSize(16).text(data.title, 48, y);
     y += 24;

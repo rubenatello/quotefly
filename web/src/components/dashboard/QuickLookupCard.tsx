@@ -178,7 +178,7 @@ function LookupSection({
   results: ReactNode[];
 }) {
   return (
-    <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-slate-900">{title}</p>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">{results.length}</span>
@@ -215,7 +215,7 @@ function LookupResultCard({
     <div
       className={`rounded-[22px] border p-3 shadow-sm transition ${
         active
-          ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)]"
+          ? "border-quotefly-blue/25 bg-quotefly-blue/[0.06]"
           : "border-slate-200 bg-white"
       }`}
     >

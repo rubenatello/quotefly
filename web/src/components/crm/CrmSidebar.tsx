@@ -80,7 +80,7 @@ export function CrmSidebar({
   return (
     <AppTooltipProvider>
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200/80 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_38%,#ffffff_100%)] py-5 shadow-[0_24px_64px_rgba(15,23,42,0.06)] transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white py-5 shadow-[0_18px_40px_rgba(15,23,42,0.06)] transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -149,7 +149,7 @@ export function CrmSidebar({
                   className={cn(
                     "group flex w-full items-center rounded-[22px] border text-sm font-medium transition-all",
                     active
-                      ? "border-quotefly-blue/20 bg-[linear-gradient(135deg,rgba(42,127,216,0.12),rgba(244,96,54,0.08))] text-slate-900 shadow-[0_18px_34px_rgba(42,127,216,0.12)]"
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900 shadow-sm"
                       : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900 hover:shadow-sm",
                     collapsed ? "justify-center px-0 py-3" : "justify-between px-3 py-3",
                   )}

@@ -533,7 +533,7 @@ export function QuoteDeskView() {
                   }
                   options={afterSaleOptions}
                 />
-                <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-3.5 py-3 shadow-sm">
+                <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-3.5 py-3 shadow-sm">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-up due</p>
                   <p className="mt-1 text-sm font-semibold text-slate-900">{afterSaleDueLabel}</p>
                 </div>
@@ -585,7 +585,7 @@ export function QuoteDeskView() {
                     return (
                       <div
                         key={item.id}
-                        className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm"
+                        className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm"
                       >
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div>
@@ -617,12 +617,12 @@ export function QuoteDeskView() {
                 )}
               </div>
 
-              <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(247,250,255,1)_100%)] p-4 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
+              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
                 <p className="text-sm font-semibold text-slate-900">Add Line Item</p>
                 <p className="mt-1 text-xs text-slate-500">
                   Build labor, materials, and service charges with cost and sell price separated.
                 </p>
-                <div className="mt-4 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
+                <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Saved Jobs</p>
@@ -663,7 +663,7 @@ export function QuoteDeskView() {
                             }}
                             className={`min-w-[190px] rounded-[22px] border px-3 py-2.5 text-left transition ${
                               preset.id === selectedPresetId
-                                ? "border-quotefly-blue/25 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] shadow-sm"
+                                ? "border-quotefly-blue/25 bg-quotefly-blue/[0.06] shadow-sm"
                                 : "border-slate-200 bg-white"
                             }`}
                           >
@@ -712,7 +712,7 @@ export function QuoteDeskView() {
                             />
                             <MiniMetric
                               label="Applied totals"
-                              value={`${money(selectedPresetCostTotal)} cost Â· ${money(selectedPresetPriceTotal)} price`}
+                              value={`${money(selectedPresetCostTotal)} cost - ${money(selectedPresetPriceTotal)} price`}
                             />
                           </div>
                         </div>
@@ -767,7 +767,7 @@ export function QuoteDeskView() {
                     />
                   </div>
 
-                  <div className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
+                  <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Draft line math</p>
                     <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
                       <MiniMetric label="Cost" value={money(lineItemMath.costTotal)} />
@@ -950,7 +950,7 @@ export function QuoteDeskView() {
 
             <div className="mt-4">
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
-              <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+              <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">Invoice Sync</p>
@@ -998,7 +998,7 @@ export function QuoteDeskView() {
                 </div>
 
                 {selectedQuote.status !== "ACCEPTED" ? (
-                  <p className="mt-3 rounded-[18px] border border-amber-200 bg-[linear-gradient(180deg,rgba(251,191,36,0.12)_0%,rgba(255,255,255,1)_100%)] px-3 py-2 text-xs text-amber-800">
+                  <p className="mt-3 rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     Mark the quote won first. QuoteFly only pushes accepted quotes into QuickBooks invoices.
                   </p>
                 ) : null}
@@ -1022,7 +1022,7 @@ export function QuoteDeskView() {
                       />
                     </div>
                     {quickBooksPreview.warnings.length > 0 ? (
-                      <div className="rounded-[18px] border border-amber-200 bg-[linear-gradient(180deg,rgba(251,191,36,0.12)_0%,rgba(255,255,255,1)_100%)] px-3 py-3">
+                      <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-3">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Review before push</p>
                         <ul className="mt-2 space-y-1 text-xs text-amber-900">
                           {quickBooksPreview.warnings.map((warning) => (
@@ -1031,7 +1031,7 @@ export function QuoteDeskView() {
                         </ul>
                       </div>
                     ) : (
-                      <p className="rounded-[18px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.12)_0%,rgba(255,255,255,1)_100%)] px-3 py-2 text-xs text-emerald-800">
+                      <p className="rounded-[18px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                         Customer and line items are ready to sync.
                       </p>
                     )}
@@ -1133,7 +1133,7 @@ export function QuoteDeskView() {
                 onClick={() => setHistoryMode(mode)}
                 className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
                   historyMode === mode
-                    ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
+                    ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
                     : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 }`}
               >
@@ -1154,13 +1154,13 @@ export function QuoteDeskView() {
             )}
           </div>
           {historyLoading ? (
-            <p className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-3 py-3 text-xs text-slate-600">Loading revision history...</p>
+            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading revision history...</p>
           ) : quoteHistory.length === 0 ? (
-            <p className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-3 py-3 text-xs text-slate-500">No history entries for this filter yet.</p>
+            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No history entries for this filter yet.</p>
           ) : (
             <div className="max-h-72 space-y-2 overflow-auto">
               {quoteHistory.map((revision) => (
-                <div key={revision.id} className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
+                <div key={revision.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <HistoryEventPill eventType={revision.eventType} />
@@ -1198,13 +1198,13 @@ export function QuoteDeskView() {
             actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
           />
           {outboundEventsLoading ? (
-            <p className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-3 py-3 text-xs text-slate-600">Loading send activity...</p>
+            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">Loading send activity...</p>
           ) : outboundEvents.length === 0 ? (
-            <p className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-3 py-3 text-xs text-slate-500">No send actions logged yet.</p>
+            <p className="rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">No send actions logged yet.</p>
           ) : (
             <div className="max-h-60 space-y-2 overflow-auto">
               {outboundEvents.map((event) => (
-                <div key={event.id} className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-3 shadow-sm">
+                <div key={event.id} className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <OutboundChannelPill channel={event.channel} />
                     <p className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</p>
@@ -1269,7 +1269,7 @@ export function QuoteDeskView() {
                 setSendComposer((prev) => (prev ? { ...prev, body: event.target.value } : prev))
               }
             />
-            <div className="rounded-[22px] border border-quotefly-blue/15 bg-[linear-gradient(180deg,rgba(91,133,170,0.12)_0%,rgba(255,255,255,1)_100%)] px-3 py-3 text-sm text-slate-700">
+            <div className="rounded-[22px] border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-3 text-sm text-slate-700">
               Confirming will mark the quote as quoted, log the action, and open the selected app.
             </div>
           </ModalBody>
@@ -1333,14 +1333,14 @@ function DeskMetricCard({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/20 bg-[linear-gradient(180deg,rgba(91,133,170,0.14)_0%,rgba(255,255,255,1)_100%)] text-quotefly-blue"
+      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
       : tone === "emerald"
-        ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.14)_0%,rgba(255,255,255,1)_100%)] text-emerald-700"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
         : tone === "amber"
-          ? "border-amber-200 bg-[linear-gradient(180deg,rgba(245,158,11,0.14)_0%,rgba(255,255,255,1)_100%)] text-amber-700"
+          ? "border-amber-200 bg-amber-50 text-amber-700"
           : tone === "rose"
-            ? "border-rose-200 bg-[linear-gradient(180deg,rgba(244,63,94,0.14)_0%,rgba(255,255,255,1)_100%)] text-rose-700"
-            : "border-slate-200 bg-[linear-gradient(180deg,rgba(148,163,184,0.1)_0%,rgba(255,255,255,1)_100%)] text-slate-700";
+            ? "border-rose-200 bg-rose-50 text-rose-700"
+            : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
     <div className={`rounded-[24px] border p-4 shadow-sm ${toneClass}`}>
@@ -1369,7 +1369,7 @@ function DeskWorkflowCard({
         subtitle="Keep the work ordered: verify scope, price the job, then send or export."
       />
       <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
-      <div className="mt-4 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] px-4 py-3 shadow-sm">
+      <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Next step</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{nextStep}</p>
       </div>
@@ -1379,7 +1379,7 @@ function DeskWorkflowCard({
             key={step.label}
             className={`rounded-[24px] border px-4 py-3 shadow-sm ${
               step.complete
-                ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.12)_0%,rgba(255,255,255,1)_100%)]"
+                ? "border-emerald-200 bg-emerald-50"
                 : "border-slate-200 bg-white"
             }`}
           >

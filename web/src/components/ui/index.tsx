@@ -17,9 +17,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "border-transparent bg-[linear-gradient(135deg,#2a7fd8,#4a92e0)] text-white shadow-[0_16px_30px_rgba(42,127,216,0.24)] hover:brightness-[1.02] active:brightness-[0.98]",
+    "border-quotefly-blue bg-quotefly-blue text-white shadow-sm hover:bg-[#256fbf] active:bg-[#1f5f9f]",
   secondary:
-    "border-transparent bg-[linear-gradient(135deg,#f46036,#fb7b46)] text-white shadow-[0_16px_30px_rgba(244,96,54,0.2)] hover:brightness-[1.02] active:brightness-[0.98]",
+    "border-quotefly-orange bg-quotefly-orange text-white shadow-sm hover:bg-[#dd532a] active:bg-[#c74921]",
   outline:
     "border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100",
   ghost: "border-transparent bg-transparent text-slate-700 hover:bg-slate-100 active:bg-slate-200",
@@ -83,7 +83,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.04)] placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+              "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-200",
               className,
@@ -121,7 +121,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.04)] transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-sm transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -160,7 +160,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[120px] w-full rounded-2xl border bg-white px-4 py-3 text-sm text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.04)] placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[120px] w-full rounded-2xl border bg-white px-4 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -183,10 +183,10 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const CARD_VARIANTS: Record<CardVariant, string> = {
-  default: "border-slate-200/80 bg-white/92 shadow-[0_18px_40px_rgba(15,23,42,0.06)] backdrop-blur-sm",
-  blue: "border-quotefly-blue/15 bg-[linear-gradient(180deg,rgba(42,127,216,0.08),rgba(255,255,255,0.94))] shadow-[0_18px_40px_rgba(42,127,216,0.08)]",
-  amber: "border-quotefly-orange/15 bg-[linear-gradient(180deg,rgba(244,96,54,0.08),rgba(255,255,255,0.94))] shadow-[0_18px_40px_rgba(244,96,54,0.08)]",
-  elevated: "border-slate-200/80 bg-white/95 shadow-[0_22px_46px_rgba(15,23,42,0.08)] backdrop-blur-sm",
+  default: "border-slate-200 bg-white shadow-sm",
+  blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.04] shadow-sm",
+  amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.05] shadow-sm",
+  elevated: "border-slate-200 bg-white shadow-[0_12px_28px_rgba(15,23,42,0.08)]",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -517,7 +517,7 @@ export function ProgressBar({
       )}
       <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
         <div
-          className="h-full rounded-full bg-[linear-gradient(90deg,#2a7fd8,#f46036)] transition-[width] duration-500 ease-out"
+          className="h-full rounded-full bg-quotefly-blue transition-[width] duration-500 ease-out"
           style={{ width: `${clampedValue}%` }}
         />
       </div>

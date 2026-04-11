@@ -932,7 +932,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
   return (
     <div className="crm-light">
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(42,127,216,0.10),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(244,96,54,0.08),_transparent_36%),#f8fafc] p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
+      <div className="min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">
@@ -1049,7 +1049,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
             {canUseChatToQuote ? (
               <form
                 onSubmit={createQuoteFromChatPrompt}
-                className="space-y-3 rounded-xl border border-blue-200 bg-gradient-to-b from-blue-50 to-white p-4 shadow-sm"
+                className="space-y-3 rounded-xl border border-blue-200 bg-white p-4 shadow-sm"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="text-lg font-semibold text-slate-900">Chat to Quote</h2>

@@ -214,7 +214,7 @@ export function StatCard({ icon, label, value }: { icon: ReactNode; label: strin
   return (
     <div className="rounded-[28px] border border-slate-200/80 bg-white/95 p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_24px_52px_rgba(15,23,42,0.1)]">
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex h-12 w-12 items-center justify-center rounded-[20px] bg-[linear-gradient(135deg,rgba(42,127,216,0.12),rgba(244,96,54,0.08))] text-quotefly-blue shadow-sm">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-[20px] bg-quotefly-blue/[0.08] text-quotefly-blue shadow-sm">
           {icon}
         </span>
       </div>
@@ -324,12 +324,12 @@ function PipelineStage({
 }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/15 bg-[linear-gradient(180deg,rgba(42,127,216,0.10),rgba(255,255,255,0.95))] text-quotefly-blue"
+      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.05] text-quotefly-blue"
       : tone === "orange"
-        ? "border-quotefly-orange/15 bg-[linear-gradient(180deg,rgba(244,96,54,0.10),rgba(255,255,255,0.95))] text-quotefly-orange"
+        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.06] text-quotefly-orange"
         : tone === "emerald"
-          ? "border-emerald-200 bg-[linear-gradient(180deg,rgba(16,185,129,0.10),rgba(255,255,255,0.95))] text-emerald-700"
-          : "border-slate-200 bg-[linear-gradient(180deg,rgba(148,163,184,0.08),rgba(255,255,255,0.95))] text-slate-600";
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
     <div className={`flex min-w-[192px] items-center justify-between rounded-[24px] border px-3.5 py-3 shadow-sm ${toneClass}`}>

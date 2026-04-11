@@ -147,7 +147,7 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main className="crm-light min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(42,127,216,0.10),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(244,96,54,0.08),_transparent_36%),#f8fafc] p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
+        <main className="crm-light min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
           <div className="mx-auto max-w-7xl">
             <Routes>
               <Route index element={<PipelineView />} />

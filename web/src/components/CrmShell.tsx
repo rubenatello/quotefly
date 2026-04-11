@@ -138,7 +138,7 @@ export function CrmShell({
   const displayPlanName = planName ?? "Starter";
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(42,127,216,0.08),_transparent_26%),radial-gradient(circle_at_top_right,_rgba(244,96,54,0.10),_transparent_24%),linear-gradient(180deg,#f8fafc_0%,#eef4fb_100%)]">
+    <div className="min-h-screen bg-slate-50">
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         onToggleMobile={() => setMobileOpen((open) => !open)}
@@ -222,7 +222,7 @@ export function CrmShell({
                       type="button"
                       className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 shadow-sm transition hover:border-slate-300"
                     >
-                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#2a7fd8,#f46036)] text-sm font-semibold text-white">
+                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-quotefly-blue text-sm font-semibold text-white">
                         {(fullName ?? "Q")
                           .split(" ")
                           .map((part) => part[0])

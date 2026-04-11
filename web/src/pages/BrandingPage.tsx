@@ -82,7 +82,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     id: "modern",
     name: "Modern Clean",
     description: "Top bar layout with clean spacing for fast readability.",
-    preview: "bg-gradient-to-br from-blue-50 to-slate-50",
+    preview: "bg-white",
     headerStyle: "bar",
     bestFor: "Fast field quotes",
   },
@@ -90,7 +90,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     id: "professional",
     name: "Professional",
     description: "Structured card header for a formal business look.",
-    preview: "bg-gradient-to-br from-emerald-50 to-slate-50",
+    preview: "bg-slate-50",
     headerStyle: "card",
     bestFor: "Office-ready estimates",
   },
@@ -98,7 +98,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     id: "bold",
     name: "Bold",
     description: "High-contrast block header that stands out immediately.",
-    preview: "bg-gradient-to-br from-orange-50 to-rose-50",
+    preview: "bg-slate-100",
     headerStyle: "block",
     bestFor: "Sales-forward proposals",
   },
@@ -114,7 +114,7 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     id: "classic",
     name: "Classic",
     description: "Balanced card style with a timeless proposal feel.",
-    preview: "bg-gradient-to-br from-amber-50 to-stone-100",
+    preview: "bg-orange-50",
     headerStyle: "card",
     bestFor: "Traditional contractors",
   },
@@ -364,7 +364,7 @@ function TemplateMiniPreview({
       onClick={onSelect}
       className={`min-w-[220px] rounded-[24px] border p-3 text-left shadow-sm transition ${
         active
-          ? "border-quotefly-primary bg-[linear-gradient(180deg,rgba(42,127,216,0.08)_0%,rgba(255,255,255,1)_100%)] shadow-[0_18px_36px_rgba(42,127,216,0.12)]"
+          ? "border-quotefly-primary bg-quotefly-primary/[0.05] shadow-[0_12px_28px_rgba(42,127,216,0.10)]"
           : "border-slate-200 bg-white hover:border-quotefly-primary/30 hover:shadow-[0_14px_28px_rgba(15,23,42,0.08)]"
       }`}
       aria-pressed={active}
@@ -372,7 +372,7 @@ function TemplateMiniPreview({
       <div className={`rounded-[20px] border border-slate-200 p-3 ${template.preview}`}>
         {template.headerStyle === "bar" ? (
           <>
-            <div className="h-3 rounded-full bg-[linear-gradient(90deg,#2a7fd8,#f46036)]" />
+            <div className="h-2 rounded-full bg-quotefly-blue" />
             <div className="mt-3 grid gap-2">
               <div className="h-2 rounded-full bg-slate-300/90" />
               <div className="h-2 w-4/5 rounded-full bg-slate-200/95" />
@@ -383,6 +383,7 @@ function TemplateMiniPreview({
           <>
             <div className="rounded-2xl border border-slate-200 bg-white/95 p-2.5">
               <div className="flex items-center gap-2">
+                <div className="h-10 w-1.5 rounded-full bg-quotefly-blue" />
                 <div className="h-7 w-7 rounded-xl bg-slate-200" />
                 <div className="flex-1">
                   <div className="h-2 rounded-full bg-slate-700/80" />
@@ -394,7 +395,8 @@ function TemplateMiniPreview({
           </>
         ) : template.headerStyle === "block" ? (
           <>
-            <div className="rounded-2xl bg-[linear-gradient(135deg,#2a7fd8,#f46036)] p-3">
+            <div className="rounded-2xl bg-slate-900 p-3">
+              <div className="mb-2 h-1.5 w-full rounded-full bg-quotefly-orange" />
               <div className="h-2 w-1/2 rounded-full bg-white/90" />
               <div className="mt-2 h-2 w-1/3 rounded-full bg-white/55" />
             </div>
@@ -609,7 +611,6 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const previewHeaderColor = getComponentColorValue("headerBgColor");
-  const previewHeaderTextColor = getComponentColorValue("headerTextColor");
   const previewSectionTitleColor = getComponentColorValue("sectionTitleColor");
   const previewTableHeaderColor = getComponentColorValue("tableHeaderBgColor");
   const previewTableHeaderTextColor = getComponentColorValue("tableHeaderTextColor");
@@ -953,7 +954,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     <ChevronLeft size={18} />
                   </button>
 
-                  <div className="flex-1 rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1)_0%,rgba(248,250,252,1)_100%)] p-4 shadow-sm">
+                  <div className="flex-1 rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
@@ -1012,30 +1013,33 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     {activeTemplate.name}
                   </div>
                 </div>
-                <div className={`rounded-xl p-8 text-black ${activeTemplate.preview}`}>
+                <div className="rounded-xl border border-slate-200 bg-white p-8 text-black">
                 {activeTemplate.headerStyle === "bar" && (
-                  <div className="mb-6 rounded-lg p-4" style={{ backgroundColor: previewHeaderColor, color: previewHeaderTextColor }}>
-                    <div className="flex items-start justify-between">
+                  <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="h-2" style={{ backgroundColor: previewHeaderColor }} />
+                    <div className="flex items-start justify-between p-4">
                       <div>
                         {logo ? (
                           <img src={logo} alt="Logo" className="mb-2 h-12 rounded bg-white p-1" />
                         ) : (
-                          <div className="mb-2 h-12 w-12 rounded bg-white/20" />
+                          <div className="mb-2 h-12 w-12 rounded bg-slate-100" />
                         )}
-                        <h4 className="mt-2 text-lg font-bold">{companyName}</h4>
+                        <h4 className="mt-2 text-lg font-bold text-slate-900">{companyName}</h4>
+                        <p className="mt-1 text-xs text-slate-500">Customer quote</p>
                       </div>
-                      <div className="text-right text-sm">
-                        <p className="font-semibold">Quote #12345</p>
-                        <p style={{ color: `${previewHeaderTextColor}CC` }}>April 10, 2026</p>
+                      <div className="text-right text-sm text-slate-600">
+                        <p className="font-semibold text-slate-900">Quote #12345</p>
+                        <p>April 10, 2026</p>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {activeTemplate.headerStyle === "card" && (
-                  <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
+                        <div className="h-10 w-1.5 rounded-full" style={{ backgroundColor: previewHeaderColor }} />
                         {logo ? (
                           <img src={logo} alt="Logo" className="h-10 rounded bg-slate-100 p-1" />
                         ) : (
@@ -1054,12 +1058,13 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 )}
 
                 {activeTemplate.headerStyle === "block" && (
-                  <div className="mb-6 rounded-lg p-5" style={{ backgroundColor: previewHeaderColor, color: previewHeaderTextColor }}>
+                  <div className="mb-6 rounded-xl bg-slate-900 p-5 text-white">
+                    <div className="mb-3 h-1.5 rounded-full" style={{ backgroundColor: previewHeaderColor }} />
                     <div className="flex items-center justify-between">
                       <h4 className="text-xl font-bold tracking-wide">{companyName}</h4>
                       <p className="text-sm">Quote #12345</p>
                     </div>
-                    <p className="mt-2 text-sm" style={{ color: `${previewHeaderTextColor}CC` }}>Prepared on April 10, 2026</p>
+                    <p className="mt-2 text-sm text-white/70">Prepared on April 10, 2026</p>
                   </div>
                 )}
 
@@ -1137,8 +1142,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 </table>
 
                 <div
-                  className={`rounded p-4 text-center font-semibold ${activeTemplate.headerStyle === "minimal" ? "border border-slate-300 text-slate-700" : "text-white"}`}
-                  style={{ backgroundColor: activeTemplate.headerStyle === "minimal" ? "#ffffff" : previewHeaderColor }}
+                  className="rounded-lg border px-4 py-4 text-center font-semibold text-slate-700"
+                  style={{ borderColor: previewHeaderColor }}
                 >
                   Valid for 30 days
                 </div>
