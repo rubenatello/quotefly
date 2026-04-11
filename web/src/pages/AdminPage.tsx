@@ -9,10 +9,11 @@ import {
   type PlanCode,
   type QuickBooksStatusPayload,
   type TenantEntitlements,
+  type TenantUsageSnapshot,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
-import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, Select } from "../components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 
 interface AdminPageProps {
@@ -28,6 +29,7 @@ interface AdminPageProps {
     effectivePlanName?: string;
     isTrial?: boolean;
     entitlements?: TenantEntitlements;
+    usage?: TenantUsageSnapshot;
   } | null;
 }
 
@@ -399,6 +401,10 @@ export function AdminPage({ session }: AdminPageProps) {
     if (teamMembersLimit === null) return `${teamMembersUsed} seats in use`;
     return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
+  const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
+  const aiQuoteUsed = session?.usage?.monthlyAiQuoteCount ?? 0;
+  const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
+  const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
   const adminLinks = [
     { id: "admin-overview", label: "Overview", hint: "Plan + status" },
     { id: "admin-billing", label: "Billing", hint: "Plans + Stripe" },
@@ -512,6 +518,22 @@ export function AdminPage({ session }: AdminPageProps) {
                 hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
               />
             </div>
+            {aiQuoteLimit !== null ? (
+              <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Draft Usage</p>
+                  <span className="text-xs font-semibold text-slate-900">
+                    {aiQuoteUsed}/{aiQuoteLimit}
+                  </span>
+                </div>
+                <ProgressBar
+                  value={aiUsagePercent}
+                  label="Monthly AI usage"
+                  hint={aiQuoteRemaining === 0 ? "Limit reached for this month" : `${aiQuoteRemaining} AI drafts remaining`}
+                  className="mt-3"
+                />
+              </div>
+            ) : null}
             <WorkspaceJumpBar links={adminLinks} className="mt-4" />
           </WorkspaceRailCard>
 
@@ -570,7 +592,7 @@ export function AdminPage({ session }: AdminPageProps) {
             ) : null}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3 xl:w-[460px]">
+          <div className="grid gap-3 sm:grid-cols-2 xl:w-[620px] xl:grid-cols-4">
             <AdminMetricCard
               icon={<PriceIcon size={16} />}
               label="Current access"
@@ -588,6 +610,12 @@ export function AdminPage({ session }: AdminPageProps) {
               label="Team seats"
               value={seatUsageText}
               hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
+            />
+            <AdminMetricCard
+              icon={<ClockIcon size={16} />}
+              label="AI drafts"
+              value={aiQuoteLimit === null ? "Unlimited" : `${aiQuoteUsed}/${aiQuoteLimit}`}
+              hint={aiQuoteLimit === null ? "No monthly cap" : `${aiQuoteRemaining} remaining this month`}
             />
           </div>
         </div>

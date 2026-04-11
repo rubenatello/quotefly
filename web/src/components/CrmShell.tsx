@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Command, MoreHorizontal, Search, Sparkles } from "lucide-react";
-import type { PlanCode, TenantEntitlements } from "../lib/api";
+import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
   ClockIcon,
@@ -29,6 +29,7 @@ interface CrmShellProps {
   planCode?: PlanCode;
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
+  usage?: TenantUsageSnapshot;
 }
 
 const OPERATIONS_LINKS: readonly CrmNavLink[] = [
@@ -112,6 +113,7 @@ export function CrmShell({
   planCode,
   isTrial,
   entitlements,
+  usage,
 }: CrmShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -173,6 +175,7 @@ export function CrmShell({
           planCode={planCode}
           isTrial={isTrial}
           entitlements={entitlements}
+          usage={usage}
         />
 
         {mobileOpen && (

@@ -14,6 +14,7 @@ import { api, type QuoteStatus, type ServiceType, type WorkPreset } from "../lib
 import { CustomerIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -52,6 +53,7 @@ export function QuoteBuilderView() {
   usePageView("quote_builder");
   const track = useTrack();
   const {
+    session,
     customers,
     quotes,
     saving,
@@ -187,6 +189,10 @@ export function QuoteBuilderView() {
     ],
     [],
   );
+  const aiQuoteUsed = session?.usage?.monthlyAiQuoteCount ?? 0;
+  const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
+  const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const aiNearLimit = aiQuoteLimit !== null && aiQuoteRemaining !== null && aiQuoteRemaining <= Math.max(3, Math.ceil(aiQuoteLimit * 0.1));
 
   useEffect(() => {
     setSelectedQuoteIds((current) => current.filter((quoteId) => visibleQuoteIds.includes(quoteId)));
@@ -376,6 +382,22 @@ export function QuoteBuilderView() {
               <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
               <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
             </div>
+            {aiQuoteLimit !== null ? (
+              <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI drafts</p>
+                  <span className="text-xs font-semibold text-slate-900">
+                    {aiQuoteUsed}/{aiQuoteLimit}
+                  </span>
+                </div>
+                <ProgressBar
+                  value={aiUsagePercent}
+                  label="Monthly AI draft usage"
+                  hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
+                  className="mt-3"
+                />
+              </div>
+            ) : null}
             <WorkspaceJumpBar links={builderLinks} className="mt-4" />
           </WorkspaceRailCard>
 
@@ -489,9 +511,16 @@ export function QuoteBuilderView() {
                   className="space-y-3"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-quotefly-blue shadow-sm">
-                      AI generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="blue">
+                        {aiQuoteLimit === null ? "AI drafts included" : `${aiQuoteUsed}/${aiQuoteLimit} AI drafts used`}
+                      </Badge>
+                      {aiQuoteLimit !== null ? (
+                        <Badge tone={aiNearLimit ? "orange" : "slate"}>
+                          {aiQuoteRemaining} left this month
+                        </Badge>
+                      ) : null}
+                    </div>
                     <Button
                       type="button"
                       variant="outline"
@@ -510,6 +539,15 @@ export function QuoteBuilderView() {
                     onChange={(event) => setChatPrompt(event.target.value)}
                     placeholder="New quote for..."
                   />
+                  {aiQuoteLimit !== null ? (
+                    <div className="rounded-[22px] border border-white/70 bg-white/90 px-3 py-3 shadow-sm">
+                      <ProgressBar
+                        value={aiUsagePercent}
+                        label="Monthly AI draft usage"
+                        hint={aiQuoteRemaining === 0 ? "Manual revisions stay unlimited" : `${aiQuoteRemaining} AI drafts remaining`}
+                      />
+                    </div>
+                  ) : null}
                   {chatParsed && (
                     <div className="rounded-2xl border border-quotefly-blue/20 bg-white/90 px-3 py-2.5 text-xs text-slate-700 shadow-sm">
                       Last parse: {chatParsed.serviceType}
@@ -1099,6 +1137,5 @@ function QuickBooksGuideModal({
     </Modal>
   );
 }
-
 
 

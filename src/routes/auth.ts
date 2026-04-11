@@ -3,7 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { getJwtClaims } from "../lib/auth";
-import { buildTenantEntitlements } from "../lib/subscription";
+import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
 
 const BCRYPT_ROUNDS = 12;
@@ -251,6 +251,31 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       subscriptionCurrentPeriodEndUtc: membership.tenant.subscriptionCurrentPeriodEndUtc,
     }, new Date(), { userEmail: membership.user.email });
 
+    const periodStart = startOfCurrentUtcMonth();
+    const periodEnd = startOfNextUtcMonth();
+    const [monthlyQuoteCount, monthlyAiQuoteCount] = await Promise.all([
+      app.prisma.quote.count({
+        where: {
+          tenantId: claims.tenantId,
+          deletedAtUtc: null,
+          createdAt: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      }),
+      app.prisma.quote.count({
+        where: {
+          tenantId: claims.tenantId,
+          deletedAtUtc: null,
+          aiGeneratedAtUtc: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      }),
+    ]);
+
     return {
       user: membership.user,
       tenant: {
@@ -259,6 +284,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         effectivePlanName: entitlements.planName,
         isTrial: entitlements.isTrial,
         entitlements,
+        usage: {
+          periodStartUtc: periodStart,
+          periodEndUtc: periodEnd,
+          monthlyQuoteCount,
+          monthlyAiQuoteCount,
+        },
       },
       role: membership.role,
     };

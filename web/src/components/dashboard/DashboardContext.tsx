@@ -16,6 +16,7 @@ import {
   type QuoteStatus,
   type ServiceType,
   type TenantEntitlements,
+  type TenantUsageSnapshot,
 } from "../../lib/api";
 
 /* ─────────────── Types ─────────────── */
@@ -93,6 +94,7 @@ export interface DashboardSession {
   effectivePlanCode?: "starter" | "professional" | "enterprise";
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
+  usage?: TenantUsageSnapshot;
 }
 
 /* ─────────────── Constants ─────────────── */

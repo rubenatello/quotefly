@@ -104,6 +104,13 @@ export type TenantEntitlements = {
   };
 };
 
+export type TenantUsageSnapshot = {
+  periodStartUtc: string;
+  periodEndUtc: string;
+  monthlyQuoteCount: number;
+  monthlyAiQuoteCount: number;
+};
+
 export type AuthSessionPayload = {
   user: {
     id: string;
@@ -125,6 +132,7 @@ export type AuthSessionPayload = {
     effectivePlanName?: string;
     isTrial?: boolean;
     entitlements?: TenantEntitlements;
+    usage?: TenantUsageSnapshot;
   };
   role: string;
 };

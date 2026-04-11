@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { Navbar } from "./components/Navbar";
 import { CrmShell } from "./components/CrmShell";
@@ -7,23 +7,7 @@ import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
 import { BottomTabBar } from "./components/crm/BottomTabBar";
-import { LandingPage } from "./pages/LandingPage";
-import { PricingPage } from "./pages/PricingPage";
-import { SolutionsPage } from "./pages/SolutionsPage";
-import { AboutPage } from "./pages/AboutPage";
-import { SupportPage } from "./pages/SupportPage";
-import { PrivacyPage } from "./pages/PrivacyPage";
-import { DataPrivacyPage } from "./pages/DataPrivacyPage";
-import { TermsPage } from "./pages/TermsPage";
-import { CookiePolicyPage } from "./pages/CookiePolicyPage";
-import { BrandingPage } from "./pages/BrandingPage";
-import { SetupPage } from "./pages/SetupPage";
-import { AdminPage } from "./pages/AdminPage";
 import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
-import { PipelineView } from "./views/PipelineView";
-import { QuoteBuilderView } from "./views/QuoteBuilderView";
-import { QuoteDeskView } from "./views/QuoteDeskView";
-import { QuoteHistoryView } from "./views/QuoteHistoryView";
 import {
   api,
   ApiError,
@@ -31,8 +15,26 @@ import {
   type AuthSessionPayload,
   type ServiceType,
   type TenantEntitlements,
+  type TenantUsageSnapshot,
 } from "./lib/api";
 import { Toaster } from "sonner";
+
+const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
+const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
+const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
+const AboutPage = lazy(() => import("./pages/AboutPage").then((module) => ({ default: module.AboutPage })));
+const SupportPage = lazy(() => import("./pages/SupportPage").then((module) => ({ default: module.SupportPage })));
+const PrivacyPage = lazy(() => import("./pages/PrivacyPage").then((module) => ({ default: module.PrivacyPage })));
+const DataPrivacyPage = lazy(() => import("./pages/DataPrivacyPage").then((module) => ({ default: module.DataPrivacyPage })));
+const TermsPage = lazy(() => import("./pages/TermsPage").then((module) => ({ default: module.TermsPage })));
+const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((module) => ({ default: module.CookiePolicyPage })));
+const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
+const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
+const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
+const PipelineView = lazy(() => import("./views/PipelineView").then((module) => ({ default: module.PipelineView })));
+const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
+const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
+const QuoteHistoryView = lazy(() => import("./views/QuoteHistoryView").then((module) => ({ default: module.QuoteHistoryView })));
 
 type Session = {
   email: string;
@@ -49,6 +51,7 @@ type Session = {
   effectivePlanName?: string;
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
+  usage?: TenantUsageSnapshot;
 };
 
 function clearStoredSession() {
@@ -73,6 +76,7 @@ function toSession(payload: AuthSessionPayload): Session {
     effectivePlanName: payload.tenant.effectivePlanName,
     isTrial: payload.tenant.isTrial,
     entitlements: payload.tenant.entitlements,
+    usage: payload.tenant.usage,
   };
 }
 
@@ -87,6 +91,7 @@ function toDashboardSession(s: Session): DashboardSession {
     effectivePlanCode: s.effectivePlanCode,
     isTrial: s.isTrial,
     entitlements: s.entitlements,
+    usage: s.usage,
   };
 }
 
@@ -141,6 +146,7 @@ function CrmLayout({
       planCode={session.effectivePlanCode}
       isTrial={session.isTrial}
       entitlements={session.entitlements}
+      usage={session.usage}
     >
       <DashboardProvider
         session={toDashboardSession(session)}
@@ -148,20 +154,22 @@ function CrmLayout({
         onNavigateToBuilder={() => navigate("/app/build")}
       >
         <main className="crm-light min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
-          <div className="mx-auto max-w-7xl">
-            <Routes>
-              <Route index element={<PipelineView />} />
-              <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
-              <Route path="build" element={<QuoteBuilderView />} />
-              <Route path="quotes" element={<QuoteDeskView />} />
-              <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
-              <Route path="history" element={<QuoteHistoryView />} />
-              <Route path="settings" element={<Navigate to="/app/admin" replace />} />
-              <Route path="branding" element={<BrandingPage tenantId={session.tenantId} />} />
-              <Route path="admin" element={<AdminPage session={session} />} />
-              <Route path="*" element={<Navigate to="/app" replace />} />
-            </Routes>
-          </div>
+          <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
+            <div className="mx-auto max-w-7xl">
+              <Routes>
+                <Route index element={<PipelineView />} />
+                <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
+                <Route path="build" element={<QuoteBuilderView />} />
+                <Route path="quotes" element={<QuoteDeskView />} />
+                <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
+                <Route path="history" element={<QuoteHistoryView />} />
+                <Route path="settings" element={<Navigate to="/app/admin" replace />} />
+                <Route path="branding" element={<BrandingPage tenantId={session.tenantId} />} />
+                <Route path="admin" element={<AdminPage session={session} />} />
+                <Route path="*" element={<Navigate to="/app" replace />} />
+              </Routes>
+            </div>
+          </Suspense>
         </main>
         <BottomTabBar />
       </DashboardProvider>
@@ -199,18 +207,20 @@ function MarketingLayout({
         onLogout={onLogout}
       />
       <main className="flex-1">
-        <Routes>
-          <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
-          <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
-          <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
-          <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
-          <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
-          <Route path="privacy" element={<PrivacyPage />} />
-          <Route path="data-privacy" element={<DataPrivacyPage />} />
-          <Route path="terms" element={<TermsPage />} />
-          <Route path="cookies" element={<CookiePolicyPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<AppLoadingScreen message="Loading page..." />}>
+          <Routes>
+            <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
+            <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
+            <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
+            <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
+            <Route path="privacy" element={<PrivacyPage />} />
+            <Route path="data-privacy" element={<DataPrivacyPage />} />
+            <Route path="terms" element={<TermsPage />} />
+            <Route path="cookies" element={<CookiePolicyPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
       <Footer />
       <CookieConsentBanner />

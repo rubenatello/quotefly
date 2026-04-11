@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { PlanCode, TenantEntitlements } from "../../lib/api";
+import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { CloseIcon, LockIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { AppTooltip, AppTooltipProvider } from "../ui/tooltip";
+import { ProgressBar } from "../ui";
 
 export interface CrmNavLink {
   label: string;
@@ -33,6 +34,7 @@ interface CrmSidebarProps {
   planCode?: PlanCode;
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
+  usage?: TenantUsageSnapshot;
 }
 
 function SidebarTooltip({
@@ -62,6 +64,7 @@ export function CrmSidebar({
   planCode,
   isTrial,
   entitlements,
+  usage,
 }: CrmSidebarProps) {
   const displayPlanName = planName ?? "Starter";
   const showTrialBadge = Boolean(isTrial);
@@ -76,6 +79,13 @@ export function CrmSidebar({
         : "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue";
 
   const sidebarWidthClass = collapsed ? "lg:w-[92px]" : "lg:w-[284px]";
+  const aiQuoteLimit = entitlements?.limits.aiQuotesPerMonth ?? null;
+  const aiQuoteUsed = usage?.monthlyAiQuoteCount ?? 0;
+  const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
+  const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const totalQuoteLimit = entitlements?.limits.quotesPerMonth ?? null;
+  const totalQuoteUsed = usage?.monthlyQuoteCount ?? 0;
+  const totalUsagePercent = totalQuoteLimit && totalQuoteLimit > 0 ? Math.min((totalQuoteUsed / totalQuoteLimit) * 100, 100) : 0;
 
   return (
     <AppTooltipProvider>
@@ -259,6 +269,34 @@ export function CrmSidebar({
               </p>
             </div>
           )}
+
+          {!collapsed && aiQuoteLimit !== null && usage ? (
+            <div className="rounded-[24px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">AI Drafts</p>
+                <span className="text-xs font-semibold text-slate-900">
+                  {aiQuoteUsed}/{aiQuoteLimit}
+                </span>
+              </div>
+              <ProgressBar
+                value={aiUsagePercent}
+                label="Monthly AI quote usage"
+                hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
+                className="mt-3"
+              />
+              {totalQuoteLimit !== null ? (
+                <div className="mt-3 rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <span>Total quotes</span>
+                    <span>{totalQuoteUsed}/{totalQuoteLimit}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-quotefly-orange" style={{ width: `${totalUsagePercent}%` }} />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {!collapsed && (
             <div className="rounded-[24px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
