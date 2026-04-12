@@ -66,7 +66,7 @@ const PAGE_META: Record<string, { label: string; hint: string }> = {
   },
   settings: {
     label: "Settings",
-    hint: "Handle organization billing, QuickBooks, and workspace controls.",
+    hint: "Handle organization billing, launch-plan access, and workspace controls.",
   },
   "settings-users": {
     label: "Users",

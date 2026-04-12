@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 
 const PlanCodeSchema = z.enum(["starter", "professional", "enterprise"]);
+const SELLABLE_PLAN_CODES = new Set<PlanCode>(["starter"]);
 
 const CreateCheckoutSessionSchema = z.object({
   planCode: PlanCodeSchema,
@@ -287,6 +288,12 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
 
     const claims = getJwtClaims(request);
     const payload = CreateCheckoutSessionSchema.parse(request.body);
+
+    if (!SELLABLE_PLAN_CODES.has(payload.planCode)) {
+      return reply.code(409).send({
+        error: "Starter is the only plan available for launch. Professional and Enterprise are coming soon.",
+      });
+    }
 
     const tenant = await app.prisma.tenant.findFirst({
       where: {

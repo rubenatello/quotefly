@@ -47,6 +47,7 @@ type PlanCard = {
   name: string;
   price: string;
   summary: string;
+  launchState: "available" | "coming-soon";
   seatText: string;
   aiQuoteText: string;
   historyText: string;
@@ -66,6 +67,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     code: "starter",
     name: "Starter",
     price: "$19/mo",
+    launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
     seatText: "Up to 7 users",
     aiQuoteText: "30 AI quote drafts / month",
@@ -75,30 +77,32 @@ const PLAN_CARDS: readonly PlanCard[] = [
       "600 quotes per month",
       "Quick customer intake and pipeline tracking",
       "PDF quote generation",
-      "QuickBooks Online invoice sync and CSV fallback",
+      "Fast customer and quote tracking",
     ],
   },
   {
     code: "professional",
     name: "Professional",
     price: "$59/mo",
-    summary: "For field teams that need stronger pipeline visibility and revision tracking.",
+    launchState: "coming-soon",
+    summary: "Staged after launch for stronger visibility, revisions, and accounting workflows.",
     seatText: "Up to 15 users",
     aiQuoteText: "300 AI quote drafts / month",
     historyText: "180-day quote history",
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
-      "5,000 quotes per month",
       "Quote version history",
       "Communication log and advanced analytics",
       "Multi-trade workspace support",
+      "Accounting workflow upgrades",
     ],
   },
   {
     code: "enterprise",
     name: "Enterprise",
     price: "$249/mo",
-    summary: "For larger operations that need automation, governance, and integrations.",
+    launchState: "coming-soon",
+    summary: "Staged after Professional for larger operations that need governance and automation.",
     seatText: "Unlimited users",
     aiQuoteText: "800 AI quote drafts / month",
     historyText: "Unlimited quote history",
@@ -210,8 +214,6 @@ export function AdminPage({ session }: AdminPageProps) {
   const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
   const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
   const [quickBooksLoading, setQuickBooksLoading] = useState(true);
-  const [quickBooksActionLoading, setQuickBooksActionLoading] = useState(false);
-  const [quickBooksActionMode, setQuickBooksActionMode] = useState<"connect" | "disconnect" | null>(null);
   const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
   const sessionRole = normalizeRole(session?.role ?? "member");
@@ -364,40 +366,6 @@ export function AdminPage({ session }: AdminPageProps) {
     }
   }
 
-  async function connectQuickBooks() {
-    if (!ownerView) return;
-
-    setQuickBooksActionLoading(true);
-    setQuickBooksActionMode("connect");
-    setError(null);
-    try {
-      const result = await api.integrations.quickbooks.connect();
-      window.location.assign(result.authorizationUrl);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed starting QuickBooks authorization.");
-      setQuickBooksActionLoading(false);
-      setQuickBooksActionMode(null);
-    }
-  }
-
-  async function disconnectQuickBooks() {
-    if (!ownerView) return;
-
-    setQuickBooksActionLoading(true);
-    setQuickBooksActionMode("disconnect");
-    setError(null);
-    try {
-      await api.integrations.quickbooks.disconnect();
-      await loadQuickBooksStatus();
-      setNotice("QuickBooks disconnected from this workspace.");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed disconnecting QuickBooks.");
-    } finally {
-      setQuickBooksActionLoading(false);
-      setQuickBooksActionMode(null);
-    }
-  }
-
   const seatUsageText = useMemo(() => {
     if (teamMembersLimit === null) return `${teamMembersUsed} seats in use`;
     return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
@@ -449,14 +417,13 @@ export function AdminPage({ session }: AdminPageProps) {
     );
   }
 
-  const quickBooksConnected = Boolean(quickBooksStatus?.connection);
-  const quickBooksEnvironmentLabel = quickBooksStatus?.environment === "sandbox" ? "Sandbox" : "Production";
+  const starterLaunchMode = effectivePlanCode === "starter";
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Settings"
-        subtitle={settingsMode === "users" ? "Manage workspace users, roles, and seat usage." : "Manage organization billing, QuickBooks, and workspace controls."}
+        subtitle={settingsMode === "users" ? "Manage workspace users, roles, and seat usage." : "Manage organization billing, launch-plan access, and workspace controls."}
         actions={
           ownerView && hasPortalAccess ? (
             <Button
@@ -496,8 +463,8 @@ export function AdminPage({ session }: AdminPageProps) {
               <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
                 {sentenceCaseStatus(session?.subscriptionStatus)}
               </Badge>
-              <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
-                QB {quickBooksConnected ? "Connected" : "Not linked"}
+              <Badge tone={starterLaunchMode ? "blue" : "amber"}>
+                {starterLaunchMode ? "Starter launch" : "Advanced tiers later"}
               </Badge>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
@@ -574,15 +541,9 @@ export function AdminPage({ session }: AdminPageProps) {
                 </Button>
               ) : null}
               {settingsMode === "org" && ownerView ? (
-                <Button
-                  type="button"
-                  onClick={() => void connectQuickBooks()}
-                  disabled={!quickBooksStatus?.enabled || quickBooksActionLoading}
-                  loading={quickBooksActionLoading && quickBooksActionMode === "connect"}
-                  fullWidth
-                >
-                  {quickBooksConnected ? "Reconnect QuickBooks" : "Connect QuickBooks"}
-                </Button>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                  Starter launch keeps the product focused on customer management and quoting. Advanced accounting integrations stay off-sale for now.
+                </div>
               ) : null}
             </div>
           </WorkspaceRailCard>
@@ -647,18 +608,19 @@ export function AdminPage({ session }: AdminPageProps) {
             id="admin-billing"
             step="Step 2"
             title="Billing"
-            description="Choose the plan that matches your crew size. Stripe handles billing and QuoteFly enforces access."
+            description="Starter is the launch plan. Advanced tiers stay visible here, but they are not for sale yet."
             actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
           title="Billing and Plan Controls"
-          subtitle="Choose the plan that matches your crew size. Stripe handles billing and QuoteFly enforces tenant access."
+          subtitle="Launch with Starter. Stripe handles billing and QuoteFly enforces access while Professional and Enterprise stay off-sale."
         />
         <div className="grid gap-4 xl:grid-cols-3">
           {PLAN_CARDS.map((plan) => {
             const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
             const isCurrentAccessPlan = effectivePlanCode === plan.code;
+            const isComingSoon = plan.launchState === "coming-soon";
 
             return (
               <article key={plan.code} className={`rounded-[26px] border p-4 shadow-sm ${plan.accentClassName}`}>
@@ -670,6 +632,7 @@ export function AdminPage({ session }: AdminPageProps) {
                   <div className="flex flex-col items-end gap-2">
                     {isCurrentAccessPlan ? <Badge tone="blue">Current access</Badge> : null}
                     {isCurrentPaidPlan ? <Badge tone="emerald">Active billing</Badge> : null}
+                    {!isCurrentPaidPlan && isComingSoon ? <Badge tone="amber">Coming soon</Badge> : null}
                   </div>
                 </div>
 
@@ -695,10 +658,10 @@ export function AdminPage({ session }: AdminPageProps) {
                   fullWidth
                   className="mt-5"
                   onClick={() => void startCheckout(plan.code)}
-                  disabled={!ownerView || isCurrentPaidPlan || billingAction !== null}
+                  disabled={!ownerView || isCurrentPaidPlan || billingAction !== null || isComingSoon}
                   loading={billingAction === plan.code}
                 >
-                  {isCurrentPaidPlan ? "Current Paid Plan" : `Choose ${plan.name}`}
+                  {isCurrentPaidPlan ? "Current Paid Plan" : isComingSoon ? "Coming Soon" : `Choose ${plan.name}`}
                 </Button>
               </article>
             );
@@ -706,9 +669,9 @@ export function AdminPage({ session }: AdminPageProps) {
         </div>
 
         <Card variant="default" padding="md" className="mt-4 bg-slate-50/80">
-          <p className="text-sm font-semibold text-slate-900">Operational note</p>
+          <p className="text-sm font-semibold text-slate-900">Launch note</p>
           <p className="mt-1 text-sm text-slate-600">
-            Stripe manages billing. QuoteFly manages tenant access, seat limits, AI quote limits, and feature unlocks based on the plan attached to this workspace.
+            Starter is the only sellable launch plan right now. Professional and Enterprise remain visible so the roadmap is clear, but they stay off-sale until the deeper reporting and accounting surfaces are hardened.
           </p>
         </Card>
             </Card>
@@ -719,88 +682,50 @@ export function AdminPage({ session }: AdminPageProps) {
           <WorkspaceSection
             id="admin-quickbooks"
             step="Step 3"
-            title="QuickBooks"
-            description="Link one QuickBooks company to this tenant so accepted quotes can move into invoice workflows."
-            actions={<Badge tone={quickBooksStatus?.environment === "sandbox" ? "amber" : "slate"}>{quickBooksEnvironmentLabel}</Badge>}
+            title="Accounting"
+            description={starterLaunchMode ? "Starter launch is focused on CRM and quoting first. Direct accounting sync stays off-sale until the next release." : "Accounting integrations are being hardened for the next release."}
+            actions={<Badge tone="amber">V2 roadmap</Badge>}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
-          title="QuickBooks Online"
-          subtitle="Link one QuickBooks company to this tenant so accepted quotes can move into invoice workflows."
+          title="Accounting roadmap"
+          subtitle={starterLaunchMode ? "Starter customers should focus on customer management, quote tracking, and PDF delivery. Direct accounting sync is being staged after launch." : "Advanced accounting sync is still being hardened before sale."}
         />
 
         <div className="flex flex-wrap gap-2">
-          <Badge tone={quickBooksConnected ? "emerald" : "slate"}>
-            {quickBooksConnected ? quickBooksStatus?.connection?.status ?? "Connected" : "Not linked"}
-          </Badge>
-          <Badge tone={quickBooksStatus?.enabled ? "blue" : "amber"}>
-            {quickBooksStatus?.enabled ? "API configured" : "API setup missing"}
-          </Badge>
-          <Badge tone={quickBooksStatus?.webhookConfigured ? "emerald" : "amber"}>
-            {quickBooksStatus?.webhookConfigured ? "Webhook ready" : "Webhook verifier missing"}
-          </Badge>
+          <Badge tone="blue">PDF quotes live</Badge>
+          <Badge tone="blue">Customer pipeline live</Badge>
+          <Badge tone="orange">Accounting sync later</Badge>
         </div>
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
           <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Connection Summary</p>
-            {quickBooksLoading ? (
-              <p className="mt-3 text-sm text-slate-600">Loading QuickBooks status...</p>
-            ) : quickBooksStatus?.connection ? (
-              <div className="mt-3 grid gap-2 text-sm text-slate-700">
-                <p><span className="font-semibold text-slate-900">Company:</span> {quickBooksStatus.connection.companyName ?? "Connected company"}</p>
-                <p><span className="font-semibold text-slate-900">Realm ID:</span> {quickBooksStatus.connection.realmId}</p>
-                <p><span className="font-semibold text-slate-900">Connected:</span> {dateText(quickBooksStatus.connection.connectedAtUtc)}</p>
-                <p><span className="font-semibold text-slate-900">Customer maps:</span> {quickBooksStatus.connection.counts.customerMaps}</p>
-                <p><span className="font-semibold text-slate-900">Item maps:</span> {quickBooksStatus.connection.counts.itemMaps}</p>
-                <p><span className="font-semibold text-slate-900">Invoice sync records:</span> {quickBooksStatus.connection.counts.invoiceSyncs}</p>
-                {quickBooksStatus.connection.lastError ? (
-                  <Alert tone="error">{quickBooksStatus.connection.lastError}</Alert>
-                ) : null}
-              </div>
-            ) : (
-              <div className="mt-3 space-y-2 text-sm text-slate-600">
-                <p>No QuickBooks company is linked to this tenant yet.</p>
-                <p>Once linked, QuoteFly keeps customer, item, and invoice sync state isolated by tenant.</p>
-              </div>
-            )}
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">What ships now</p>
+            <div className="mt-3 grid gap-2 text-sm text-slate-700">
+              <p><span className="font-semibold text-slate-900">Customer pipeline:</span> new through sold, with clear status handling.</p>
+              <p><span className="font-semibold text-slate-900">Quote workflow:</span> draft, send, close, and PDF actions from one workspace.</p>
+              <p><span className="font-semibold text-slate-900">Team access:</span> Starter seat and AI limits are enforced from billing.</p>
+              <p><span className="font-semibold text-slate-900">Exports:</span> PDF delivery is part of the launch workflow today.</p>
+            </div>
           </div>
 
           <Card variant="default" padding="md">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Owner Actions</p>
-            {!quickBooksStatus?.enabled ? (
-              <Alert tone="warning">
-                QuickBooks credentials are not configured on the API yet.
-              </Alert>
-            ) : null}
-
-            <div className="mt-4 grid gap-2">
-              <Button
-                type="button"
-                onClick={() => void connectQuickBooks()}
-                disabled={!ownerView || !quickBooksStatus?.enabled || quickBooksActionLoading}
-                loading={quickBooksActionLoading && quickBooksActionMode === "connect"}
-              >
-                {quickBooksConnected ? "Reconnect QuickBooks" : "Connect QuickBooks"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void disconnectQuickBooks()}
-                disabled={!ownerView || !quickBooksConnected || quickBooksActionLoading}
-                loading={quickBooksActionLoading && quickBooksActionMode === "disconnect"}
-              >
-                Disconnect
-              </Button>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Later release</p>
+            <div className="mt-3 space-y-3 text-sm text-slate-600">
+              <p>Professional and Enterprise will take on accounting workflows only after the starter CRM and quoting path is stable in production.</p>
+              <ul className="space-y-2 text-sm text-slate-700">
+                <li>- Direct QuickBooks Online connection</li>
+                <li>- Invoice push and status refresh</li>
+                <li>- Deeper accounting automation and reconciliation</li>
+              </ul>
+              {quickBooksLoading ? (
+                <p className="text-xs text-slate-400">Checking internal QuickBooks foundation...</p>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Internal foundation status: {quickBooksStatus?.enabled ? "configured" : "not configured"}.
+                </p>
+              )}
             </div>
-
-            {!ownerView ? (
-              <p className="mt-3 text-xs text-slate-500">
-                Only workspace owners can change billing and integration connections.
-              </p>
-            ) : null}
-            <p className="mt-3 text-xs text-slate-500">Redirect URI: {quickBooksStatus?.redirectUri ?? "Loading..."}</p>
-            <p className="mt-1 text-xs text-slate-500">Webhook URL: {quickBooksStatus?.webhookUrl ?? "Loading..."}</p>
           </Card>
         </div>
             </Card>

@@ -34,7 +34,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
     },
     {
       title: "Made to integrate",
-      description: "Stripe billing works now. QuickBooks Online connection, invoice push, and CSV fallback are live.",
+      description: "Stripe billing works now. Starter is focused on CRM and quoting first, with accounting integrations staged after launch.",
     },
     {
       title: "Customer-obsessed",

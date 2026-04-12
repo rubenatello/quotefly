@@ -21,54 +21,57 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Starter",
       price: "$19",
       period: "/month",
-      description: "For solo contractors and lean crews that need speed without extra overhead.",
+      description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
       features: [
         "Up to 600 quotes/month",
         "30 AI quote drafts/month",
         "Quick customer intake and lead pipeline",
         "PDF quote generation",
-        "QuickBooks Online invoice sync plus CSV fallback",
+        "Customer and quote status tracking",
         "7 team members",
         "30-day quote history",
       ],
       cta: "Start Free Trial",
-      highlighted: false,
+      highlighted: true,
+      availableNow: true,
+      note: "Available now",
     },
     {
       name: "Professional",
       price: "$59",
       period: "/month",
-      description: "For growing field teams that need stronger visibility and revision control.",
+      description: "Planned for the next release once advanced analytics, history, and accounting workflows are fully hardened.",
       features: [
-        "Up to 5,000 quotes/month",
         "Everything in Starter, plus:",
         "300 AI quote drafts/month",
         "Advanced analytics and reporting",
         "Customer communication log",
         "Quote versioning and history",
         "15 team members",
-        "180-day quote history",
+        "Accounting workflow upgrades",
       ],
-      cta: "Start Free Trial",
-      highlighted: true,
+      cta: "Coming Soon",
+      highlighted: false,
+      availableNow: false,
+      note: "V2 roadmap",
     },
     {
       name: "Enterprise",
       price: "$249",
       period: "/month",
-      description: "For larger operations that need governance, automation, and integration control.",
+      description: "Planned after Professional for larger operations that need deeper automation and integration control.",
       features: [
         "Everything in Professional, plus:",
-        "Unlimited quotes",
         "800 AI quote drafts/month",
         "Unlimited team members",
         "Advanced AI automation layer",
         "API access and audit logs",
-        "Custom branding",
-        "Priority support and integration planning",
+        "Priority support and rollout planning",
       ],
-      cta: "Start Free Trial",
+      cta: "Coming Soon",
       highlighted: false,
+      availableNow: false,
+      note: "Later release",
     },
   ];
 
@@ -87,7 +90,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Do you support QuickBooks?",
-      a: "QuoteFly supports QuickBooks-friendly CSV export and direct QuickBooks Online invoice sync. Webhook-driven payment automation is the next layer.",
+      a: "Not as a sellable launch feature. Starter is focused on customer management, quoting, and PDF workflow first. Accounting integrations are planned after launch.",
     },
     {
       q: "Do you offer annual billing?",
@@ -101,14 +104,14 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         <div className="mx-auto max-w-4xl text-center">
           <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Simple, transparent pricing</h1>
           <p className="text-lg text-slate-600">
-            Pick the plan that fits your crew today. Upgrade when you need more seats, more AI drafts, or more control.
+            Starter is the launch plan. It covers fast customer intake, quoting, and follow-up today. Advanced plans are being staged after the core workflow hardens.
           </p>
 
           <div className="mt-8 flex items-center justify-center gap-4">
             <span className="text-sm text-slate-600">Billed monthly</span>
-            <button className="inline-flex items-center rounded-full border border-quotefly-blue bg-quotefly-blue/10 px-4 py-2">
-              <span className="text-xs font-semibold text-quotefly-blue">Annual billing can come later</span>
-            </button>
+            <span className="inline-flex items-center rounded-full border border-quotefly-blue/15 bg-quotefly-blue/[0.06] px-4 py-2 text-xs font-semibold text-quotefly-blue">
+              Starter is live now
+            </span>
           </div>
         </div>
       </section>
@@ -127,12 +130,17 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
               >
                 {plan.highlighted && (
                   <div className="border-b border-quotefly-blue/20 bg-quotefly-blue/10 px-6 py-2 text-center text-sm font-semibold text-quotefly-blue">
-                    Most Popular
+                    Launch Plan
                   </div>
                 )}
 
                 <div className="p-6">
-                  <h3 className="text-xl font-bold text-slate-900">{plan.name}</h3>
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-xl font-bold text-slate-900">{plan.name}</h3>
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${plan.availableNow ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-500"}`}>
+                      {plan.note}
+                    </span>
+                  </div>
                   <p className="mt-2 text-sm text-slate-600">{plan.description}</p>
 
                   <div className="mt-6 flex items-baseline gap-1">
@@ -141,11 +149,14 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                   </div>
 
                   <button
-                    onClick={onOpenAuth}
+                    onClick={plan.availableNow ? onOpenAuth : undefined}
+                    disabled={!plan.availableNow}
                     className={`mt-6 w-full rounded-lg px-6 py-3 font-semibold transition-colors ${
                       plan.highlighted
                         ? "bg-quotefly-blue text-white hover:bg-blue-600"
-                        : "border border-slate-300 text-slate-900 hover:border-slate-400"
+                        : "border border-slate-300 text-slate-900"
+                    } ${
+                      !plan.availableNow ? "cursor-not-allowed bg-slate-100 text-slate-400" : ""
                     }`}
                   >
                     {plan.cta}
@@ -191,8 +202,8 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h2 className="mb-4 text-3xl font-bold text-slate-900">Start your free trial today</h2>
-          <p className="mb-8 text-lg text-slate-600">No credit card required. Full access for 14 days.</p>
+          <h2 className="mb-4 text-3xl font-bold text-slate-900">Start with Starter</h2>
+          <p className="mb-8 text-lg text-slate-600">No credit card required. Full access to the launch workflow for 14 days.</p>
           <button
             onClick={onOpenAuth}
             className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-blue-600"

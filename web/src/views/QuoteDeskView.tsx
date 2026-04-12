@@ -125,6 +125,7 @@ export function QuoteDeskView() {
   } = useDashboard();
   const { quoteId } = useParams<{ quoteId: string }>();
   const [activeDeskTab, setActiveDeskTab] = useState<"overview" | "details" | "lines" | "actions" | "history" | "comms">("overview");
+  const starterLaunchMode = currentPlanLabel.trim().toLowerCase() === "starter";
 
   useEffect(() => {
     if (!quoteId) return;
@@ -158,7 +159,7 @@ export function QuoteDeskView() {
   }, []);
 
   async function loadQuickBooksPreview(showErrors = false) {
-    if (!selectedQuote) return;
+    if (!selectedQuote || starterLaunchMode) return;
     setQuickBooksPreviewLoading(true);
     if (showErrors) {
       setQuickBooksCardMessage(null);
@@ -184,7 +185,7 @@ export function QuoteDeskView() {
   }
 
   async function pushQuoteToQuickBooks() {
-    if (!selectedQuote) return;
+    if (!selectedQuote || starterLaunchMode) return;
     setQuickBooksPushLoading(true);
     setQuickBooksCardMessage(null);
     setError(null);
@@ -208,7 +209,7 @@ export function QuoteDeskView() {
   }
 
   async function refreshQuickBooksInvoiceStatus() {
-    if (!selectedQuote) return;
+    if (!selectedQuote || starterLaunchMode) return;
     setQuickBooksStatusLoading(true);
     setQuickBooksCardMessage(null);
     setError(null);
@@ -288,12 +289,12 @@ export function QuoteDeskView() {
     setQuickBooksSyncRecord(null);
     setQuickBooksInvoiceStatus(null);
 
-    if (!selectedQuote || selectedQuote.status !== "ACCEPTED") {
+    if (starterLaunchMode || !selectedQuote || selectedQuote.status !== "ACCEPTED") {
       return;
     }
 
     void loadQuickBooksPreview(false);
-  }, [selectedQuote?.id, selectedQuote?.status]);
+  }, [starterLaunchMode, selectedQuote?.id, selectedQuote?.status]);
 
   const selectedPreset = useMemo(
     () => availablePresets.find((preset) => preset.id === selectedPresetId) ?? null,
@@ -897,7 +898,7 @@ export function QuoteDeskView() {
             id="desk-actions"
             step="Send + Sync"
             title="Actions and Sync"
-            description="Save the quote, move the lifecycle forward, send it out, or sync the invoice into QuickBooks."
+            description={starterLaunchMode ? "Save the quote, move the lifecycle forward, and send the customer-facing PDF without leaving the workspace." : "Save the quote, move the lifecycle forward, send it out, or sync the invoice into QuickBooks."}
           >
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
               <div className="space-y-5">
@@ -1042,149 +1043,168 @@ export function QuoteDeskView() {
 
               <Card variant="blue" padding="lg" className="overflow-hidden">
                 <CardHeader
-                  title="QuickBooks"
-                  subtitle="Use this only after the quote is accepted and ready to invoice."
+                  title={starterLaunchMode ? "Starter launch scope" : "QuickBooks"}
+                  subtitle={starterLaunchMode ? "Starter is intentionally focused on CRM, quote tracking, and PDF delivery first." : "Use this only after the quote is accepted and ready to invoice."}
                 />
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Invoice Sync</p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      Push won jobs into QuickBooks and refresh invoice balance to see whether they are still open or paid.
-                    </p>
-                  </div>
-                  {quickBooksInvoiceStatus ? (
-                    <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
-                  ) : quickBooksSyncRecord ? (
-                    <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
-                  ) : null}
-                </div>
-
-                <div className="mt-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void loadQuickBooksPreview(true)}
-                    loading={quickBooksPreviewLoading}
-                  >
-                    Preview Mapping
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => void pushQuoteToQuickBooks()}
-                    loading={quickBooksPushLoading}
-                    disabled={saving || selectedQuote.status !== "ACCEPTED"}
-                  >
-                    Push Invoice
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void refreshQuickBooksInvoiceStatus()}
-                    loading={quickBooksStatusLoading}
-                    disabled={saving || !quickBooksSyncRecord?.quickBooksInvoiceId}
-                  >
-                    Refresh Status
-                  </Button>
-                </div>
-
-                {selectedQuote.status !== "ACCEPTED" ? (
-                  <p className="mt-3 rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Mark the quote won first. QuoteFly only pushes accepted quotes into QuickBooks invoices.
-                  </p>
-                ) : null}
-
-                {quickBooksCardMessage ? (
-                  <p className="mt-3 rounded-[18px] border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                    {quickBooksCardMessage}
-                  </p>
-                ) : null}
-
-                {quickBooksPreview ? (
-                  <div className="mt-4 space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <MiniMetric
-                        label="Connected company"
-                        value={quickBooksPreview.connection.companyName ?? quickBooksPreview.connection.realmId}
-                      />
-                      <MiniMetric
-                        label="Doc number"
-                        value={quickBooksPreview.invoice.docNumber}
-                      />
+                {starterLaunchMode ? (
+                  <div className="space-y-4">
+                    <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-4">
+                      <p className="text-sm font-semibold text-slate-900">What Starter covers now</p>
+                      <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                        <li>- Save and revise quotes fast</li>
+                        <li>- Track customers from new through sold</li>
+                        <li>- Send customer-facing PDFs by email or text app</li>
+                        <li>- Keep quote status and work status current in one workflow</li>
+                      </ul>
                     </div>
-                    {quickBooksPreview.warnings.length > 0 ? (
-                      <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Review before push</p>
-                        <ul className="mt-2 space-y-1 text-xs text-amber-900">
-                          {quickBooksPreview.warnings.map((warning) => (
-                            <li key={warning}>- {warning}</li>
-                          ))}
-                        </ul>
+                    <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+                      Direct accounting sync is intentionally off the launch path. Professional and Enterprise will take on QuickBooks and deeper accounting workflows after the starter CRM and quoting flow is stable in production.
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Invoice Sync</p>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Push won jobs into QuickBooks and refresh invoice balance to see whether they are still open or paid.
+                        </p>
                       </div>
-                    ) : (
-                      <p className="rounded-[18px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                        Customer and line items are ready to sync.
+                      {quickBooksInvoiceStatus ? (
+                        <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
+                      ) : quickBooksSyncRecord ? (
+                        <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void loadQuickBooksPreview(true)}
+                        loading={quickBooksPreviewLoading}
+                      >
+                        Preview Mapping
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void pushQuoteToQuickBooks()}
+                        loading={quickBooksPushLoading}
+                        disabled={saving || selectedQuote.status !== "ACCEPTED"}
+                      >
+                        Push Invoice
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void refreshQuickBooksInvoiceStatus()}
+                        loading={quickBooksStatusLoading}
+                        disabled={saving || !quickBooksSyncRecord?.quickBooksInvoiceId}
+                      >
+                        Refresh Status
+                      </Button>
+                    </div>
+
+                    {selectedQuote.status !== "ACCEPTED" ? (
+                      <p className="mt-3 rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Mark the quote won first. QuoteFly only pushes accepted quotes into QuickBooks invoices.
                       </p>
-                    )}
-                  </div>
-                ) : null}
-
-                {quickBooksSyncRecord ? (
-                  <div className="mt-4 rounded-[18px] border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-semibold text-slate-900">Latest sync</p>
-                      <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
-                    </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <MiniMetric
-                        label="Invoice id"
-                        value={quickBooksSyncRecord.quickBooksInvoiceId ?? "Not created yet"}
-                      />
-                      <MiniMetric
-                        label="Last attempt"
-                        value={
-                          quickBooksSyncRecord.lastAttemptedAtUtc
-                            ? formatDateTime(quickBooksSyncRecord.lastAttemptedAtUtc)
-                            : "Not attempted yet"
-                        }
-                      />
-                    </div>
-                    {quickBooksSyncRecord.lastError ? (
-                      <p className="mt-2 text-xs text-red-700">{quickBooksSyncRecord.lastError}</p>
                     ) : null}
-                  </div>
-                ) : null}
 
-                {quickBooksInvoiceStatus ? (
-                  <div className="mt-4 rounded-[18px] border border-slate-200 bg-white px-3 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-slate-900">Remote invoice status</p>
-                      <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
-                    </div>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                      <MiniMetric
-                        label="Total"
-                        value={money(quickBooksInvoiceStatus.totalAmount)}
-                      />
-                      <MiniMetric
-                        label="Balance"
-                        value={money(quickBooksInvoiceStatus.balance)}
-                        valueClassName={quickBooksInvoiceStatus.paid ? "text-emerald-700" : "text-slate-900"}
-                      />
-                      <MiniMetric
-                        label="Invoice date"
-                        value={quickBooksInvoiceStatus.txnDate ?? "Not available"}
-                      />
-                      <MiniMetric
-                        label="Due date"
-                        value={quickBooksInvoiceStatus.dueDate ?? "Not available"}
-                      />
-                    </div>
-                  </div>
-                ) : null}
+                    {quickBooksCardMessage ? (
+                      <p className="mt-3 rounded-[18px] border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                        {quickBooksCardMessage}
+                      </p>
+                    ) : null}
+
+                    {quickBooksPreview ? (
+                      <div className="mt-4 space-y-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <MiniMetric
+                            label="Connected company"
+                            value={quickBooksPreview.connection.companyName ?? quickBooksPreview.connection.realmId}
+                          />
+                          <MiniMetric
+                            label="Doc number"
+                            value={quickBooksPreview.invoice.docNumber}
+                          />
+                        </div>
+                        {quickBooksPreview.warnings.length > 0 ? (
+                          <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Review before push</p>
+                            <ul className="mt-2 space-y-1 text-xs text-amber-900">
+                              {quickBooksPreview.warnings.map((warning) => (
+                                <li key={warning}>- {warning}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : (
+                          <p className="rounded-[18px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                            Customer and line items are ready to sync.
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {quickBooksSyncRecord ? (
+                      <div className="mt-4 rounded-[18px] border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-slate-900">Latest sync</p>
+                          <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
+                        </div>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <MiniMetric
+                            label="Invoice id"
+                            value={quickBooksSyncRecord.quickBooksInvoiceId ?? "Not created yet"}
+                          />
+                          <MiniMetric
+                            label="Last attempt"
+                            value={
+                              quickBooksSyncRecord.lastAttemptedAtUtc
+                                ? formatDateTime(quickBooksSyncRecord.lastAttemptedAtUtc)
+                                : "Not attempted yet"
+                            }
+                          />
+                        </div>
+                        {quickBooksSyncRecord.lastError ? (
+                          <p className="mt-2 text-xs text-red-700">{quickBooksSyncRecord.lastError}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {quickBooksInvoiceStatus ? (
+                      <div className="mt-4 rounded-[18px] border border-slate-200 bg-white px-3 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">Remote invoice status</p>
+                          <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <MiniMetric
+                            label="Total"
+                            value={money(quickBooksInvoiceStatus.totalAmount)}
+                          />
+                          <MiniMetric
+                            label="Balance"
+                            value={money(quickBooksInvoiceStatus.balance)}
+                            valueClassName={quickBooksInvoiceStatus.paid ? "text-emerald-700" : "text-slate-900"}
+                          />
+                          <MiniMetric
+                            label="Invoice date"
+                            value={quickBooksInvoiceStatus.txnDate ?? "Not available"}
+                          />
+                          <MiniMetric
+                            label="Due date"
+                            value={quickBooksInvoiceStatus.dueDate ?? "Not available"}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </Card>
             </div>
           </WorkspaceSection>

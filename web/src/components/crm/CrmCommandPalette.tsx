@@ -79,7 +79,7 @@ const COMMAND_ITEMS: CommandItem[] = [
   },
   {
     label: "Organization Settings",
-    description: "Manage billing, QuickBooks, and workspace configuration.",
+    description: "Manage billing, launch-plan access, and workspace configuration.",
     page: "settings",
     icon: <Settings size={16} />,
     group: "Workspace",
