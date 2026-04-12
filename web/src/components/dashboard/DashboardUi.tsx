@@ -212,14 +212,14 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
 export function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-[28px] border border-slate-200/80 bg-white/95 p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_24px_52px_rgba(15,23,42,0.1)]">
+    <div className="rounded-[22px] border border-slate-200/80 bg-white/95 p-3.5 shadow-sm transition hover:border-slate-300">
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex h-12 w-12 items-center justify-center rounded-[20px] bg-quotefly-blue/[0.08] text-quotefly-blue shadow-sm">
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-[16px] bg-quotefly-blue/[0.08] text-quotefly-blue">
           {icon}
         </span>
       </div>
       <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
     </div>
   );
 }
@@ -297,7 +297,7 @@ export function PipelineFlow({
   afterSaleLeads: number;
 }) {
   return (
-    <div className="overflow-x-auto rounded-[28px] border border-slate-200/80 bg-white/92 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm sm:p-4">
+    <div className="overflow-x-auto rounded-[22px] border border-slate-200/80 bg-white p-3 shadow-sm sm:p-3.5">
       <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
@@ -332,14 +332,14 @@ function PipelineStage({
           : "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
-    <div className={`flex min-w-[192px] items-center justify-between rounded-[24px] border px-3.5 py-3 shadow-sm ${toneClass}`}>
+    <div className={`flex min-w-[176px] items-center justify-between rounded-[18px] border px-3 py-2.5 ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-current/10 bg-white shadow-sm">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-current/10 bg-white">
           {icon}
         </span>
         {label}
       </p>
-      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold shadow-sm">{count}</span>
+      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold">{count}</span>
     </div>
   );
 }

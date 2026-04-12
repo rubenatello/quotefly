@@ -1,7 +1,7 @@
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, InvoiceIcon, QuoteIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select } from "../components/ui";
 import { FollowUpPill, PipelineFlow, QuoteStatusPill, StatCard } from "../components/dashboard/DashboardUi";
-import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
 import { usePageView } from "../lib/analytics";
@@ -365,52 +365,31 @@ export function PipelineView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
-          <WorkspaceRailCard
-            eyebrow="Operator board"
-            title="Daily queue"
-            description="Keep the top of the funnel clean, then move into won work and post-job follow-up."
-          >
-            <div className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Needs attention</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{nextAttentionCount}</p>
+      <div className="space-y-5">
+          <section id="pipeline-overview" className="scroll-mt-28 space-y-4">
+            <Card variant="elevated" padding="md">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="grid gap-3 sm:grid-cols-3 xl:w-[380px]">
+                  <CompactQueueStat label="Needs attention" value={nextAttentionCount} />
+                  <CompactQueueStat label="Active work" value={pipeline.totals.closedLeads} />
+                  <CompactQueueStat label="After-sale" value={pipeline.totals.afterSaleLeads} />
                 </div>
-                <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Active work</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{pipeline.totals.closedLeads}</p>
-                </div>
-                <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">After-sale</p>
-                  <p className="mt-2 text-2xl font-bold text-slate-900">{pipeline.totals.afterSaleLeads}</p>
+                <div className="flex min-w-0 flex-1 flex-col gap-3">
+                  <WorkspaceJumpBar links={pipelineLinks} />
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => navigateToBuilder()}>
+                      Start New Quote
+                    </Button>
+                    {selectedQuoteId ? (
+                      <Button onClick={() => navigateToQuote(selectedQuoteId)}>
+                        Reopen Active Quote
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-              <WorkspaceJumpBar links={pipelineLinks} />
-            </div>
-          </WorkspaceRailCard>
+            </Card>
 
-          <WorkspaceRailCard
-            eyebrow="Quick actions"
-            title="Move faster"
-            description="Keep actions obvious on a phone: build, reopen, or work the next queue."
-          >
-            <div className="grid gap-2">
-              <Button fullWidth onClick={() => navigateToBuilder()}>
-                Start New Quote
-              </Button>
-              {selectedQuoteId ? (
-                <Button fullWidth variant="outline" onClick={() => navigateToQuote(selectedQuoteId)}>
-                  Reopen Active Quote
-                </Button>
-              ) : null}
-            </div>
-          </WorkspaceRailCard>
-        </aside>
-
-        <div className="space-y-5">
-          <section id="pipeline-overview" className="scroll-mt-28 space-y-4">
             <div className="grid gap-4 sm:grid-cols-3">
               <StatCard icon={<QuoteIcon size={24} />} label="Quotes This Month" value={String(stats.monthlyQuotes)} />
               <StatCard
@@ -526,8 +505,16 @@ export function PipelineView() {
           }
         />
           </div>
-        </div>
       </div>
+    </div>
+  );
+}
+
+function CompactQueueStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
     </div>
   );
 }

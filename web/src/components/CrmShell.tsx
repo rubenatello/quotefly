@@ -158,7 +158,7 @@ export function CrmShell({
 
       <div
         className={`mx-auto w-full max-w-[1600px] lg:grid ${
-          sidebarCollapsed ? "lg:grid-cols-[92px_1fr]" : "lg:grid-cols-[284px_1fr]"
+          sidebarCollapsed ? "lg:grid-cols-[88px_1fr]" : "lg:grid-cols-[264px_1fr]"
         }`}
       >
         <CrmSidebar
@@ -189,7 +189,7 @@ export function CrmShell({
 
         <div className="min-w-0">
           <div className="sticky top-0 z-30 hidden border-b border-white/70 bg-white/75 backdrop-blur-xl lg:block">
-            <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-8 py-4">
+            <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3">
               <div className="min-w-0">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                   QuoteFly Workspace

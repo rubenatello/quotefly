@@ -45,7 +45,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import {
   api,
   type QuickBooksInvoiceStatusPayload,
@@ -436,64 +436,51 @@ export function QuoteDeskView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
-          <WorkspaceRailCard
-            eyebrow="Quote Desk"
-            title={customerName}
-            description="Everything for this job stays in one place: overview, scope, line items, send actions, and accounting sync."
-          >
-            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <DeskRailStat label="Status" value={formatQuoteStatusLabel(selectedQuote.status)} />
-              <DeskRailStat label="Line Items" value={String(lineItemCount)} />
-              <DeskRailStat label="Updated" value={formatDateTime(selectedQuote.updatedAt)} />
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
-              {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
-            </div>
-            <WorkspaceJumpBar links={deskLinks} className="mt-4" />
-          </WorkspaceRailCard>
+      <div className="space-y-6">
+          <Card variant="elevated" padding="md">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
+                <div className="grid gap-3 sm:grid-cols-3 xl:max-w-[420px]">
+                  <DeskRailStat label="Status" value={formatQuoteStatusLabel(selectedQuote.status)} />
+                  <DeskRailStat label="Line Items" value={String(lineItemCount)} />
+                  <DeskRailStat label="Updated" value={formatDateTime(selectedQuote.updatedAt)} />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <HeaderMetaChip icon={<CustomerIcon size={13} />} label={customerName} />
+                  <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
+                  {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
+                </div>
+                <WorkspaceJumpBar links={deskLinks} />
+              </div>
 
-          <WorkspaceRailCard
-            eyebrow="Next Step"
-            title={`${deskCompletionPercent}% ready`}
-            description={nextDeskStep}
-          >
-            <ProgressBar value={deskCompletionPercent} label="Desk progress" hint={`${deskCompletionPercent}%`} />
-            <div className="mt-4 grid gap-2">
-              <Button fullWidth loading={saving} onClick={() => void persistSelectedQuote()}>
-                Save Quote
-              </Button>
-              <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
-                Start Another Quote
-              </Button>
-              {quickBooksInvoiceStatus ? (
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
-                    <span className="text-sm font-semibold text-slate-900">
-                      {quickBooksInvoiceStatus.paid ? "Paid" : money(quickBooksInvoiceStatus.balance)}
-                    </span>
+              <div className="xl:w-[320px]">
+                <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Next step</p>
+                      <p className="mt-2 text-base font-semibold text-slate-900">{deskCompletionPercent}% ready</p>
+                      <p className="mt-1 text-sm text-slate-600">{nextDeskStep}</p>
+                    </div>
+                    {quickBooksInvoiceStatus ? (
+                      <QuickBooksPaymentBadge paid={quickBooksInvoiceStatus.paid} />
+                    ) : quickBooksSyncRecord ? (
+                      <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
+                    ) : null}
+                  </div>
+                  <ProgressBar value={deskCompletionPercent} label="Desk progress" hint={`${deskCompletionPercent}%`} className="mt-4" />
+                  <div className="mt-4 grid gap-2">
+                    <Button fullWidth loading={saving} onClick={() => void persistSelectedQuote()}>
+                      Save Quote
+                    </Button>
+                    <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                      Start Another Quote
+                    </Button>
                   </div>
                 </div>
-              ) : quickBooksSyncRecord ? (
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuickBooks</p>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <QuickBooksSyncBadge status={quickBooksSyncRecord.status} />
-                    <span className="text-sm font-semibold text-slate-900">
-                      {quickBooksSyncRecord.quickBooksInvoiceId ?? "Not pushed"}
-                    </span>
-                  </div>
-                </div>
-              ) : null}
+              </div>
             </div>
-          </WorkspaceRailCard>
-        </aside>
+          </Card>
 
-        <div className="space-y-6">
           <WorkspaceSection
             id="desk-overview"
             step="Step 1"
@@ -1175,7 +1162,6 @@ export function QuoteDeskView() {
               </Card>
             </div>
           </WorkspaceSection>
-        </div>
       </div>
 
       <div className="sticky bottom-16 z-20 rounded-[26px] border border-slate-200 bg-white/95 p-3 shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur sm:hidden">
@@ -1443,12 +1429,12 @@ function DeskMetricCard({
             : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
-    <div className={`rounded-[24px] border p-4 shadow-sm ${toneClass}`}>
+    <div className={`rounded-[18px] border p-3.5 ${toneClass}`}>
       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em]">
         {icon}
         <span>{label}</span>
       </div>
-      <p className="mt-3 text-2xl font-bold">{value}</p>
+      <p className="mt-2 text-[1.85rem] font-bold leading-none">{value}</p>
     </div>
   );
 }
@@ -1469,30 +1455,32 @@ function DeskWorkflowCard({
         subtitle="Keep the work ordered: verify scope, price the job, then send or export."
       />
       <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
-      <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
+      <div className="mt-4 rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Next step</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{nextStep}</p>
       </div>
-      <div className="mt-4 grid gap-3 lg:grid-cols-4">
+      <div className="mt-4 space-y-2">
         {steps.map((step, index) => (
           <div
             key={step.label}
-            className={`rounded-[24px] border px-4 py-3 shadow-sm ${
+            className={`flex items-start gap-3 rounded-[18px] border px-4 py-3 ${
               step.complete
                 ? "border-emerald-200 bg-emerald-50"
                 : "border-slate-200 bg-white"
             }`}
           >
-            <div className="flex items-start justify-between gap-3">
-              <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                {step.icon}
-              </span>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                {index + 1}
-              </span>
+            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+              {step.icon}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-900">{step.label}</p>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                  {index + 1}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-600">{step.description}</p>
             </div>
-            <p className="mt-3 text-sm font-semibold text-slate-900">{step.label}</p>
-            <p className="mt-1 text-xs text-slate-600">{step.description}</p>
           </div>
         ))}
       </div>

@@ -78,7 +78,7 @@ export function CrmSidebar({
         ? "border-quotefly-orange/20 bg-quotefly-orange/[0.06] text-quotefly-orange"
         : "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue";
 
-  const sidebarWidthClass = collapsed ? "lg:w-[92px]" : "lg:w-[284px]";
+  const sidebarWidthClass = collapsed ? "lg:w-[88px]" : "lg:w-[264px]";
   const aiQuoteLimit = entitlements?.limits.aiQuotesPerMonth ?? null;
   const aiQuoteUsed = usage?.monthlyAiQuoteCount ?? 0;
   const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
@@ -90,7 +90,7 @@ export function CrmSidebar({
   return (
     <AppTooltipProvider>
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white py-5 shadow-[0_18px_40px_rgba(15,23,42,0.06)] transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white py-4 shadow-[0_12px_30px_rgba(15,23,42,0.05)] transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -104,12 +104,12 @@ export function CrmSidebar({
               aria-label="Go to pipeline"
             >
               {collapsed ? (
-                <span className="inline-flex h-14 w-14 items-center justify-center rounded-[22px] border border-slate-200 bg-white shadow-[0_18px_36px_rgba(15,23,42,0.08)]">
-                  <img src="/favicon.png" alt="QuoteFly" className="h-10 w-10 object-contain" />
+                <span className="inline-flex h-12 w-12 items-center justify-center rounded-[18px] border border-slate-200 bg-white shadow-sm">
+                  <img src="/favicon.png" alt="QuoteFly" className="h-8 w-8 object-contain" />
                 </span>
               ) : (
-                <div className="rounded-[26px] border border-slate-200 bg-white px-3 py-3 shadow-[0_16px_34px_rgba(15,23,42,0.06)]">
-                  <img src="/logo.png" alt="QuoteFly" className="h-10 w-auto object-contain" />
+                <div className="rounded-[20px] border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+                  <img src="/logo.png" alt="QuoteFly" className="h-8 w-auto object-contain" />
                 </div>
               )}
             </button>
@@ -128,20 +128,6 @@ export function CrmSidebar({
           </div>
 
           {!collapsed && (
-            <div className="rounded-[26px] border border-slate-200 bg-white px-4 py-3 shadow-[0_16px_34px_rgba(15,23,42,0.05)]">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                QuoteFly Workspace
-              </p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">
-                Close more leads without fighting the software.
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Pipeline, quoting, branding, billing, and accounting in one operator view.
-              </p>
-            </div>
-          )}
-
-          {!collapsed && (
             <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
               Core workflow
             </p>
@@ -157,18 +143,18 @@ export function CrmSidebar({
                   title={link.label}
                   aria-label={link.label}
                   className={cn(
-                    "group flex w-full items-center rounded-[22px] border text-sm font-medium transition-all",
+                    "group flex w-full items-center rounded-[18px] border text-sm font-medium transition-all",
                     active
                       ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900 shadow-sm"
                       : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900 hover:shadow-sm",
-                    collapsed ? "justify-center px-0 py-3" : "justify-between px-3 py-3",
+                    collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
                         "inline-flex items-center justify-center rounded-2xl transition",
-                        collapsed ? "h-11 w-11" : "h-10 w-10",
+                        collapsed ? "h-10 w-10" : "h-9 w-9",
                         active
                           ? "bg-white text-quotefly-blue shadow-sm"
                           : "bg-slate-100 text-slate-500 group-hover:bg-slate-50 group-hover:text-quotefly-blue",
@@ -209,18 +195,18 @@ export function CrmSidebar({
                     }
                   }}
                   className={cn(
-                    "group flex w-full items-center rounded-[20px] border transition-all",
+                    "group flex w-full items-center rounded-[18px] border transition-all",
                     unlocked
                       ? "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900 hover:shadow-sm"
                       : "cursor-not-allowed border-transparent text-slate-400",
-                    collapsed ? "justify-center px-0 py-3" : "justify-between px-3 py-2.5",
+                    collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
                         "inline-flex items-center justify-center rounded-2xl",
-                        collapsed ? "h-11 w-11" : "h-9 w-9",
+                        collapsed ? "h-10 w-10" : "h-8.5 w-8.5",
                         unlocked ? "bg-slate-100 text-slate-500" : "bg-slate-100 text-slate-400",
                       )}
                     >
@@ -258,7 +244,7 @@ export function CrmSidebar({
 
         <div className={cn("mt-6 space-y-3", collapsed ? "px-3" : "px-4")}>
           {!collapsed && (
-            <div className={`rounded-[24px] border px-4 py-3 text-xs shadow-sm ${planBadgeClasses}`}>
+            <div className={`rounded-[18px] border px-4 py-3 text-xs shadow-sm ${planBadgeClasses}`}>
               <p className="font-semibold">
                 {showTrialBadge ? "Trial Access" : "Current Plan"}: {displayPlanName}
               </p>
@@ -271,7 +257,7 @@ export function CrmSidebar({
           )}
 
           {!collapsed && aiQuoteLimit !== null && usage ? (
-            <div className="rounded-[24px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">AI Drafts</p>
                 <span className="text-xs font-semibold text-slate-900">
@@ -299,7 +285,7 @@ export function CrmSidebar({
           ) : null}
 
           {!collapsed && (
-            <div className="rounded-[24px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
               <p className="text-sm font-semibold text-slate-900">{fullName || "Signed In User"}</p>
               <p className="text-xs text-slate-500">QuoteFly CRM workspace</p>
             </div>

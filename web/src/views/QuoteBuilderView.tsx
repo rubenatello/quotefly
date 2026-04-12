@@ -28,7 +28,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import { usePageView, useTrack } from "../lib/analytics";
 
 const MAX_QUICKBOOKS_EXPORT_QUOTES = 100;
@@ -370,65 +370,65 @@ export function QuoteBuilderView() {
 
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
-          <WorkspaceRailCard
-            eyebrow="Builder"
-            title="One clean flow"
-            description="Find the customer, draft the quote, then export or open the desk without losing your place."
-          >
-            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
-              <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
-              <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
-            </div>
-            {aiQuoteLimit !== null ? (
-              <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI drafts</p>
-                  <span className="text-xs font-semibold text-slate-900">
-                    {aiQuoteUsed}/{aiQuoteLimit}
-                  </span>
+      <div className="space-y-6">
+          <Card variant="elevated" padding="md">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
+                <div className="grid gap-3 sm:grid-cols-3 xl:max-w-[420px]">
+                  <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
+                  <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
+                  <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
                 </div>
-                <ProgressBar
-                  value={aiUsagePercent}
-                  label="Monthly AI draft usage"
-                  hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
-                  className="mt-3"
-                />
+                {aiQuoteLimit !== null ? (
+                  <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI drafts</p>
+                      <span className="text-xs font-semibold text-slate-900">
+                        {aiQuoteUsed}/{aiQuoteLimit}
+                      </span>
+                    </div>
+                    <ProgressBar
+                      value={aiUsagePercent}
+                      label="Monthly AI draft usage"
+                      hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
+                      className="mt-3"
+                    />
+                  </div>
+                ) : null}
+                <WorkspaceJumpBar links={builderLinks} />
               </div>
-            ) : null}
-            <WorkspaceJumpBar links={builderLinks} className="mt-4" />
-          </WorkspaceRailCard>
 
-          <WorkspaceRailCard
-            eyebrow="Current state"
-            title={activeCustomer ? activeCustomer.fullName : "No customer selected"}
-            description={
-              activeCustomer
-                ? `${activeCustomer.phone}${activeCustomer.email ? ` · ${activeCustomer.email}` : ""}`
-                : "Use the customer section first so the quote attaches to the right record."
-            }
-          >
-            <div className="grid gap-2">
-              <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Builder progress</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{builderCompletionPercent}%</p>
+              <div className="xl:w-[320px]">
+                <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current state</p>
+                  <p className="mt-2 text-base font-semibold text-slate-900">
+                    {activeCustomer ? activeCustomer.fullName : "No customer selected"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {activeCustomer
+                      ? `${activeCustomer.phone}${activeCustomer.email ? ` · ${activeCustomer.email}` : ""}`
+                      : "Use the customer section first so the quote attaches to the right record."}
+                  </p>
+                  <div className="mt-4 grid gap-2">
+                    <div className="rounded-[16px] border border-slate-200 bg-white px-3 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Builder progress</p>
+                      <p className="mt-1 text-2xl font-bold text-slate-900">{builderCompletionPercent}%</p>
+                    </div>
+                    {selectedQuoteId ? (
+                      <Button fullWidth onClick={() => navigateToQuote(selectedQuoteId)}>
+                        Open Quote Desk
+                      </Button>
+                    ) : (
+                      <Button fullWidth variant="outline" disabled>
+                        Create Quote First
+                      </Button>
+                    )}
+                  </div>
+                </div>
               </div>
-              {selectedQuoteId ? (
-                <Button fullWidth onClick={() => navigateToQuote(selectedQuoteId)}>
-                  Open Quote Desk
-                </Button>
-              ) : (
-                <Button fullWidth variant="outline" disabled>
-                  Create Quote First
-                </Button>
-              )}
             </div>
-          </WorkspaceRailCard>
-        </aside>
+          </Card>
 
-        <div className="space-y-6">
           <WorkspaceSection
             id="builder-overview"
             step="Step 1"
@@ -922,7 +922,6 @@ export function QuoteBuilderView() {
       </Card>
             </div>
           </WorkspaceSection>
-        </div>
       </div>
 
       <QuickBooksGuideModal
@@ -1137,5 +1136,4 @@ function QuickBooksGuideModal({
     </Modal>
   );
 }
-
 
