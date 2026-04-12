@@ -1142,6 +1142,40 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: "desc" },
         take: query.limit,
         skip: query.offset,
+        include: {
+          customer: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phone: true,
+              followUpStatus: true,
+              followUpUpdatedAtUtc: true,
+              createdAt: true,
+              updatedAt: true,
+              tenantId: true,
+            },
+          },
+          quickBooksInvoiceSyncs: {
+            where: {
+              deletedAtUtc: null,
+            },
+            orderBy: [
+              { syncedAtUtc: "desc" },
+              { createdAt: "desc" },
+            ],
+            take: 1,
+            select: {
+              id: true,
+              quickBooksInvoiceId: true,
+              quickBooksDocNumber: true,
+              status: true,
+              syncedAtUtc: true,
+              lastAttemptedAtUtc: true,
+              lastError: true,
+            },
+          },
+        },
       }),
       app.prisma.quote.count({ where }),
     ]);

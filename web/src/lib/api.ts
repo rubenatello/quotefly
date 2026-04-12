@@ -238,6 +238,15 @@ export type Quote = {
   updatedAt: string;
   customer?: Customer;
   lineItems?: QuoteLineItem[];
+  quickBooksInvoiceSyncs?: Array<{
+    id: string;
+    quickBooksInvoiceId?: string | null;
+    quickBooksDocNumber?: string | null;
+    status: "PENDING" | "SYNCED" | "FAILED";
+    syncedAtUtc?: string | null;
+    lastAttemptedAtUtc?: string | null;
+    lastError?: string | null;
+  }>;
 };
 
 export type QuoteRevisionSnapshot = {
