@@ -4,6 +4,7 @@ import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../co
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import type { Customer, Quote } from "../lib/api";
+import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
 type CustomerStage = "NEW" | "CONTACTED" | "QUOTED" | "WORKING" | "SOLD";
 
@@ -341,6 +342,7 @@ export function CustomersPage() {
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
+  const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
 
   useEffect(() => {
     void loadAll();
@@ -396,7 +398,12 @@ export function CustomersPage() {
       <PageHeader
         title="Customers"
         subtitle="Track customers through a simple sales pipeline, then jump into quoting when they are ready."
-        actions={<Button onClick={() => navigateToBuilder()}>New Quote</Button>}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
+            <Button onClick={() => navigateToBuilder()}>New Quote</Button>
+          </>
+        }
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
@@ -468,6 +475,26 @@ export function CustomersPage() {
           )}
         </div>
       </Card>
+
+      <QuickCustomerModal
+        open={quickCustomerOpen}
+        onClose={() => setQuickCustomerOpen(false)}
+        onCreated={async ({ customer, merged, restored, intent }) => {
+          await loadAll();
+          setNotice(
+            merged
+              ? restored
+                ? "Customer merged and restored."
+                : "Customer merged into existing record."
+              : restored
+                ? "Customer restored."
+                : "Customer created.",
+          );
+          if (intent === "quote") {
+            navigateToBuilder(customer.id);
+          }
+        }}
+      />
     </div>
   );
 }

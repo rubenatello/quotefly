@@ -16,6 +16,7 @@ import {
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
+import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
 type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
@@ -411,6 +412,7 @@ export function QuotesPage() {
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
   const [pdfActionQuote, setPdfActionQuote] = useState<Quote | null>(null);
   const [pdfActionLoading, setPdfActionLoading] = useState<PdfActionType | null>(null);
+  const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
 
   useEffect(() => {
     void loadAll();
@@ -614,6 +616,7 @@ export function QuotesPage() {
         subtitle="Review quote value, lifecycle, and invoice progress from one clean board, then open the quote desk only when work is needed."
         actions={
           <>
+            <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
             <Button variant="outline" onClick={() => navigateToBuilder()}>New Quote</Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
           </>
@@ -762,6 +765,26 @@ export function QuotesPage() {
           </ModalFooter>
         </Modal>
       ) : null}
+
+      <QuickCustomerModal
+        open={quickCustomerOpen}
+        onClose={() => setQuickCustomerOpen(false)}
+        onCreated={async ({ customer, merged, restored, intent }) => {
+          await loadAll();
+          setNotice(
+            merged
+              ? restored
+                ? "Customer merged and restored."
+                : "Customer merged into existing record."
+              : restored
+                ? "Customer restored."
+                : "Customer created.",
+          );
+          if (intent === "quote") {
+            navigateToBuilder(customer.id);
+          }
+        }}
+      />
     </div>
   );
 }
