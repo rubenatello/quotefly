@@ -67,10 +67,11 @@ function statusClass(status: QuoteStatus): string {
   return "text-slate-600 border-slate-200 bg-slate-50";
 }
 
-function quoteStatusMeta(status: QuoteStatus): { label: string; className: string; icon: ReactNode } {
+function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: string; className: string; icon: ReactNode } {
   if (status === "ACCEPTED") {
     return {
       label: "Won",
+      shortLabel: "W",
       className: statusClass(status),
       icon: <CheckIcon size={12} />,
     };
@@ -79,6 +80,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; className: strin
   if (status === "REJECTED") {
     return {
       label: "Lost",
+      shortLabel: "L",
       className: statusClass(status),
       icon: <CloseIcon size={12} />,
     };
@@ -87,6 +89,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; className: strin
   if (status === "SENT_TO_CUSTOMER") {
     return {
       label: "Quoted",
+      shortLabel: "Q",
       className: statusClass(status),
       icon: <SendIcon size={12} />,
     };
@@ -95,6 +98,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; className: strin
   if (status === "READY_FOR_REVIEW") {
     return {
       label: "Review",
+      shortLabel: "R",
       className: statusClass(status),
       icon: <ClockIcon size={12} />,
     };
@@ -102,6 +106,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; className: strin
 
   return {
     label: "Draft",
+    shortLabel: "D",
     className: statusClass(status),
     icon: <EditIcon size={12} />,
   };
@@ -468,7 +473,13 @@ export function QuoteStatusPill({
         compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs"
       }`}
     >
-      {meta.icon}
+      {compact ? (
+        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current/15 bg-white/90 text-[9px] font-bold">
+          {meta.shortLabel}
+        </span>
+      ) : (
+        meta.icon
+      )}
       {meta.label}
     </span>
   );

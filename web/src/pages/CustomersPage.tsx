@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import { BadgeCheck, CircleDot, FileText, PhoneCall, Wrench } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
@@ -27,6 +28,46 @@ function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald
   if (stage === "CONTACTED") return "blue";
   if (stage === "QUOTED") return "orange";
   return "emerald";
+}
+
+function stageInitial(stage: CustomerStage) {
+  if (stage === "NEW") return "N";
+  if (stage === "CONTACTED") return "C";
+  if (stage === "QUOTED") return "Q";
+  if (stage === "WORKING") return "W";
+  return "S";
+}
+
+function stageIcon(stage: CustomerStage) {
+  if (stage === "NEW") return <CircleDot size={12} strokeWidth={2.2} />;
+  if (stage === "CONTACTED") return <PhoneCall size={12} strokeWidth={2.2} />;
+  if (stage === "QUOTED") return <FileText size={12} strokeWidth={2.2} />;
+  if (stage === "WORKING") return <Wrench size={12} strokeWidth={2.2} />;
+  return <BadgeCheck size={12} strokeWidth={2.2} />;
+}
+
+function stageStateClasses(active: boolean, complete: boolean) {
+  if (active) {
+    return "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue shadow-sm shadow-quotefly-blue/10";
+  }
+
+  if (complete) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-400";
+}
+
+function stageFilterBadgeClass(stage: CustomerStage, active: boolean) {
+  if (active) {
+    return "border-quotefly-blue/20 bg-white text-quotefly-blue";
+  }
+
+  if (stage === "NEW") return "border-slate-200 bg-slate-50 text-slate-500";
+  if (stage === "CONTACTED") return "border-quotefly-blue/15 bg-quotefly-blue/[0.05] text-quotefly-blue";
+  if (stage === "QUOTED") return "border-quotefly-orange/15 bg-quotefly-orange/[0.06] text-quotefly-orange";
+  if (stage === "WORKING") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
 function quoteNumber(quoteId: string) {
@@ -83,40 +124,39 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
   const activeIndex = stageIndex(stage);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-1.5">
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
         {CUSTOMER_STAGE_ORDER.map((item, index) => {
           const active = index === activeIndex;
           const complete = index < activeIndex;
+
           return (
-            <div key={item} className="flex min-w-0 flex-1 items-center gap-1.5">
-              <span
-                className={`h-2.5 min-w-2.5 flex-1 rounded-full ${
-                  active
-                    ? "bg-quotefly-blue"
-                    : complete
-                      ? "bg-emerald-500"
-                      : "bg-slate-200"
-                }`}
-              />
+            <div key={item} className="flex items-center gap-1.5">
+              <div
+                className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full border text-[11px] font-bold ${stageStateClasses(
+                  active,
+                  complete,
+                )}`}
+                title={stageLabel(item)}
+                aria-label={stageLabel(item)}
+              >
+                {stageInitial(item)}
+              </div>
+              {index < CUSTOMER_STAGE_ORDER.length - 1 ? (
+                <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-emerald-300" : "bg-slate-200"}`} />
+              ) : null}
             </div>
           );
         })}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={stageTone(stage)}>{stageLabel(stage)}</Badge>
-        <div className="hidden flex-wrap gap-1 sm:flex">
-          {CUSTOMER_STAGE_ORDER.map((item, index) => (
-            <span
-              key={item}
-              className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                index <= activeIndex ? "text-slate-700" : "text-slate-400"
-              }`}
-            >
-              {stageLabel(item)}
-            </span>
-          ))}
-        </div>
+        <Badge tone={stageTone(stage)} icon={stageIcon(stage)}>
+          {stageLabel(stage)}
+        </Badge>
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <span className="text-slate-400">{stageInitial(stage)}</span>
+          Current
+        </span>
       </div>
     </div>
   );
@@ -125,11 +165,13 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
 function StageCountCard({
   label,
   count,
+  stage,
   active,
   onClick,
 }: {
   label: string;
   count: number;
+  stage: CustomerStage | "ALL";
   active: boolean;
   onClick: () => void;
 }) {
@@ -141,7 +183,20 @@ function StageCountCard({
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
       }`}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+        {stage === "ALL" ? (
+          <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1 text-[10px] font-bold text-slate-500">
+            All
+          </span>
+        ) : (
+          <span
+            className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full border text-[10px] font-bold ${stageFilterBadgeClass(stage, active)}`}
+          >
+            {stageInitial(stage)}
+          </span>
+        )}
+      </div>
       <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{count}</p>
     </button>
   );
@@ -159,7 +214,7 @@ function CustomerDesktopRow({
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_260px_118px] gap-4 px-4 py-3 lg:grid lg:items-center">
+    <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_280px_118px] gap-4 px-4 py-3 lg:grid lg:items-center">
       <div className="min-w-0">
         <div className="flex items-center gap-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
@@ -186,7 +241,9 @@ function CustomerDesktopRow({
         <CustomerPipelineMini stage={stage} />
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
           {latestQuote ? (
-            <span className="truncate">{quoteNumber(latestQuote.id)} · {latestQuote.title}</span>
+            <span className="truncate">
+              {quoteNumber(latestQuote.id)} · {latestQuote.title}
+            </span>
           ) : (
             <span>No quote yet</span>
           )}
@@ -227,7 +284,12 @@ function CustomerMobileCard({
             <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
           </div>
         </div>
-        <Badge tone={stageTone(stage)}>{stageLabel(stage)}</Badge>
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-[10px] font-bold text-quotefly-blue">
+            {stageInitial(stage)}
+          </span>
+          {stageLabel(stage)}
+        </div>
       </div>
 
       <div className="grid gap-2 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
@@ -341,12 +403,13 @@ export function CustomersPage() {
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
       <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 md:grid md:grid-cols-3 md:overflow-visible md:px-0 xl:grid-cols-6">
-        <StageCountCard label="All" count={customerRows.length} active={stageFilter === "ALL"} onClick={() => setStageFilter("ALL")} />
+        <StageCountCard label="All" count={customerRows.length} stage="ALL" active={stageFilter === "ALL"} onClick={() => setStageFilter("ALL")} />
         {CUSTOMER_STAGE_ORDER.map((stage) => (
           <StageCountCard
             key={stage}
             label={stageLabel(stage)}
             count={stageCounts[stage]}
+            stage={stage}
             active={stageFilter === stage}
             onClick={() => setStageFilter(stage)}
           />
@@ -378,7 +441,7 @@ export function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_260px_118px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_280px_118px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
