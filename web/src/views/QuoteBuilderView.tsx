@@ -10,6 +10,7 @@ import {
 import { FeatureLockedCard } from "../components/dashboard/DashboardUi";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
   Badge,
@@ -23,6 +24,7 @@ import {
 } from "../components/ui";
 import { api, type WorkPreset } from "../lib/api";
 import {
+  buildPresetPayloadFromLine,
   joinQuoteLineDescription,
   makeEditableQuoteLine,
   quoteLineAmount,
@@ -48,6 +50,8 @@ export function QuoteBuilderView() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("1");
   const [draftLines, setDraftLines] = useState<EditableQuoteLine[]>([makeEditableQuoteLine()]);
+  const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
+  const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const {
     session,
     customers,
@@ -147,6 +151,14 @@ export function QuoteBuilderView() {
     [draftLines],
   );
 
+  const savedPresetKeys = useMemo(
+    () =>
+      new Set(
+        presetLibrary.map((preset) => `${preset.serviceType}:${preset.name.trim().toLowerCase()}:${(preset.description ?? "").trim().toLowerCase()}`),
+      ),
+    [presetLibrary],
+  );
+
   const internalSubtotal = useMemo(
     () => filteredDraftLines.reduce((total, line) => total + quoteLineCostTotal(line.quantity, line.unitCost), 0),
     [filteredDraftLines],
@@ -170,6 +182,23 @@ export function QuoteBuilderView() {
   }
 
   function addBlankLine() {
+    const previousLine = draftLines[draftLines.length - 1];
+    if (
+      previousLine &&
+      previousLine.title.trim() &&
+      !previousLine.presetPromptHandled &&
+      !previousLine.sourcePresetId &&
+      !savedPresetKeys.has(
+        `${quoteForm.serviceType}:${previousLine.title.trim().toLowerCase()}:${previousLine.details.trim().toLowerCase()}`,
+      )
+    ) {
+      setPresetPromptLine(previousLine);
+      setDraftLines((current) =>
+        current.map((line) =>
+          line.id === previousLine.id ? { ...line, presetPromptHandled: true } : line,
+        ),
+      );
+    }
     setDraftLines((current) => [...current, makeEditableQuoteLine()]);
   }
 
@@ -187,6 +216,7 @@ export function QuoteBuilderView() {
       quantity: String(presetQuantity),
       unitCost: Number(preset.unitCost).toFixed(2),
       unitPrice: Number(preset.unitPrice).toFixed(2),
+      sourcePresetId: preset.id,
     });
 
     setDraftLines((current) => {
@@ -203,8 +233,51 @@ export function QuoteBuilderView() {
     setNotice(`${preset.name} loaded into the quote.`);
   }
 
-  async function handleCreateQuote() {
+  async function saveDraftLineAsPreset(includeDescription: boolean) {
+    if (!presetPromptLine) return;
+    setPresetPromptSaving(true);
+    setError(null);
+    try {
+      const result = await api.onboarding.savePreset(
+        buildPresetPayloadFromLine(quoteForm.serviceType, presetPromptLine, { includeDescription }),
+      );
+      setPresetLibrary((current) => {
+        const next = current.filter((preset) => preset.id !== result.preset.id);
+        return [...next, result.preset];
+      });
+      setDraftLines((current) =>
+        current.map((line) =>
+          line.id === presetPromptLine.id
+            ? {
+                ...line,
+                sourcePresetId: result.preset.id,
+                presetPromptHandled: true,
+              }
+            : line,
+        ),
+      );
+      setSelectedPresetId(result.preset.id);
+      setNotice(includeDescription ? "Saved job name and description for future quotes." : "Saved job name for future quotes.");
+      setPresetPromptLine(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed saving work name.");
+    } finally {
+      setPresetPromptSaving(false);
+    }
+  }
 
+  function dismissPresetPrompt() {
+    if (presetPromptLine) {
+      setDraftLines((current) =>
+        current.map((line) =>
+          line.id === presetPromptLine.id ? { ...line, presetPromptHandled: true } : line,
+        ),
+      );
+    }
+    setPresetPromptLine(null);
+  }
+
+  async function handleCreateQuote() {
     if (!quoteForm.customerId) {
       setError("Select a customer before creating the quote.");
       return;
@@ -220,13 +293,27 @@ export function QuoteBuilderView() {
       return;
     }
 
+    const linesToCreate = filteredDraftLines;
+    const promptCandidate =
+      [...linesToCreate]
+        .reverse()
+        .find(
+          (line) =>
+            line.title.trim() &&
+            !line.presetPromptHandled &&
+            !line.sourcePresetId &&
+            !savedPresetKeys.has(
+              `${quoteForm.serviceType}:${line.title.trim().toLowerCase()}:${line.details.trim().toLowerCase()}`,
+            ),
+        ) ?? null;
+
     track("builder_quote_create");
     const createdQuote = await createQuoteDraftFromForm({
       quoteOverride: {
         internalCostSubtotal: internalSubtotal.toFixed(2),
         customerPriceSubtotal: customerSubtotal.toFixed(2),
       },
-      initialLineItems: filteredDraftLines.map((line) => ({
+      initialLineItems: linesToCreate.map((line) => ({
         description: joinQuoteLineDescription(line.title, line.details),
         quantity: Number(line.quantity) || 1,
         unitCost: Number(line.unitCost) || 0,
@@ -237,6 +324,9 @@ export function QuoteBuilderView() {
 
     if (createdQuote) {
       setDraftLines([makeEditableQuoteLine()]);
+      if (!presetPromptLine && promptCandidate) {
+        setPresetPromptLine(promptCandidate);
+      }
     }
   }
 
@@ -493,6 +583,15 @@ export function QuoteBuilderView() {
           selectQuoteCustomer(customer.id);
           setNotice(intent === "quote" ? `${customer.fullName} is ready for a quote.` : "Customer created.");
         }}
+      />
+
+      <SaveLinePresetModal
+        open={Boolean(presetPromptLine)}
+        line={presetPromptLine}
+        saving={presetPromptSaving}
+        onClose={dismissPresetPrompt}
+        onSaveFull={() => void saveDraftLineAsPreset(true)}
+        onSaveNameOnly={() => void saveDraftLineAsPreset(false)}
       />
     </div>
   );

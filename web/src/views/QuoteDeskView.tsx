@@ -20,6 +20,7 @@ import {
   QuoteStatusPill,
 } from "../components/dashboard/DashboardUi";
 import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
+import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
   Badge,
@@ -39,6 +40,7 @@ import {
 } from "../components/ui";
 import { api, type WorkPreset } from "../lib/api";
 import {
+  buildPresetPayloadFromLine,
   joinQuoteLineDescription,
   makeEditableQuoteLine,
   quoteLineAmount,
@@ -69,6 +71,8 @@ export function QuoteDeskView() {
   const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("1");
   const [editableLines, setEditableLines] = useState<EditableQuoteLine[]>([]);
   const [newLine, setNewLine] = useState<EditableQuoteLine>(makeEditableQuoteLine());
+  const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
+  const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const {
     session,
     selectedQuoteId,
@@ -183,6 +187,17 @@ export function QuoteDeskView() {
     [availablePresets, selectedPresetId],
   );
 
+  const savedPresetKeys = useMemo(
+    () =>
+      new Set(
+        presetLibrary.map(
+          (preset) =>
+            `${preset.serviceType}:${preset.name.trim().toLowerCase()}:${(preset.description ?? "").trim().toLowerCase()}`,
+        ),
+      ),
+    [presetLibrary],
+  );
+
   const presetQuantity = useMemo(() => {
     const parsed = Number(selectedPresetQuantity);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
@@ -268,19 +283,29 @@ export function QuoteDeskView() {
       return;
     }
 
+    const lineToMaybeSave = newLine;
     track("quote_line_add");
     await addLineItemDraft(
       {
-        description: joinQuoteLineDescription(newLine.title, newLine.details),
-        quantity: Number(newLine.quantity) || 1,
-        unitCost: Number(newLine.unitCost) || 0,
-        unitPrice: Number(newLine.unitPrice) || 0,
+        description: joinQuoteLineDescription(lineToMaybeSave.title, lineToMaybeSave.details),
+        quantity: Number(lineToMaybeSave.quantity) || 1,
+        unitCost: Number(lineToMaybeSave.unitCost) || 0,
+        unitPrice: Number(lineToMaybeSave.unitPrice) || 0,
       },
       {
-        notice: `${newLine.title} added to the quote.`,
+        notice: `${lineToMaybeSave.title} added to the quote.`,
       },
     );
     setNewLine(makeEditableQuoteLine());
+    if (
+      lineToMaybeSave.title.trim() &&
+      !lineToMaybeSave.sourcePresetId &&
+      !savedPresetKeys.has(
+        `${quoteEditForm.serviceType}:${lineToMaybeSave.title.trim().toLowerCase()}:${lineToMaybeSave.details.trim().toLowerCase()}`,
+      )
+    ) {
+      setPresetPromptLine(lineToMaybeSave);
+    }
   }
 
   async function handleSaveQuoteSheet() {
@@ -299,6 +324,7 @@ export function QuoteDeskView() {
         quantity: String(presetQuantity),
         unitCost: Number(preset.unitCost).toFixed(2),
         unitPrice: Number(preset.unitPrice).toFixed(2),
+        sourcePresetId: preset.id,
       }),
     );
     setNotice(`${preset.name} loaded into the new line row.`);
@@ -315,6 +341,32 @@ export function QuoteDeskView() {
       },
       { notice: `${preset.name} added to the quote.` },
     );
+  }
+
+  async function saveNewLineAsPreset(includeDescription: boolean) {
+    if (!presetPromptLine) return;
+    setPresetPromptSaving(true);
+    setError(null);
+    try {
+      const result = await api.onboarding.savePreset(
+        buildPresetPayloadFromLine(quoteEditForm.serviceType, presetPromptLine, { includeDescription }),
+      );
+      setPresetLibrary((current) => {
+        const next = current.filter((preset) => preset.id !== result.preset.id);
+        return [...next, result.preset];
+      });
+      setSelectedPresetId(result.preset.id);
+      setNotice(includeDescription ? "Saved job name and description for future quotes." : "Saved job name for future quotes.");
+      setPresetPromptLine(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed saving work name.");
+    } finally {
+      setPresetPromptSaving(false);
+    }
+  }
+
+  function dismissPresetPrompt() {
+    setPresetPromptLine(null);
   }
 
   async function confirmDeleteLineItem() {
@@ -765,6 +817,15 @@ export function QuoteDeskView() {
         description="This removes the row from the quote and recalculates totals."
         confirmLabel="Delete line"
         loading={saving}
+      />
+
+      <SaveLinePresetModal
+        open={Boolean(presetPromptLine)}
+        line={presetPromptLine}
+        saving={presetPromptSaving}
+        onClose={dismissPresetPrompt}
+        onSaveFull={() => void saveNewLineAsPreset(true)}
+        onSaveNameOnly={() => void saveNewLineAsPreset(false)}
       />
 
       {sendComposer ? (

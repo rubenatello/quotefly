@@ -6,6 +6,7 @@ import {
   applyOnboardingSetup,
   parseServiceCategory,
   recommendedPresetsForTrade,
+  saveTenantWorkPreset,
 } from "../services/onboarding";
 
 const ServiceTypeEnum = z.enum([
@@ -53,6 +54,17 @@ const SaveOnboardingSchema = z.object({
   sqFtUnitCost: z.number().positive().max(10000).optional(),
   sqFtUnitPrice: z.number().positive().max(10000).optional(),
   presets: z.array(OnboardingPresetSchema).max(50).optional(),
+});
+
+const SavePresetSchema = z.object({
+  serviceType: ServiceTypeEnum,
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(500).optional(),
+  category: PresetCategoryEnum.default(PresetCategory.SERVICE),
+  unitType: PresetUnitTypeEnum.default(PresetUnitType.FLAT),
+  defaultQuantity: z.number().positive().max(100000).default(1),
+  unitCost: z.number().nonnegative().max(1000000).default(0),
+  unitPrice: z.number().nonnegative().max(1000000).default(0),
 });
 
 const PresetQuerySchema = z.object({
@@ -154,6 +166,38 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({
       message: "Onboarding setup saved.",
       presetsCreatedOrUpdated: result.presetsCreatedOrUpdated,
+    });
+  });
+
+  app.post("/onboarding/presets", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const payload = SavePresetSchema.parse(request.body);
+
+    const tenant = await app.prisma.tenant.findFirst({
+      where: { id: claims.tenantId, deletedAtUtc: null },
+      select: { id: true },
+    });
+
+    if (!tenant) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    const result = await saveTenantWorkPreset(app.prisma, {
+      tenantId: tenant.id,
+      serviceType: payload.serviceType,
+      name: payload.name,
+      description: payload.description,
+      category: payload.category,
+      unitType: payload.unitType,
+      defaultQuantity: payload.defaultQuantity,
+      unitCost: payload.unitCost,
+      unitPrice: payload.unitPrice,
+    });
+
+    return reply.send({
+      message: "Preset saved.",
+      action: result.action,
+      preset: result.preset,
     });
   });
 };

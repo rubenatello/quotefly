@@ -681,6 +681,24 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       }),
+
+    savePreset: (body: {
+      serviceType: ServiceType;
+      name: string;
+      description?: string;
+      category?: WorkPresetCategory;
+      unitType?: WorkPresetUnitType;
+      defaultQuantity?: number;
+      unitCost?: number;
+      unitPrice?: number;
+    }) =>
+      request<{ message: string; action: "created" | "updated" | "restored"; preset: WorkPreset }>(
+        `/v1/onboarding/presets`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+      ),
   },
 
   org: {

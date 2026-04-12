@@ -38,6 +38,18 @@ export interface OnboardingSetupInput {
   customPresets?: OnboardingPresetInput[];
 }
 
+export interface SaveTenantWorkPresetInput {
+  tenantId: string;
+  serviceType: ServiceCategory;
+  name: string;
+  description?: string;
+  category: PresetCategory;
+  unitType: PresetUnitType;
+  defaultQuantity: number;
+  unitCost: number;
+  unitPrice: number;
+}
+
 const DEFAULT_PRICING_BY_TRADE: Record<ServiceCategory, { laborRate: number; materialMarkup: number }> = {
   HVAC: { laborRate: 2.4, materialMarkup: 0.33 },
   PLUMBING: { laborRate: 2.6, materialMarkup: 0.38 },
@@ -388,4 +400,79 @@ export function parseServiceCategory(input: string): ServiceCategory | null {
   const candidates = Object.values(ServiceCategory) as string[];
   if (!candidates.includes(normalized)) return null;
   return normalized as ServiceCategory;
+}
+
+export async function saveTenantWorkPreset(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  input: SaveTenantWorkPresetInput,
+) {
+  const normalizedName = input.name.trim();
+  if (!normalizedName) {
+    throw new Error("Preset name is required.");
+  }
+
+  const existingPresets = await prisma.workPreset.findMany({
+    where: {
+      tenantId: input.tenantId,
+      serviceType: input.serviceType,
+      catalogKey: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      deletedAtUtc: true,
+    },
+    take: 200,
+  });
+
+  const matchedPreset = existingPresets.find(
+    (preset) => normalizePresetName(preset.name) === normalizePresetName(normalizedName),
+  );
+
+  const normalizedDescription =
+    input.description !== undefined ? input.description.trim() || null : undefined;
+
+  const payload = {
+    category: input.category,
+    unitType: input.unitType,
+    name: normalizedName,
+    description: normalizedDescription,
+    defaultQuantity: clampMoney(input.defaultQuantity, 1),
+    unitCost: clampMoney(input.unitCost, 0),
+    unitPrice: clampMoney(input.unitPrice, 0),
+    isDefault: true,
+    deletedAtUtc: null,
+  } satisfies Prisma.WorkPresetUncheckedUpdateInput;
+
+  if (matchedPreset) {
+    const preset = await prisma.workPreset.update({
+      where: { id: matchedPreset.id },
+      data: payload,
+    });
+
+    return {
+      action: matchedPreset.deletedAtUtc ? "restored" : "updated",
+      preset,
+    } as const;
+  }
+
+  const preset = await prisma.workPreset.create({
+    data: {
+      tenantId: input.tenantId,
+      serviceType: input.serviceType,
+      category: input.category,
+      unitType: input.unitType,
+      name: normalizedName,
+      description: normalizedDescription,
+      defaultQuantity: clampMoney(input.defaultQuantity, 1),
+      unitCost: clampMoney(input.unitCost, 0),
+      unitPrice: clampMoney(input.unitPrice, 0),
+      isDefault: true,
+    },
+  });
+
+  return {
+    action: "created",
+    preset,
+  } as const;
 }
