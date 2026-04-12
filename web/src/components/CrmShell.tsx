@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Command, MoreHorizontal, Search, Sparkles } from "lucide-react";
+import { Command, FilePlus2, MoreHorizontal, Plus, Search, Sparkles, UserPlus2 } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
@@ -20,6 +20,7 @@ import { Badge } from "./ui";
 interface CrmShellProps {
   currentPage: string;
   onNavigate: (page: string) => void;
+  onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   children: ReactNode;
   fullName?: string;
@@ -31,10 +32,10 @@ interface CrmShellProps {
 }
 
 const OPERATIONS_LINKS: readonly CrmNavLink[] = [
-  { label: "Analytics", path: "analytics", icon: <ClockIcon size={15} /> },
-  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
   { label: "Customers", path: "customers", icon: <CustomerIcon size={15} /> },
   { label: "Quotes", path: "quotes", icon: <QuoteIcon size={15} /> },
+  { label: "Analytics", path: "analytics", icon: <ClockIcon size={15} /> },
+  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
 ] as const;
 
 const SETTINGS_LINKS: readonly CrmNavLink[] = [
@@ -76,6 +77,7 @@ const PAGE_META: Record<string, { label: string; hint: string }> = {
 export function CrmShell({
   currentPage,
   onNavigate,
+  onQuickAction,
   onLogout,
   children,
   fullName,
@@ -108,7 +110,7 @@ export function CrmShell({
     setCommandOpen(false);
   };
 
-  const pageMeta = PAGE_META[currentPage] ?? PAGE_META.pipeline;
+  const pageMeta = PAGE_META[currentPage] ?? PAGE_META.customers;
   const displayPlanName = planName ?? "Starter";
 
   return (
@@ -118,6 +120,7 @@ export function CrmShell({
         onToggleMobile={() => setMobileOpen((open) => !open)}
         onOpenCommand={() => setCommandOpen(true)}
         onNavigate={handleNavigate}
+        onQuickAction={onQuickAction}
         onLogout={onLogout}
         currentLabel={pageMeta.label}
         planName={displayPlanName}
@@ -126,6 +129,7 @@ export function CrmShell({
         open={commandOpen}
         onOpenChange={setCommandOpen}
         onNavigate={(page) => handleNavigate(page)}
+        onQuickAction={onQuickAction}
       />
 
       <div
@@ -139,6 +143,7 @@ export function CrmShell({
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
           onNavigate={handleNavigate}
+          onQuickAction={onQuickAction}
           operationsLinks={OPERATIONS_LINKS}
           settingsLinks={SETTINGS_LINKS}
           onLogout={onLogout}
@@ -170,6 +175,40 @@ export function CrmShell({
               </div>
 
               <div className="flex items-center gap-2">
+                <DropdownMenuPrimitive.Root>
+                  <DropdownMenuPrimitive.Trigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-2 rounded-xl border border-quotefly-blue bg-quotefly-blue px-3.5 py-2 text-sm font-medium text-white transition hover:bg-[#256fbf]"
+                    >
+                      <Plus size={15} />
+                      New
+                    </button>
+                  </DropdownMenuPrimitive.Trigger>
+                  <DropdownMenuPrimitive.Portal>
+                    <DropdownMenuPrimitive.Content
+                      align="end"
+                      sideOffset={12}
+                      className="z-[130] min-w-[220px] rounded-[24px] border border-slate-200 bg-white p-2 shadow-[0_20px_44px_rgba(15,23,42,0.18)]"
+                    >
+                      <DropdownMenuPrimitive.Item
+                        onSelect={() => onQuickAction("new-customer")}
+                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                      >
+                        <UserPlus2 size={15} className="text-quotefly-blue" />
+                        New customer
+                      </DropdownMenuPrimitive.Item>
+                      <DropdownMenuPrimitive.Item
+                        onSelect={() => onQuickAction("new-quote")}
+                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                      >
+                        <FilePlus2 size={15} className="text-quotefly-blue" />
+                        New quote
+                      </DropdownMenuPrimitive.Item>
+                    </DropdownMenuPrimitive.Content>
+                  </DropdownMenuPrimitive.Portal>
+                </DropdownMenuPrimitive.Root>
+
                 <button
                   type="button"
                   onClick={() => setCommandOpen(true)}

@@ -4,32 +4,51 @@ import { Command as CommandPrimitive } from "cmdk";
 import {
   ArrowRight,
   BrushCleaning,
+  FilePlus2,
   FileText,
   LayoutDashboard,
   LineChart,
   Search,
   Settings,
+  UserPlus2,
   UserRoundCog,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 type CommandPage = "customers" | "quotes" | "analytics" | "branding" | "settings" | "settings-users";
+type CommandAction = "new-customer" | "new-quote";
 
 interface CrmCommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onNavigate: (page: CommandPage) => void;
+  onQuickAction: (action: CommandAction) => void;
 }
 
 type CommandItem = {
   label: string;
   description: string;
-  page: CommandPage;
+  page?: CommandPage;
+  action?: CommandAction;
   icon: ReactNode;
-  group: "Workflow" | "Workspace";
+  group: "Actions" | "Workflow" | "Workspace";
 };
 
 const COMMAND_ITEMS: CommandItem[] = [
+  {
+    label: "New Customer",
+    description: "Open the fast add-customer flow from anywhere in the workspace.",
+    action: "new-customer",
+    icon: <UserPlus2 size={16} />,
+    group: "Actions",
+  },
+  {
+    label: "New Quote",
+    description: "Jump straight into the quote builder with the current workflow shell.",
+    action: "new-quote",
+    icon: <FilePlus2 size={16} />,
+    group: "Actions",
+  },
   {
     label: "Customers",
     description: "See customers in the sales pipeline from new to sold.",
@@ -91,7 +110,7 @@ function CommandGroup({
       <div className="mt-2 space-y-1">
         {items.map((item) => (
           <CommandPrimitive.Item
-            key={item.page}
+            key={item.page ?? item.action}
             value={`${item.label} ${item.description}`}
             onSelect={() => onSelect(item)}
             className={cn(
@@ -120,6 +139,7 @@ export function CrmCommandPalette({
   open,
   onOpenChange,
   onNavigate,
+  onQuickAction,
 }: CrmCommandPaletteProps) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -159,10 +179,19 @@ export function CrmCommandPalette({
               </CommandPrimitive.Empty>
 
               <CommandGroup
+                heading="Actions"
+                items={COMMAND_ITEMS.filter((item) => item.group === "Actions")}
+                onSelect={(item) => {
+                  if (item.action) onQuickAction(item.action);
+                  onOpenChange(false);
+                }}
+              />
+
+              <CommandGroup
                 heading="Workflow"
                 items={COMMAND_ITEMS.filter((item) => item.group === "Workflow")}
                 onSelect={(item) => {
-                  onNavigate(item.page);
+                  if (item.page) onNavigate(item.page);
                   onOpenChange(false);
                 }}
               />
@@ -171,7 +200,7 @@ export function CrmCommandPalette({
                 heading="Workspace"
                 items={COMMAND_ITEMS.filter((item) => item.group === "Workspace")}
                 onSelect={(item) => {
-                  onNavigate(item.page);
+                  if (item.page) onNavigate(item.page);
                   onOpenChange(false);
                 }}
               />

@@ -140,10 +140,20 @@ function CrmLayout({
     else navigate("/app/customers");
   };
 
+  const handleQuickAction = (action: "new-customer" | "new-quote") => {
+    if (action === "new-customer") {
+      navigate("/app/customers?compose=customer");
+      return;
+    }
+
+    navigate("/app/build");
+  };
+
   return (
     <CrmShell
       currentPage={currentPage}
       onNavigate={handleNavigate}
+      onQuickAction={handleQuickAction}
       onLogout={onLogout}
       fullName={session.fullName}
       planName={session.effectivePlanName}

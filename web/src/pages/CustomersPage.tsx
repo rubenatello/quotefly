@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { BadgeCheck, CircleDot, FileText, PhoneCall, Wrench } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
@@ -343,10 +344,26 @@ export function CustomersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    if (searchParams.get("compose") === "customer") {
+      setQuickCustomerOpen(true);
+    }
+  }, [searchParams]);
+
+  function closeQuickCustomerModal() {
+    setQuickCustomerOpen(false);
+    if (searchParams.get("compose") === "customer") {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("compose");
+      setSearchParams(nextParams, { replace: true });
+    }
+  }
 
   const latestQuoteByCustomer = useMemo(() => getLatestQuoteMap(quotes), [quotes]);
 
@@ -478,7 +495,7 @@ export function CustomersPage() {
 
       <QuickCustomerModal
         open={quickCustomerOpen}
-        onClose={() => setQuickCustomerOpen(false)}
+        onClose={closeQuickCustomerModal}
         onCreated={async ({ customer, merged, restored, intent }) => {
           await loadAll();
           setNotice(
@@ -498,3 +515,4 @@ export function CustomersPage() {
     </div>
   );
 }
+

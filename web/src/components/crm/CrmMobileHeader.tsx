@@ -1,5 +1,5 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Command, MoreHorizontal, Search } from "lucide-react";
+import { Command, FilePlus2, MoreHorizontal, Search, UserPlus2 } from "lucide-react";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 
@@ -8,6 +8,7 @@ interface CrmMobileHeaderProps {
   onToggleMobile: () => void;
   onOpenCommand: () => void;
   onNavigate: (page: string) => void;
+  onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   currentLabel: string;
   planName?: string;
@@ -18,6 +19,7 @@ export function CrmMobileHeader({
   onToggleMobile,
   onOpenCommand,
   onNavigate,
+  onQuickAction,
   onLogout,
   currentLabel,
   planName,
@@ -80,6 +82,21 @@ export function CrmMobileHeader({
                   <Command size={15} />
                   Search workspace
                 </DropdownMenuPrimitive.Item>
+                <DropdownMenuPrimitive.Item
+                  onSelect={() => onQuickAction("new-customer")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                >
+                  <UserPlus2 size={15} className="text-quotefly-blue" />
+                  New customer
+                </DropdownMenuPrimitive.Item>
+                <DropdownMenuPrimitive.Item
+                  onSelect={() => onQuickAction("new-quote")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                >
+                  <FilePlus2 size={15} className="text-quotefly-blue" />
+                  New quote
+                </DropdownMenuPrimitive.Item>
+                <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onNavigate("settings")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
