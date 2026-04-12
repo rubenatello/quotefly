@@ -1,10 +1,13 @@
-import { CallIcon, EmailIcon } from "../components/Icons";
+import type { ReactNode } from "react";
+import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, QuoteIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select } from "../components/ui";
 import { FollowUpPill, PipelineFlow, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
 import { usePageView } from "../lib/analytics";
+
+type PipelineLead = ReturnType<typeof useDashboard>["pipeline"]["newLeads"][number];
 
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
   "NEEDS_FOLLOW_UP",
@@ -82,6 +85,25 @@ function sectionBadgeTone(tone: "blue" | "orange" | "emerald" | "slate") {
   return tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue";
 }
 
+function customerInitials(fullName: string) {
+  return fullName
+    .split(" ")
+    .map((part) => part[0] ?? "")
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function nextActionLabel(
+  lead: PipelineLead,
+  actionKind: "follow_up" | "job_status" | "after_sale" | "none",
+) {
+  if (actionKind === "job_status") return "Move work forward";
+  if (actionKind === "after_sale") return "Ask for review or referral";
+  if (!lead.quoteId) return "Draft first quote";
+  return "Follow up with customer";
+}
+
 function PipelineRowsSection({
   sectionId,
   step,
@@ -92,6 +114,7 @@ function PipelineRowsSection({
   emptyDescription,
   saving,
   onNavigateToQuote,
+  activeQuoteId,
   actionKind,
   tone,
   onUpdateFollowUp,
@@ -101,11 +124,12 @@ function PipelineRowsSection({
   step: string;
   title: string;
   subtitle: string;
-  leads: ReturnType<typeof useDashboard>["pipeline"]["newLeads"];
+  leads: PipelineLead[];
   emptyTitle: string;
   emptyDescription: string;
   saving: boolean;
   onNavigateToQuote: (quoteId: string) => void;
+  activeQuoteId?: string | null;
   actionKind: "follow_up" | "job_status" | "after_sale" | "none";
   tone: "blue" | "orange" | "emerald" | "slate";
   onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
@@ -127,7 +151,7 @@ function PipelineRowsSection({
           <EmptyState title={emptyTitle} description={emptyDescription} />
         ) : (
           <>
-            <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_170px_130px_160px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+            <div className="hidden grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
               <span>Lead</span>
               <span>Quote</span>
               <span>Status</span>
@@ -144,9 +168,9 @@ function PipelineRowsSection({
                 return (
                   <article
                     key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
-                    className="px-4 py-3 transition hover:bg-slate-50/70"
+                    className={`px-4 py-3 transition hover:bg-slate-50/70 ${lead.quoteId && lead.quoteId === activeQuoteId ? "bg-quotefly-blue/[0.04]" : ""}`}
                   >
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_170px_130px_160px] lg:items-center">
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] lg:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
@@ -154,18 +178,25 @@ function PipelineRowsSection({
                           </span>
                           <span className="text-xs text-slate-500">Created {formatDateTime(lead.createdAt)}</span>
                         </div>
-                        <p className="mt-1.5 truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-                          <span className="inline-flex items-center gap-1">
-                            <CallIcon size={12} />
-                            {lead.phone}
+                        <div className="mt-1.5 flex items-start gap-3">
+                          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+                            {customerInitials(lead.customerName)}
                           </span>
-                          {lead.email ? (
-                            <span className="inline-flex items-center gap-1">
-                              <EmailIcon size={12} />
-                              {lead.email}
-                            </span>
-                          ) : null}
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                              <span className="inline-flex items-center gap-1">
+                                <CallIcon size={12} />
+                                {lead.phone}
+                              </span>
+                              {lead.email ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <EmailIcon size={12} />
+                                  {lead.email}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -205,7 +236,10 @@ function PipelineRowsSection({
                         ) : null}
                       </div>
 
-                      <div className="text-xs text-slate-500">{touchLabel}</div>
+                      <div className="space-y-1 text-xs text-slate-500">
+                        <p>{touchLabel}</p>
+                        <p className="font-medium text-slate-700">{nextActionLabel(lead, actionKind)}</p>
+                      </div>
 
                       <div className="flex flex-col gap-2 lg:items-end">
                         {lead.quoteId ? (
@@ -317,50 +351,92 @@ export function PipelineView() {
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
       <section id="pipeline-overview" className="scroll-mt-28 space-y-4">
-        <Card variant="default" padding="md">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="grid gap-3 sm:grid-cols-3 xl:w-[340px]">
-              <CompactQueueStat label="Needs attention" value={nextAttentionCount} />
-              <CompactQueueStat label="Active work" value={pipeline.totals.closedLeads} />
-              <CompactQueueStat label="After-sale" value={pipeline.totals.afterSaleLeads} />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-3">
-              <WorkspaceJumpBar links={pipelineLinks} />
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => navigateToBuilder()}>
-                  Start New Quote
-                </Button>
-                {selectedQuoteId ? (
-                  <Button onClick={() => navigateToQuote(selectedQuoteId)}>
-                    Reopen Active Quote
-                  </Button>
-                ) : null}
-              </div>
-              <div className="grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-3">
-                <CompactQueueStat label="Quotes this month" value={stats.monthlyQuotes} />
-                <CompactQueueStat label="Active customers" value={activeCustomerCount} />
-                <CompactQueueStat label="Accepted revenue" value={stats.acceptedRevenue} currency />
-              </div>
-            </div>
-          </div>
-        </Card>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_320px]">
+          <div className="space-y-4">
+            <Card variant="default" padding="md">
+              <div className="flex flex-col gap-4">
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                  <MetricTile label="Needs attention" value={nextAttentionCount} tone="orange" />
+                  <MetricTile label="New leads" value={pipeline.totals.newLeads} tone="blue" />
+                  <MetricTile label="Quoted" value={pipeline.totals.quotedLeads} tone="slate" />
+                  <MetricTile label="Active work" value={pipeline.totals.closedLeads} tone="emerald" />
+                  <MetricTile label="After-sale" value={pipeline.totals.afterSaleLeads} tone="slate" />
+                  <MetricTile label="Revenue" value={stats.acceptedRevenue} tone="blue" currency />
+                </div>
 
-        <Card variant="default" padding="md">
-          <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Operator board</p>
-              <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Lead Pipeline</h2>
-              <p className="mt-1 text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
-            </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-3 border-t border-slate-200 pt-3">
+                  <WorkspaceJumpBar links={pipelineLinks} />
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => navigateToBuilder()}>
+                      Start New Quote
+                    </Button>
+                    {selectedQuoteId ? (
+                      <Button onClick={() => navigateToQuote(selectedQuoteId)}>
+                        Reopen Active Quote
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card variant="default" padding="md">
+              <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Operator board</p>
+                  <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Lead Pipeline</h2>
+                  <p className="mt-1 text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
+                </div>
+              </div>
+
+              <PipelineFlow
+                newLeads={pipeline.totals.newLeads}
+                quotedLeads={pipeline.totals.quotedLeads}
+                closedLeads={pipeline.totals.closedLeads}
+                afterSaleLeads={pipeline.totals.afterSaleLeads}
+              />
+            </Card>
           </div>
 
-          <PipelineFlow
-            newLeads={pipeline.totals.newLeads}
-            quotedLeads={pipeline.totals.quotedLeads}
-            closedLeads={pipeline.totals.closedLeads}
-            afterSaleLeads={pipeline.totals.afterSaleLeads}
-          />
-        </Card>
+          <div className="space-y-4">
+            <Card variant="default" padding="md">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Queue focus</p>
+              <div className="mt-3 space-y-3">
+                <FocusRow icon={<ClockIcon size={14} />} label="Needs touch today" value={String(nextAttentionCount)} />
+                <FocusRow icon={<CustomerIcon size={14} />} label="Active customers" value={String(activeCustomerCount)} />
+                <FocusRow icon={<QuoteIcon size={14} />} label="Quotes this month" value={String(stats.monthlyQuotes)} />
+              </div>
+            </Card>
+
+            <Card variant="default" padding="md">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recent leads</p>
+              <div className="mt-3 space-y-3">
+                {pipeline.recentLeads.slice(0, 4).length > 0 ? (
+                  pipeline.recentLeads.slice(0, 4).map((lead) => (
+                    <button
+                      key={`${lead.customerId}-${lead.quoteId ?? "recent"}`}
+                      type="button"
+                      onClick={() => (lead.quoteId ? navigateToQuote(lead.quoteId) : navigateToBuilder(lead.customerId))}
+                      className="flex w-full items-start gap-3 rounded-[14px] border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-slate-300 hover:bg-white"
+                    >
+                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-slate-700 shadow-sm">
+                        {customerInitials(lead.customerName)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-slate-900">{lead.customerName}</span>
+                        <span className="mt-1 block text-xs text-slate-500">{lead.quoteTitle ?? "No quote yet"}</span>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="rounded-[14px] border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                    New leads will appear here.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
+        </div>
       </section>
 
       <div className="grid gap-5">
@@ -374,6 +450,7 @@ export function PipelineView() {
           emptyDescription="No leads waiting for first quote."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          activeQuoteId={selectedQuoteId}
           actionKind="follow_up"
           tone="blue"
           onUpdateFollowUp={(customerId, followUpStatus) =>
@@ -391,6 +468,7 @@ export function PipelineView() {
           emptyDescription="Quoted jobs will appear here."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          activeQuoteId={selectedQuoteId}
           actionKind="follow_up"
           tone="orange"
           onUpdateFollowUp={(customerId, followUpStatus) =>
@@ -408,6 +486,7 @@ export function PipelineView() {
           emptyDescription="Accepted jobs will appear here once marked as won."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          activeQuoteId={selectedQuoteId}
           actionKind="job_status"
           tone="emerald"
           onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
@@ -423,6 +502,7 @@ export function PipelineView() {
           emptyDescription="Completed jobs will appear here when they need a follow-up."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          activeQuoteId={selectedQuoteId}
           actionKind="after_sale"
           tone="slate"
           onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
@@ -438,6 +518,7 @@ export function PipelineView() {
           emptyDescription="Customer records will show here once created."
           saving={saving}
           onNavigateToQuote={navigateToQuote}
+          activeQuoteId={selectedQuoteId}
           actionKind="follow_up"
           tone="blue"
           onUpdateFollowUp={(customerId, followUpStatus) =>
@@ -449,11 +530,44 @@ export function PipelineView() {
   );
 }
 
-function CompactQueueStat({ label, value, currency = false }: { label: string; value: number; currency?: boolean }) {
+function FocusRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-[16px] border border-slate-200 bg-slate-50 px-3 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-xl font-bold tracking-tight text-slate-900">{currency ? money(value) : value}</p>
+    <div className="flex items-center justify-between gap-3 rounded-[14px] border border-slate-200 bg-slate-50 px-3 py-3">
+      <div className="inline-flex items-center gap-2 text-sm text-slate-700">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white text-quotefly-blue shadow-sm">
+          {icon}
+        </span>
+        <span>{label}</span>
+      </div>
+      <span className="text-sm font-semibold text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  tone,
+  currency = false,
+}: {
+  label: string;
+  value: number;
+  tone: "blue" | "orange" | "emerald" | "slate";
+  currency?: boolean;
+}) {
+  const toneClass =
+    tone === "blue"
+      ? "bg-quotefly-blue text-white"
+      : tone === "orange"
+        ? "bg-quotefly-orange text-white"
+        : tone === "emerald"
+          ? "bg-emerald-600 text-white"
+          : "bg-slate-800 text-white";
+
+  return (
+    <div className={`rounded-[16px] px-4 py-3 shadow-sm ${toneClass}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
+      <p className="mt-2 text-2xl font-bold tracking-tight">{currency ? money(value) : value}</p>
     </div>
   );
 }
