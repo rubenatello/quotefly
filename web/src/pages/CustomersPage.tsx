@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, CircleDot, FileText, PhoneCall, Wrench } from "lucide-react";
+import { BadgeCheck, CircleDot, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Wrench } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
@@ -83,6 +83,14 @@ function customerInitials(fullName: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+function openDialer(phone: string) {
+  window.location.assign(`tel:${phone}`);
+}
+
+function openTextComposer(phone: string) {
+  window.location.assign(`sms:${phone}`);
 }
 
 function getLatestQuoteMap(quotes: Quote[]) {
@@ -208,15 +216,19 @@ function CustomerDesktopRow({
   row,
   onOpenQuote,
   onStartQuote,
+  onCallCustomer,
+  onTextCustomer,
 }: {
   row: CustomerRow;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
+  onCallCustomer: (phone: string) => void;
+  onTextCustomer: (phone: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_280px_118px] gap-4 px-4 py-3 lg:grid lg:items-center">
+    <div className="hidden grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 px-4 py-3 lg:grid lg:items-center">
       <div className="min-w-0">
         <div className="flex items-center gap-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
@@ -252,12 +264,17 @@ function CustomerDesktopRow({
         </div>
       </div>
 
-      <div className="flex justify-end">
-        {latestQuote ? (
-          <Button size="sm" variant="outline" onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
-        ) : (
-          <Button size="sm" variant="outline" onClick={() => onStartQuote(customer.id)}>Start</Button>
-        )}
+      <div className="flex justify-end gap-1.5">
+        <Button size="sm" variant="ghost" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)} aria-label="Call customer" />
+        <Button size="sm" variant="ghost" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)} aria-label="Text customer" />
+        <Button
+          size="sm"
+          variant={latestQuote ? "outline" : "primary"}
+          icon={<FilePlus2 size={14} />}
+          onClick={() => (latestQuote ? onOpenQuote(latestQuote.id) : onStartQuote(customer.id))}
+        >
+          {latestQuote ? "Open" : "Quote"}
+        </Button>
       </div>
     </div>
   );
@@ -267,10 +284,14 @@ function CustomerMobileCard({
   row,
   onOpenQuote,
   onStartQuote,
+  onCallCustomer,
+  onTextCustomer,
 }: {
   row: CustomerRow;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
+  onCallCustomer: (phone: string) => void;
+  onTextCustomer: (phone: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
 
@@ -318,11 +339,19 @@ function CustomerMobileCard({
         <p className="mt-1 text-xs text-slate-500">{latestQuote?.title ?? "Start a quote when this customer is ready."}</p>
       </div>
 
-      {latestQuote ? (
-        <Button fullWidth variant="outline" onClick={() => onOpenQuote(latestQuote.id)}>Open Quote</Button>
-      ) : (
-        <Button fullWidth variant="outline" onClick={() => onStartQuote(customer.id)}>Start Quote</Button>
-      )}
+      <div className="grid grid-cols-3 gap-2">
+        <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)}>
+          Call
+        </Button>
+        <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)}>
+          Text
+        </Button>
+        {latestQuote ? (
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
+        ) : (
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onStartQuote(customer.id)}>Quote</Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -465,12 +494,12 @@ export function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_280px_118px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
                 <span>Pipeline</span>
-                <span>Action</span>
+                <span className="text-right">Actions</span>
               </div>
               <div className="divide-y divide-slate-200">
                 {filteredRows.map((row) => (
@@ -479,11 +508,15 @@ export function CustomersPage() {
                       row={row}
                       onOpenQuote={navigateToQuote}
                       onStartQuote={navigateToBuilder}
+                      onCallCustomer={openDialer}
+                      onTextCustomer={openTextComposer}
                     />
                     <CustomerMobileCard
                       row={row}
                       onOpenQuote={navigateToQuote}
                       onStartQuote={navigateToBuilder}
+                      onCallCustomer={openDialer}
+                      onTextCustomer={openTextComposer}
                     />
                   </div>
                 ))}

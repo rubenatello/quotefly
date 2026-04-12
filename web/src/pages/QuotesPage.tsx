@@ -614,13 +614,6 @@ export function QuotesPage() {
       <PageHeader
         title="Quotes"
         subtitle="Review quote value, lifecycle, and invoice progress from one clean board, then open the quote desk only when work is needed."
-        actions={
-          <>
-            <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
-            <Button variant="outline" onClick={() => navigateToBuilder()}>New Quote</Button>
-            {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
-          </>
-        }
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
@@ -672,18 +665,24 @@ export function QuotesPage() {
       </div>
 
       <Card variant="default" padding="md">
-        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
+        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quote board</p>
-            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent quotes first</h2>
-            <p className="mt-1 text-sm text-slate-600">Open the desk for edits. Use PDF actions when you only need to preview, download, or send the customer-facing quote.</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Most recent quotes first</h2>
           </div>
-          <div className="w-full lg:w-[320px]">
-            <Input
-              placeholder="Search quote number, customer, or title"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-            />
+          <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
+            <div className="w-full lg:w-[300px]">
+              <Input
+                placeholder="Search quote number, customer, or title"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
+              <Button variant="outline" onClick={() => navigateToBuilder()}>New Quote</Button>
+              {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
+            </div>
           </div>
         </div>
 

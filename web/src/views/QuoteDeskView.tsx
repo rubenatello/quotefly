@@ -45,7 +45,6 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { WorkspaceSection } from "../components/ui/workspace";
 import {
   api,
   type QuickBooksInvoiceStatusPayload,
@@ -452,7 +451,7 @@ export function QuoteDeskView() {
                   <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
                   {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
                   {deskTabs.map((tab) => {
                     const active = tab.id === activeDeskTab;
                     return (
@@ -470,6 +469,35 @@ export function QuoteDeskView() {
                       </button>
                     );
                   })}
+                </div>
+                <div className="hidden flex-wrap gap-2 lg:flex">
+                  <Button size="sm" loading={saving} onClick={() => void persistSelectedQuote()}>
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { track("quote_mark_quoted"); void sendDecision("send"); }}
+                    disabled={saving}
+                  >
+                    Mark Quoted
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { track("quote_email"); openSendComposer("email"); }}
+                    disabled={saving}
+                  >
+                    Email
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { track("quote_pdf"); void downloadQuotePdf(); }}
+                    disabled={saving}
+                  >
+                    PDF
+                  </Button>
                 </div>
               </div>
 
@@ -502,9 +530,7 @@ export function QuoteDeskView() {
           </Card>
 
           {activeDeskTab === "overview" ? (
-          <WorkspaceSection
-            id="desk-overview"
-            step="Overview"
+          <DeskTabPanel
             title="Overview"
             description="Get customer context, confirm quote health, and switch records without losing flow."
           >
@@ -565,13 +591,11 @@ export function QuoteDeskView() {
                 <DeskWorkflowCard steps={deskSteps} progress={deskCompletionPercent} nextStep={nextDeskStep} />
               </div>
             </div>
-          </WorkspaceSection>
+          </DeskTabPanel>
           ) : null}
 
           {activeDeskTab === "details" ? (
-          <WorkspaceSection
-            id="desk-details"
-            step="Details"
+          <DeskTabPanel
             title="Quote Details"
             description="Control customer-facing wording, lifecycle stage, and tax without losing the internal math."
             actions={<Badge tone="blue">Live Draft</Badge>}
@@ -658,13 +682,11 @@ export function QuoteDeskView() {
                 )}
               </form>
             </Card>
-          </WorkspaceSection>
+          </DeskTabPanel>
           ) : null}
 
           {activeDeskTab === "lines" ? (
-          <WorkspaceSection
-            id="desk-lines"
-            step="Line Items"
+          <DeskTabPanel
             title="Line Items"
             description="Use saved jobs when possible, then fine-tune labor, material, or service lines."
             actions={<Badge tone="slate">{lineItemCount} lines</Badge>}
@@ -890,13 +912,11 @@ export function QuoteDeskView() {
                 </div>
               </div>
             </Card>
-          </WorkspaceSection>
+          </DeskTabPanel>
           ) : null}
 
           {activeDeskTab === "actions" ? (
-          <WorkspaceSection
-            id="desk-actions"
-            step="Send + Sync"
+          <DeskTabPanel
             title="Actions and Sync"
             description={starterLaunchMode ? "Save the quote, move the lifecycle forward, and send the customer-facing PDF without leaving the workspace." : "Save the quote, move the lifecycle forward, send it out, or sync the invoice into QuickBooks."}
           >
@@ -1207,7 +1227,7 @@ export function QuoteDeskView() {
                 )}
               </Card>
             </div>
-          </WorkspaceSection>
+          </DeskTabPanel>
           ) : null}
       </div>
 
@@ -1229,9 +1249,7 @@ export function QuoteDeskView() {
       </div>
 
       {activeDeskTab === "history" ? (
-      <WorkspaceSection
-        id="desk-history"
-        step="History"
+      <DeskTabPanel
         title="Revision History"
         description="Track original values, revisions, and decision changes on the selected quote."
       >
@@ -1306,13 +1324,11 @@ export function QuoteDeskView() {
             showUpgradeHint={canAutoUpgradeMessage}
           />
         )}
-      </WorkspaceSection>
+      </DeskTabPanel>
       ) : null}
 
       {activeDeskTab === "comms" ? (
-      <WorkspaceSection
-        id="desk-comms"
-        step="Send Log"
+      <DeskTabPanel
         title="Send Activity"
         description="Review logged email, text, and copy actions for this quote."
       >
@@ -1353,7 +1369,7 @@ export function QuoteDeskView() {
             showUpgradeHint={canAutoUpgradeMessage}
           />
         )}
-      </WorkspaceSection>
+      </DeskTabPanel>
       ) : null}
 
       <ConfirmModal
@@ -1445,6 +1461,31 @@ function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
       <span className="text-quotefly-blue">{icon}</span>
       {label}
     </span>
+  );
+}
+
+function DeskTabPanel({
+  title,
+  description,
+  actions,
+  children,
+}: {
+  title: string;
+  description: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="font-display text-[1.1rem] font-semibold tracking-[-0.03em] text-slate-900">{title}</h2>
+          <p className="mt-1 text-sm text-slate-600">{description}</p>
+        </div>
+        {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      </div>
+      {children}
+    </section>
   );
 }
 
