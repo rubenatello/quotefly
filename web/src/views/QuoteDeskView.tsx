@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import {
   Building2,
   CalendarClock,
+  Eye,
   FileOutput,
   Mail,
   MessageSquare,
@@ -20,6 +21,7 @@ import {
   QuoteStatusPill,
 } from "../components/dashboard/DashboardUi";
 import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
+import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
@@ -73,6 +75,7 @@ export function QuoteDeskView() {
   const [newLine, setNewLine] = useState<EditableQuoteLine>(makeEditableQuoteLine());
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const {
     session,
     selectedQuoteId,
@@ -244,6 +247,18 @@ export function QuoteDeskView() {
   const customerName = selectedQuote?.customer?.fullName ?? "Customer unavailable";
   const customerPhone = selectedQuote?.customer?.phone ?? "No phone";
   const customerEmail = selectedQuote?.customer?.email ?? null;
+  const previewLines = useMemo(
+    () =>
+      editableLines.map((line) => ({
+        id: line.id,
+        title: line.title,
+        details: line.details,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
+      })),
+    [editableLines],
+  );
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setEditableLines((current) =>
@@ -411,14 +426,21 @@ export function QuoteDeskView() {
       <PageHeader
         title={quoteEditForm.title || selectedQuote.title}
         subtitle="Edit the quote directly: update the customer-facing copy, adjust the lines, then send or export when it is ready."
-        actions={<QuoteStatusPill status={selectedQuote.status} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+              Preview
+            </Button>
+            <QuoteStatusPill status={selectedQuote.status} />
+          </div>
+        }
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
       <Card variant="default" padding="md">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <MetaCard icon={<Building2 size={16} />} label="Business" value={session?.tenantName ?? "QuoteFly"} />
@@ -487,35 +509,54 @@ export function QuoteDeskView() {
             </div>
           </div>
 
-          <Card variant="blue" padding="md" className="self-start">
-            <CardHeader title="Quote totals" subtitle="Saved rows drive the sheet totals." />
-            <div className="space-y-3 text-sm">
-              <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
-              <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-              <div className="space-y-1">
-                <Input
-                  label="Tax"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={quoteEditForm.taxAmount}
-                  onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-                />
+          <div className="space-y-5 lg:sticky lg:top-24 lg:self-start">
+            <div className="hidden lg:block">
+              <QuoteLivePreview
+                businessName={session?.tenantName ?? "QuoteFly"}
+                customerName={customerName}
+                customerPhone={customerPhone}
+                customerEmail={customerEmail}
+                preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+                sentDateLabel={sentDateLabel}
+                quoteTitle={quoteEditForm.title}
+                scopeText={quoteEditForm.scopeText}
+                lines={previewLines}
+                customerSubtotal={customerSubtotal}
+                taxAmount={taxAmount}
+                totalAmount={totalAmount}
+              />
+            </div>
+
+            <Card variant="blue" padding="md" className="self-start">
+              <CardHeader title="Quote totals" subtitle="Saved rows drive the sheet totals." />
+              <div className="space-y-3 text-sm">
+                <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
+                <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+                <div className="space-y-1">
+                  <Input
+                    label="Tax"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quoteEditForm.taxAmount}
+                    onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+                  />
+                </div>
+                <SummaryRow label="Total" value={money(totalAmount)} strong />
+                <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
+                <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
               </div>
-              <SummaryRow label="Total" value={money(totalAmount)} strong />
-              <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-              <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
-            </div>
-            <div className="mt-4 grid gap-2">
-              <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-                Save Quote Sheet
-              </Button>
-              <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
-                Start Another Quote
-              </Button>
-              <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} · Sent {sentDateLabel}</p>
-            </div>
-          </Card>
+              <div className="mt-4 grid gap-2">
+                <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
+                  Save Quote Sheet
+                </Button>
+                <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                  Start Another Quote
+                </Button>
+                <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} · Sent {sentDateLabel}</p>
+              </div>
+            </Card>
+          </div>
         </div>
       </Card>
 
@@ -827,6 +868,30 @@ export function QuoteDeskView() {
         onSaveFull={() => void saveNewLineAsPreset(true)}
         onSaveNameOnly={() => void saveNewLineAsPreset(false)}
       />
+
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
+        <ModalHeader
+          title="Quote preview"
+          description="This is the customer-facing view of the active quote."
+          onClose={() => setPreviewOpen(false)}
+        />
+        <ModalBody className="bg-slate-50">
+          <QuoteLivePreview
+            businessName={session?.tenantName ?? "QuoteFly"}
+            customerName={customerName}
+            customerPhone={customerPhone}
+            customerEmail={customerEmail}
+            preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+            sentDateLabel={sentDateLabel}
+            quoteTitle={quoteEditForm.title}
+            scopeText={quoteEditForm.scopeText}
+            lines={previewLines}
+            customerSubtotal={customerSubtotal}
+            taxAmount={taxAmount}
+            totalAmount={totalAmount}
+          />
+        </ModalBody>
+      </Modal>
 
       {sendComposer ? (
         <Modal open={true} onClose={() => setSendComposer(null)} size="lg" ariaLabel="Send quote confirmation">

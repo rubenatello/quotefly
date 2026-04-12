@@ -2,6 +2,7 @@
 import {
   Building2,
   CalendarClock,
+  Eye,
   FileText,
   Plus,
   Sparkles,
@@ -10,6 +11,7 @@ import {
 import { FeatureLockedCard } from "../components/dashboard/DashboardUi";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
@@ -18,6 +20,9 @@ import {
   Card,
   CardHeader,
   Input,
+  Modal,
+  ModalBody,
+  ModalHeader,
   PageHeader,
   Select,
   Textarea,
@@ -52,6 +57,7 @@ export function QuoteBuilderView() {
   const [draftLines, setDraftLines] = useState<EditableQuoteLine[]>([makeEditableQuoteLine()]);
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const {
     session,
     customers,
@@ -174,6 +180,18 @@ export function QuoteBuilderView() {
   const totalAmount = customerSubtotal + taxAmount;
   const estimatedProfit = customerSubtotal - internalSubtotal;
   const estimatedMarginPercent = customerSubtotal > 0 ? (estimatedProfit / customerSubtotal) * 100 : 0;
+  const previewLines = useMemo(
+    () =>
+      filteredDraftLines.map((line) => ({
+        id: line.id,
+        title: line.title,
+        details: line.details,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
+      })),
+    [filteredDraftLines],
+  );
 
   function updateDraftLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setDraftLines((current) =>
@@ -336,7 +354,12 @@ export function QuoteBuilderView() {
         title="Build Quote"
         subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
         actions={
-          selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : undefined
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+              Preview
+            </Button>
+            {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
+          </div>
         }
       />
 
@@ -427,7 +450,7 @@ export function QuoteBuilderView() {
         </div>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card variant="default" padding="md">
           <CardHeader
             title="Quote sheet"
@@ -530,7 +553,24 @@ export function QuoteBuilderView() {
           </div>
         </Card>
 
-        <div className="space-y-5">
+        <div className="space-y-5 lg:sticky lg:top-24 lg:self-start">
+          <div className="hidden lg:block">
+            <QuoteLivePreview
+              businessName={session?.tenantName ?? "QuoteFly"}
+              customerName={activeCustomer?.fullName ?? "Select customer"}
+              customerPhone={activeCustomer?.phone ?? null}
+              customerEmail={activeCustomer?.email ?? null}
+              preparedDateLabel={preparedDateLabel}
+              sentDateLabel="N/A"
+              quoteTitle={quoteForm.title}
+              scopeText={quoteForm.scopeText}
+              lines={previewLines}
+              customerSubtotal={customerSubtotal}
+              taxAmount={taxAmount}
+              totalAmount={totalAmount}
+            />
+          </div>
+
           <Card variant="default" padding="md">
             <CardHeader title="Create checklist" subtitle="Keep the quote clean before you create it." />
             <div className="space-y-2 text-sm text-slate-700">
@@ -593,6 +633,30 @@ export function QuoteBuilderView() {
         onSaveFull={() => void saveDraftLineAsPreset(true)}
         onSaveNameOnly={() => void saveDraftLineAsPreset(false)}
       />
+
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
+        <ModalHeader
+          title="Quote preview"
+          description="This is the customer-facing view of the quote as you build it."
+          onClose={() => setPreviewOpen(false)}
+        />
+        <ModalBody className="bg-slate-50">
+          <QuoteLivePreview
+            businessName={session?.tenantName ?? "QuoteFly"}
+            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerPhone={activeCustomer?.phone ?? null}
+            customerEmail={activeCustomer?.email ?? null}
+            preparedDateLabel={preparedDateLabel}
+            sentDateLabel="N/A"
+            quoteTitle={quoteForm.title}
+            scopeText={quoteForm.scopeText}
+            lines={previewLines}
+            customerSubtotal={customerSubtotal}
+            taxAmount={taxAmount}
+            totalAmount={totalAmount}
+          />
+        </ModalBody>
+      </Modal>
     </div>
   );
 }
