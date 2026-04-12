@@ -1,16 +1,39 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, CircleDot, Eye, FileText, ReceiptText, Send, XCircle } from "lucide-react";
-import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
+﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { BadgeCheck, Calculator, CircleDot, Eye, FileText, ReceiptText, Send, Share2, XCircle } from "lucide-react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  PageHeader,
+} from "../components/ui";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
-import { api, ApiError, type Quote, type QuoteStatus } from "../lib/api";
+import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
 
 type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
+type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
 
 const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
+}
+
+function fileLabel(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 60) || "quote"
+  );
 }
 
 function customerInitials(fullName: string) {
@@ -20,6 +43,31 @@ function customerInitials(fullName: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+function buildQuoteMessageDraft(quote: Quote, customerName: string): { subject: string; body: string } {
+  const subject = `${quote.title} - Quote`;
+  const body = [
+    `Hi ${customerName},`,
+    "",
+    "Thanks for the opportunity to quote this project.",
+    "",
+    `Quote: ${quote.title}`,
+    `Total: ${money(quote.totalAmount)}`,
+    "",
+    "Scope:",
+    quote.scopeText,
+    "",
+    "Reply to confirm or ask for any revisions.",
+  ].join("\n");
+
+  return { subject, body };
+}
+
+function mapSendChannelToOutboundChannel(channel: "email" | "sms" | "copy"): QuoteOutboundChannel {
+  if (channel === "email") return "EMAIL_APP";
+  if (channel === "sms") return "SMS_APP";
+  return "COPY";
 }
 
 function quoteLifecycleStage(quote: Quote): QuoteLifecycleStage {
@@ -70,7 +118,7 @@ function lifecycleToneClass(stage: QuoteLifecycleStage, quote: Quote) {
 
 function lifecycleStageBadgeClass(stage: QuoteLifecycleStage, quote: Quote, active: boolean, complete: boolean) {
   if (active) {
-    return lifecycleToneClass(stage, quote) + " shadow-sm";
+    return `${lifecycleToneClass(stage, quote)} shadow-sm`;
   }
 
   if (complete) {
@@ -86,6 +134,7 @@ function stageIndex(stage: QuoteLifecycleStage) {
 
 function rawStatusHint(quote: Quote) {
   const stage = quoteLifecycleStage(quote);
+
   if (stage === "INVOICED") {
     const sync = quote.quickBooksInvoiceSyncs?.[0];
     return sync?.quickBooksDocNumber ? `Invoice ${sync.quickBooksDocNumber}` : "Synced to QuickBooks";
@@ -98,12 +147,68 @@ function rawStatusHint(quote: Quote) {
   return "Still being drafted";
 }
 
-function MetricCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+function supportsNativeFileShare(file: File) {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") return false;
+  const checker = (navigator as Navigator & { canShare?: (data?: ShareData) => boolean }).canShare;
+  if (typeof checker !== "function") return false;
+  try {
+    return checker.call(navigator, { files: [file] });
+  } catch {
+    return false;
+  }
+}
+
+function MetricCard({
+  label,
+  value,
+  hint,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  icon: ReactNode;
+  tone: "blue" | "orange" | "emerald" | "slate";
+}) {
+  const toneClasses =
+    tone === "blue"
+      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04]"
+      : tone === "orange"
+        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.05]"
+        : tone === "emerald"
+          ? "border-emerald-200 bg-emerald-50/70"
+          : "border-slate-200 bg-slate-50/80";
+  const iconClasses =
+    tone === "blue"
+      ? "bg-quotefly-blue/[0.10] text-quotefly-blue"
+      : tone === "orange"
+        ? "bg-quotefly-orange/[0.10] text-quotefly-orange"
+        : tone === "emerald"
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-white text-slate-600";
+  const barClasses =
+    tone === "blue"
+      ? "bg-quotefly-blue"
+      : tone === "orange"
+        ? "bg-quotefly-orange"
+        : tone === "emerald"
+          ? "bg-emerald-500"
+          : "bg-slate-300";
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
+    <div className={`relative overflow-hidden rounded-xl border px-4 py-3 ${toneClasses}`}>
+      <div className={`absolute inset-x-0 top-0 h-1 ${barClasses}`} />
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
+          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+        </div>
+        <span className={`inline-flex h-10 w-10 items-center justify-center rounded-full ${iconClasses}`}>
+          {icon}
+        </span>
+      </div>
     </div>
   );
 }
@@ -183,8 +288,8 @@ function QuoteLifecycleMini({ quote }: { quote: Quote }) {
         })}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={stage === "SENT" ? "orange" : stage === "DRAFT" ? "slate" : "emerald"} icon={lifecycleIcon(stage, quote.status)}>
-          {lifecycleLabel(stage)}
+        <Badge tone={quoteLifecycleStage(quote) === "SENT" ? "orange" : quoteLifecycleStage(quote) === "DRAFT" ? "slate" : "emerald"} icon={lifecycleIcon(quoteLifecycleStage(quote), quote.status)}>
+          {lifecycleLabel(quoteLifecycleStage(quote))}
         </Badge>
         <span className="truncate text-xs text-slate-500">{rawStatusHint(quote)}</span>
       </div>
@@ -195,13 +300,11 @@ function QuoteLifecycleMini({ quote }: { quote: Quote }) {
 function QuoteDesktopRow({
   quote,
   onOpenQuote,
-  onPreviewPdf,
-  previewing,
+  onOpenPdfActions,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
-  onPreviewPdf: (quoteId: string) => void;
-  previewing: boolean;
+  onOpenPdfActions: (quote: Quote) => void;
 }) {
   return (
     <div className="hidden grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_184px] gap-4 px-4 py-3 lg:grid lg:items-center">
@@ -230,8 +333,8 @@ function QuoteDesktopRow({
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button size="sm" variant="outline" icon={<Eye size={14} />} loading={previewing} onClick={() => onPreviewPdf(quote.id)}>
-          Preview
+        <Button size="sm" variant="outline" icon={<FileText size={14} />} onClick={() => onOpenPdfActions(quote)}>
+          PDF
         </Button>
         <Button size="sm" variant="outline" onClick={() => onOpenQuote(quote.id)}>
           Open
@@ -244,13 +347,11 @@ function QuoteDesktopRow({
 function QuoteMobileCard({
   quote,
   onOpenQuote,
-  onPreviewPdf,
-  previewing,
+  onOpenPdfActions,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
-  onPreviewPdf: (quoteId: string) => void;
-  previewing: boolean;
+  onOpenPdfActions: (quote: Quote) => void;
 }) {
   return (
     <div className="space-y-3 px-4 py-4 lg:hidden">
@@ -281,8 +382,8 @@ function QuoteMobileCard({
       </div>
 
       <div className="flex gap-2">
-        <Button fullWidth size="sm" variant="outline" icon={<Eye size={14} />} loading={previewing} onClick={() => onPreviewPdf(quote.id)}>
-          Preview PDF
+        <Button fullWidth size="sm" variant="outline" icon={<FileText size={14} />} onClick={() => onOpenPdfActions(quote)}>
+          PDF
         </Button>
         <Button fullWidth size="sm" variant="outline" onClick={() => onOpenQuote(quote.id)}>
           Open
@@ -308,7 +409,8 @@ export function QuotesPage() {
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
-  const [previewingQuoteId, setPreviewingQuoteId] = useState<string | null>(null);
+  const [pdfActionQuote, setPdfActionQuote] = useState<Quote | null>(null);
+  const [pdfActionLoading, setPdfActionLoading] = useState<PdfActionType | null>(null);
 
   useEffect(() => {
     void loadAll();
@@ -357,12 +459,16 @@ export function QuotesPage() {
   const invoicedQuotes = sortedQuotes.filter((quote) => quoteLifecycleStage(quote) === "INVOICED");
   const invoicedAmount = invoicedQuotes.reduce((total, quote) => total + Number(quote.totalAmount), 0);
 
-  async function previewQuotePdf(quoteId: string) {
-    setPreviewingQuoteId(quoteId);
+  async function getPdfBlob(quoteId: string, options?: { inline?: boolean }) {
+    return api.quotes.downloadPdf(quoteId, { inline: options?.inline });
+  }
+
+  async function previewQuotePdf(quote: Quote) {
+    setPdfActionLoading("preview");
     setError(null);
 
     try {
-      const blob = await api.quotes.downloadPdf(quoteId, { inline: true });
+      const blob = await getPdfBlob(quote.id, { inline: true });
       const objectUrl = URL.createObjectURL(blob);
       const previewWindow = window.open(objectUrl, "_blank", "noopener,noreferrer");
 
@@ -380,9 +486,126 @@ export function QuotesPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed opening quote PDF preview.");
     } finally {
-      setPreviewingQuoteId((current) => (current === quoteId ? null : current));
+      setPdfActionLoading(null);
     }
   }
+
+  async function downloadQuotePdf(quote: Quote) {
+    setPdfActionLoading("download");
+    setError(null);
+
+    try {
+      const blob = await getPdfBlob(quote.id);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `${fileLabel(quote.title)}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      setNotice("PDF downloaded.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed downloading quote PDF.");
+    } finally {
+      setPdfActionLoading(null);
+    }
+  }
+
+  async function recordOutboundAndMarkSent(quote: Quote, channel: "email" | "sms" | "copy", draft: { subject: string; body: string }) {
+    await api.quotes.decision(quote.id, "send");
+    await api.quotes.outboundEvents.create(quote.id, {
+      channel: mapSendChannelToOutboundChannel(channel),
+      destination: channel === "email" ? quote.customer?.email ?? undefined : channel === "sms" ? quote.customer?.phone : undefined,
+      subject: draft.subject,
+      body: draft.body,
+    });
+    await loadAll();
+  }
+
+  async function openQuoteInApp(quote: Quote, channel: "email" | "sms") {
+    if (!quote.customer) {
+      setError("This quote is missing customer information.");
+      return;
+    }
+
+    if (channel === "email" && !quote.customer.email) {
+      setError("This customer does not have an email address yet.");
+      return;
+    }
+
+    if (channel === "sms" && !quote.customer.phone) {
+      setError("This customer does not have a phone number yet.");
+      return;
+    }
+
+    setPdfActionLoading(channel);
+    setError(null);
+
+    try {
+      const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
+      await recordOutboundAndMarkSent(quote, channel, draft);
+
+      if (channel === "email") {
+        const mailto = `mailto:${quote.customer.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+        window.location.assign(mailto);
+        setNotice("Email app opened. Download the PDF first if you want to attach it.");
+      } else {
+        window.location.assign(`sms:${quote.customer.phone}?&body=${encodeURIComponent(draft.body)}`);
+        setNotice("Text app opened. Download the PDF first if you want to share the file separately.");
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Failed opening ${channel} app.`);
+    } finally {
+      setPdfActionLoading(null);
+    }
+  }
+
+  async function shareQuotePdfNatively(quote: Quote) {
+    if (!quote.customer) {
+      setError("This quote is missing customer information.");
+      return;
+    }
+
+    setPdfActionLoading("native-share");
+    setError(null);
+
+    try {
+      const blob = await getPdfBlob(quote.id);
+      const file = new File([blob], `${fileLabel(quote.title)}.pdf`, { type: "application/pdf" });
+
+      if (!supportsNativeFileShare(file)) {
+        throw new Error("Native PDF sharing is not available on this device.");
+      }
+
+      const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
+      await navigator.share({
+        title: draft.subject,
+        text: draft.body,
+        files: [file],
+      });
+
+      await recordOutboundAndMarkSent(quote, "copy", draft);
+      setNotice("Native share sheet opened with the quote PDF.");
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Failed opening share sheet.");
+    } finally {
+      setPdfActionLoading(null);
+    }
+  }
+
+  const canUseNativeShare = useMemo(() => {
+    if (!pdfActionQuote) return false;
+    try {
+      const testFile = new File([new Blob(["test"], { type: "application/pdf" })], "quote.pdf", { type: "application/pdf" });
+      return supportsNativeFileShare(testFile);
+    } catch {
+      return false;
+    }
+  }, [pdfActionQuote]);
 
   return (
     <div className="space-y-5">
@@ -401,10 +624,34 @@ export function QuotesPage() {
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Awaiting response" value={String(awaitingResponseQuotes.length)} hint="Quotes still waiting on the customer" />
-        <MetricCard label="Awaiting amount" value={money(awaitingAmount)} hint="Value tied up in open decisions" />
-        <MetricCard label="Avg per quote" value={money(averageQuoteValue)} hint="Average total across current quotes" />
-        <MetricCard label="Invoiced" value={String(invoicedQuotes.length)} hint={`${money(invoicedAmount)} synced to QuickBooks`} />
+        <MetricCard
+          label="Awaiting response"
+          value={String(awaitingResponseQuotes.length)}
+          hint="Quotes still waiting on the customer"
+          icon={<Send size={18} strokeWidth={2.1} />}
+          tone="orange"
+        />
+        <MetricCard
+          label="Awaiting amount"
+          value={money(awaitingAmount)}
+          hint="Value tied up in open decisions"
+          icon={<ReceiptText size={18} strokeWidth={2.1} />}
+          tone="blue"
+        />
+        <MetricCard
+          label="Avg per quote"
+          value={money(averageQuoteValue)}
+          hint="Average total across current quotes"
+          icon={<Calculator size={18} strokeWidth={2.1} />}
+          tone="slate"
+        />
+        <MetricCard
+          label="Invoiced"
+          value={String(invoicedQuotes.length)}
+          hint={`${money(invoicedAmount)} synced to QuickBooks`}
+          icon={<BadgeCheck size={18} strokeWidth={2.1} />}
+          tone="emerald"
+        />
       </div>
 
       <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 md:grid md:grid-cols-3 md:overflow-visible md:px-0 xl:grid-cols-6">
@@ -426,7 +673,7 @@ export function QuotesPage() {
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quote board</p>
             <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent quotes first</h2>
-            <p className="mt-1 text-sm text-slate-600">Open the desk for edits. Use preview when you only need to verify the customer-facing PDF.</p>
+            <p className="mt-1 text-sm text-slate-600">Open the desk for edits. Use PDF actions when you only need to preview, download, or send the customer-facing quote.</p>
           </div>
           <div className="w-full lg:w-[320px]">
             <Input
@@ -457,18 +704,8 @@ export function QuotesPage() {
               <div className="divide-y divide-slate-200">
                 {filteredQuotes.map((quote) => (
                   <div key={quote.id}>
-                    <QuoteDesktopRow
-                      quote={quote}
-                      onOpenQuote={navigateToQuote}
-                      onPreviewPdf={previewQuotePdf}
-                      previewing={previewingQuoteId === quote.id}
-                    />
-                    <QuoteMobileCard
-                      quote={quote}
-                      onOpenQuote={navigateToQuote}
-                      onPreviewPdf={previewQuotePdf}
-                      previewing={previewingQuoteId === quote.id}
-                    />
+                    <QuoteDesktopRow quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
+                    <QuoteMobileCard quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
                   </div>
                 ))}
               </div>
@@ -476,6 +713,56 @@ export function QuotesPage() {
           )}
         </div>
       </Card>
+
+      {pdfActionQuote ? (
+        <Modal open={true} onClose={() => setPdfActionQuote(null)} size="lg" ariaLabel="PDF quote actions">
+          <ModalHeader
+            title="PDF quote actions"
+            description={`${quoteNumber(pdfActionQuote.id)} · ${pdfActionQuote.customer?.fullName ?? "Customer missing"}`}
+            onClose={() => setPdfActionQuote(null)}
+          />
+          <ModalBody className="space-y-5">
+            <div className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">
+                <FileText size={22} strokeWidth={2} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-900">{pdfActionQuote.title}</p>
+                <p className="mt-1 text-sm text-slate-600">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Preview first if you want to verify the layout. Download if you want a file to attach. Email and text actions open the device apps directly.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button variant="outline" icon={<Eye size={14} />} loading={pdfActionLoading === "preview"} onClick={() => void previewQuotePdf(pdfActionQuote)}>
+                Preview PDF
+              </Button>
+              <Button variant="outline" icon={<FileText size={14} />} loading={pdfActionLoading === "download"} onClick={() => void downloadQuotePdf(pdfActionQuote)}>
+                Download PDF
+              </Button>
+              <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "email"} onClick={() => void openQuoteInApp(pdfActionQuote, "email")}>
+                Email App
+              </Button>
+              <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "sms"} onClick={() => void openQuoteInApp(pdfActionQuote, "sms")}>
+                Text App
+              </Button>
+              {canUseNativeShare ? (
+                <Button className="sm:col-span-2" variant="secondary" icon={<Share2 size={14} />} loading={pdfActionLoading === "native-share"} onClick={() => void shareQuotePdfNatively(pdfActionQuote)}>
+                  Share PDF
+                </Button>
+              ) : null}
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" onClick={() => setPdfActionQuote(null)} disabled={pdfActionLoading !== null}>
+              Close
+            </Button>
+          </ModalFooter>
+        </Modal>
+      ) : null}
     </div>
   );
 }
+
