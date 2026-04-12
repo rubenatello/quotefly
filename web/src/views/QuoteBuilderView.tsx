@@ -372,7 +372,7 @@ export function QuoteBuilderView() {
           <Card variant="default" padding="md">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
-                <div className="grid gap-3 sm:grid-cols-3 xl:max-w-[420px]">
+                <div className="grid gap-4 sm:gap-3 sm:grid-cols-3 xl:max-w-[420px]">
                   <BuilderSnapshotCard label="Customers" value={String(customerCount)} tone="blue" />
                   <BuilderSnapshotCard label="Draft Quotes" value={String(draftQuotesCount)} tone="slate" />
                   <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
@@ -393,7 +393,7 @@ export function QuoteBuilderView() {
                     />
                   </div>
                 ) : null}
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 lg:gap-3">
                   {builderTabs.map((tab) => {
                     const active = tab.id === activeBuilderTab;
                     return (
@@ -401,7 +401,7 @@ export function QuoteBuilderView() {
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveBuilderTab(tab.id)}
-                        className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                        className={`inline-flex items-center rounded-full border px-4 py-2.5 text-sm font-medium transition sm:px-3 sm:py-1.5 min-h-[44px] sm:min-h-0 ${
                           active
                             ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
                             : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
@@ -415,7 +415,7 @@ export function QuoteBuilderView() {
               </div>
 
               <div className="xl:w-[320px]">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 md:sticky md:top-24">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current state</p>
                   <p className="mt-2 text-base font-semibold text-slate-900">
                     {activeCustomer ? activeCustomer.fullName : "No customer selected"}

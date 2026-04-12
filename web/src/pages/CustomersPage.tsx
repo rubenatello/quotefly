@@ -292,14 +292,14 @@ function CustomerMobileCard({
         </div>
       </div>
 
-      <div className="grid gap-2 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
-        <div>
+      <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
+        <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Phone</p>
-          <p className="mt-1 break-all">{customer.phone}</p>
+          <p className="mt-1 truncate">{customer.phone}</p>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</p>
-          <p className="mt-1 break-all text-slate-600">{customer.email ?? "No email"}</p>
+          <p className="mt-1 truncate text-slate-600">{customer.email ?? "No email"}</p>
         </div>
       </div>
 

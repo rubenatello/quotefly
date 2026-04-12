@@ -42,16 +42,16 @@ export function BottomTabBar() {
               key={tab.path}
               type="button"
               onClick={() => navigate(tab.path)}
-              className={`flex flex-col items-center justify-center gap-0.5 py-2.5 text-[10px] font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center py-2.5 text-[10px] font-medium transition-colors ${
                 active
                   ? "text-quotefly-blue"
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              <span className={`inline-flex items-center justify-center rounded-2xl p-2 ${active ? "bg-quotefly-blue/[0.08]" : ""}`}>
+              <span className={`mb-1 inline-flex items-center justify-center rounded-xl p-1.5 ${active ? "bg-quotefly-blue/[0.08]" : ""}`}>
                 {tab.icon}
               </span>
-              {tab.label}
+              <span className="w-full truncate px-1 text-center leading-none">{tab.label}</span>
             </button>
           );
         })}

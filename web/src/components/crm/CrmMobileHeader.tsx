@@ -23,30 +23,30 @@ export function CrmMobileHeader({
   planName,
 }: CrmMobileHeaderProps) {
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/92 px-4 py-3 shadow-[0_12px_30px_rgba(15,23,42,0.06)] backdrop-blur-xl lg:hidden">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/92 px-[max(1rem,env(safe-area-inset-left))] py-3 pr-[max(1rem,env(safe-area-inset-right))] shadow-[0_4px_24px_rgba(15,23,42,0.06)] backdrop-blur-xl lg:hidden">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             onClick={onToggleMobile}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm"
           >
             {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
           </button>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 rounded-xl" />
+              <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 shrink-0 rounded-lg" />
               <p className="truncate text-sm font-semibold text-slate-900">{currentLabel}</p>
             </div>
             <p className="truncate text-xs text-slate-500">{planName ?? "QuoteFly workspace"}</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onOpenCommand}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm"
             aria-label="Open workspace search"
           >
             <Search size={17} />

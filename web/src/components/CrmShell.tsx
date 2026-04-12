@@ -247,6 +247,7 @@ export function CrmShell({
           </div>
 
           {children}
+          <div className="pb-24 lg:pb-0" />
           <CrmLayoutFooter />
         </div>
       </div>

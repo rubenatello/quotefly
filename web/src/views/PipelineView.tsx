@@ -134,7 +134,7 @@ function QueueTabs({
   onChange: (tab: QueueTab) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex overflow-x-auto gap-2 pb-2 -mx-4 px-4 snap-x sm:mx-0 sm:px-0 sm:pb-0 sm:flex-wrap sm:overflow-visible hide-scrollbar relative">
       {tabs.map((tab) => {
         const active = tab.key === activeTab;
         return (
@@ -142,7 +142,7 @@ function QueueTabs({
             key={tab.key}
             type="button"
             onClick={() => onChange(tab.key)}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+            className={`shrink-0 snap-start inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
               active
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
                 : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
@@ -230,11 +230,11 @@ function QueueRow({
           <p className="font-medium text-slate-700">{nextActionLabel(lead, actionKind)}</p>
         </div>
 
-        <div className="flex flex-col gap-2 lg:items-end">
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center lg:mt-0 lg:flex-col lg:items-end">
           {lead.quoteId ? (
-            <Button size="sm" variant="outline" onClick={() => onNavigateToQuote(lead.quoteId!)}>Open Quote</Button>
+            <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => onNavigateToQuote(lead.quoteId!)}>Open Quote</Button>
           ) : (
-            <Button size="sm" variant="outline" disabled>Draft Needed</Button>
+            <Button size="sm" variant="outline" disabled className="w-full sm:w-auto">Draft Needed</Button>
           )}
 
           {actionKind === "follow_up" ? (
@@ -244,7 +244,7 @@ function QueueRow({
               disabled={saving}
               onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
               options={FOLLOW_UP_OPTIONS}
-              className="min-w-[150px]"
+              className="w-full sm:w-auto min-w-[150px]"
             />
           ) : actionKind === "job_status" ? (
             <Select
@@ -255,7 +255,7 @@ function QueueRow({
                 lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { jobStatus: event.target.value as QuoteJobStatus })
               }
               options={JOB_STATUS_OPTIONS}
-              className="min-w-[150px]"
+              className="w-full sm:w-auto min-w-[150px]"
             />
           ) : actionKind === "after_sale" ? (
             <Select
@@ -266,7 +266,7 @@ function QueueRow({
                 lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus })
               }
               options={AFTER_SALE_OPTIONS}
-              className="min-w-[150px]"
+              className="w-full sm:w-auto min-w-[150px]"
             />
           ) : null}
         </div>
