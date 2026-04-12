@@ -46,7 +46,11 @@ export function buildServer() {
   app.decorate("prisma", prisma);
   app.decorate("env", env);
 
-  app.register(cors, { origin: true });
+  app.register(cors, {
+    origin: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  });
   app.register(formbody);
   app.register(fastifyRawBody, {
     field: "rawBody",
