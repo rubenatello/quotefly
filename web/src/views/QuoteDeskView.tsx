@@ -1,6 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
+  ChevronDown,
+  ChevronUp,
   Eye,
   FileOutput,
   Mail,
@@ -640,14 +642,15 @@ export function QuoteDeskView() {
                 ) : null}
                 <div className="divide-y divide-slate-200">
                   {editableLines.map((line, index) => (
-                    <ExistingLineEditorRow
-                      key={line.id}
-                      line={line}
-                      index={index}
-                      dirty={dirtyLineIds.includes(line.id)}
-                      onChange={updateEditableLine}
-                      onSave={saveLine}
-                      onDelete={() => setLineItemPendingDeleteId(line.id)}
+                  <ExistingLineEditorRow
+                    key={line.id}
+                    line={line}
+                    index={index}
+                    dirty={dirtyLineIds.includes(line.id)}
+                    startExpanded={dirtyLineIds.includes(line.id)}
+                    onChange={updateEditableLine}
+                    onSave={saveLine}
+                    onDelete={() => setLineItemPendingDeleteId(line.id)}
                     />
                   ))}
                 </div>
@@ -716,6 +719,30 @@ export function QuoteDeskView() {
                   </Button>
                 </div>
               </Card>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "quote" ? (
+        <div className="lg:hidden">
+          <div className="h-24" />
+          <div className="fixed inset-x-4 bottom-20 z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+            <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+              <span>{lineItemCount} line{lineItemCount === 1 ? "" : "s"}</span>
+              <span>Total {money(totalAmount)}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                icon={mobilePane === "preview" ? <ChevronDown size={14} /> : <Eye size={14} />}
+                onClick={() => setMobilePane((current) => (current === "editor" ? "preview" : "editor"))}
+              >
+                {mobilePane === "preview" ? "Edit Quote" : "Preview"}
+              </Button>
+              <Button loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
+                Save Quote
+              </Button>
             </div>
           </div>
         </div>
@@ -981,6 +1008,7 @@ function ExistingLineEditorRow({
   line,
   index,
   dirty,
+  startExpanded,
   onChange,
   onSave,
   onDelete,
@@ -988,39 +1016,64 @@ function ExistingLineEditorRow({
   line: EditableQuoteLine;
   index: number;
   dirty: boolean;
+  startExpanded?: boolean;
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onSave: (lineId: string) => Promise<void>;
   onDelete: () => void;
 }) {
+  const [expanded, setExpanded] = useState(startExpanded ?? false);
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
+
+  useEffect(() => {
+    setExpanded(startExpanded ?? false);
+  }, [line.id, startExpanded]);
 
   return (
     <div className="px-4 py-4">
       <div className="lg:hidden">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
-            {dirty ? <Badge tone="amber">Unsaved</Badge> : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void onSave(line.id)} disabled={!dirty}>
-              Save
-            </Button>
-            <Button size="sm" variant="ghost" onClick={onDelete}>
-              Remove
-            </Button>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <Input label="Line" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} />
-          <Textarea label="Description" rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
-          <div className="grid grid-cols-3 gap-2">
-            <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-            <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-            <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-900">
-            Line total {money(lineTotal)}
+        <div className="rounded-2xl border border-slate-200 bg-slate-50">
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
+                {dirty ? <Badge tone="amber">Unsaved</Badge> : null}
+              </div>
+              <p className="truncate text-sm font-semibold text-slate-900">{line.title.trim() || "Untitled line"}</p>
+              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span>Qty {line.quantity}</span>
+                <span>Price {money(line.unitPrice)}</span>
+                <span>Total {money(lineTotal)}</span>
+              </div>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
+              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </span>
+          </button>
+          <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
+            <div className="mb-2 flex items-center justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={() => void onSave(line.id)} disabled={!dirty}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onDelete}>
+                Remove
+              </Button>
+            </div>
+            <div className="space-y-3">
+              <Input label="Line" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} />
+              <Textarea label="Description" rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
+              <div className="grid grid-cols-3 gap-2">
+                <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+                <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+                <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
+                Line total {money(lineTotal)}
+              </div>
+            </div>
           </div>
         </div>
       </div>
