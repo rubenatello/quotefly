@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import type { Customer, Quote } from "../lib/api";
 
 type CustomerStage = "NEW" | "CONTACTED" | "QUOTED" | "WORKING" | "SOLD";
+
+type CustomerRow = {
+  customer: Customer;
+  latestQuote: Quote | null;
+  stage: CustomerStage;
+};
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
 
@@ -16,8 +22,24 @@ function stageLabel(stage: CustomerStage) {
   return "Sold";
 }
 
+function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald" {
+  if (stage === "NEW") return "slate";
+  if (stage === "CONTACTED") return "blue";
+  if (stage === "QUOTED") return "orange";
+  return "emerald";
+}
+
 function quoteNumber(quoteId: string) {
   return `QF-${quoteId.slice(0, 8).toUpperCase()}`;
+}
+
+function customerInitials(fullName: string) {
+  return fullName
+    .split(" ")
+    .map((part) => part[0] ?? "")
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 }
 
 function getLatestQuoteMap(quotes: Quote[]) {
@@ -57,45 +79,187 @@ function stageIndex(stage: CustomerStage) {
   return CUSTOMER_STAGE_ORDER.indexOf(stage);
 }
 
-function CustomerStageProgress({ stage }: { stage: CustomerStage }) {
+function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
   const activeIndex = stageIndex(stage);
 
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {CUSTOMER_STAGE_ORDER.map((item, index) => {
-        const active = index === activeIndex;
-        const complete = index < activeIndex;
-        return (
-          <span
-            key={item}
-            className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
-              active
-                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                : complete
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-slate-200 bg-white text-slate-400"
-            }`}
-          >
-            {stageLabel(item)}
-          </span>
-        );
-      })}
+    <div className="space-y-2">
+      <div className="flex items-center gap-1.5">
+        {CUSTOMER_STAGE_ORDER.map((item, index) => {
+          const active = index === activeIndex;
+          const complete = index < activeIndex;
+          return (
+            <div key={item} className="flex min-w-0 flex-1 items-center gap-1.5">
+              <span
+                className={`h-2.5 min-w-2.5 flex-1 rounded-full ${
+                  active
+                    ? "bg-quotefly-blue"
+                    : complete
+                      ? "bg-emerald-500"
+                      : "bg-slate-200"
+                }`}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={stageTone(stage)}>{stageLabel(stage)}</Badge>
+        <div className="hidden flex-wrap gap-1 sm:flex">
+          {CUSTOMER_STAGE_ORDER.map((item, index) => (
+            <span
+              key={item}
+              className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                index <= activeIndex ? "text-slate-700" : "text-slate-400"
+              }`}
+            >
+              {stageLabel(item)}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-function StageCountCard({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+function StageCountCard({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl border px-3 py-3 text-left transition ${
+      className={`min-w-[132px] rounded-xl border px-3 py-3 text-left transition ${
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
       }`}
     >
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
       <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{count}</p>
     </button>
+  );
+}
+
+function CustomerDesktopRow({
+  row,
+  onOpenQuote,
+  onStartQuote,
+}: {
+  row: CustomerRow;
+  onOpenQuote: (quoteId: string) => void;
+  onStartQuote: (customerId: string) => void;
+}) {
+  const { customer, latestQuote, stage } = row;
+
+  return (
+    <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_260px_118px] gap-4 px-4 py-3 lg:grid lg:items-center">
+      <div className="min-w-0">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+            {customerInitials(customer.fullName)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
+            <p className="mt-1 truncate text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="truncate text-sm text-slate-700">{customer.phone}</div>
+
+      <div className="min-w-0">
+        {customer.email ? (
+          <p className="truncate text-sm text-slate-600">{customer.email}</p>
+        ) : (
+          <p className="text-sm text-slate-400">No email</p>
+        )}
+      </div>
+
+      <div className="min-w-0 space-y-2">
+        <CustomerPipelineMini stage={stage} />
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          {latestQuote ? (
+            <span className="truncate">{quoteNumber(latestQuote.id)} · {latestQuote.title}</span>
+          ) : (
+            <span>No quote yet</span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        {latestQuote ? (
+          <Button size="sm" variant="outline" onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => onStartQuote(customer.id)}>Start</Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CustomerMobileCard({
+  row,
+  onOpenQuote,
+  onStartQuote,
+}: {
+  row: CustomerRow;
+  onOpenQuote: (quoteId: string) => void;
+  onStartQuote: (customerId: string) => void;
+}) {
+  const { customer, latestQuote, stage } = row;
+
+  return (
+    <div className="space-y-3 px-4 py-4 lg:hidden">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex items-center gap-3">
+          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+            {customerInitials(customer.fullName)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
+            <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
+          </div>
+        </div>
+        <Badge tone={stageTone(stage)}>{stageLabel(stage)}</Badge>
+      </div>
+
+      <div className="grid gap-2 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Phone</p>
+          <p className="mt-1 break-all">{customer.phone}</p>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</p>
+          <p className="mt-1 break-all text-slate-600">{customer.email ?? "No email"}</p>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pipeline</p>
+        <div className="mt-2">
+          <CustomerPipelineMini stage={stage} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Latest quote</p>
+        <p className="mt-1 font-medium text-slate-900">{latestQuote ? quoteNumber(latestQuote.id) : "No quote yet"}</p>
+        <p className="mt-1 text-xs text-slate-500">{latestQuote?.title ?? "Start a quote when this customer is ready."}</p>
+      </div>
+
+      {latestQuote ? (
+        <Button fullWidth variant="outline" onClick={() => onOpenQuote(latestQuote.id)}>Open Quote</Button>
+      ) : (
+        <Button fullWidth variant="outline" onClick={() => onStartQuote(customer.id)}>Start Quote</Button>
+      )}
+    </div>
   );
 }
 
@@ -131,7 +295,7 @@ export function CustomersPage() {
           customer,
           latestQuote,
           stage,
-        };
+        } satisfies CustomerRow;
       })
       .sort((left, right) => new Date(right.customer.updatedAt).getTime() - new Date(left.customer.updatedAt).getTime());
   }, [customers, latestQuoteByCustomer]);
@@ -151,13 +315,13 @@ export function CustomersPage() {
       if (!matchesStage) return false;
       if (!normalizedSearch) return true;
 
-        const haystack = [
-          row.customer.fullName,
-          row.customer.phone,
-          row.customer.email ?? "",
-          row.latestQuote?.title ?? "",
-          row.latestQuote ? quoteNumber(row.latestQuote.id) : "",
-        ]
+      const haystack = [
+        row.customer.fullName,
+        row.customer.phone,
+        row.customer.email ?? "",
+        row.latestQuote?.title ?? "",
+        row.latestQuote ? quoteNumber(row.latestQuote.id) : "",
+      ]
         .join(" ")
         .toLowerCase();
 
@@ -176,7 +340,7 @@ export function CustomersPage() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 md:grid md:grid-cols-3 md:overflow-visible md:px-0 xl:grid-cols-6">
         <StageCountCard label="All" count={customerRows.length} active={stageFilter === "ALL"} onClick={() => setStageFilter("ALL")} />
         {CUSTOMER_STAGE_ORDER.map((stage) => (
           <StageCountCard
@@ -194,7 +358,7 @@ export function CustomersPage() {
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer board</p>
             <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent customers first</h2>
-            <p className="mt-1 text-sm text-slate-600">Use this as the operating table. Open quotes when they exist, or start a new one when they do not.</p>
+            <p className="mt-1 max-w-3xl text-sm text-slate-600">Use this as the operating table. Open quotes when they exist, or start a new one when they do not.</p>
           </div>
           <div className="w-full lg:w-[320px]">
             <Input
@@ -214,7 +378,7 @@ export function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.4fr)_160px_220px_320px_120px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[minmax(0,1.45fr)_156px_220px_260px_118px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
@@ -222,40 +386,18 @@ export function CustomersPage() {
                 <span>Action</span>
               </div>
               <div className="divide-y divide-slate-200">
-                {filteredRows.map(({ customer, latestQuote, stage }) => (
-                  <div key={customer.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.4fr)_160px_220px_320px_120px] lg:items-center">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
-                          {customer.fullName
-                            .split(" ")
-                            .map((part) => part[0] ?? "")
-                            .join("")
-                            .slice(0, 2)
-                            .toUpperCase()}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
-                          <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-sm text-slate-700">{customer.phone}</div>
-                    <div className="min-w-0 text-sm text-slate-600">{customer.email ?? <span className="text-slate-400">No email</span>}</div>
-                    <div className="space-y-2">
-                      <CustomerStageProgress stage={stage} />
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <Badge tone={stage === "SOLD" ? "emerald" : stage === "WORKING" ? "blue" : stage === "QUOTED" ? "orange" : "slate"}>{stageLabel(stage)}</Badge>
-                        {latestQuote ? <span>{quoteNumber(latestQuote.id)}</span> : <span>No quote yet</span>}
-                      </div>
-                    </div>
-                    <div className="flex justify-start lg:justify-end">
-                      {latestQuote ? (
-                        <Button size="sm" variant="outline" onClick={() => navigateToQuote(latestQuote.id)}>Open Quote</Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={() => navigateToBuilder(customer.id)}>Start Quote</Button>
-                      )}
-                    </div>
+                {filteredRows.map((row) => (
+                  <div key={row.customer.id}>
+                    <CustomerDesktopRow
+                      row={row}
+                      onOpenQuote={navigateToQuote}
+                      onStartQuote={navigateToBuilder}
+                    />
+                    <CustomerMobileCard
+                      row={row}
+                      onOpenQuote={navigateToQuote}
+                      onStartQuote={navigateToBuilder}
+                    />
                   </div>
                 ))}
               </div>
