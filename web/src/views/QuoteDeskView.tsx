@@ -1,9 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import {
-  Building2,
-  CalendarClock,
   Eye,
   FileOutput,
   Mail,
@@ -11,7 +8,6 @@ import {
   Plus,
   Save,
   Send,
-  UserRound,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import {
@@ -22,6 +18,7 @@ import {
 } from "../components/dashboard/DashboardUi";
 import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
@@ -464,59 +461,39 @@ export function QuoteDeskView() {
         </div>
       ) : null}
 
-      <Card variant="default" padding="md">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <MetaCard icon={<Building2 size={16} />} label="Business" value={session?.tenantName ?? "QuoteFly"} />
-              <MetaCard
-                icon={<UserRound size={16} />}
-                label="Customer"
-                value={customerName}
-                hint={`${customerPhone}${customerEmail ? ` · ${customerEmail}` : ""}`}
-              />
-              <MetaCard icon={<CalendarClock size={16} />} label="Prepared" value={formatDateTime(selectedQuote.createdAt)} />
-              <MetaCard icon={<Send size={16} />} label="Sent" value={sentDateLabel} />
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[180px_180px_minmax(0,1fr)]">
-              <Select
-                label="Trade"
-                value={quoteEditForm.serviceType}
-                onChange={(event) =>
-                  setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-                }
-                options={[
-                  { value: "HVAC", label: "HVAC" },
-                  { value: "PLUMBING", label: "PLUMBING" },
-                  { value: "FLOORING", label: "FLOORING" },
-                  { value: "ROOFING", label: "ROOFING" },
-                  { value: "GARDENING", label: "GARDENING" },
-                  { value: "CONSTRUCTION", label: "CONSTRUCTION" },
-                ]}
-              />
-              <Select
-                label="Quote status"
-                value={quoteEditForm.status}
-                onChange={(event) =>
-                  setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
-                }
-                options={[
-                  { value: "DRAFT", label: "Draft" },
-                  { value: "READY_FOR_REVIEW", label: "Completed" },
-                  { value: "SENT_TO_CUSTOMER", label: "Sent" },
-                  { value: "ACCEPTED", label: "Closed" },
-                  { value: "REJECTED", label: "Lost" },
-                ]}
-              />
-              <Input
-                label="Quote title"
-                value={quoteEditForm.title}
-                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, title: event.target.value }))}
-              />
-            </div>
-
-            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <Card variant="default" padding="md">
+          <div className="grid gap-3 md:grid-cols-[180px_180px_minmax(0,1fr)]">
+            <Select
+              label="Trade"
+              value={quoteEditForm.serviceType}
+              onChange={(event) =>
+                setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+              }
+              options={[
+                { value: "HVAC", label: "HVAC" },
+                { value: "PLUMBING", label: "PLUMBING" },
+                { value: "FLOORING", label: "FLOORING" },
+                { value: "ROOFING", label: "ROOFING" },
+                { value: "GARDENING", label: "GARDENING" },
+                { value: "CONSTRUCTION", label: "CONSTRUCTION" },
+              ]}
+            />
+            <Select
+              label="Quote status"
+              value={quoteEditForm.status}
+              onChange={(event) =>
+                setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
+              }
+              options={[
+                { value: "DRAFT", label: "Draft" },
+                { value: "READY_FOR_REVIEW", label: "Completed" },
+                { value: "SENT_TO_CUSTOMER", label: "Sent" },
+                { value: "ACCEPTED", label: "Closed" },
+                { value: "REJECTED", label: "Lost" },
+              ]}
+            />
+            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pt-5 md:pt-0 md:items-end md:justify-end">
               {tabs.map((tab) => (
                 <button
                   key={tab.id}
@@ -533,48 +510,54 @@ export function QuoteDeskView() {
               ))}
             </div>
           </div>
+        </Card>
 
-          <div className="space-y-5 lg:sticky lg:top-24 lg:self-start">
-            <Card variant="blue" padding="md" className="self-start">
-              <CardHeader title="Quote summary" subtitle="Internal totals, pricing health, and save actions stay here." />
-              <div className="space-y-3 text-sm">
-                <SummaryRow label="Line items" value={String(lineItemCount)} />
-                <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
-                <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-                <div className="space-y-1">
-                  <Input
-                    label="Tax"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={quoteEditForm.taxAmount}
-                    onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-                  />
-                </div>
-                <SummaryRow label="Total" value={money(totalAmount)} strong />
-                <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-                <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
-              </div>
-              <div className="mt-4 grid gap-2">
-                <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-                  Save Quote Sheet
-                </Button>
-                <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
-                  Start Another Quote
-                </Button>
-                <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} · Sent {sentDateLabel}</p>
-              </div>
-            </Card>
+        <Card variant="blue" padding="md" className="self-start">
+          <CardHeader title="Quote summary" subtitle="Internal totals, pricing health, and save actions stay here." />
+          <div className="space-y-3 text-sm">
+            <SummaryRow label="Line items" value={String(lineItemCount)} />
+            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
+            <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+            <div className="space-y-1">
+              <Input
+                label="Tax"
+                type="number"
+                min="0"
+                step="0.01"
+                value={quoteEditForm.taxAmount}
+                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+              />
+            </div>
+            <SummaryRow label="Total" value={money(totalAmount)} strong />
+            <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
+            <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
           </div>
-        </div>
-      </Card>
+          <div className="mt-4 grid gap-2">
+            <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
+              Save Quote Sheet
+            </Button>
+            <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+              Start Another Quote
+            </Button>
+            <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} · Sent {sentDateLabel}</p>
+          </div>
+        </Card>
+      </div>
 
       {activeTab === "quote" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <Card variant="default" padding="md" className={mobilePane === "preview" ? "hidden lg:block" : ""}>
-            <CardHeader
-              title="Quote editor"
-              subtitle="Edit the quote the same way it will read on paper: title, description, then one line at a time."
+          <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
+            <QuoteSheetEditor
+              title={quoteEditForm.title}
+              onTitleChange={(value) => setQuoteEditForm((prev) => ({ ...prev, title: value }))}
+              businessName={session?.tenantName ?? "QuoteFly"}
+              customerName={customerName}
+              customerHint={`${customerPhone}${customerEmail ? ` / ${customerEmail}` : ""}`}
+              preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+              sentDateLabel={sentDateLabel}
+              overview={quoteEditForm.scopeText}
+              onOverviewChange={(value) => setQuoteEditForm((prev) => ({ ...prev, scopeText: value }))}
+              overviewPlaceholder="Optional overview shown near the top of the quote."
               actions={
                 dirtyLineIds.length ? (
                   <Badge tone="amber">{dirtyLineIds.length} line edit{dirtyLineIds.length === 1 ? "" : "s"} pending</Badge>
@@ -582,17 +565,7 @@ export function QuoteDeskView() {
                   <Badge tone="blue">Line editor live</Badge>
                 )
               }
-            />
-
-            <div className="space-y-4">
-              <Textarea
-                label="Quote description"
-                rows={3}
-                placeholder="Optional overview shown near the top of the quote."
-                value={quoteEditForm.scopeText}
-                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, scopeText: event.target.value }))}
-              />
-
+            >
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
@@ -684,8 +657,8 @@ export function QuoteDeskView() {
                 <CardHeader title="Add line" subtitle="Use this row to insert a new charge into the quote." />
                 <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} />
               </Card>
-            </div>
-          </Card>
+            </QuoteSheetEditor>
+          </div>
 
           <div className="space-y-5">
             <div className={mobilePane === "editor" ? "hidden lg:block" : ""}>
@@ -975,29 +948,6 @@ export function QuoteDeskView() {
           </ModalFooter>
         </Modal>
       ) : null}
-    </div>
-  );
-}
-
-function MetaCard({
-  icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  hint?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-        <span className="text-quotefly-blue">{icon}</span>
-        {label}
-      </div>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
     </div>
   );
 }

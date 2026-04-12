@@ -1,17 +1,10 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  Building2,
-  CalendarClock,
-  Eye,
-  FileText,
-  Plus,
-  Sparkles,
-  UserRound,
-} from "lucide-react";
+﻿import { useEffect, useMemo, useState } from "react";
+import { Eye, Plus, Sparkles } from "lucide-react";
 import { FeatureLockedCard } from "../components/dashboard/DashboardUi";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import {
   Alert,
@@ -389,115 +382,87 @@ export function QuoteBuilderView() {
         ))}
       </div>
 
-      <Card variant="default" padding="md">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <MetaCard icon={<Building2 size={16} />} label="Business" value={session?.tenantName ?? "QuoteFly"} />
-              <MetaCard
-                icon={<UserRound size={16} />}
-                label="Customer"
-                value={activeCustomer?.fullName ?? "Select customer"}
-                hint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` · ${activeCustomer.email}` : ""}` : "Use an existing customer or add one fast."}
-              />
-              <MetaCard icon={<CalendarClock size={16} />} label="Prepared" value={preparedDateLabel} />
-              <MetaCard icon={<FileText size={16} />} label="Sent" value="N/A" hint="Set after the quote is sent." />
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-              <Select
-                label="Customer"
-                value={quoteForm.customerId}
-                onChange={(event) => selectQuoteCustomer(event.target.value)}
-                options={customerOptions}
-                placeholder="Select customer"
-              />
-              <div className="flex items-end">
-                <Button fullWidth variant="outline" icon={<Plus size={14} />} onClick={() => setQuickCustomerOpen(true)}>
-                  Add Customer
-                </Button>
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
-              <Select
-                label="Trade"
-                value={quoteForm.serviceType}
-                onChange={(event) =>
-                  setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-                }
-                options={[
-                  { value: "HVAC", label: "HVAC" },
-                  { value: "PLUMBING", label: "PLUMBING" },
-                  { value: "FLOORING", label: "FLOORING" },
-                  { value: "ROOFING", label: "ROOFING" },
-                  { value: "GARDENING", label: "GARDENING" },
-                  { value: "CONSTRUCTION", label: "CONSTRUCTION" },
-                ]}
-              />
-              <Input
-                label="Quote title"
-                placeholder="Asphalt shingle roof replacement"
-                value={quoteForm.title}
-                onChange={(event) => setQuoteForm((prev) => ({ ...prev, title: event.target.value }))}
-              />
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <Card variant="default" padding="md">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
+            <Select
+              label="Customer"
+              value={quoteForm.customerId}
+              onChange={(event) => selectQuoteCustomer(event.target.value)}
+              options={customerOptions}
+              placeholder="Select customer"
+            />
+            <Select
+              label="Trade"
+              value={quoteForm.serviceType}
+              onChange={(event) =>
+                setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+              }
+              options={[
+                { value: "HVAC", label: "HVAC" },
+                { value: "PLUMBING", label: "PLUMBING" },
+                { value: "FLOORING", label: "FLOORING" },
+                { value: "ROOFING", label: "ROOFING" },
+                { value: "GARDENING", label: "GARDENING" },
+                { value: "CONSTRUCTION", label: "CONSTRUCTION" },
+              ]}
+            />
+            <div className="flex items-end">
+              <Button fullWidth variant="outline" icon={<Plus size={14} />} onClick={() => setQuickCustomerOpen(true)}>
+                Add Customer
+              </Button>
             </div>
           </div>
+        </Card>
 
-          <Card variant="blue" padding="md" className="self-start">
-            <CardHeader title="Quote totals" subtitle="The sheet calculates from the lines below." />
-            <div className="space-y-3 text-sm">
-              <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
-              <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-              <div className="space-y-1">
-                <Input
-                  label="Tax"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={quoteForm.taxAmount}
-                  onChange={(event) => setQuoteForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-                />
-              </div>
-              <SummaryRow label="Total" value={money(totalAmount)} strong />
-              <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-              <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+        <Card variant="blue" padding="md" className="self-start">
+          <CardHeader title="Quote totals" subtitle="Internal math stays visible while you build." />
+          <div className="space-y-3 text-sm">
+            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
+            <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+            <div className="space-y-1">
+              <Input
+                label="Tax"
+                type="number"
+                min="0"
+                step="0.01"
+                value={quoteForm.taxAmount}
+                onChange={(event) => setQuoteForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+              />
             </div>
-            <div className="mt-4 grid gap-2">
-              <Button fullWidth loading={saving} onClick={() => void handleCreateQuote()}>
-                Create Quote
-              </Button>
-              <p className="text-xs text-slate-500">Create the quote, then continue in Quote Desk for send, revisions, and PDF actions.</p>
-            </div>
-          </Card>
-        </div>
-      </Card>
+            <SummaryRow label="Total" value={money(totalAmount)} strong />
+            <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
+            <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+          </div>
+          <div className="mt-4 grid gap-2">
+            <Button fullWidth loading={saving} onClick={() => void handleCreateQuote()}>
+              Create Quote
+            </Button>
+            <p className="text-xs text-slate-500">Create the quote, then continue in Quote Desk for send, revisions, and PDF actions.</p>
+          </div>
+        </Card>
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Card
-          variant="default"
-          padding="md"
-          className={mobilePane === "preview" ? "hidden lg:block" : ""}
-        >
-          <CardHeader
-            title="Quote sheet"
-            subtitle="Add rows the way contractors actually quote: title, description, quantity, cost, and price."
+        <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
+          <QuoteSheetEditor
+            title={quoteForm.title}
+            onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
+            titlePlaceholder="Asphalt shingle roof replacement"
+            businessName={session?.tenantName ?? "QuoteFly"}
+            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : "Use an existing customer or add one fast."}
+            preparedDateLabel={preparedDateLabel}
+            sentDateLabel="N/A"
+            overview={quoteForm.scopeText}
+            onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
+            overviewPlaceholder="Optional overview shown near the top of the quote."
             actions={
               <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addBlankLine}>
                 Add line
               </Button>
             }
-          />
-
-          <div className="space-y-3">
-            <Textarea
-              label="Quote description"
-              rows={3}
-              placeholder="Optional overview that appears near the top of the quote."
-              value={quoteForm.scopeText}
-              onChange={(event) => setQuoteForm((prev) => ({ ...prev, scopeText: event.target.value }))}
-            />
-
+          >
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
@@ -577,8 +542,8 @@ export function QuoteBuilderView() {
                 ))}
               </div>
             </div>
-          </div>
-        </Card>
+          </QuoteSheetEditor>
+        </div>
 
         <div className={`space-y-5 lg:sticky lg:top-24 lg:self-start ${mobilePane === "editor" ? "hidden lg:block" : ""}`}>
           <div className="block">
@@ -697,29 +662,6 @@ export function QuoteBuilderView() {
           />
         </ModalBody>
       </Modal>
-    </div>
-  );
-}
-
-function MetaCard({
-  icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  hint?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-        <span className="text-quotefly-blue">{icon}</span>
-        {label}
-      </div>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
     </div>
   );
 }
