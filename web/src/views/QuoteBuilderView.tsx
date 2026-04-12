@@ -6,6 +6,7 @@ import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
+import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
 import {
   Alert,
   Badge,
@@ -52,6 +53,7 @@ export function QuoteBuilderView() {
   const [draftLines, setDraftLines] = useState<EditableQuoteLine[]>([makeEditableQuoteLine()]);
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const {
@@ -469,8 +471,13 @@ export function QuoteBuilderView() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Common work names</p>
                   <p className="mt-1 text-sm text-slate-600">Load standard jobs or your saved work names into the quote sheet.</p>
                 </div>
+                <div className="lg:hidden">
+                  <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
+                    Browse jobs
+                  </Button>
+                </div>
                 {selectedPreset ? (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="hidden flex-col gap-2 sm:flex-row sm:items-end lg:flex">
                     <div className="sm:w-24">
                       <Input
                         label={formatPresetUnitLabel(selectedPreset.unitType)}
@@ -490,7 +497,36 @@ export function QuoteBuilderView() {
 
               {presetLoadError ? <p className="mt-3 text-xs text-red-600">{presetLoadError}</p> : null}
 
-              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              {selectedPreset ? (
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 lg:hidden">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {money(selectedPreset.unitPrice)} / {formatPresetUnitLabel(selectedPreset.unitType)}
+                      </p>
+                    </div>
+                    {selectedPreset.catalogKey ? <Badge tone="blue">Standard</Badge> : <Badge tone="slate">Saved</Badge>}
+                  </div>
+                  <div className="mt-3 grid grid-cols-[96px_minmax(0,1fr)] gap-2">
+                    <Input
+                      label={formatPresetUnitLabel(selectedPreset.unitType)}
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={selectedPresetQuantity}
+                      onChange={(event) => setSelectedPresetQuantity(event.target.value)}
+                    />
+                    <div className="flex items-end">
+                      <Button fullWidth size="sm" variant="outline" onClick={() => applyPresetToDraft(selectedPreset)}>
+                        Load selected job
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 lg:flex">
                 {presetsLoading ? (
                   <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work…</div>
                 ) : availablePresets.length ? (
@@ -660,6 +696,22 @@ export function QuoteBuilderView() {
         onClose={dismissPresetPrompt}
         onSaveFull={() => void saveDraftLineAsPreset(true)}
         onSaveNameOnly={() => void saveDraftLineAsPreset(false)}
+      />
+
+      <WorkPresetPickerModal
+        open={presetPickerOpen}
+        onClose={() => setPresetPickerOpen(false)}
+        presets={availablePresets}
+        selectedPresetId={selectedPresetId}
+        onSelectPreset={setSelectedPresetId}
+        quantity={selectedPresetQuantity}
+        onQuantityChange={setSelectedPresetQuantity}
+        primaryActionLabel="Load selected job"
+        onPrimaryAction={() => {
+          if (!selectedPreset) return;
+          applyPresetToDraft(selectedPreset);
+          setPresetPickerOpen(false);
+        }}
       />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
