@@ -94,6 +94,7 @@ export interface TenantBrandingRow {
   id: string;
   tenantId: string;
   logoUrl: string | null;
+  logoPosition: "left" | "center" | "right";
   primaryColor: string;
   templateId: string;
   businessEmail: string | null;

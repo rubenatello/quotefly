@@ -159,6 +159,7 @@ export type LeadFollowUpStatus = "NEEDS_FOLLOW_UP" | "FOLLOWED_UP" | "WON" | "LO
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
 export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
+export type BrandingLogoPosition = "left" | "center" | "right";
 export type BrandingComponentColors = {
   headerBgColor?: string;
   headerTextColor?: string;
@@ -561,6 +562,7 @@ export const api = {
               primaryColor: string;
               templateId: BrandingTemplateId;
               logoUrl?: string | null;
+              logoPosition?: BrandingLogoPosition;
               businessEmail?: string | null;
               businessPhone?: string | null;
               addressLine1?: string | null;
@@ -579,6 +581,7 @@ export const api = {
       tenantId: string,
       body: {
         logoUrl?: string | null;
+        logoPosition: BrandingLogoPosition;
         primaryColor: string;
         templateId: BrandingTemplateId;
         timezone: string;
@@ -595,6 +598,7 @@ export const api = {
           primaryColor: string;
           templateId: BrandingTemplateId;
           logoUrl?: string | null;
+          logoPosition: BrandingLogoPosition;
           businessEmail?: string | null;
           businessPhone?: string | null;
           addressLine1?: string | null;

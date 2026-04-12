@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -19,6 +22,7 @@ import {
   ApiError,
   type BrandingBusinessProfile,
   type BrandingComponentColors,
+  type BrandingLogoPosition,
   type BrandingTemplateId,
 } from "../lib/api";
 import { Badge, Button, Input, PageHeader, ProgressBar, Select } from "../components/ui";
@@ -43,6 +47,13 @@ interface TemplateOption {
 interface BrandingSectionConfig {
   id: BrandingSectionId;
   title: string;
+  description: string;
+  icon: LucideIcon;
+}
+
+interface LogoPositionOption {
+  value: BrandingLogoPosition;
+  label: string;
   description: string;
   icon: LucideIcon;
 }
@@ -118,6 +129,27 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
     preview: "bg-orange-50",
     headerStyle: "card",
     bestFor: "Traditional contractors",
+  },
+];
+
+const LOGO_POSITION_OPTIONS: LogoPositionOption[] = [
+  {
+    value: "left",
+    label: "Top Left",
+    description: "Good for compact contractor marks.",
+    icon: AlignLeft,
+  },
+  {
+    value: "center",
+    label: "Top Center",
+    description: "Best for badge or stacked logos.",
+    icon: AlignCenter,
+  },
+  {
+    value: "right",
+    label: "Top Right",
+    description: "Good for cleaner corporate headers.",
+    icon: AlignRight,
   },
 ];
 
@@ -429,6 +461,93 @@ function TemplateMiniPreview({
   );
 }
 
+function PreviewQuoteHeader({
+  template,
+  companyName,
+  logo,
+  logoPosition,
+  headerColor,
+  headerTextColor,
+}: {
+  template: TemplateOption;
+  companyName: string;
+  logo: string | null;
+  logoPosition: BrandingLogoPosition;
+  headerColor: string;
+  headerTextColor: string;
+}) {
+  const logoRowClass =
+    logoPosition === "center"
+      ? "justify-center"
+      : logoPosition === "right"
+        ? "justify-end"
+        : "justify-start";
+  const contentAlignClass =
+    logoPosition === "center"
+      ? "items-center text-center"
+      : logoPosition === "right"
+        ? "items-end text-right"
+        : "items-start text-left";
+  const headingColor = template.headerStyle === "block" ? headerTextColor : "#0f172a";
+  const subtitleColor =
+    template.headerStyle === "block" ? "text-white/70" : "text-slate-500";
+  const metaToneClass =
+    template.headerStyle === "block" ? "text-white/75 border-white/15" : "text-slate-500 border-slate-200";
+
+  return (
+    <div
+      className={`mb-6 overflow-hidden ${
+        template.headerStyle === "minimal"
+          ? "border-b border-slate-300 pb-5"
+          : template.headerStyle === "block"
+            ? "rounded-[24px] border border-slate-900/10 shadow-sm"
+            : "rounded-[24px] border border-slate-200 shadow-sm"
+      } ${template.headerStyle === "card" ? "bg-slate-50" : "bg-white"}`}
+      style={template.headerStyle === "block" ? { backgroundColor: headerColor } : undefined}
+    >
+      {template.headerStyle === "bar" ? (
+        <div className="h-1.5" style={{ backgroundColor: headerColor }} />
+      ) : null}
+
+      <div className={`relative px-5 py-5 sm:px-6 ${template.headerStyle === "card" ? "sm:pl-9" : ""}`}>
+        {template.headerStyle === "card" ? (
+          <div
+            className="absolute bottom-5 left-5 top-5 hidden w-1 rounded-full sm:block"
+            style={{ backgroundColor: headerColor }}
+          />
+        ) : null}
+
+        <div className={`flex ${logoRowClass}`}>
+          {logo ? (
+            <img
+              src={logo}
+              alt="Logo"
+              className={`object-contain ${template.headerStyle === "minimal" ? "h-10 max-w-[120px]" : "h-12 max-w-[140px]"} rounded bg-white/90 p-1.5`}
+            />
+          ) : (
+            <div className={`rounded-2xl border border-dashed ${template.headerStyle === "block" ? "border-white/30 bg-white/10" : "border-slate-200 bg-slate-50"} h-12 w-12`} />
+          )}
+        </div>
+
+        <div className={`mt-4 flex flex-col ${contentAlignClass}`}>
+          <h4
+            className={`font-display ${template.headerStyle === "minimal" ? "text-[1.25rem]" : "text-[1.45rem]"} font-semibold tracking-tight`}
+            style={{ color: headingColor }}
+          >
+            {companyName}
+          </h4>
+          <p className={`mt-1 text-sm ${subtitleColor}`}>Customer quote</p>
+        </div>
+
+        <div className={`mt-5 flex items-center justify-between gap-4 border-t pt-3 text-[12px] font-medium ${metaToneClass}`}>
+          <span>Prepared April 10, 2026</span>
+          <span>Quote #12345</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function BrandingPage({ tenantId }: BrandingPageProps) {
   useEffect(() => {
     setSEOMetadata({
@@ -445,6 +564,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
   const [companyName, setCompanyName] = useState("QuoteFly Services");
   const [logo, setLogo] = useState<string | null>(null);
+  const [logoPosition, setLogoPosition] = useState<BrandingLogoPosition>("left");
   const [brandColor, setBrandColor] = useState("#5B85AA");
   const [timezone, setTimezone] = useState(browserTimezone);
   const [businessProfile, setBusinessProfile] = useState<BrandingBusinessProfile>(EMPTY_BUSINESS_PROFILE);
@@ -474,6 +594,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
         setBrandColor(branding.primaryColor);
         setSelectedTemplate(branding.templateId);
+        setLogoPosition(branding.logoPosition ?? "left");
         setComponentColors(branding.componentColors ?? {});
         setBusinessProfile(normalizeBusinessProfile(branding));
         if (branding.logoUrl) {
@@ -548,6 +669,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
 
       await api.branding.save(effectiveTenantId, {
         logoUrl: logo ?? null,
+        logoPosition,
         primaryColor: brandColor,
         templateId: selectedTemplate,
         timezone,
@@ -617,6 +739,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const previewHeaderColor = getComponentColorValue("headerBgColor");
+  const previewHeaderTextColor = getComponentColorValue("headerTextColor");
   const previewSectionTitleColor = getComponentColorValue("sectionTitleColor");
   const previewTableHeaderColor = getComponentColorValue("tableHeaderBgColor");
   const previewTableHeaderTextColor = getComponentColorValue("tableHeaderTextColor");
@@ -651,6 +774,10 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Logo</p>
                   <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? "Uploaded" : "Optional"}</p>
+                </div>
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Placement</p>
+                  <p className="mt-2 text-sm font-semibold capitalize text-slate-900">{logoPosition}</p>
                 </div>
               </div>
               <ProgressBar
@@ -788,8 +915,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
               completionLabel={sectionCompletionLabel.logo}
               onToggle={() => toggleSection("logo")}
             >
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-                <div>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <div className="space-y-4">
                   {logo ? (
                     <div className="flex min-h-[180px] items-center justify-center rounded-xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
                       <img src={logo} alt="Your logo" className="max-h-28 max-w-full object-contain" />
@@ -804,6 +931,49 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                       </div>
                     </label>
                   )}
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <p className="text-sm font-semibold text-slate-900">Logo placement</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Choose where the logo sits in the quote header. The live preview and PDF use the same position.
+                    </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      {LOGO_POSITION_OPTIONS.map((option) => {
+                        const Icon = option.icon;
+                        const active = logoPosition === option.value;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setLogoPosition(option.value)}
+                            className={`rounded-[20px] border px-4 py-3 text-left transition ${
+                              active
+                                ? "border-quotefly-blue bg-quotefly-blue/[0.06] shadow-[0_10px_24px_rgba(42,127,216,0.10)]"
+                                : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                            }`}
+                            aria-pressed={active}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`inline-flex h-9 w-9 items-center justify-center rounded-2xl border ${
+                                  active
+                                    ? "border-quotefly-blue/20 bg-white text-quotefly-blue"
+                                    : "border-slate-200 bg-white text-slate-500"
+                                }`}
+                              >
+                                <Icon size={16} />
+                              </span>
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">{option.label}</p>
+                                <p className="text-xs text-slate-500">{option.description}</p>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -984,71 +1154,14 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-white p-8 text-black">
-                {activeTemplate.headerStyle === "bar" && (
-                  <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                    <div className="h-2" style={{ backgroundColor: previewHeaderColor }} />
-                    <div className="flex items-start justify-between p-4">
-                      <div>
-                        {logo ? (
-                          <img src={logo} alt="Logo" className="mb-2 h-12 rounded bg-white p-1" />
-                        ) : (
-                          <div className="mb-2 h-12 w-12 rounded bg-slate-100" />
-                        )}
-                        <h4 className="mt-2 text-lg font-bold text-slate-900">{companyName}</h4>
-                        <p className="mt-1 text-xs text-slate-500">Customer quote</p>
-                      </div>
-                      <div className="text-right text-sm text-slate-600">
-                        <p className="font-semibold text-slate-900">Quote #12345</p>
-                        <p>April 10, 2026</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {activeTemplate.headerStyle === "card" && (
-                  <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-1.5 rounded-full" style={{ backgroundColor: previewHeaderColor }} />
-                        {logo ? (
-                          <img src={logo} alt="Logo" className="h-10 rounded bg-slate-100 p-1" />
-                        ) : (
-                          <div className="h-10 w-10 rounded bg-slate-200" />
-                        )}
-                        <div>
-                          <p className="text-base font-semibold" style={{ color: previewHeaderColor }}>
-                            {companyName}
-                          </p>
-                          <p className="text-xs text-slate-500">Quote #12345</p>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-500">April 10, 2026</p>
-                    </div>
-                  </div>
-                )}
-
-                {activeTemplate.headerStyle === "block" && (
-                  <div className="mb-6 rounded-xl bg-slate-900 p-5 text-white">
-                    <div className="mb-3 h-1.5 rounded-full" style={{ backgroundColor: previewHeaderColor }} />
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xl font-bold tracking-wide">{companyName}</h4>
-                      <p className="text-sm">Quote #12345</p>
-                    </div>
-                    <p className="mt-2 text-sm text-white/70">Prepared on April 10, 2026</p>
-                  </div>
-                )}
-
-                {activeTemplate.headerStyle === "minimal" && (
-                  <div className="mb-6 border-b border-slate-300 pb-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-lg font-semibold" style={{ color: previewHeaderColor }}>
-                        {companyName}
-                      </h4>
-                      <p className="text-xs text-slate-500">Quote #12345</p>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-600">Customer-facing quote preview</p>
-                  </div>
-                )}
+                <PreviewQuoteHeader
+                  template={activeTemplate}
+                  companyName={companyName}
+                  logo={logo}
+                  logoPosition={logoPosition}
+                  headerColor={previewHeaderColor}
+                  headerTextColor={previewHeaderTextColor}
+                />
 
                 <div className="mb-6 grid gap-4 md:grid-cols-2">
                   <div className="rounded-lg border border-slate-200 bg-white/70 p-4">

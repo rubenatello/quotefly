@@ -19,8 +19,8 @@ export default {
         "quotefly-warning": "#d97706",
       },
       fontFamily: {
-        "sans": ["Inter", "sans-serif"],
-        "display": ["Poppins", "sans-serif"],
+        "sans": ["Manrope", "sans-serif"],
+        "display": ["Space Grotesk", "sans-serif"],
       },
     },
   },

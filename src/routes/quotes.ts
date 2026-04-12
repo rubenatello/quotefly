@@ -1482,6 +1482,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 templateId: true,
                 primaryColor: true,
                 logoUrl: true,
+                logoPosition: true,
                 businessEmail: true,
                 businessPhone: true,
                 addressLine1: true,
@@ -1526,6 +1527,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         templateId: quote.tenant.branding?.templateId ?? "modern",
         primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
         logoUrl: quote.tenant.branding?.logoUrl ?? null,
+        logoPosition:
+          quote.tenant.branding?.logoPosition === "center" || quote.tenant.branding?.logoPosition === "right"
+            ? quote.tenant.branding.logoPosition
+            : "left",
         businessEmail: quote.tenant.branding?.businessEmail ?? null,
         businessPhone: quote.tenant.branding?.businessPhone ?? null,
         addressLine1: quote.tenant.branding?.addressLine1 ?? null,

@@ -39,6 +39,8 @@ const BrandingComponentColorsSchema = z
   .nullable()
   .optional();
 
+const LogoPositionSchema = z.enum(["left", "center", "right"]);
+
 const BusinessProfileSchema = z
   .object({
     businessEmail: NullableEmailSchema,
@@ -53,6 +55,7 @@ const BusinessProfileSchema = z
 
 const UpsertBrandingSchema = z.object({
   logoUrl: z.union([z.string().url(), DataImageUrlSchema]).optional().nullable(),
+  logoPosition: LogoPositionSchema.default("left"),
   primaryColor: HexColorSchema.default("#5B85AA"),
   templateId: z.enum(["modern", "professional", "bold", "minimal", "classic"]).default("modern"),
   timezone: z.string().trim().min(1).max(100).default("UTC"),
@@ -86,6 +89,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           branding: {
             select: {
               logoUrl: true,
+              logoPosition: true,
               primaryColor: true,
               templateId: true,
               businessEmail: true,
@@ -149,6 +153,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           create: {
             tenantId,
             logoUrl: payload.logoUrl ?? null,
+            logoPosition: payload.logoPosition,
             primaryColor: payload.primaryColor,
             templateId: payload.templateId,
             businessEmail: businessProfile.businessEmail ?? null,
@@ -162,6 +167,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           },
           update: {
             logoUrl: payload.logoUrl ?? null,
+            logoPosition: payload.logoPosition,
             primaryColor: payload.primaryColor,
             templateId: payload.templateId,
             businessEmail: businessProfile.businessEmail ?? null,
@@ -175,6 +181,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           },
           select: {
             logoUrl: true,
+            logoPosition: true,
             primaryColor: true,
             templateId: true,
             businessEmail: true,

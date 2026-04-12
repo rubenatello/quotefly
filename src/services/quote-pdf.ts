@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 
 export type QuotePdfTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
+export type QuotePdfLogoPosition = "left" | "center" | "right";
 
 export interface QuoteComponentColors {
   headerBgColor?: string;
@@ -44,6 +45,7 @@ export interface QuotePdfData {
     templateId: string;
     primaryColor: string;
     logoUrl: string | null;
+    logoPosition?: QuotePdfLogoPosition | null;
     businessEmail?: string | null;
     businessPhone?: string | null;
     addressLine1?: string | null;
@@ -71,6 +73,13 @@ interface ThemeDefinition {
   accentColor: string;
   secondaryColor: string;
   textDark: string;
+}
+
+interface HeaderFrame {
+  top: number;
+  height: number;
+  textColor: string;
+  metaColor: string;
 }
 
 const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
@@ -184,6 +193,11 @@ function safeTemplateId(templateId: string): QuotePdfTemplateId {
   return "modern";
 }
 
+function safeLogoPosition(value: string | null | undefined): QuotePdfLogoPosition {
+  if (value === "center" || value === "right") return value;
+  return "left";
+}
+
 function safeHexColor(color: string, fallback: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : fallback;
 }
@@ -259,77 +273,90 @@ function writeHeader(
   const width = right - left;
   const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
   const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
+  const logoPosition = safeLogoPosition(data.branding.logoPosition);
 
-  if (theme.headerStyle === "bar") {
-    doc.rect(0, 0, doc.page.width, 8).fill(colors.headerBgColor);
-    if (logoBuffer) {
-      try {
-        doc.image(logoBuffer, left, 26, { fit: [84, 52] });
-      } catch {
-        // Ignore bad image payloads and continue without logo rendering.
-      }
+  const drawFrame = (): HeaderFrame => {
+    if (theme.headerStyle === "bar") {
+      doc.roundedRect(left, 28, width, 124, 16).fillAndStroke("#ffffff", "#dbe3ef");
+      doc.rect(left, 28, width, 6).fill(colors.headerBgColor);
+      return { top: 28, height: 124, textColor: theme.textDark, metaColor: "#475569" };
     }
-    const contentLeft = left + (logoBuffer ? 98 : 0);
-    doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(20).text(data.tenant.name, contentLeft, 28);
-    doc.fillColor("#475569").font("Helvetica").fontSize(10).text("Customer quote", contentLeft, 54);
-    doc.font("Helvetica").fontSize(10).text(quoteLabel, right - 110, 30, { width: 110, align: "right" });
-    doc.text(`Prepared ${createdDate}`, right - 110, 46, { width: 110, align: "right" });
-    doc.moveTo(left, 94).lineTo(right, 94).stroke("#dbe3ef");
-    return 112;
-  }
 
-  if (theme.headerStyle === "block") {
-    doc.roundedRect(left, 28, width, 92, 12).fill(theme.secondaryColor);
-    doc.rect(left, 28, width, 6).fill(colors.headerBgColor);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(18).text(data.tenant.name, left + 16, 46);
-    doc.font("Helvetica").fontSize(10).text(quoteLabel, left + 16, 72);
-    doc.text(`Prepared ${createdDate}`, left + 16, 88);
-    if (logoBuffer) {
-      try {
-        doc.image(logoBuffer, right - 92, 46, { fit: [76, 42] });
-      } catch {
-        // Ignore bad image payloads and continue without logo rendering.
-      }
+    if (theme.headerStyle === "block") {
+      doc.roundedRect(left, 28, width, 126, 16).fill(colors.headerBgColor);
+      return {
+        top: 28,
+        height: 126,
+        textColor: colors.headerTextColor,
+        metaColor: colors.headerTextColor === "#ffffff" ? "#e2e8f0" : "#334155",
+      };
     }
-    doc.fillColor("#111111");
-    return 144;
-  }
 
-  if (theme.headerStyle === "card") {
-    doc.roundedRect(left, 30, width, 86, 12).fillAndStroke(theme.secondaryColor, "#dbe3ef");
-    doc.roundedRect(left, 30, 6, 86, 3).fill(colors.headerBgColor);
-    if (logoBuffer) {
-      try {
-        doc.image(logoBuffer, left + 20, 44, { fit: [68, 46] });
-      } catch {
-        // Ignore bad image payloads and continue without logo rendering.
-      }
+    if (theme.headerStyle === "card") {
+      doc.roundedRect(left, 28, width, 124, 16).fillAndStroke(theme.secondaryColor, "#dbe3ef");
+      doc.roundedRect(left + 18, 46, 4, 78, 2).fill(colors.headerBgColor);
+      return { top: 28, height: 124, textColor: theme.textDark, metaColor: "#475569" };
     }
-    const contentLeft = left + (logoBuffer ? 100 : 22);
-    doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(18).text(data.tenant.name, contentLeft, 46);
-    doc.fillColor("#475569").font("Helvetica").fontSize(10).text("Customer quote", contentLeft, 68);
-    doc.fillColor(theme.textDark).font("Helvetica").fontSize(10).text(quoteLabel, right - 110, 46, { width: 96, align: "right" });
-    doc.fillColor("#475569").text(`Prepared ${createdDate}`, right - 110, 64, { width: 96, align: "right" });
-    doc.fillColor("#111111");
-    return 136;
-  }
 
-  doc.fillColor(theme.textDark).font("Helvetica-Bold").fontSize(22).text(data.tenant.name, left, 40);
-  doc.font("Helvetica").fontSize(10).fillColor("#475569").text(quoteLabel, right - 110, 42, {
-    width: 110,
-    align: "right",
-  });
-  doc.text(`Prepared ${createdDate}`, right - 110, 58, { width: 110, align: "right" });
+    doc.moveTo(left, 114).lineTo(right, 114).stroke(colors.headerBgColor);
+    return { top: 28, height: 92, textColor: theme.textDark, metaColor: "#64748b" };
+  };
+
+  const frame = drawFrame();
+  const innerLeft = left + 18;
+  const innerRight = right - 18;
+  const contentWidth = innerRight - innerLeft;
+  const logoFit: [number, number] = theme.headerStyle === "minimal" ? [80, 42] : [92, 48];
+  const logoTop = frame.top + 18;
+  let logoBottom = logoTop;
+
   if (logoBuffer) {
+    let logoX = innerLeft;
+    if (logoPosition === "center") {
+      logoX = left + (width - logoFit[0]) / 2;
+    } else if (logoPosition === "right") {
+      logoX = innerRight - logoFit[0];
+    }
+
     try {
-      doc.image(logoBuffer, right - 96, 72, { fit: [84, 52] });
+      doc.image(logoBuffer, logoX, logoTop, { fit: logoFit });
+      logoBottom = logoTop + logoFit[1];
     } catch {
       // Ignore bad image payloads and continue without logo rendering.
     }
   }
-  doc.moveTo(left, 84).lineTo(right, 84).stroke(colors.headerBgColor);
+
+  const hasLogo = Boolean(logoBuffer);
+  const headingAlign = logoPosition === "center" ? "center" : logoPosition === "right" ? "right" : "left";
+  const headingTop = hasLogo ? logoBottom + 8 : frame.top + 24;
+  const headingX = innerLeft;
+  const headingWidth = contentWidth;
+  const subtitle = "Customer quote";
+  const metaTop = Math.min(frame.top + frame.height - 28, headingTop + 42);
+
+  doc.fillColor(frame.textColor).font("Helvetica-Bold").fontSize(theme.headerStyle === "minimal" ? 20 : 21);
+  doc.text(data.tenant.name, headingX, headingTop, {
+    width: headingWidth,
+    align: headingAlign,
+  });
+
+  doc.fillColor(frame.metaColor).font("Helvetica").fontSize(10);
+  doc.text(subtitle, headingX, headingTop + 22, {
+    width: headingWidth,
+    align: headingAlign,
+  });
+
+  doc.text(`Prepared ${createdDate}`, innerLeft, metaTop, {
+    width: contentWidth / 2,
+    align: "left",
+  });
+  doc.text(quoteLabel, innerLeft + contentWidth / 2, metaTop, {
+    width: contentWidth / 2,
+    align: "right",
+  });
+
   doc.fillColor("#111111");
-  return 108;
+  return frame.top + frame.height + 20;
 }
 
 function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, sectionTitleColor: string): number {

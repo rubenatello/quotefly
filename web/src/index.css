@@ -9,8 +9,8 @@
   --color-quotefly-blue: #5B85AA;
   --color-quotefly-orange: #F46036;
   --color-quotefly-gold: #414770;
-  --font-sans: "Inter", sans-serif;
-  --font-display: "Poppins", sans-serif;
+  --font-sans: "Manrope", sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
 }
 
 :root {
@@ -41,9 +41,19 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "Inter", "Segoe UI", sans-serif;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+  font-feature-settings: "ss01" 1, "cv10" 1, "cv11" 1;
   color: #0f172a;
   background: #f8fafc;
+}
+
+h1,
+h2,
+h3,
+h4,
+.font-display {
+  font-family: "Space Grotesk", "Manrope", sans-serif;
 }
 
 #root {
@@ -56,6 +66,12 @@ img {
 }
 
 button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
   font: inherit;
 }
 
