@@ -45,6 +45,8 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   return "Qty";
 }
 
+type BuilderPane = "editor" | "preview";
+
 export function QuoteBuilderView() {
   usePageView("quote_builder");
   const track = useTrack();
@@ -58,6 +60,7 @@ export function QuoteBuilderView() {
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const {
     session,
     customers,
@@ -366,6 +369,26 @@ export function QuoteBuilderView() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
+      <div className="flex gap-2 lg:hidden">
+        {([
+          { id: "editor", label: "Edit quote" },
+          { id: "preview", label: "Preview" },
+        ] as const).map((pane) => (
+          <button
+            key={pane.id}
+            type="button"
+            onClick={() => setMobilePane(pane.id)}
+            className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition ${
+              mobilePane === pane.id
+                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                : "border-slate-200 bg-white text-slate-700"
+            }`}
+          >
+            {pane.label}
+          </button>
+        ))}
+      </div>
+
       <Card variant="default" padding="md">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
           <div className="space-y-4">
@@ -451,7 +474,11 @@ export function QuoteBuilderView() {
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Card variant="default" padding="md">
+        <Card
+          variant="default"
+          padding="md"
+          className={mobilePane === "preview" ? "hidden lg:block" : ""}
+        >
           <CardHeader
             title="Quote sheet"
             subtitle="Add rows the way contractors actually quote: title, description, quantity, cost, and price."
@@ -553,8 +580,8 @@ export function QuoteBuilderView() {
           </div>
         </Card>
 
-        <div className="space-y-5 lg:sticky lg:top-24 lg:self-start">
-          <div className="hidden lg:block">
+        <div className={`space-y-5 lg:sticky lg:top-24 lg:self-start ${mobilePane === "editor" ? "hidden lg:block" : ""}`}>
+          <div className="block">
             <QuoteLivePreview
               businessName={session?.tenantName ?? "QuoteFly"}
               customerName={activeCustomer?.fullName ?? "Select customer"}
@@ -571,47 +598,60 @@ export function QuoteBuilderView() {
             />
           </div>
 
-          <Card variant="default" padding="md">
-            <CardHeader title="Create checklist" subtitle="Keep the quote clean before you create it." />
-            <div className="space-y-2 text-sm text-slate-700">
-              <ChecklistItem complete={Boolean(activeCustomer)} label="Customer selected" />
-              <ChecklistItem complete={Boolean(quoteForm.title.trim())} label="Quote title added" />
-              <ChecklistItem complete={filteredDraftLines.length > 0} label={`${filteredDraftLines.length || 0} quote line${filteredDraftLines.length === 1 ? "" : "s"} ready`} />
-              <ChecklistItem complete={customerSubtotal > 0} label="Price totals calculated" />
+          <Card variant="blue" padding="md">
+            <CardHeader title="Quote totals" subtitle="This is what the customer sees on the document." />
+            <div className="space-y-3 text-sm">
+              <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+              <SummaryRow label="Tax" value={money(taxAmount)} />
+              <SummaryRow label="Total" value={money(totalAmount)} strong />
             </div>
           </Card>
 
-          {canUseChatToQuote ? (
+          <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
             <Card variant="default" padding="md">
-              <CardHeader
-                title="AI quick start"
-                subtitle={`Use AI for a fast first draft on ${currentPlanLabel}. You can still clean everything up here line by line.`}
-              />
-              {aiQuoteLimit !== null ? (
-                <Badge tone="blue">{session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} AI drafts this month</Badge>
-              ) : null}
-              <form className="mt-3 space-y-3" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
-                <Textarea
-                  label="Prompt"
-                  rows={6}
-                  placeholder="New quote for Alan Johnson..."
-                  value={chatPrompt}
-                  onChange={(event) => setChatPrompt(event.target.value)}
-                />
-                <Button fullWidth loading={saving} icon={<Sparkles size={14} />}>
-                  Draft With AI
-                </Button>
-              </form>
+              <CardHeader title="Create checklist" subtitle="Keep the quote clean before you create it." />
+              <div className="space-y-2 text-sm text-slate-700">
+                <ChecklistItem complete={Boolean(activeCustomer)} label="Customer selected" />
+                <ChecklistItem complete={Boolean(quoteForm.title.trim())} label="Quote title added" />
+                <ChecklistItem complete={filteredDraftLines.length > 0} label={`${filteredDraftLines.length || 0} quote line${filteredDraftLines.length === 1 ? "" : "s"} ready`} />
+                <ChecklistItem complete={customerSubtotal > 0} label="Price totals calculated" />
+              </div>
             </Card>
-          ) : (
-            <FeatureLockedCard
-              title="AI draft helper"
-              description="AI-assisted quote drafting is not active on this workspace yet."
-              currentPlanLabel={currentPlanLabel}
-              requiredPlanLabel="Starter"
-              showUpgradeHint={canAutoUpgradeMessage}
-            />
-          )}
+
+            {canUseChatToQuote ? (
+              <Card variant="default" padding="md" className="mt-5">
+                <CardHeader
+                  title="AI quick start"
+                  subtitle={`Use AI for a fast first draft on ${currentPlanLabel}. You can still clean everything up here line by line.`}
+                />
+                {aiQuoteLimit !== null ? (
+                  <Badge tone="blue">{session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} AI drafts this month</Badge>
+                ) : null}
+                <form className="mt-3 space-y-3" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
+                  <Textarea
+                    label="Prompt"
+                    rows={6}
+                    placeholder="New quote for Alan Johnson..."
+                    value={chatPrompt}
+                    onChange={(event) => setChatPrompt(event.target.value)}
+                  />
+                  <Button fullWidth loading={saving} icon={<Sparkles size={14} />}>
+                    Draft With AI
+                  </Button>
+                </form>
+              </Card>
+            ) : (
+              <div className="mt-5">
+                <FeatureLockedCard
+                  title="AI draft helper"
+                  description="AI-assisted quote drafting is not active on this workspace yet."
+                  currentPlanLabel={currentPlanLabel}
+                  requiredPlanLabel="Starter"
+                  showUpgradeHint={canAutoUpgradeMessage}
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

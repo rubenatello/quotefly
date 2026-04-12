@@ -60,6 +60,7 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
 }
 
 type DeskTab = "quote" | "send" | "history" | "log";
+type DeskPane = "editor" | "preview";
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
@@ -76,6 +77,7 @@ export function QuoteDeskView() {
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const {
     session,
     selectedQuoteId,
@@ -158,6 +160,7 @@ export function QuoteDeskView() {
 
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
+    setMobilePane("editor");
   }, [selectedQuote?.id, selectedQuote?.updatedAt]);
 
   const availablePresets = useMemo(
@@ -439,6 +442,28 @@ export function QuoteDeskView() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
+      {activeTab === "quote" ? (
+        <div className="flex gap-2 lg:hidden">
+          {([
+            { id: "editor", label: "Edit quote" },
+            { id: "preview", label: "Preview" },
+          ] as const).map((pane) => (
+            <button
+              key={pane.id}
+              type="button"
+              onClick={() => setMobilePane(pane.id)}
+              className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition ${
+                mobilePane === pane.id
+                  ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                  : "border-slate-200 bg-white text-slate-700"
+              }`}
+            >
+              {pane.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <Card variant="default" padding="md">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-4">
@@ -510,26 +535,10 @@ export function QuoteDeskView() {
           </div>
 
           <div className="space-y-5 lg:sticky lg:top-24 lg:self-start">
-            <div className="hidden lg:block">
-              <QuoteLivePreview
-                businessName={session?.tenantName ?? "QuoteFly"}
-                customerName={customerName}
-                customerPhone={customerPhone}
-                customerEmail={customerEmail}
-                preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
-                sentDateLabel={sentDateLabel}
-                quoteTitle={quoteEditForm.title}
-                scopeText={quoteEditForm.scopeText}
-                lines={previewLines}
-                customerSubtotal={customerSubtotal}
-                taxAmount={taxAmount}
-                totalAmount={totalAmount}
-              />
-            </div>
-
             <Card variant="blue" padding="md" className="self-start">
-              <CardHeader title="Quote totals" subtitle="Saved rows drive the sheet totals." />
+              <CardHeader title="Quote summary" subtitle="Internal totals, pricing health, and save actions stay here." />
               <div className="space-y-3 text-sm">
+                <SummaryRow label="Line items" value={String(lineItemCount)} />
                 <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
                 <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
                 <div className="space-y-1">
@@ -562,7 +571,7 @@ export function QuoteDeskView() {
 
       {activeTab === "quote" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <Card variant="default" padding="md">
+          <Card variant="default" padding="md" className={mobilePane === "preview" ? "hidden lg:block" : ""}>
             <CardHeader
               title="Quote editor"
               subtitle="Edit the quote the same way it will read on paper: title, description, then one line at a time."
@@ -679,34 +688,62 @@ export function QuoteDeskView() {
           </Card>
 
           <div className="space-y-5">
-            <QuickLookupCard
-              title="Switch Customer or Quote"
-              subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the quote desk."
-              customerActionLabel="New Quote"
-              customerActionVariant="outline"
-              activeCustomerId={selectedQuote.customerId}
-              activeQuoteId={selectedQuote.id}
-              onCustomerAction={(customer) => {
-                setNotice(`${customer.fullName} is ready for a new quote.`);
-                navigateToBuilder(customer.id);
-              }}
-              onQuoteAction={(quote) => navigateToQuote(quote.id)}
-            />
+            <div className={mobilePane === "editor" ? "hidden lg:block" : ""}>
+              <QuoteLivePreview
+                businessName={session?.tenantName ?? "QuoteFly"}
+                customerName={customerName}
+                customerPhone={customerPhone}
+                customerEmail={customerEmail}
+                preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+                sentDateLabel={sentDateLabel}
+                quoteTitle={quoteEditForm.title}
+                scopeText={quoteEditForm.scopeText}
+                lines={previewLines}
+                customerSubtotal={customerSubtotal}
+                taxAmount={taxAmount}
+                totalAmount={totalAmount}
+              />
+            </div>
 
-            <Card variant="default" padding="md">
-              <CardHeader title="Quote status" subtitle="Move the quote forward without leaving the editor." />
-              <div className="grid gap-2">
-                <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "SENT_TO_CUSTOMER" })}>
-                  Mark sent
-                </Button>
-                <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" })}>
-                  Mark closed / won
-                </Button>
-                <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "REJECTED" })}>
-                  Mark lost
-                </Button>
+            <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden lg:block" : ""}>
+              <CardHeader title="Customer-facing totals" subtitle="This is what the customer sees on the document." />
+              <div className="space-y-3 text-sm">
+                <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+                <SummaryRow label="Tax" value={money(taxAmount)} />
+                <SummaryRow label="Total" value={money(totalAmount)} strong />
               </div>
             </Card>
+
+            <div className={`space-y-5 ${mobilePane === "preview" ? "hidden lg:block" : ""}`}>
+              <QuickLookupCard
+                title="Switch Customer or Quote"
+                subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the quote desk."
+                customerActionLabel="New Quote"
+                customerActionVariant="outline"
+                activeCustomerId={selectedQuote.customerId}
+                activeQuoteId={selectedQuote.id}
+                onCustomerAction={(customer) => {
+                  setNotice(`${customer.fullName} is ready for a new quote.`);
+                  navigateToBuilder(customer.id);
+                }}
+                onQuoteAction={(quote) => navigateToQuote(quote.id)}
+              />
+
+              <Card variant="default" padding="md">
+                <CardHeader title="Quote status" subtitle="Move the quote forward without leaving the editor." />
+                <div className="grid gap-2">
+                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "SENT_TO_CUSTOMER" })}>
+                    Mark sent
+                  </Button>
+                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" })}>
+                    Mark closed / won
+                  </Button>
+                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "REJECTED" })}>
+                    Mark lost
+                  </Button>
+                </div>
+              </Card>
+            </div>
           </div>
         </div>
       ) : null}
