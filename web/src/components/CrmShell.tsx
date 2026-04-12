@@ -7,15 +7,13 @@ import { cn } from "../lib/utils";
 import {
   ClockIcon,
   CustomerIcon,
-  EditIcon,
   InvoiceIcon,
-  MessageIcon,
   QuoteIcon,
   SettingsIcon,
 } from "./Icons";
 import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmCommandPalette } from "./crm/CrmCommandPalette";
-import { CrmSidebar, type CrmModuleLink, type CrmNavLink } from "./crm/CrmSidebar";
+import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
 import { Badge } from "./ui";
 
@@ -33,61 +31,29 @@ interface CrmShellProps {
 }
 
 const OPERATIONS_LINKS: readonly CrmNavLink[] = [
-  { label: "Pipeline", path: "pipeline", icon: <CustomerIcon size={15} /> },
-  { label: "Build Quote", path: "build", icon: <EditIcon size={15} /> },
-  { label: "Quote Desk", path: "quotes", icon: <QuoteIcon size={15} /> },
-  { label: "Setup", path: "setup", icon: <EditIcon size={14} /> },
+  { label: "Analytics", path: "analytics", icon: <ClockIcon size={15} /> },
   { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
-  { label: "Admin", path: "admin", icon: <SettingsIcon size={14} /> },
+  { label: "Customers", path: "customers", icon: <CustomerIcon size={15} /> },
+  { label: "Quotes", path: "quotes", icon: <QuoteIcon size={15} /> },
 ] as const;
 
-const MODULE_LINKS: readonly CrmModuleLink[] = [
-  {
-    label: "Quote History",
-    path: "history",
-    feature: "quoteVersionHistory",
-    requiredPlanLabel: "Professional+",
-    icon: <ClockIcon size={14} />,
-  },
-  {
-    label: "Comms Log",
-    path: "quotes",
-    feature: "communicationLog",
-    requiredPlanLabel: "Professional+",
-    icon: <MessageIcon size={14} />,
-  },
-  {
-    label: "Advanced Analytics",
-    path: "pipeline",
-    feature: "advancedAnalytics",
-    requiredPlanLabel: "Professional+",
-    icon: <CustomerIcon size={14} />,
-  },
-  {
-    label: "API & Integrations",
-    path: "admin",
-    feature: "apiAccess",
-    requiredPlanLabel: "Enterprise",
-    icon: <SettingsIcon size={14} />,
-  },
+const SETTINGS_LINKS: readonly CrmNavLink[] = [
+  { label: "Org", path: "settings", icon: <SettingsIcon size={14} /> },
+  { label: "Users", path: "settings-users", icon: <CustomerIcon size={14} /> },
 ];
 
 const PAGE_META: Record<string, { label: string; hint: string }> = {
-  pipeline: {
-    label: "Pipeline",
-    hint: "Prioritize leads, follow-ups, and closed work.",
+  customers: {
+    label: "Customers",
+    hint: "Track customer progress from new to sold in one board.",
   },
-  build: {
-    label: "Build Quote",
-    hint: "Create customers, draft quotes, and prep exports quickly.",
+  analytics: {
+    label: "Analytics",
+    hint: "See quote and pipeline performance at a glance.",
   },
   quotes: {
-    label: "Quote Desk",
-    hint: "Edit, send, sync, and close active quotes.",
-  },
-  history: {
-    label: "Quote History",
-    hint: "Track revisions, outbound actions, and final outcomes.",
+    label: "Quotes",
+    hint: "Watch quote volume, status, value, and open the desk when needed.",
   },
   setup: {
     label: "Setup",
@@ -97,9 +63,13 @@ const PAGE_META: Record<string, { label: string; hint: string }> = {
     label: "Branding",
     hint: "Control templates, sender details, and PDF styling.",
   },
-  admin: {
-    label: "Admin",
-    hint: "Handle billing, QuickBooks, users, and workspace control.",
+  settings: {
+    label: "Settings",
+    hint: "Handle organization billing, QuickBooks, and workspace controls.",
+  },
+  "settings-users": {
+    label: "Users",
+    hint: "Manage roles, seats, and member access.",
   },
 };
 
@@ -170,7 +140,7 @@ export function CrmShell({
           onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
           onNavigate={handleNavigate}
           operationsLinks={OPERATIONS_LINKS}
-          moduleLinks={MODULE_LINKS}
+          settingsLinks={SETTINGS_LINKS}
           onLogout={onLogout}
           planName={planName}
           isTrial={isTrial}
@@ -249,9 +219,9 @@ export function CrmShell({
                       </div>
                       <div className="mt-2 space-y-1">
                         {[
-                          { label: "Open admin", page: "admin" },
+                          { label: "Open customers", page: "customers" },
+                          { label: "Open settings", page: "settings" },
                           { label: "Open branding", page: "branding" },
-                          { label: "Open setup", page: "setup" },
                         ].map((item) => (
                           <DropdownMenuPrimitive.Item
                             key={item.page}

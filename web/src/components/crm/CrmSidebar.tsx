@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
-import { CloseIcon, LockIcon } from "../Icons";
+import { CloseIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { AppTooltip, AppTooltipProvider } from "../ui/tooltip";
 import { ProgressBar } from "../ui";
@@ -12,14 +12,6 @@ export interface CrmNavLink {
   icon: ReactNode;
 }
 
-export interface CrmModuleLink {
-  label: string;
-  path?: string;
-  feature: keyof TenantEntitlements["features"];
-  requiredPlanLabel: string;
-  icon: ReactNode;
-}
-
 interface CrmSidebarProps {
   currentPage: string;
   mobileOpen: boolean;
@@ -27,7 +19,7 @@ interface CrmSidebarProps {
   onToggleCollapse: () => void;
   onNavigate: (page: string) => void;
   operationsLinks: readonly CrmNavLink[];
-  moduleLinks: readonly CrmModuleLink[];
+  settingsLinks: readonly CrmNavLink[];
   onLogout: () => void;
   planName?: string;
   isTrial?: boolean;
@@ -55,7 +47,7 @@ export function CrmSidebar({
   onToggleCollapse,
   onNavigate,
   operationsLinks,
-  moduleLinks,
+  settingsLinks,
   onLogout,
   planName,
   isTrial,
@@ -64,8 +56,6 @@ export function CrmSidebar({
 }: CrmSidebarProps) {
   const displayPlanName = planName ?? "Starter";
   const showTrialBadge = Boolean(isTrial);
-  const isFeatureUnlocked = (feature: keyof TenantEntitlements["features"]) =>
-    Boolean(entitlements?.features?.[feature]);
 
   const sidebarWidthClass = collapsed ? "lg:w-[76px]" : "lg:w-[228px]";
   const aiQuoteLimit = entitlements?.limits.aiQuotesPerMonth ?? null;
@@ -157,26 +147,22 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed && <p className="px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Extensions</p>}
+          {!collapsed && <p className="px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p>}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
-            {moduleLinks.map((module) => {
-              const unlocked = isFeatureUnlocked(module.feature);
+            {settingsLinks.map((link) => {
+              const active = currentPage === link.path;
               const button = (
                 <button
-                  key={module.feature}
+                  key={link.path}
                   type="button"
-                  title={`${module.label}${unlocked ? "" : ` (${module.requiredPlanLabel})`}`}
-                  aria-label={`${module.label}${unlocked ? "" : ` locked: ${module.requiredPlanLabel}`}`}
-                  onClick={() => {
-                    if (unlocked && module.path) {
-                      onNavigate(module.path);
-                    }
-                  }}
+                  title={link.label}
+                  aria-label={link.label}
+                  onClick={() => onNavigate(link.path)}
                   className={cn(
                     "group flex w-full items-center rounded-xl border transition-all",
-                    unlocked
-                      ? "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900"
-                      : "cursor-not-allowed border-transparent text-slate-400",
+                    active
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900"
+                      : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900",
                     collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
@@ -185,23 +171,18 @@ export function CrmSidebar({
                       className={cn(
                         "inline-flex items-center justify-center rounded-2xl",
                         collapsed ? "h-9 w-9" : "h-8 w-8",
-                        unlocked ? "bg-slate-100 text-slate-500" : "bg-slate-100 text-slate-400",
+                        active ? "bg-white text-quotefly-blue" : "bg-slate-100 text-slate-500",
                       )}
                     >
-                      {module.icon}
+                      {link.icon}
                     </span>
-                    {!collapsed && module.label}
+                    {!collapsed && link.label}
                   </span>
                   {collapsed ? (
-                    <span className={cn("ml-1 h-2.5 w-2.5 rounded-full", unlocked ? "bg-quotefly-blue" : "bg-slate-300")} />
-                  ) : unlocked ? (
-                    <span className="rounded-full border border-quotefly-blue/20 bg-quotefly-blue/[0.06] px-2 py-0.5 text-[10px] font-medium text-quotefly-blue">
-                      On
-                    </span>
+                    <span className={cn("ml-1 h-2.5 w-2.5 rounded-full", active ? "bg-quotefly-blue" : "bg-slate-300")} />
                   ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                      <LockIcon size={10} />
-                      {module.requiredPlanLabel}
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${active ? "bg-white text-quotefly-blue" : "bg-slate-100 text-slate-500"}`}>
+                      {active ? "Open" : ""}
                     </span>
                   )}
                 </button>
@@ -209,8 +190,8 @@ export function CrmSidebar({
 
               return (
                 <SidebarTooltip
-                  key={module.feature}
-                  label={`${module.label}${unlocked ? "" : ` (${module.requiredPlanLabel})`}`}
+                  key={link.path}
+                  label={link.label}
                   collapsed={collapsed}
                 >
                   {button}

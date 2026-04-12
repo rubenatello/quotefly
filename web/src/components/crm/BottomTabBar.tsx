@@ -1,10 +1,10 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode } from "react";
 import {
-  CustomerIcon,
-  EditIcon,
-  QuoteIcon,
   ClockIcon,
+  CustomerIcon,
+  InvoiceIcon,
+  QuoteIcon,
   SettingsIcon,
 } from "../Icons";
 
@@ -15,15 +15,16 @@ interface TabItem {
 }
 
 const TABS: TabItem[] = [
-  { path: "/app", label: "Pipeline", icon: <CustomerIcon size={20} /> },
-  { path: "/app/build", label: "Build", icon: <EditIcon size={20} /> },
+  { path: "/app/customers", label: "Customers", icon: <CustomerIcon size={20} /> },
   { path: "/app/quotes", label: "Quotes", icon: <QuoteIcon size={20} /> },
-  { path: "/app/history", label: "History", icon: <ClockIcon size={20} /> },
-  { path: "/app/admin", label: "More", icon: <SettingsIcon size={20} /> },
+  { path: "/app/analytics", label: "Analytics", icon: <ClockIcon size={20} /> },
+  { path: "/app/branding", label: "Branding", icon: <InvoiceIcon size={20} /> },
+  { path: "/app/settings", label: "Settings", icon: <SettingsIcon size={20} /> },
 ];
 
 function isActive(tabPath: string, currentPath: string): boolean {
-  if (tabPath === "/app") return currentPath === "/app" || currentPath === "/app/";
+  if (tabPath === "/app/customers") return currentPath === "/app" || currentPath === "/app/" || currentPath.startsWith("/app/customers");
+  if (tabPath === "/app/quotes") return currentPath.startsWith("/app/quotes") || currentPath.startsWith("/app/build");
   return currentPath.startsWith(tabPath);
 }
 

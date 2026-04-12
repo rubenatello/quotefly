@@ -5,16 +5,15 @@ import {
   ArrowRight,
   BrushCleaning,
   FileText,
-  History,
   LayoutDashboard,
+  LineChart,
   Search,
   Settings,
-  Sparkles,
   UserRoundCog,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-type CommandPage = "pipeline" | "build" | "quotes" | "history" | "setup" | "branding" | "admin";
+type CommandPage = "customers" | "quotes" | "analytics" | "branding" | "settings" | "settings-users";
 
 interface CrmCommandPaletteProps {
   open: boolean;
@@ -32,39 +31,25 @@ type CommandItem = {
 
 const COMMAND_ITEMS: CommandItem[] = [
   {
-    label: "Pipeline",
-    description: "See new leads, quoted jobs, closed work, and follow-up.",
-    page: "pipeline",
+    label: "Customers",
+    description: "See customers in the sales pipeline from new to sold.",
+    page: "customers",
     icon: <LayoutDashboard size={16} />,
     group: "Workflow",
   },
   {
-    label: "Build Quote",
-    description: "Create customers, draft new quotes, and prep exports quickly.",
-    page: "build",
-    icon: <Sparkles size={16} />,
-    group: "Workflow",
-  },
-  {
-    label: "Quote Desk",
-    description: "Open the live quote workspace for edits, sending, and invoice sync.",
+    label: "Quotes",
+    description: "See quote KPIs and open the quote desk when a quote needs work.",
     page: "quotes",
     icon: <FileText size={16} />,
     group: "Workflow",
   },
   {
-    label: "Quote History",
-    description: "Review revisions, outbound activity, and past quotes.",
-    page: "history",
-    icon: <History size={16} />,
+    label: "Analytics",
+    description: "Track quote performance, revenue, and recent outcomes.",
+    page: "analytics",
+    icon: <LineChart size={16} />,
     group: "Workflow",
-  },
-  {
-    label: "Setup",
-    description: "Tune onboarding defaults, starter jobs, and trade settings.",
-    page: "setup",
-    icon: <Settings size={16} />,
-    group: "Workspace",
   },
   {
     label: "Branding",
@@ -74,9 +59,16 @@ const COMMAND_ITEMS: CommandItem[] = [
     group: "Workspace",
   },
   {
-    label: "Admin",
-    description: "Manage billing, QuickBooks, team members, and access.",
-    page: "admin",
+    label: "Organization Settings",
+    description: "Manage billing, QuickBooks, and workspace configuration.",
+    page: "settings",
+    icon: <Settings size={16} />,
+    group: "Workspace",
+  },
+  {
+    label: "User Settings",
+    description: "Manage team members, roles, and seat usage.",
+    page: "settings-users",
     icon: <UserRoundCog size={16} />,
     group: "Workspace",
   },
@@ -153,7 +145,7 @@ export function CrmCommandPalette({
               </span>
               <CommandPrimitive.Input
                 autoFocus
-                placeholder="Jump to pipeline, quote desk, branding, admin..."
+                placeholder="Jump to customers, quotes, analytics, branding..."
                 className="w-full border-0 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
               />
               <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline-flex">

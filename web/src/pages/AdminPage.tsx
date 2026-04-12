@@ -212,6 +212,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const [quickBooksLoading, setQuickBooksLoading] = useState(true);
   const [quickBooksActionLoading, setQuickBooksActionLoading] = useState(false);
   const [quickBooksActionMode, setQuickBooksActionMode] = useState<"connect" | "disconnect" | null>(null);
+  const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
   const sessionRole = normalizeRole(session?.role ?? "member");
   const ownerView = sessionRole === "owner";
@@ -244,8 +245,8 @@ export function AdminPage({ session }: AdminPageProps) {
 
     setNotice(nextNotice ?? nextIntegrationNotice);
     setError(null);
-    navigate("/app/admin", { replace: true });
-  }, [location.search, navigate]);
+    navigate(settingsMode === "users" ? "/app/settings/users" : "/app/settings", { replace: true });
+  }, [location.search, navigate, settingsMode]);
 
   async function loadMembers() {
     setLoading(true);
@@ -411,6 +412,7 @@ export function AdminPage({ session }: AdminPageProps) {
     { id: "admin-quickbooks", label: "QuickBooks", hint: "Accounting sync" },
     { id: "admin-team", label: "Team", hint: "Users + roles" },
   ];
+  const visibleAdminLinks = settingsMode === "users" ? adminLinks.filter((link) => link.id === "admin-team") : adminLinks.filter((link) => link.id !== "admin-team");
 
   const billingSummaryText = useMemo(() => {
     if (session?.isTrial) {
@@ -434,11 +436,11 @@ export function AdminPage({ session }: AdminPageProps) {
   ]);
 
   if (loading) {
-    return (
+      return (
       <div className="space-y-4">
         <PageHeader
-          title="Organization Admin"
-          subtitle="Manage billing, team seats, and workspace access without leaving the CRM."
+          title="Settings"
+          subtitle="Manage billing, users, and workspace access without leaving the CRM."
         />
         <Card variant="elevated" padding="lg" className="text-sm text-slate-600">
           Loading organization settings...
@@ -453,8 +455,8 @@ export function AdminPage({ session }: AdminPageProps) {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Organization Admin"
-        subtitle="Manage billing, integrations, and team access without leaving the CRM."
+        title="Settings"
+        subtitle={settingsMode === "users" ? "Manage workspace users, roles, and seat usage." : "Manage organization billing, QuickBooks, and workspace controls."}
         actions={
           ownerView && hasPortalAccess ? (
             <Button
@@ -534,16 +536,32 @@ export function AdminPage({ session }: AdminPageProps) {
                 />
               </div>
             ) : null}
-            <WorkspaceJumpBar links={adminLinks} className="mt-4" />
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant={settingsMode === "org" ? "primary" : "outline"}
+                onClick={() => navigate("/app/settings")}
+              >
+                Org
+              </Button>
+              <Button
+                size="sm"
+                variant={settingsMode === "users" ? "primary" : "outline"}
+                onClick={() => navigate("/app/settings/users")}
+              >
+                Users
+              </Button>
+            </div>
+            <WorkspaceJumpBar links={visibleAdminLinks} className="mt-4" />
           </WorkspaceRailCard>
 
           <WorkspaceRailCard
-            eyebrow="Owner actions"
-            title={ownerView ? "You can manage billing" : "Read-only access"}
-            description={ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
+            eyebrow={settingsMode === "users" ? "Access" : "Owner actions"}
+            title={settingsMode === "users" ? "User management" : ownerView ? "You can manage billing" : "Read-only access"}
+            description={settingsMode === "users" ? "Owners can edit roles and remove members. Admins can add members." : ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
           >
             <div className="grid gap-2">
-              {ownerView && hasPortalAccess ? (
+              {settingsMode === "org" && ownerView && hasPortalAccess ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -555,7 +573,7 @@ export function AdminPage({ session }: AdminPageProps) {
                   Manage Billing
                 </Button>
               ) : null}
-              {ownerView ? (
+              {settingsMode === "org" && ownerView ? (
                 <Button
                   type="button"
                   onClick={() => void connectQuickBooks()}
@@ -571,6 +589,7 @@ export function AdminPage({ session }: AdminPageProps) {
         </aside>
 
         <div className="space-y-6">
+          {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-overview"
             step="Step 1"
@@ -621,7 +640,9 @@ export function AdminPage({ session }: AdminPageProps) {
         </div>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-billing"
             step="Step 2"
@@ -692,7 +713,9 @@ export function AdminPage({ session }: AdminPageProps) {
         </Card>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-quickbooks"
             step="Step 3"
@@ -782,10 +805,12 @@ export function AdminPage({ session }: AdminPageProps) {
         </div>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {settingsMode === "users" ? (
           <WorkspaceSection
             id="admin-team"
-            step="Step 4"
+            step="Users"
             title="Team"
             description="Invite field users and office staff into the same workspace and keep role controls obvious."
             actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
@@ -901,6 +926,7 @@ export function AdminPage({ session }: AdminPageProps) {
         </Card>
             </div>
           </WorkspaceSection>
+          ) : null}
         </div>
       </div>
 

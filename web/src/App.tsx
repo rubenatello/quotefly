@@ -31,10 +31,11 @@ const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((mod
 const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
-const PipelineView = lazy(() => import("./views/PipelineView").then((module) => ({ default: module.PipelineView })));
+const CustomersPage = lazy(() => import("./pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
+const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
 const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
-const QuoteHistoryView = lazy(() => import("./views/QuoteHistoryView").then((module) => ({ default: module.QuoteHistoryView })));
 
 type Session = {
   email: string;
@@ -116,24 +117,27 @@ function CrmLayout({
   }, [location.pathname, navigate, session.onboardingCompletedAtUtc]);
 
   const currentPage = (() => {
-    if (location.pathname.startsWith("/app/build")) return "build";
+    if (location.pathname.startsWith("/app/analytics")) return "analytics";
+    if (location.pathname.startsWith("/app/customers")) return "customers";
     if (location.pathname.startsWith("/app/quotes")) return "quotes";
-    if (location.pathname.startsWith("/app/history")) return "history";
-    if (location.pathname.startsWith("/app/setup")) return "setup";
+    if (location.pathname.startsWith("/app/build")) return "quotes";
+    if (location.pathname.startsWith("/app/history")) return "analytics";
+    if (location.pathname.startsWith("/app/settings/users")) return "settings-users";
+    if (location.pathname.startsWith("/app/settings")) return "settings";
+    if (location.pathname.startsWith("/app/setup")) return "settings";
     if (location.pathname.startsWith("/app/branding")) return "branding";
-    if (location.pathname.startsWith("/app/admin")) return "admin";
-    return "pipeline";
+    if (location.pathname.startsWith("/app/admin")) return "settings";
+    return "customers";
   })();
 
   const handleNavigate = (page: string) => {
-    if (page === "pipeline") navigate("/app");
-    else if (page === "build") navigate("/app/build");
+    if (page === "customers") navigate("/app/customers");
+    else if (page === "analytics") navigate("/app/analytics");
     else if (page === "quotes") navigate("/app/quotes");
-    else if (page === "history") navigate("/app/history");
-    else if (page === "setup") navigate("/app/setup");
     else if (page === "branding") navigate("/app/branding");
-    else if (page === "admin") navigate("/app/admin");
-    else navigate("/app");
+    else if (page === "settings") navigate("/app/settings");
+    else if (page === "settings-users") navigate("/app/settings/users");
+    else navigate("/app/customers");
   };
 
   return (
@@ -157,16 +161,19 @@ function CrmLayout({
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto max-w-7xl">
               <Routes>
-                <Route index element={<PipelineView />} />
+                <Route index element={<Navigate to="/app/customers" replace />} />
+                <Route path="customers" element={<CustomersPage />} />
+                <Route path="analytics" element={<AnalyticsPage />} />
                 <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
                 <Route path="build" element={<QuoteBuilderView />} />
-                <Route path="quotes" element={<QuoteDeskView />} />
+                <Route path="quotes" element={<QuotesPage />} />
                 <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
-                <Route path="history" element={<QuoteHistoryView />} />
-                <Route path="settings" element={<Navigate to="/app/admin" replace />} />
+                <Route path="history" element={<Navigate to="/app/analytics" replace />} />
+                <Route path="settings" element={<AdminPage session={session} />} />
+                <Route path="settings/users" element={<AdminPage session={session} />} />
                 <Route path="branding" element={<BrandingPage tenantId={session.tenantId} />} />
-                <Route path="admin" element={<AdminPage session={session} />} />
-                <Route path="*" element={<Navigate to="/app" replace />} />
+                <Route path="admin" element={<Navigate to="/app/settings" replace />} />
+                <Route path="*" element={<Navigate to="/app/customers" replace />} />
               </Routes>
             </div>
           </Suspense>
