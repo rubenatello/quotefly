@@ -41,6 +41,7 @@ type Session = {
   email: string;
   fullName: string;
   tenantId: string;
+  tenantName: string;
   role: string;
   primaryTrade?: ServiceType | null;
   onboardingCompletedAtUtc?: string | null;
@@ -66,6 +67,7 @@ function toSession(payload: AuthSessionPayload): Session {
     email: payload.user.email,
     fullName: payload.user.fullName,
     tenantId: payload.tenant.id,
+    tenantName: payload.tenant.name,
     role: payload.role,
     primaryTrade: payload.tenant.primaryTrade ?? null,
     onboardingCompletedAtUtc: payload.tenant.onboardingCompletedAtUtc ?? null,
@@ -86,6 +88,7 @@ function toDashboardSession(s: Session): DashboardSession {
     email: s.email,
     fullName: s.fullName,
     tenantId: s.tenantId,
+    tenantName: s.tenantName,
     primaryTrade: s.primaryTrade,
     onboardingCompletedAtUtc: s.onboardingCompletedAtUtc,
     effectivePlanName: s.effectivePlanName,
@@ -305,6 +308,7 @@ function AppRoutes() {
           email: payload.user.email,
           fullName: payload.user.fullName,
           tenantId: payload.tenant.id,
+          tenantName: payload.tenant.name,
           role: "owner",
         });
       })

@@ -88,6 +88,7 @@ export interface DashboardSession {
   email: string;
   fullName: string;
   tenantId: string;
+  tenantName: string;
   primaryTrade?: ServiceType | null;
   onboardingCompletedAtUtc?: string | null;
   effectivePlanName?: string;
@@ -305,6 +306,7 @@ export interface DashboardContextValue {
   createQuoteDraftFromForm: (options?: {
     initialLineItems?: CreateLineItemInput[];
     successNotice?: string;
+    quoteOverride?: Partial<QuoteForm>;
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<void>;
@@ -321,6 +323,11 @@ export interface DashboardContextValue {
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
   addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<void>;
+  updateLineItem: (
+    lineItemId: string,
+    input: Partial<CreateLineItemInput> & { description?: string },
+    options?: { notice?: string },
+  ) => Promise<void>;
   deleteLineItem: (lineItemId: string) => Promise<void>;
   updateLeadFollowUpStatus: (customerId: string, followUpStatus: LeadFollowUpStatus) => Promise<void>;
   loadOutboundEvents: (quoteId: string) => Promise<void>;
@@ -640,17 +647,22 @@ export function DashboardProvider({
   const createQuoteDraftFromForm = useCallback(async (options?: {
     initialLineItems?: CreateLineItemInput[];
     successNotice?: string;
+    quoteOverride?: Partial<QuoteForm>;
   }) => {
     setSaving(true); setError(null);
     try {
+      const mergedQuoteForm = {
+        ...quoteForm,
+        ...(options?.quoteOverride ?? {}),
+      };
       const { quote } = await api.quotes.create({
-        customerId: quoteForm.customerId,
-        serviceType: quoteForm.serviceType,
-        title: quoteForm.title,
-        scopeText: quoteForm.scopeText,
-        internalCostSubtotal: Number(quoteForm.internalCostSubtotal),
-        customerPriceSubtotal: Number(quoteForm.customerPriceSubtotal),
-        taxAmount: Number(quoteForm.taxAmount),
+        customerId: mergedQuoteForm.customerId,
+        serviceType: mergedQuoteForm.serviceType,
+        title: mergedQuoteForm.title,
+        scopeText: mergedQuoteForm.scopeText,
+        internalCostSubtotal: Number(mergedQuoteForm.internalCostSubtotal),
+        customerPriceSubtotal: Number(mergedQuoteForm.customerPriceSubtotal),
+        taxAmount: Number(mergedQuoteForm.taxAmount),
       });
       if (options?.initialLineItems?.length) {
         for (const lineItem of options.initialLineItems) {
@@ -863,6 +875,26 @@ export function DashboardProvider({
     });
   }, [lineItemForm, addLineItemDraft]);
 
+  const updateLineItem = useCallback(async (
+    lineItemId: string,
+    input: Partial<CreateLineItemInput> & { description?: string },
+    options?: { notice?: string },
+  ) => {
+    if (!selectedQuote) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.quotes.lineItems.update(selectedQuote.id, lineItemId, input);
+      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
+      if (canViewQuoteHistory) await loadQuoteHistory();
+      setNotice(options?.notice ?? "Line item updated.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed updating line item.");
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedQuote, canViewQuoteHistory]);
+
   const deleteLineItem = useCallback(async (lineItemId: string) => {
     if (!selectedQuote) return;
     setSaving(true); setError(null);
@@ -1037,7 +1069,7 @@ export function DashboardProvider({
     createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,
-    addLineItem, addLineItemDraft, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
+    addLineItem, addLineItemDraft, updateLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
