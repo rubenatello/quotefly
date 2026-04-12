@@ -181,11 +181,11 @@ function StageCountCard({
     <button
       type="button"
       onClick={onClick}
-      className={`min-w-[132px] rounded-xl border px-3 py-3 text-left transition ${
+      className={`min-w-fit rounded-full border px-3 py-2 text-left transition ${
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
         {stage === "ALL" ? (
           <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1 text-[10px] font-bold text-slate-500">
@@ -198,8 +198,8 @@ function StageCountCard({
             {stageInitial(stage)}
           </span>
         )}
+        <span className="text-sm font-semibold text-slate-900">{count}</span>
       </div>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{count}</p>
     </button>
   );
 }
@@ -426,7 +426,7 @@ export function CustomersPage() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 md:grid md:grid-cols-3 md:overflow-visible md:px-0 xl:grid-cols-6">
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         <StageCountCard label="All" count={customerRows.length} stage="ALL" active={stageFilter === "ALL"} onClick={() => setStageFilter("ALL")} />
         {CUSTOMER_STAGE_ORDER.map((stage) => (
           <StageCountCard
@@ -474,7 +474,7 @@ export function CustomersPage() {
               </div>
               <div className="divide-y divide-slate-200">
                 {filteredRows.map((row) => (
-                  <div key={row.customer.id}>
+                  <div key={row.customer.id} className="transition-colors hover:bg-slate-50/80">
                     <CustomerDesktopRow
                       row={row}
                       onOpenQuote={navigateToQuote}

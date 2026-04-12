@@ -199,11 +199,11 @@ function MetricCard({
 
   return (
     <div className={`relative overflow-hidden rounded-xl border px-4 py-3 ${toneClasses}`}>
-      <div className={`absolute inset-x-0 top-0 h-1 ${barClasses}`} />
+      <div className={`absolute bottom-0 left-0 top-0 w-1 ${barClasses}`} />
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="pl-1">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
+          <p className="mt-1.5 text-[1.65rem] font-bold tracking-tight text-slate-900">{value}</p>
           <p className="mt-1 text-xs text-slate-500">{hint}</p>
         </div>
         <span className={`inline-flex h-10 w-10 items-center justify-center rounded-full ${iconClasses}`}>
@@ -231,11 +231,11 @@ function StageCountCard({
     <button
       type="button"
       onClick={onClick}
-      className={`min-w-[132px] rounded-xl border px-3 py-3 text-left transition ${
+      className={`min-w-fit rounded-full border px-3 py-2 text-left transition ${
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
         {stage === "ALL" ? (
           <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1 text-[10px] font-bold text-slate-500">
@@ -250,8 +250,8 @@ function StageCountCard({
             {lifecycleInitial(stage)}
           </span>
         )}
+        <span className="text-sm font-semibold text-slate-900">{count}</span>
       </div>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{count}</p>
     </button>
   );
 }
@@ -657,7 +657,7 @@ export function QuotesPage() {
         />
       </div>
 
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 md:grid md:grid-cols-3 md:overflow-visible md:px-0 xl:grid-cols-6">
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         <StageCountCard label="All" count={sortedQuotes.length} stage="ALL" active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")} />
         {QUOTE_STAGE_ORDER.map((stage) => (
           <StageCountCard
@@ -706,7 +706,7 @@ export function QuotesPage() {
               </div>
               <div className="divide-y divide-slate-200">
                 {filteredQuotes.map((quote) => (
-                  <div key={quote.id}>
+                  <div key={quote.id} className="transition-colors hover:bg-slate-50/80">
                     <QuoteDesktopRow quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
                     <QuoteMobileCard quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
                   </div>
