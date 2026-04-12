@@ -432,9 +432,6 @@ export function QuoteDeskView() {
         subtitle="Edit the quote directly: update the customer-facing copy, adjust the lines, then send or export when it is ready."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-              Preview
-            </Button>
             <QuoteStatusPill status={selectedQuote.status} />
           </div>
         }
@@ -563,11 +560,16 @@ export function QuoteDeskView() {
               onOverviewChange={(value) => setQuoteEditForm((prev) => ({ ...prev, scopeText: value }))}
               overviewPlaceholder="Optional overview shown near the top of the quote."
               actions={
-                dirtyLineIds.length ? (
-                  <Badge tone="amber">{dirtyLineIds.length} line edit{dirtyLineIds.length === 1 ? "" : "s"} pending</Badge>
-                ) : (
-                  <Badge tone="blue">Line editor live</Badge>
-                )
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                    Preview PDF
+                  </Button>
+                  {dirtyLineIds.length ? (
+                    <Badge tone="amber">{dirtyLineIds.length} line edit{dirtyLineIds.length === 1 ? "" : "s"} pending</Badge>
+                  ) : (
+                    <Badge tone="blue">Line editor live</Badge>
+                  )}
+                </div>
               }
             >
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -703,7 +705,7 @@ export function QuoteDeskView() {
           </div>
 
           <div className="space-y-5">
-            <div className={mobilePane === "editor" ? "hidden lg:block" : ""}>
+            <div className={mobilePane === "preview" ? "block lg:hidden" : "hidden"}>
               <QuoteLivePreview
                 businessName={session?.tenantName ?? "QuoteFly"}
                 customerName={customerName}
@@ -721,7 +723,15 @@ export function QuoteDeskView() {
             </div>
 
             <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden lg:block" : ""}>
-              <CardHeader title="Customer-facing totals" subtitle="This is what the customer sees on the document." />
+              <CardHeader
+                title="Customer-facing totals"
+                subtitle="Keep the quote sheet primary and open the PDF preview when you want the final document view."
+                actions={
+                  <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                    Preview PDF
+                  </Button>
+                }
+              />
               <div className="space-y-3 text-sm">
                 <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
                 <SummaryRow label="Tax" value={money(taxAmount)} />

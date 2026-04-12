@@ -353,9 +353,6 @@ export function QuoteBuilderView() {
         subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-              Preview
-            </Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
           </div>
         }
@@ -460,9 +457,14 @@ export function QuoteBuilderView() {
             onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
             overviewPlaceholder="Optional overview shown near the top of the quote."
             actions={
-              <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addBlankLine}>
-                Add line
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                  Preview PDF
+                </Button>
+                <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addBlankLine}>
+                  Add line
+                </Button>
+              </div>
             }
           >
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -583,7 +585,7 @@ export function QuoteBuilderView() {
         </div>
 
         <div className={`space-y-5 lg:sticky lg:top-24 lg:self-start ${mobilePane === "editor" ? "hidden lg:block" : ""}`}>
-          <div className="block">
+          <div className={mobilePane === "preview" ? "block lg:hidden" : "hidden"}>
             <QuoteLivePreview
               businessName={session?.tenantName ?? "QuoteFly"}
               customerName={activeCustomer?.fullName ?? "Select customer"}
@@ -601,7 +603,15 @@ export function QuoteBuilderView() {
           </div>
 
           <Card variant="blue" padding="md">
-            <CardHeader title="Quote totals" subtitle="This is what the customer sees on the document." />
+            <CardHeader
+              title="Quote totals"
+              subtitle="Use this rail for math, checklist, and quick preview while the quote sheet stays primary."
+              actions={
+                <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                  Preview PDF
+                </Button>
+              }
+            />
             <div className="space-y-3 text-sm">
               <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
               <SummaryRow label="Tax" value={money(taxAmount)} />
