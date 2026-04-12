@@ -487,8 +487,8 @@ export function QuoteDeskView() {
             title="Overview"
             description="Get customer context, confirm quote health, and switch records without losing flow."
           >
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-              <Card variant="blue" padding="lg" className="overflow-hidden">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_340px]">
+              <Card variant="default" padding="md" className="overflow-hidden">
                 <div className="flex flex-wrap gap-2">
                   <HeaderMetaChip icon={<CustomerIcon size={13} />} label={customerName} />
                   <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
@@ -497,7 +497,7 @@ export function QuoteDeskView() {
                 </div>
 
                 {selectedQuoteMath && (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <DeskMetricCard
                       icon={<PriceIcon size={16} />}
                       label="Quote Total"
@@ -526,7 +526,7 @@ export function QuoteDeskView() {
                 )}
               </Card>
 
-              <div className="space-y-5">
+              <div className="space-y-4">
                 <QuickLookupCard
                   title="Switch Customer or Quote"
                   subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the workflow."
@@ -1164,7 +1164,7 @@ export function QuoteDeskView() {
           </WorkspaceSection>
       </div>
 
-      <div className="sticky bottom-16 z-20 rounded-[26px] border border-slate-200 bg-white/95 p-3 shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur sm:hidden">
+      <div className="sticky bottom-16 z-20 rounded-[20px] border border-slate-200 bg-white/95 p-3 shadow-[0_14px_28px_rgba(15,23,42,0.14)] backdrop-blur sm:hidden">
         <div className="grid grid-cols-2 gap-2">
           <Button size="sm" loading={saving} onClick={() => void persistSelectedQuote()}>
             Save
@@ -1390,7 +1390,7 @@ function formatAfterSaleStatusLabel(status: string) {
 
 function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm">
+    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
       <span className="text-quotefly-blue">{icon}</span>
       {label}
     </span>
@@ -1399,9 +1399,9 @@ function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
 
 function DeskRailStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+    <div className="rounded-[14px] border border-slate-200 bg-slate-50 px-3 py-2.5">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
+      <p className="mt-1.5 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
 }
@@ -1429,12 +1429,12 @@ function DeskMetricCard({
             : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
-    <div className={`rounded-[18px] border p-3.5 ${toneClass}`}>
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em]">
+    <div className={`rounded-[14px] border p-3 ${toneClass}`}>
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em]">
         {icon}
         <span>{label}</span>
       </div>
-      <p className="mt-2 text-[1.85rem] font-bold leading-none">{value}</p>
+      <p className="mt-2 text-[1.6rem] font-bold leading-none">{value}</p>
     </div>
   );
 }
@@ -1449,17 +1449,17 @@ function DeskWorkflowCard({
   nextStep: string;
 }) {
   return (
-    <Card variant="elevated" padding="lg">
+    <Card variant="default" padding="md">
       <CardHeader
         title="Quote Desk Workflow"
         subtitle="Keep the work ordered: verify scope, price the job, then send or export."
       />
       <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
-      <div className="mt-4 rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-3">
+      <div className="mt-3 rounded-[14px] border border-slate-200 bg-slate-50 px-3.5 py-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Next step</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{nextStep}</p>
       </div>
-      <div className="mt-4 space-y-2">
+      <div className="mt-3 space-y-2">
         {steps.map((step, index) => (
           <div
             key={step.label}
@@ -1469,7 +1469,7 @@ function DeskWorkflowCard({
                 : "border-slate-200 bg-white"
             }`}
           >
-            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+            <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${step.complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
               {step.icon}
             </span>
             <div className="min-w-0 flex-1">

@@ -29,9 +29,9 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: "min-h-[34px] px-4 py-1.5 text-xs gap-1.5",
-  md: "min-h-[44px] px-5 py-2 text-sm gap-2",
-  lg: "min-h-[50px] px-6 py-2.5 text-base gap-2.5",
+  sm: "min-h-[32px] px-3.5 py-1.5 text-xs gap-1.5",
+  md: "min-h-[40px] px-4.5 py-2 text-sm gap-2",
+  lg: "min-h-[46px] px-5.5 py-2.5 text-base gap-2.5",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -83,7 +83,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+              "min-h-[42px] w-full rounded-xl border bg-white px-3.5 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-200",
               className,
@@ -121,7 +121,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[46px] w-full rounded-2xl border bg-white px-4 py-2 text-sm text-slate-900 shadow-sm transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[42px] w-full rounded-xl border bg-white px-3.5 py-2 text-sm text-slate-900 shadow-sm transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -160,7 +160,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[120px] w-full rounded-2xl border bg-white px-4 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[120px] w-full rounded-xl border bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -186,7 +186,7 @@ const CARD_VARIANTS: Record<CardVariant, string> = {
   default: "border-slate-200 bg-white shadow-sm",
   blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.04] shadow-sm",
   amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.05] shadow-sm",
-  elevated: "border-slate-200 bg-white shadow-[0_12px_28px_rgba(15,23,42,0.08)]",
+  elevated: "border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.07)]",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -199,7 +199,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ variant = "default", padding = "md", className = "", children, ...rest }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-[28px] border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
+      className={cn("rounded-[22px] border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
       {...rest}
     >
       {children}
@@ -212,9 +212,9 @@ Card.displayName = "Card";
 
 export function CardHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
+        <h2 className="text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{title}</h2>
         {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
@@ -260,8 +260,8 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 export function EmptyState({ icon, title, description }: { icon?: ReactNode; title: string; description?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-[26px] border border-dashed border-slate-300 bg-slate-50/70 px-6 py-10 text-center">
-      {icon && <span className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+    <div className="flex flex-col items-center justify-center rounded-[20px] border border-dashed border-slate-300 bg-slate-50/70 px-5 py-8 text-center">
+      {icon && <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-400">
         {icon}
       </span>}
       <p className="text-sm font-medium text-slate-600">{title}</p>
@@ -278,7 +278,7 @@ export function Skeleton({ className = "" }: { className?: string }) {
 
 export function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="rounded-[18px] border border-slate-200 bg-white p-4">
       <Skeleton className="mb-3 h-4 w-24" />
       <Skeleton className="mb-2 h-3 w-full" />
       <Skeleton className="h-3 w-3/4" />
@@ -515,7 +515,7 @@ export function ProgressBar({
           {hint ? <span>{hint}</span> : null}
         </div>
       )}
-      <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
         <div
           className="h-full rounded-full bg-quotefly-blue transition-[width] duration-500 ease-out"
           style={{ width: `${clampedValue}%` }}
@@ -529,8 +529,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-slate-600 sm:text-base">{subtitle}</p>}
+        <h1 className="text-[2rem] font-bold tracking-tight text-slate-900 sm:text-[2.5rem]">{title}</h1>
+        {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
     </div>

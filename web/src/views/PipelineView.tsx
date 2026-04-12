@@ -1,6 +1,6 @@
-import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, InvoiceIcon, QuoteIcon } from "../components/Icons";
+import { CallIcon, EmailIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select } from "../components/ui";
-import { FollowUpPill, PipelineFlow, QuoteStatusPill, StatCard } from "../components/dashboard/DashboardUi";
+import { FollowUpPill, PipelineFlow, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
@@ -70,29 +70,15 @@ function LifecyclePill({
     tone === "blue"
       ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
       : tone === "emerald"
-        ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
         : tone === "amber"
           ? "border-amber-200 bg-amber-50 text-amber-700"
           : "border-slate-200 bg-slate-50 text-slate-600";
 
-  return <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}>{label}</span>;
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${toneClass}`}>{label}</span>;
 }
 
-function sectionToneClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
-  if (tone === "blue") return "bg-quotefly-blue/[0.06] text-quotefly-blue";
-  if (tone === "orange") return "bg-quotefly-orange/[0.06] text-quotefly-orange";
-  if (tone === "emerald") return "bg-quotefly-blue/[0.06] text-quotefly-blue";
-  return "bg-slate-50 text-slate-600";
-}
-
-function sectionBorderClass(tone: "blue" | "orange" | "emerald" | "slate"): string {
-  if (tone === "blue") return "border-l-2 border-l-quotefly-blue";
-  if (tone === "orange") return "border-l-2 border-l-quotefly-orange";
-  if (tone === "emerald") return "border-l-2 border-l-quotefly-blue";
-  return "border-l-2 border-l-slate-300";
-}
-
-function toneBadge(tone: "blue" | "orange" | "emerald" | "slate") {
+function sectionBadgeTone(tone: "blue" | "orange" | "emerald" | "slate") {
   return tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue";
 }
 
@@ -134,46 +120,41 @@ function PipelineRowsSection({
       step={step}
       title={title}
       description={subtitle}
-      actions={
-        <Badge tone={tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue"}>
-          {leads.length} active
-        </Badge>
-      }
+      actions={<Badge tone={sectionBadgeTone(tone)}>{leads.length} active</Badge>}
     >
-      <Card variant="elevated" padding="lg" className="overflow-hidden">
-        <div className={`rounded-[24px] px-4 py-4 shadow-sm ${sectionToneClass(tone)}`}>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">Pipeline Queue</p>
-              <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
-              <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
-            </div>
-            <Badge tone={toneBadge(tone)}>{leads.length} active</Badge>
-          </div>
-        </div>
-
+      <Card variant="default" padding="md" className="overflow-hidden">
         {leads.length === 0 ? (
-          <div className="mt-4">
-            <EmptyState title={emptyTitle} description={emptyDescription} />
-          </div>
+          <EmptyState title={emptyTitle} description={emptyDescription} />
         ) : (
-          <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm">
-            {leads.map((lead, index) => (
-              <article
-                key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
-                className={`px-4 py-4 transition hover:bg-slate-50/70 ${sectionBorderClass(tone)} ${index > 0 ? "border-t border-slate-200" : ""}`}
-              >
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_170px_170px_auto] xl:items-center">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        Queue {index + 1}
-                      </span>
-                      <span className="text-xs text-slate-500">Created {formatDateTime(lead.createdAt)}</span>
-                    </div>
-                    <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+          <>
+            <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_170px_130px_160px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <span>Lead</span>
+              <span>Quote</span>
+              <span>Status</span>
+              <span>Touch</span>
+              <span>Action</span>
+            </div>
+
+            <div className="divide-y divide-slate-200">
+              {leads.map((lead, index) => {
+                const touchLabel = lead.afterSaleFollowUpDueAtUtc
+                  ? formatDateTime(lead.afterSaleFollowUpDueAtUtc)
+                  : formatDateTime(lead.createdAt);
+
+                return (
+                  <article
+                    key={`${lead.customerId}-${lead.quoteId ?? "no-quote"}`}
+                    className="px-4 py-3 transition hover:bg-slate-50/70"
+                  >
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_170px_130px_160px] lg:items-center">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            {index + 1}
+                          </span>
+                          <span className="text-xs text-slate-500">Created {formatDateTime(lead.createdAt)}</span>
+                        </div>
+                        <p className="mt-1.5 truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
                           <span className="inline-flex items-center gap-1">
                             <CallIcon size={12} />
@@ -186,139 +167,104 @@ function PipelineRowsSection({
                             </span>
                           ) : null}
                         </div>
-                        {lead.quoteTitle ? (
-                          <p className="mt-2 truncate text-sm text-slate-700">
-                            {lead.quoteTitle}
-                            {lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}
-                          </p>
-                        ) : (
-                          <p className="mt-2 text-sm text-slate-500">No quote drafted yet.</p>
-                        )}
-                        {lead.afterSaleFollowUpDueAtUtc ? (
-                          <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-amber-700">
-                            <ClockIcon size={12} />
-                            Follow-up due {formatDateTime(lead.afterSaleFollowUpDueAtUtc)}
-                          </p>
-                        ) : null}
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <FollowUpPill status={lead.followUpStatus} />
-                        {lead.status ? (
-                          <QuoteStatusPill status={lead.status} />
+
+                      <div className="min-w-0">
+                        {lead.quoteTitle ? (
+                          <>
+                            <p className="truncate text-sm font-medium text-slate-900">{lead.quoteTitle}</p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {lead.totalAmount !== undefined ? money(lead.totalAmount) : "No total yet"}
+                            </p>
+                          </>
                         ) : (
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+                          <p className="text-sm text-slate-500">No quote drafted yet.</p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <FollowUpPill status={lead.followUpStatus} compact />
+                        {lead.status ? (
+                          <QuoteStatusPill status={lead.status} compact />
+                        ) : (
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600">
                             No Quote
                           </span>
                         )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Lead Status</p>
-                    <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                      <p className="text-sm font-semibold text-slate-900">{followUpLabel(lead.followUpStatus)}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {lead.status ? "Quote attached" : "Needs quote draft"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      {actionKind === "job_status" ? "Job Stage" : actionKind === "after_sale" ? "After-Sale" : "Last Touch"}
-                    </p>
-                    <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                      {actionKind === "job_status" && lead.jobStatus ? (
-                        <>
+                        {actionKind === "job_status" && lead.jobStatus ? (
                           <LifecyclePill
                             label={jobStatusLabel(lead.jobStatus)}
                             tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"}
                           />
-                          <p className="mt-2 text-xs text-slate-500">Active work status</p>
-                        </>
-                      ) : actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
-                        <>
+                        ) : null}
+                        {actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
                           <LifecyclePill
                             label={afterSaleLabel(lead.afterSaleFollowUpStatus)}
                             tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"}
                           />
-                          <p className="mt-2 text-xs text-slate-500">Review and referral follow-up</p>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-sm font-semibold text-slate-900">{formatDateTime(lead.createdAt)}</p>
-                          <p className="mt-1 text-xs text-slate-500">Last queue activity</p>
-                        </>
-                      )}
+                        ) : null}
+                      </div>
+
+                      <div className="text-xs text-slate-500">{touchLabel}</div>
+
+                      <div className="flex flex-col gap-2 lg:items-end">
+                        {lead.quoteId ? (
+                          <Button size="sm" variant="outline" onClick={() => onNavigateToQuote(lead.quoteId!)}>
+                            Open Quote
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="outline" disabled>
+                            Draft Needed
+                          </Button>
+                        )}
+
+                        {actionKind === "follow_up" ? (
+                          <Select
+                            aria-label={`Update follow-up for ${lead.customerName}`}
+                            value={lead.followUpStatus}
+                            disabled={saving}
+                            onChange={(event) =>
+                              onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)
+                            }
+                            options={FOLLOW_UP_OPTIONS}
+                            className="min-w-[150px]"
+                          />
+                        ) : actionKind === "job_status" ? (
+                          <Select
+                            aria-label={`Update job stage for ${lead.customerName}`}
+                            value={lead.jobStatus ?? "NOT_STARTED"}
+                            disabled={saving || !lead.quoteId}
+                            onChange={(event) =>
+                              lead.quoteId &&
+                              onUpdateQuoteLifecycle?.(lead.quoteId, {
+                                jobStatus: event.target.value as QuoteJobStatus,
+                              })
+                            }
+                            options={JOB_STATUS_OPTIONS}
+                            className="min-w-[150px]"
+                          />
+                        ) : actionKind === "after_sale" ? (
+                          <Select
+                            aria-label={`Update after-sale for ${lead.customerName}`}
+                            value={lead.afterSaleFollowUpStatus ?? "DUE"}
+                            disabled={saving || !lead.quoteId}
+                            onChange={(event) =>
+                              lead.quoteId &&
+                              onUpdateQuoteLifecycle?.(lead.quoteId, {
+                                afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus,
+                              })
+                            }
+                            options={AFTER_SALE_OPTIONS}
+                            className="min-w-[150px]"
+                          />
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2 xl:items-end">
-                    {lead.quoteId ? (
-                      <Button size="sm" variant="outline" onClick={() => onNavigateToQuote(lead.quoteId!)}>
-                        Open Quote Desk
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" disabled>
-                        Draft Needed
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {actionKind !== "none" && (
-                  <div className="mt-4 grid gap-2 border-t border-slate-200 pt-4 sm:grid-cols-[170px_1fr] sm:items-center">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      {actionKind === "follow_up"
-                        ? "Update Follow-Up"
-                        : actionKind === "job_status"
-                          ? "Update Job Stage"
-                          : "Update After-Sale"}
-                    </p>
-
-                    {actionKind === "follow_up" ? (
-                      <Select
-                        aria-label={`Update follow-up for ${lead.customerName}`}
-                        value={lead.followUpStatus}
-                        disabled={saving}
-                        onChange={(event) =>
-                          onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)
-                        }
-                        options={FOLLOW_UP_OPTIONS}
-                      />
-                    ) : actionKind === "job_status" ? (
-                      <Select
-                        aria-label={`Update job stage for ${lead.customerName}`}
-                        value={lead.jobStatus ?? "NOT_STARTED"}
-                        disabled={saving || !lead.quoteId}
-                        onChange={(event) =>
-                          lead.quoteId &&
-                          onUpdateQuoteLifecycle?.(lead.quoteId, {
-                            jobStatus: event.target.value as QuoteJobStatus,
-                          })
-                        }
-                        options={JOB_STATUS_OPTIONS}
-                      />
-                    ) : (
-                      <Select
-                        aria-label={`Update after-sale for ${lead.customerName}`}
-                        value={lead.afterSaleFollowUpStatus ?? "DUE"}
-                        disabled={saving || !lead.quoteId}
-                        onChange={(event) =>
-                          lead.quoteId &&
-                          onUpdateQuoteLifecycle?.(lead.quoteId, {
-                            afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus,
-                          })
-                        }
-                        options={AFTER_SALE_OPTIONS}
-                      />
-                    )}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
+                  </article>
+                );
+              })}
+            </div>
+          </>
         )}
       </Card>
     </WorkspaceSection>
@@ -342,9 +288,14 @@ export function PipelineView() {
   ];
 
   const nextAttentionCount = pipeline.totals.newLeads + pipeline.totals.quotedLeads;
+  const activeCustomerCount =
+    pipeline.totals.newLeads +
+    pipeline.totals.quotedLeads +
+    pipeline.totals.closedLeads +
+    pipeline.totals.afterSaleLeads;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title={session?.fullName ? `Welcome, ${session.fullName.split(" ")[0]}` : "QuoteFly CRM"}
         subtitle="Work top-down through your queue: untouched leads first, quoted jobs next, active work after that, then reviews and referrals."
@@ -365,65 +316,54 @@ export function PipelineView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <div className="space-y-5">
-          <section id="pipeline-overview" className="scroll-mt-28 space-y-4">
-            <Card variant="elevated" padding="md">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="grid gap-3 sm:grid-cols-3 xl:w-[380px]">
-                  <CompactQueueStat label="Needs attention" value={nextAttentionCount} />
-                  <CompactQueueStat label="Active work" value={pipeline.totals.closedLeads} />
-                  <CompactQueueStat label="After-sale" value={pipeline.totals.afterSaleLeads} />
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-3">
-                  <WorkspaceJumpBar links={pipelineLinks} />
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => navigateToBuilder()}>
-                      Start New Quote
-                    </Button>
-                    {selectedQuoteId ? (
-                      <Button onClick={() => navigateToQuote(selectedQuoteId)}>
-                        Reopen Active Quote
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              <StatCard icon={<QuoteIcon size={24} />} label="Quotes This Month" value={String(stats.monthlyQuotes)} />
-              <StatCard
-                icon={<CustomerIcon size={24} />}
-                label="Active Customers"
-                value={String(
-                  pipeline.totals.newLeads +
-                    pipeline.totals.quotedLeads +
-                    pipeline.totals.closedLeads +
-                    pipeline.totals.afterSaleLeads,
-                )}
-              />
-              <StatCard icon={<InvoiceIcon size={24} />} label="Accepted Revenue" value={money(stats.acceptedRevenue)} />
+      <section id="pipeline-overview" className="scroll-mt-28 space-y-4">
+        <Card variant="default" padding="md">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="grid gap-3 sm:grid-cols-3 xl:w-[340px]">
+              <CompactQueueStat label="Needs attention" value={nextAttentionCount} />
+              <CompactQueueStat label="Active work" value={pipeline.totals.closedLeads} />
+              <CompactQueueStat label="After-sale" value={pipeline.totals.afterSaleLeads} />
             </div>
-
-            <Card variant="blue">
-              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Operator board</p>
-                  <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-900">Lead Pipeline</h2>
-                  <p className="mt-1 text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
-                </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-3">
+              <WorkspaceJumpBar links={pipelineLinks} />
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => navigateToBuilder()}>
+                  Start New Quote
+                </Button>
+                {selectedQuoteId ? (
+                  <Button onClick={() => navigateToQuote(selectedQuoteId)}>
+                    Reopen Active Quote
+                  </Button>
+                ) : null}
               </div>
+              <div className="grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-3">
+                <CompactQueueStat label="Quotes this month" value={stats.monthlyQuotes} />
+                <CompactQueueStat label="Active customers" value={activeCustomerCount} />
+                <CompactQueueStat label="Accepted revenue" value={stats.acceptedRevenue} currency />
+              </div>
+            </div>
+          </div>
+        </Card>
 
-              <PipelineFlow
-                newLeads={pipeline.totals.newLeads}
-                quotedLeads={pipeline.totals.quotedLeads}
-                closedLeads={pipeline.totals.closedLeads}
-                afterSaleLeads={pipeline.totals.afterSaleLeads}
-              />
-            </Card>
-          </section>
+        <Card variant="default" padding="md">
+          <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Operator board</p>
+              <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Lead Pipeline</h2>
+              <p className="mt-1 text-sm text-slate-600">New leads, quoted jobs, active work, and post-job follow-up in one flow.</p>
+            </div>
+          </div>
 
-          <div className="grid gap-5">
+          <PipelineFlow
+            newLeads={pipeline.totals.newLeads}
+            quotedLeads={pipeline.totals.quotedLeads}
+            closedLeads={pipeline.totals.closedLeads}
+            afterSaleLeads={pipeline.totals.afterSaleLeads}
+          />
+        </Card>
+      </section>
+
+      <div className="grid gap-5">
         <PipelineRowsSection
           sectionId="pipeline-new"
           step="Step 1"
@@ -504,17 +444,16 @@ export function PipelineView() {
             void updateLeadFollowUpStatus(customerId, followUpStatus)
           }
         />
-          </div>
       </div>
     </div>
   );
 }
 
-function CompactQueueStat({ label, value }: { label: string; value: number }) {
+function CompactQueueStat({ label, value, currency = false }: { label: string; value: number; currency?: boolean }) {
   return (
-    <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-3">
+    <div className="rounded-[16px] border border-slate-200 bg-slate-50 px-3 py-3">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 text-xl font-bold tracking-tight text-slate-900">{currency ? money(value) : value}</p>
     </div>
   );
 }

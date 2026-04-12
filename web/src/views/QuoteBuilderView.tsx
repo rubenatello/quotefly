@@ -10,7 +10,7 @@ import {
   SERVICE_TYPES,
   QUOTE_STATUSES,
 } from "../components/dashboard/DashboardContext";
-import { api, type QuoteStatus, type ServiceType, type WorkPreset } from "../lib/api";
+import { api, type Quote, type QuoteStatus, type ServiceType, type WorkPreset } from "../lib/api";
 import { CustomerIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import {
   Alert,
@@ -782,25 +782,25 @@ export function QuoteBuilderView() {
             description="Review live quotes, select invoice-ready records, and hand off cleanly into QuickBooks."
           >
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_360px]">
-      <Card variant="elevated" padding="lg">
+      <Card variant="default" padding="md">
         <CardHeader
           title="Quote List"
           subtitle="Select one or more quotes and export as QuickBooks invoice CSV rows."
           actions={<span className="text-xs font-medium text-slate-600">Selected: {selectedQuoteIds.length}</span>}
         />
-        <div className="mb-2 grid grid-cols-[1fr_140px] gap-2">
+        <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search quotes" />
           <Select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as QuoteStatus | "ALL")}
             options={statusOptions}
           />
+          <Button variant="outline" size="sm" onClick={() => void loadQuotes()} className="md:min-w-[120px]">
+            Apply Filters
+          </Button>
         </div>
-        <Button variant="outline" size="sm" fullWidth onClick={() => void loadQuotes()} className="mb-3">
-          Apply Filters
-        </Button>
 
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-[16px] border border-slate-200 bg-slate-50 p-3">
           <Button
             type="button"
             size="sm"
@@ -819,7 +819,7 @@ export function QuoteBuilderView() {
           >
             Clear
           </Button>
-          <label className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+          <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
             Due in
             <input
               type="number"
@@ -858,49 +858,28 @@ export function QuoteBuilderView() {
           </span>
         </div>
 
-        <div className="max-h-[340px] space-y-2 overflow-auto">
-          {quotes.map((quote) => (
-            <div
-              key={quote.id}
-              className={`rounded-xl border p-3 transition ${
-                selectedQuoteId === quote.id
-                  ? "border-quotefly-blue/25 bg-quotefly-blue/[0.04]"
-                  : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={selectedQuoteIdSet.has(quote.id)}
-                    disabled={!selectedQuoteIdSet.has(quote.id) && selectedQuoteIds.length >= MAX_QUICKBOOKS_EXPORT_QUOTES}
-                    onChange={(event) => toggleQuoteSelection(quote.id, event.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-quotefly-blue focus:ring-quotefly-blue"
-                  />
-                  Select for CSV
-                </label>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => navigateToQuote(quote.id)}
-                >
-                  Open
-                </Button>
-              </div>
-              <button
-                type="button"
-                onClick={() => navigateToQuote(quote.id)}
-                className="w-full text-left"
-              >
-                <p className="text-sm font-semibold text-slate-900">{quote.title}</p>
-                <div className="mt-1 flex items-center justify-between">
-                  <QuoteStatusPill status={quote.status} compact />
-                  <span className="text-xs text-slate-600">{money(quote.totalAmount)}</span>
-                </div>
-              </button>
-            </div>
-          ))}
+        <div className="overflow-hidden rounded-[18px] border border-slate-200 bg-white">
+          <div className="hidden grid-cols-[48px_minmax(0,1.7fr)_minmax(0,1fr)_130px_110px_96px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:grid">
+            <span>Select</span>
+            <span>Quote</span>
+            <span>Customer</span>
+            <span>Status</span>
+            <span>Total</span>
+            <span>Open</span>
+          </div>
+          <div className="max-h-[380px] divide-y divide-slate-200 overflow-auto">
+            {quotes.map((quote) => (
+              <QuoteListRow
+                key={quote.id}
+                quote={quote}
+                selected={selectedQuoteIdSet.has(quote.id)}
+                active={selectedQuoteId === quote.id}
+                selectionLocked={!selectedQuoteIdSet.has(quote.id) && selectedQuoteIds.length >= MAX_QUICKBOOKS_EXPORT_QUOTES}
+                onToggleSelected={(checked) => toggleQuoteSelection(quote.id, checked)}
+                onOpen={() => navigateToQuote(quote.id)}
+              />
+            ))}
+          </div>
         </div>
       </Card>
 
@@ -1008,6 +987,62 @@ function BuilderSnapshotCard({
     <div className={`rounded-xl border px-4 py-4 ${toneClass}`}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em]">{label}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function QuoteListRow({
+  quote,
+  selected,
+  active,
+  selectionLocked,
+  onToggleSelected,
+  onOpen,
+}: {
+  quote: Quote;
+  selected: boolean;
+  active: boolean;
+  selectionLocked: boolean;
+  onToggleSelected: (checked: boolean) => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div
+      className={`grid gap-3 px-4 py-3 transition md:grid-cols-[48px_minmax(0,1.7fr)_minmax(0,1fr)_130px_110px_96px] md:items-center ${
+        active ? "bg-quotefly-blue/[0.04]" : "bg-white hover:bg-slate-50/80"
+      }`}
+    >
+      <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={selectionLocked}
+          onChange={(event) => onToggleSelected(event.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 text-quotefly-blue focus:ring-quotefly-blue"
+        />
+        <span className="md:hidden">Select</span>
+      </label>
+
+      <button type="button" onClick={onOpen} className="min-w-0 text-left">
+        <p className="truncate text-sm font-semibold text-slate-900">{quote.title}</p>
+        <p className="mt-1 text-xs text-slate-500 md:hidden">
+          {quote.customer?.fullName ?? "Customer unavailable"} · {money(quote.totalAmount)}
+        </p>
+      </button>
+
+      <p className="hidden truncate text-sm text-slate-600 md:block">
+        {quote.customer?.fullName ?? "Customer unavailable"}
+      </p>
+
+      <div className="flex items-center gap-2">
+        <QuoteStatusPill status={quote.status} compact />
+      </div>
+
+      <p className="text-sm font-semibold text-slate-900">{money(quote.totalAmount)}</p>
+
+      <Button type="button" size="sm" variant="outline" onClick={onOpen}>
+        Open
+      </Button>
     </div>
   );
 }
@@ -1136,4 +1171,3 @@ function QuickBooksGuideModal({
     </Modal>
   );
 }
-

@@ -83,10 +83,10 @@ export function QuickLookupCard({
   const hasResults = customers.length > 0 || quotes.length > 0;
 
   return (
-    <Card variant="elevated" padding="lg" className={className}>
+    <Card variant="default" padding="md" className={className}>
       <CardHeader title={title} subtitle={subtitle} />
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -94,7 +94,7 @@ export function QuickLookupCard({
           icon={<Search size={16} />}
         />
 
-        {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+        {error ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
         {!hasQuery && !loading ? (
           <EmptyState
@@ -159,7 +159,7 @@ export function QuickLookupCard({
         ) : null}
 
         {hasQuery && !loading && !hasResults ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
             Nothing matched. Try a customer phone number, customer email, or part of the quote title.
           </div>
         ) : null}
@@ -178,13 +178,13 @@ function LookupSection({
   results: ReactNode[];
 }) {
   return (
-    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-2">
+    <div className="overflow-hidden rounded-[18px] border border-slate-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
         <p className="text-sm font-semibold text-slate-900">{title}</p>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">{results.length}</span>
       </div>
-      <div className="space-y-3">
-        {results.length ? results : <p className="rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">{emptyLabel}</p>}
+      <div className="divide-y divide-slate-200">
+        {results.length ? results : <p className="px-4 py-4 text-sm text-slate-500">{emptyLabel}</p>}
       </div>
     </div>
   );
@@ -213,16 +213,16 @@ function LookupResultCard({
 }) {
   return (
     <div
-      className={`rounded-[22px] border p-3 shadow-sm transition ${
+      className={`px-4 py-3 transition ${
         active
-          ? "border-quotefly-blue/25 bg-quotefly-blue/[0.06]"
-          : "border-slate-200 bg-white"
+          ? "bg-quotefly-blue/[0.04]"
+          : "bg-white hover:bg-slate-50/80"
       }`}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600">
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
               {icon}
             </span>
             <div className="min-w-0">
@@ -231,9 +231,9 @@ function LookupResultCard({
             </div>
           </div>
 
-          <div className="mt-3 space-y-1.5">
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
             {meta.map((item, index) => (
-              <p key={`${item.label}-${index}`} className="flex items-center gap-2 text-xs text-slate-600">
+              <p key={`${item.label}-${index}`} className="flex items-center gap-1.5 text-xs text-slate-600">
                 {item.icon ? <span className="text-slate-400">{item.icon}</span> : null}
                 <span className="truncate">{item.label}</span>
               </p>
@@ -241,7 +241,7 @@ function LookupResultCard({
           </div>
         </div>
 
-        <Button type="button" size="sm" variant={actionVariant} onClick={onAction} disabled={actionDisabled}>
+        <Button type="button" size="sm" variant={actionVariant} onClick={onAction} disabled={actionDisabled} className="md:shrink-0">
           {actionLabel}
         </Button>
       </div>
@@ -251,14 +251,14 @@ function LookupResultCard({
 
 function LookupSkeletonSection({ title }: { title: string }) {
   return (
-    <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-2">
+    <div className="overflow-hidden rounded-[18px] border border-slate-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
         <p className="text-sm font-semibold text-slate-900">{title}</p>
         <Skeleton className="h-5 w-8 rounded-full" />
       </div>
-      <div className="space-y-3">
-        <Skeleton className="h-28 w-full rounded-[22px]" />
-        <Skeleton className="h-28 w-full rounded-[22px]" />
+      <div className="space-y-0 divide-y divide-slate-200 p-0">
+        <Skeleton className="h-20 w-full rounded-none" />
+        <Skeleton className="h-20 w-full rounded-none" />
       </div>
     </div>
   );
