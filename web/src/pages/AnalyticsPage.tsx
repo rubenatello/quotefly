@@ -1,15 +1,52 @@
-import { useEffect, useMemo } from "react";
+﻿import { useEffect, useMemo, type ReactNode } from "react";
+import { BadgeCheck, ChartColumn, CircleDollarSign, Send } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, PageHeader } from "../components/ui";
 import { QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { useDashboard, money, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 
-function MetricCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+function MetricCard({
+  label,
+  value,
+  hint,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  icon: ReactNode;
+  tone: "blue" | "orange" | "emerald" | "slate";
+}) {
+  const toneClasses =
+    tone === "blue"
+      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04]"
+      : tone === "orange"
+        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.05]"
+        : tone === "emerald"
+          ? "border-emerald-200 bg-emerald-50/70"
+          : "border-slate-200 bg-slate-50/80";
+  const iconClasses =
+    tone === "blue"
+      ? "bg-quotefly-blue/[0.10] text-quotefly-blue"
+      : tone === "orange"
+        ? "bg-quotefly-orange/[0.10] text-quotefly-orange"
+        : tone === "emerald"
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-white text-slate-600";
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
+    <div className={`rounded-xl border px-4 py-3 ${toneClasses}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
+          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+        </div>
+        <span className={`inline-flex h-10 w-10 items-center justify-center rounded-full ${iconClasses}`}>
+          {icon}
+        </span>
+      </div>
     </div>
   );
 }
@@ -61,10 +98,10 @@ export function AnalyticsPage() {
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Quotes this month" value={String(stats.monthlyQuotes)} hint="Current monthly volume" />
-        <MetricCard label="Accepted revenue" value={money(stats.acceptedRevenue)} hint="Won quote totals" />
-        <MetricCard label="Avg quote value" value={money(averageQuoteValue)} hint="Average total across quotes" />
-        <MetricCard label="Acceptance rate" value={`${acceptanceRate}%`} hint={`${awaitingResponse.length} still awaiting response`} />
+        <MetricCard label="Quotes this month" value={String(stats.monthlyQuotes)} hint="Current monthly volume" icon={<ChartColumn size={18} strokeWidth={2.1} />} tone="blue" />
+        <MetricCard label="Accepted revenue" value={money(stats.acceptedRevenue)} hint="Won quote totals" icon={<CircleDollarSign size={18} strokeWidth={2.1} />} tone="emerald" />
+        <MetricCard label="Avg quote value" value={money(averageQuoteValue)} hint="Average total across quotes" icon={<BadgeCheck size={18} strokeWidth={2.1} />} tone="slate" />
+        <MetricCard label="Acceptance rate" value={`${acceptanceRate}%`} hint={`${awaitingResponse.length} still awaiting response`} icon={<Send size={18} strokeWidth={2.1} />} tone="orange" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_320px]">
@@ -119,12 +156,15 @@ export function AnalyticsPage() {
 
         <Card variant="default" padding="md">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace snapshot</p>
-          <div className="mt-4 space-y-3">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-              <p className="text-sm font-semibold text-slate-900">Customers in workspace</p>
-              <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{customers.length}</p>
+          <div className="mt-4 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Customers in workspace</p>
+                <p className="mt-1 text-xs text-slate-500">Active customer records across the tenant</p>
+              </div>
+              <span className="text-2xl font-bold tracking-tight text-slate-900">{customers.length}</span>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="px-4 py-3">
               <p className="text-sm font-semibold text-slate-900">Plan</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Badge tone="blue">{session?.effectivePlanName ?? "Starter"}</Badge>
@@ -132,9 +172,9 @@ export function AnalyticsPage() {
               </div>
             </div>
             {session?.usage ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+              <div className="grid gap-3 px-4 py-3 text-sm text-slate-700">
                 <p><span className="font-semibold text-slate-900">Quotes used:</span> {session.usage.monthlyQuoteCount}</p>
-                <p className="mt-1"><span className="font-semibold text-slate-900">AI drafts used:</span> {session.usage.monthlyAiQuoteCount}</p>
+                <p><span className="font-semibold text-slate-900">AI drafts used:</span> {session.usage.monthlyAiQuoteCount}</p>
               </div>
             ) : null}
           </div>
@@ -143,3 +183,4 @@ export function AnalyticsPage() {
     </div>
   );
 }
+

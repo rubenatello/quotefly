@@ -23,13 +23,13 @@ export function CrmMobileHeader({
   planName,
 }: CrmMobileHeaderProps) {
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/92 px-[max(1rem,env(safe-area-inset-left))] py-3 pr-[max(1rem,env(safe-area-inset-right))] shadow-[0_4px_24px_rgba(15,23,42,0.06)] backdrop-blur-xl lg:hidden">
+    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/96 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             onClick={onToggleMobile}
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700"
           >
             {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
           </button>
@@ -38,7 +38,12 @@ export function CrmMobileHeader({
               <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 shrink-0 rounded-lg" />
               <p className="truncate text-sm font-semibold text-slate-900">{currentLabel}</p>
             </div>
-            <p className="truncate text-xs text-slate-500">{planName ?? "QuoteFly workspace"}</p>
+            <div className="mt-0.5 flex items-center gap-2">
+              <p className="truncate text-xs text-slate-500">QuoteFly workspace</p>
+              <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                {planName ?? "Starter"}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -46,7 +51,7 @@ export function CrmMobileHeader({
           <button
             type="button"
             onClick={onOpenCommand}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
             aria-label="Open workspace search"
           >
             <Search size={17} />
@@ -56,7 +61,7 @@ export function CrmMobileHeader({
             <DropdownMenuPrimitive.Trigger asChild>
               <button
                 type="button"
-                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
                 aria-label="Open workspace menu"
               >
                 <MoreHorizontal size={18} />
@@ -76,10 +81,10 @@ export function CrmMobileHeader({
                   Search workspace
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
-                  onSelect={() => onNavigate("admin")}
+                  onSelect={() => onNavigate("settings")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
                 >
-                  Open admin
+                  Open settings
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onNavigate("branding")}

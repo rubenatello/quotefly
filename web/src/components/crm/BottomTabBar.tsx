@@ -34,7 +34,7 @@ export function BottomTabBar() {
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] lg:hidden">
-      <div className="grid grid-cols-5 overflow-hidden rounded-[30px] border border-slate-200 bg-white/95 shadow-[0_18px_40px_rgba(15,23,42,0.14)] backdrop-blur-xl">
+      <div className="grid grid-cols-5 overflow-hidden rounded-[28px] border border-slate-200 bg-white/96 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur-xl">
         {TABS.map((tab) => {
           const active = isActive(tab.path, location.pathname);
           return (
@@ -42,12 +42,13 @@ export function BottomTabBar() {
               key={tab.path}
               type="button"
               onClick={() => navigate(tab.path)}
-              className={`flex flex-col items-center justify-center py-2.5 text-[10px] font-medium transition-colors ${
+              className={`relative flex flex-col items-center justify-center py-2.5 text-[10px] font-medium transition-colors ${
                 active
                   ? "text-quotefly-blue"
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
+              {active ? <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-quotefly-blue" /> : null}
               <span className={`mb-1 inline-flex items-center justify-center rounded-xl p-1.5 ${active ? "bg-quotefly-blue/[0.08]" : ""}`}>
                 {tab.icon}
               </span>
