@@ -353,6 +353,9 @@ export function QuoteBuilderView() {
         subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+              Preview PDF
+            </Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
           </div>
         }
@@ -381,70 +384,138 @@ export function QuoteBuilderView() {
         ))}
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <Card variant="default" padding="md">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
-            <Select
-              label="Customer"
-              value={quoteForm.customerId}
-              onChange={(event) => selectQuoteCustomer(event.target.value)}
-              options={customerOptions}
-              placeholder="Select customer"
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_340px]">
+        <div>
+          {canUseChatToQuote ? (
+            <Card variant="default" padding="md" className="h-full">
+              <CardHeader
+                title="AI quick start"
+                subtitle={`Start here when speed matters. Draft the first version with AI, then clean the quote line by line.`}
+                actions={
+                  aiQuoteLimit !== null ? (
+                    <Badge tone="blue">
+                      {session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} drafts
+                    </Badge>
+                  ) : null
+                }
+              />
+              <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px]" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
+                <Textarea
+                  label="Prompt"
+                  rows={5}
+                  placeholder="New quote for Alan Johnson. Replace 1,250 sq ft asphalt shingle roof..."
+                  value={chatPrompt}
+                  onChange={(event) => setChatPrompt(event.target.value)}
+                />
+                <div className="flex flex-col gap-3">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                    AI should get you to a first draft fast, not lock the quote. You still own every line, cost, and price.
+                  </div>
+                  <Button fullWidth loading={saving} icon={<Sparkles size={14} />}>
+                    Draft With AI
+                  </Button>
+                </div>
+              </form>
+            </Card>
+          ) : (
+            <FeatureLockedCard
+              title="AI draft helper"
+              description="AI-assisted quote drafting is not active on this workspace yet."
+              currentPlanLabel={currentPlanLabel}
+              requiredPlanLabel="Starter"
+              showUpgradeHint={canAutoUpgradeMessage}
             />
-            <Select
-              label="Trade"
-              value={quoteForm.serviceType}
-              onChange={(event) =>
-                setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-              }
-              options={[
-                { value: "HVAC", label: "HVAC" },
-                { value: "PLUMBING", label: "PLUMBING" },
-                { value: "FLOORING", label: "FLOORING" },
-                { value: "ROOFING", label: "ROOFING" },
-                { value: "GARDENING", label: "GARDENING" },
-                { value: "CONSTRUCTION", label: "CONSTRUCTION" },
-              ]}
-            />
-            <div className="flex items-end">
-              <Button fullWidth variant="outline" icon={<Plus size={14} />} onClick={() => setQuickCustomerOpen(true)}>
-                Add Customer
-              </Button>
-            </div>
-          </div>
-        </Card>
+          )}
+        </div>
 
         <Card variant="blue" padding="md" className="self-start">
-          <CardHeader title="Quote totals" subtitle="Internal math stays visible while you build." />
+          <CardHeader
+            title="Quote actions"
+            subtitle="Keep PDF and create actions in view while you build."
+            actions={
+              <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                Preview PDF
+              </Button>
+            }
+          />
           <div className="space-y-3 text-sm">
-            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
             <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-            <div className="space-y-1">
-              <Input
-                label="Tax"
-                type="number"
-                min="0"
-                step="0.01"
-                value={quoteForm.taxAmount}
-                onChange={(event) => setQuoteForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-              />
-            </div>
+            <SummaryRow label="Tax" value={money(taxAmount)} />
             <SummaryRow label="Total" value={money(totalAmount)} strong />
             <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
             <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+          </div>
+          <div className="mt-4 space-y-2 text-sm text-slate-700">
+            <ChecklistItem compact complete={Boolean(activeCustomer)} label="Customer selected" />
+            <ChecklistItem compact complete={Boolean(quoteForm.title.trim())} label="Quote title added" />
+            <ChecklistItem compact complete={filteredDraftLines.length > 0} label={`${filteredDraftLines.length || 0} line${filteredDraftLines.length === 1 ? "" : "s"} ready`} />
           </div>
           <div className="mt-4 grid gap-2">
             <Button fullWidth loading={saving} onClick={() => void handleCreateQuote()}>
               Create Quote
             </Button>
-            <p className="text-xs text-slate-500">Create the quote, then continue in Quote Desk for send, revisions, and PDF actions.</p>
+            {selectedQuoteId ? (
+              <Button fullWidth variant="outline" onClick={() => navigateToQuote(selectedQuoteId)}>
+                Open Active Quote
+              </Button>
+            ) : null}
           </div>
         </Card>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
-          <QuoteSheetEditor
+      <Card variant="default" padding="md">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
+          <Select
+            label="Customer"
+            value={quoteForm.customerId}
+            onChange={(event) => selectQuoteCustomer(event.target.value)}
+            options={customerOptions}
+            placeholder="Select customer"
+          />
+          <Select
+            label="Trade"
+            value={quoteForm.serviceType}
+            onChange={(event) =>
+              setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+            }
+            options={[
+              { value: "HVAC", label: "HVAC" },
+              { value: "PLUMBING", label: "PLUMBING" },
+              { value: "FLOORING", label: "FLOORING" },
+              { value: "ROOFING", label: "ROOFING" },
+              { value: "GARDENING", label: "GARDENING" },
+              { value: "CONSTRUCTION", label: "CONSTRUCTION" },
+            ]}
+          />
+          <div className="flex items-end">
+            <Button fullWidth variant="outline" icon={<Plus size={14} />} onClick={() => setQuickCustomerOpen(true)}>
+              Add Customer
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {mobilePane === "preview" ? (
+        <div className="lg:hidden">
+          <QuoteLivePreview
+            businessName={session?.tenantName ?? "QuoteFly"}
+            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerPhone={activeCustomer?.phone ?? null}
+            customerEmail={activeCustomer?.email ?? null}
+            preparedDateLabel={preparedDateLabel}
+            sentDateLabel="N/A"
+            quoteTitle={quoteForm.title}
+            scopeText={quoteForm.scopeText}
+            lines={previewLines}
+            customerSubtotal={customerSubtotal}
+            taxAmount={taxAmount}
+            totalAmount={totalAmount}
+          />
+        </div>
+      ) : null}
+
+      <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
+        <QuoteSheetEditor
             title={quoteForm.title}
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
             titlePlaceholder="Asphalt shingle roof replacement"
@@ -582,89 +653,6 @@ export function QuoteBuilderView() {
               </div>
             </div>
           </QuoteSheetEditor>
-        </div>
-
-        <div className={`space-y-5 lg:sticky lg:top-24 lg:self-start ${mobilePane === "editor" ? "hidden lg:block" : ""}`}>
-          <div className={mobilePane === "preview" ? "block lg:hidden" : "hidden"}>
-            <QuoteLivePreview
-              businessName={session?.tenantName ?? "QuoteFly"}
-              customerName={activeCustomer?.fullName ?? "Select customer"}
-              customerPhone={activeCustomer?.phone ?? null}
-              customerEmail={activeCustomer?.email ?? null}
-              preparedDateLabel={preparedDateLabel}
-              sentDateLabel="N/A"
-              quoteTitle={quoteForm.title}
-              scopeText={quoteForm.scopeText}
-              lines={previewLines}
-              customerSubtotal={customerSubtotal}
-              taxAmount={taxAmount}
-              totalAmount={totalAmount}
-            />
-          </div>
-
-          <Card variant="blue" padding="md">
-            <CardHeader
-              title="Quote totals"
-              subtitle="Use this rail for math, checklist, and quick preview while the quote sheet stays primary."
-              actions={
-                <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                  Preview PDF
-                </Button>
-              }
-            />
-            <div className="space-y-3 text-sm">
-              <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-              <SummaryRow label="Tax" value={money(taxAmount)} />
-              <SummaryRow label="Total" value={money(totalAmount)} strong />
-            </div>
-          </Card>
-
-          <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
-            <Card variant="default" padding="md">
-              <CardHeader title="Create checklist" subtitle="Keep the quote clean before you create it." />
-              <div className="space-y-2 text-sm text-slate-700">
-                <ChecklistItem complete={Boolean(activeCustomer)} label="Customer selected" />
-                <ChecklistItem complete={Boolean(quoteForm.title.trim())} label="Quote title added" />
-                <ChecklistItem complete={filteredDraftLines.length > 0} label={`${filteredDraftLines.length || 0} quote line${filteredDraftLines.length === 1 ? "" : "s"} ready`} />
-                <ChecklistItem complete={customerSubtotal > 0} label="Price totals calculated" />
-              </div>
-            </Card>
-
-            {canUseChatToQuote ? (
-              <Card variant="default" padding="md" className="mt-5">
-                <CardHeader
-                  title="AI quick start"
-                  subtitle={`Use AI for a fast first draft on ${currentPlanLabel}. You can still clean everything up here line by line.`}
-                />
-                {aiQuoteLimit !== null ? (
-                  <Badge tone="blue">{session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} AI drafts this month</Badge>
-                ) : null}
-                <form className="mt-3 space-y-3" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
-                  <Textarea
-                    label="Prompt"
-                    rows={6}
-                    placeholder="New quote for Alan Johnson..."
-                    value={chatPrompt}
-                    onChange={(event) => setChatPrompt(event.target.value)}
-                  />
-                  <Button fullWidth loading={saving} icon={<Sparkles size={14} />}>
-                    Draft With AI
-                  </Button>
-                </form>
-              </Card>
-            ) : (
-              <div className="mt-5">
-                <FeatureLockedCard
-                  title="AI draft helper"
-                  description="AI-assisted quote drafting is not active on this workspace yet."
-                  currentPlanLabel={currentPlanLabel}
-                  requiredPlanLabel="Starter"
-                  showUpgradeHint={canAutoUpgradeMessage}
-                />
-              </div>
-            )}
-          </div>
-        </div>
       </div>
 
       <div className="lg:hidden">
@@ -776,9 +764,17 @@ function SummaryRow({
   );
 }
 
-function ChecklistItem({ complete, label }: { complete: boolean; label: string }) {
+function ChecklistItem({
+  complete,
+  label,
+  compact,
+}: {
+  complete: boolean;
+  label: string;
+  compact?: boolean;
+}) {
   return (
-    <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${complete ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}>
+    <div className={`flex items-center gap-2 rounded-xl border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}>
       <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
         {complete ? "OK" : "-"}
       </span>
