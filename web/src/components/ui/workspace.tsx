@@ -30,7 +30,7 @@ export function WorkspaceJumpBar({
             type="button"
             onClick={() => jumpToWorkspaceSection(link.id)}
             title={link.hint ?? link.label}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
           >
             <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
               {index + 1}
@@ -91,7 +91,7 @@ export function WorkspaceRailCard({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-[22px] border border-slate-200 bg-white p-3.5 shadow-sm", className)}>
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-3.5", className)}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{eyebrow}</p>
       <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
       <p className="mt-1 text-sm text-slate-600">{description}</p>

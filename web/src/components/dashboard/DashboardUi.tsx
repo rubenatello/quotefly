@@ -212,9 +212,9 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
 export function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-[18px] border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:border-slate-300">
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 transition hover:border-slate-300">
       <div className="flex items-center gap-3">
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-quotefly-blue/[0.08] text-quotefly-blue">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-quotefly-blue/[0.08] text-quotefly-blue">
           {icon}
         </span>
         <div className="min-w-0 flex-1">
@@ -256,7 +256,7 @@ export function MobileSectionSwitcher({
   ];
 
   return (
-    <div className="space-y-2 rounded-[28px] border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
+    <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-2 lg:hidden">
       <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
         Mobile Workflow
       </p>
@@ -268,7 +268,7 @@ export function MobileSectionSwitcher({
               key={section.id}
               type="button"
               onClick={() => onChange(section.id)}
-              className={`rounded-[22px] border px-2 py-2.5 text-left transition ${
+              className={`rounded-xl border px-2 py-2.5 text-left transition ${
                 active
                   ? "border-quotefly-blue/30 bg-quotefly-blue/[0.06] text-quotefly-blue"
                   : "border-slate-200 bg-white text-slate-700"
@@ -299,7 +299,7 @@ export function PipelineFlow({
   afterSaleLeads: number;
 }) {
   return (
-    <div className="overflow-x-auto rounded-[18px] border border-slate-200 bg-white p-2.5 sm:p-3">
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-2.5 sm:p-3">
       <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
         <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
         <FlowArrow />
@@ -334,7 +334,7 @@ function PipelineStage({
           : "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
-    <div className={`flex min-w-[160px] items-center justify-between rounded-[14px] border px-3 py-2 ${toneClass}`}>
+    <div className={`flex min-w-[160px] items-center justify-between rounded-xl border px-3 py-2 ${toneClass}`}>
       <p className="inline-flex items-center gap-2">
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl border border-current/10 bg-white">
           {icon}

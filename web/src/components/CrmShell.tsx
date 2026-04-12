@@ -121,7 +121,9 @@ export function CrmShell({
 
   useEffect(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
-    if (savedValue === "true") {
+    if (savedValue === null) {
+      setSidebarCollapsed(true);
+    } else if (savedValue === "true") {
       setSidebarCollapsed(true);
     }
   }, []);
@@ -158,7 +160,7 @@ export function CrmShell({
 
       <div
         className={`mx-auto w-full max-w-[1480px] lg:grid ${
-          sidebarCollapsed ? "lg:grid-cols-[88px_1fr]" : "lg:grid-cols-[264px_1fr]"
+          sidebarCollapsed ? "lg:grid-cols-[76px_1fr]" : "lg:grid-cols-[228px_1fr]"
         }`}
       >
         <CrmSidebar
@@ -170,9 +172,7 @@ export function CrmShell({
           operationsLinks={OPERATIONS_LINKS}
           moduleLinks={MODULE_LINKS}
           onLogout={onLogout}
-          fullName={fullName}
           planName={planName}
-          planCode={planCode}
           isTrial={isTrial}
           entitlements={entitlements}
           usage={usage}
@@ -188,16 +188,13 @@ export function CrmShell({
         )}
 
         <div className="min-w-0">
-          <div className="sticky top-0 z-30 hidden border-b border-slate-200/80 bg-white/88 backdrop-blur-xl lg:block">
-            <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-2.5">
+          <div className="sticky top-0 z-30 hidden border-b border-slate-200/80 bg-white/92 backdrop-blur-xl lg:block">
+            <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-2">
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  QuoteFly Workspace
-                </p>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[15px] font-semibold text-slate-900">{pageMeta.label}</span>
                   <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-                  <span className="text-sm text-slate-600">{pageMeta.hint}</span>
+                  <span className="text-sm text-slate-500">{pageMeta.hint}</span>
                 </div>
               </div>
 
@@ -205,7 +202,7 @@ export function CrmShell({
                 <button
                   type="button"
                   onClick={() => setCommandOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
                 >
                   <Search size={15} />
                   Search or jump
@@ -223,7 +220,7 @@ export function CrmShell({
                   <DropdownMenuPrimitive.Trigger asChild>
                     <button
                       type="button"
-                      className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 shadow-sm transition hover:border-slate-300"
+                      className="inline-flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-2 py-1.5 transition hover:border-slate-300"
                     >
                       <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-quotefly-blue text-sm font-semibold text-white">
                         {(fullName ?? "Q")

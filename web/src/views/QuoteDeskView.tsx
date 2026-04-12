@@ -45,7 +45,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceSection } from "../components/ui/workspace";
 import {
   api,
   type QuickBooksInvoiceStatusPayload,
@@ -124,6 +124,7 @@ export function QuoteDeskView() {
     navigateToQuote,
   } = useDashboard();
   const { quoteId } = useParams<{ quoteId: string }>();
+  const [activeDeskTab, setActiveDeskTab] = useState<"overview" | "details" | "lines" | "actions" | "history" | "comms">("overview");
 
   useEffect(() => {
     if (!quoteId) return;
@@ -402,13 +403,13 @@ export function QuoteDeskView() {
   const deskCompletionPercent = Math.round((deskSteps.filter((step) => step.complete).length / deskSteps.length) * 100);
   const nextDeskStep =
     deskSteps.find((step) => !step.complete)?.description ?? "Quote is fully staged. Send it or move job status forward.";
-  const deskLinks = [
-    { id: "desk-overview", label: "Overview", hint: "Customer + progress" },
-    { id: "desk-details", label: "Details", hint: "Scope + pricing" },
-    { id: "desk-lines", label: "Line Items", hint: "Saved jobs + math" },
-    { id: "desk-actions", label: "Actions", hint: "Send + lifecycle" },
-    { id: "desk-history", label: "History", hint: "Revisions" },
-    { id: "desk-comms", label: "Send Log", hint: "Outbound activity" },
+  const deskTabs = [
+    { id: "overview" as const, label: "Overview" },
+    { id: "details" as const, label: "Details" },
+    { id: "lines" as const, label: "Line Items" },
+    { id: "actions" as const, label: "Send + Sync" },
+    { id: "history" as const, label: "History" },
+    { id: "comms" as const, label: "Send Log" },
   ];
 
   async function confirmDeleteLineItem() {
@@ -437,7 +438,7 @@ export function QuoteDeskView() {
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
       <div className="space-y-6">
-          <Card variant="elevated" padding="md">
+          <Card variant="default" padding="md">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
                 <div className="grid gap-3 sm:grid-cols-3 xl:max-w-[420px]">
@@ -450,11 +451,29 @@ export function QuoteDeskView() {
                   <HeaderMetaChip icon={<MessageIcon size={13} />} label={customerPhone} />
                   {customerEmail ? <HeaderMetaChip icon={<EmailIcon size={13} />} label={customerEmail} /> : null}
                 </div>
-                <WorkspaceJumpBar links={deskLinks} />
+                <div className="flex flex-wrap gap-2">
+                  {deskTabs.map((tab) => {
+                    const active = tab.id === activeDeskTab;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveDeskTab(tab.id)}
+                        className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                          active
+                            ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="xl:w-[320px]">
-                <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Next step</p>
@@ -481,9 +500,10 @@ export function QuoteDeskView() {
             </div>
           </Card>
 
+          {activeDeskTab === "overview" ? (
           <WorkspaceSection
             id="desk-overview"
-            step="Step 1"
+            step="Overview"
             title="Overview"
             description="Get customer context, confirm quote health, and switch records without losing flow."
           >
@@ -545,10 +565,12 @@ export function QuoteDeskView() {
               </div>
             </div>
           </WorkspaceSection>
+          ) : null}
 
+          {activeDeskTab === "details" ? (
           <WorkspaceSection
             id="desk-details"
-            step="Step 2"
+            step="Details"
             title="Quote Details"
             description="Control customer-facing wording, lifecycle stage, and tax without losing the internal math."
             actions={<Badge tone="blue">Live Draft</Badge>}
@@ -609,7 +631,7 @@ export function QuoteDeskView() {
                     }
                     options={afterSaleOptions}
                   />
-                  <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-3.5 py-3 shadow-sm">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Follow-Up Due</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{afterSaleDueLabel}</p>
                   </div>
@@ -636,10 +658,12 @@ export function QuoteDeskView() {
               </form>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {activeDeskTab === "lines" ? (
           <WorkspaceSection
             id="desk-lines"
-            step="Step 3"
+            step="Line Items"
             title="Line Items"
             description="Use saved jobs when possible, then fine-tune labor, material, or service lines."
             actions={<Badge tone="slate">{lineItemCount} lines</Badge>}
@@ -659,7 +683,7 @@ export function QuoteDeskView() {
                       description="Add labor, materials, or service charges so the quote math has usable structure."
                     />
                   ) : (
-                    <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                       <div className="hidden border-b border-slate-200 bg-slate-50 px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1.5fr)_70px_100px_100px_110px_auto] lg:items-center lg:gap-3">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</p>
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Qty</p>
@@ -695,12 +719,12 @@ export function QuoteDeskView() {
                   )}
                 </div>
 
-                <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <p className="text-sm font-semibold text-slate-900">Add Line Item</p>
                   <p className="mt-1 text-xs text-slate-500">
                     Build labor, materials, and service charges with cost and sell price separated.
                   </p>
-                  <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">Saved Jobs</p>
@@ -739,7 +763,7 @@ export function QuoteDeskView() {
                                 setSelectedPresetId(preset.id);
                                 setSelectedPresetQuantity(String(Number(preset.defaultQuantity)));
                               }}
-                              className={`min-w-[190px] rounded-[22px] border px-3 py-2.5 text-left transition ${
+                              className={`min-w-[190px] rounded-xl border px-3 py-2.5 text-left transition ${
                                 preset.id === selectedPresetId
                                   ? "border-quotefly-blue/25 bg-quotefly-blue/[0.06] shadow-sm"
                                   : "border-slate-200 bg-white"
@@ -774,7 +798,7 @@ export function QuoteDeskView() {
                         </div>
 
                         {selectedPreset ? (
-                          <div className="rounded-[22px] border border-slate-200 bg-white p-3 shadow-sm">
+                          <div className="rounded-xl border border-slate-200 bg-white p-3">
                             <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
                             <p className="mt-1 text-xs text-slate-600">
                               {selectedPreset.description ?? "No default description yet."}
@@ -845,7 +869,7 @@ export function QuoteDeskView() {
                       />
                     </div>
 
-                    <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Draft line math</p>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-600">
                         <MiniMetric label="Cost" value={money(lineItemMath.costTotal)} />
@@ -866,10 +890,12 @@ export function QuoteDeskView() {
               </div>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {activeDeskTab === "actions" ? (
           <WorkspaceSection
             id="desk-actions"
-            step="Step 4"
+            step="Send + Sync"
             title="Actions and Sync"
             description="Save the quote, move the lifecycle forward, send it out, or sync the invoice into QuickBooks."
           >
@@ -1162,9 +1188,10 @@ export function QuoteDeskView() {
               </Card>
             </div>
           </WorkspaceSection>
+          ) : null}
       </div>
 
-      <div className="sticky bottom-16 z-20 rounded-[20px] border border-slate-200 bg-white/95 p-3 shadow-[0_14px_28px_rgba(15,23,42,0.14)] backdrop-blur sm:hidden">
+      <div className="sticky bottom-16 z-20 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur sm:hidden">
         <div className="grid grid-cols-2 gap-2">
           <Button size="sm" loading={saving} onClick={() => void persistSelectedQuote()}>
             Save
@@ -1181,9 +1208,10 @@ export function QuoteDeskView() {
         </div>
       </div>
 
+      {activeDeskTab === "history" ? (
       <WorkspaceSection
         id="desk-history"
-        step="Step 5"
+        step="History"
         title="Revision History"
         description="Track original values, revisions, and decision changes on the selected quote."
       >
@@ -1259,10 +1287,12 @@ export function QuoteDeskView() {
           />
         )}
       </WorkspaceSection>
+      ) : null}
 
+      {activeDeskTab === "comms" ? (
       <WorkspaceSection
         id="desk-comms"
-        step="Step 6"
+        step="Send Log"
         title="Send Activity"
         description="Review logged email, text, and copy actions for this quote."
       >
@@ -1304,6 +1334,7 @@ export function QuoteDeskView() {
           />
         )}
       </WorkspaceSection>
+      ) : null}
 
       <ConfirmModal
         open={lineItemPendingDeleteId !== null}
@@ -1390,7 +1421,7 @@ function formatAfterSaleStatusLabel(status: string) {
 
 function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
+    <span className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
       <span className="text-quotefly-blue">{icon}</span>
       {label}
     </span>
@@ -1399,7 +1430,7 @@ function HeaderMetaChip({ icon, label }: { icon: ReactNode; label: string }) {
 
 function DeskRailStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[14px] border border-slate-200 bg-slate-50 px-3 py-2.5">
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1.5 text-sm font-semibold text-slate-900">{value}</p>
     </div>
@@ -1429,7 +1460,7 @@ function DeskMetricCard({
             : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
-    <div className={`rounded-[14px] border p-3 ${toneClass}`}>
+    <div className={`rounded-xl border p-3 ${toneClass}`}>
       <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em]">
         {icon}
         <span>{label}</span>
@@ -1455,7 +1486,7 @@ function DeskWorkflowCard({
         subtitle="Keep the work ordered: verify scope, price the job, then send or export."
       />
       <ProgressBar value={progress} label="Completion" hint={`${progress}%`} />
-      <div className="mt-3 rounded-[14px] border border-slate-200 bg-slate-50 px-3.5 py-3">
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Next step</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{nextStep}</p>
       </div>
@@ -1463,7 +1494,7 @@ function DeskWorkflowCard({
         {steps.map((step, index) => (
           <div
             key={step.label}
-            className={`flex items-start gap-3 rounded-[18px] border px-4 py-3 ${
+            className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${
               step.complete
                 ? "border-emerald-200 bg-emerald-50"
                 : "border-slate-200 bg-white"

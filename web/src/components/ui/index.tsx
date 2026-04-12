@@ -17,11 +17,11 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "border-quotefly-blue bg-quotefly-blue text-white shadow-sm hover:bg-[#256fbf] active:bg-[#1f5f9f]",
+    "border-quotefly-blue bg-quotefly-blue text-white hover:bg-[#256fbf] active:bg-[#1f5f9f]",
   secondary:
-    "border-quotefly-orange bg-quotefly-orange text-white shadow-sm hover:bg-[#dd532a] active:bg-[#c74921]",
+    "border-quotefly-orange bg-quotefly-orange text-white hover:bg-[#dd532a] active:bg-[#c74921]",
   outline:
-    "border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100",
+    "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100",
   ghost: "border-transparent bg-transparent text-slate-700 hover:bg-slate-100 active:bg-slate-200",
   danger: "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 active:bg-red-200",
   success: "bg-quotefly-blue/10 text-quotefly-blue border-quotefly-blue/20 hover:bg-quotefly-blue/15 active:bg-quotefly-blue/20",
@@ -40,7 +40,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center rounded-full border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center rounded-xl border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50",
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         fullWidth && "w-full",
@@ -83,7 +83,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[42px] w-full rounded-xl border bg-white px-3.5 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+              "min-h-[42px] w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-200",
               className,
@@ -121,7 +121,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[42px] w-full rounded-xl border bg-white px-3.5 py-2 text-sm text-slate-900 shadow-sm transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[42px] w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -160,7 +160,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[120px] w-full rounded-xl border bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+            "min-h-[120px] w-full rounded-lg border bg-white px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
             error ? "border-red-300" : "border-slate-200",
             className,
           )}
@@ -183,10 +183,10 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const CARD_VARIANTS: Record<CardVariant, string> = {
-  default: "border-slate-200 bg-white shadow-sm",
-  blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.04] shadow-sm",
-  amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.05] shadow-sm",
-  elevated: "border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.07)]",
+  default: "border-slate-200 bg-white",
+  blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.035]",
+  amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.045]",
+  elevated: "border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -199,7 +199,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ variant = "default", padding = "md", className = "", children, ...rest }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-[22px] border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
+      className={cn("rounded-2xl border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
       {...rest}
     >
       {children}
@@ -260,7 +260,7 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 export function EmptyState({ icon, title, description }: { icon?: ReactNode; title: string; description?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-[20px] border border-dashed border-slate-300 bg-slate-50/70 px-5 py-8 text-center">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-5 py-8 text-center">
       {icon && <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-400">
         {icon}
       </span>}
@@ -278,7 +278,7 @@ export function Skeleton({ className = "" }: { className?: string }) {
 
 export function SkeletonCard() {
   return (
-    <div className="rounded-[18px] border border-slate-200 bg-white p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <Skeleton className="mb-3 h-4 w-24" />
       <Skeleton className="mb-2 h-3 w-full" />
       <Skeleton className="h-3 w-3/4" />
@@ -378,7 +378,7 @@ export function Modal({
         aria-labelledby={ariaLabel ? undefined : titleId}
         aria-label={ariaLabel}
       className={cn(
-        "flex max-h-[90vh] w-full flex-col overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]",
+        "flex max-h-[90vh] w-full flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_24px_56px_rgba(15,23,42,0.18)]",
         MODAL_SIZES[size],
         panelClassName,
       )}
@@ -529,8 +529,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h1 className="text-[2rem] font-bold tracking-tight text-slate-900 sm:text-[2.5rem]">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
+        <h1 className="text-[1.85rem] font-bold tracking-tight text-slate-900 sm:text-[2.15rem]">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-3xl text-sm text-slate-600">{subtitle}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
     </div>

@@ -28,7 +28,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceSection } from "../components/ui/workspace";
 import { usePageView, useTrack } from "../lib/analytics";
 
 const MAX_QUICKBOOKS_EXPORT_QUOTES = 100;
@@ -52,6 +52,7 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
 export function QuoteBuilderView() {
   usePageView("quote_builder");
   const track = useTrack();
+  const [activeBuilderTab, setActiveBuilderTab] = useState<"overview" | "customer" | "ai" | "draft" | "export">("overview");
   const {
     session,
     customers,
@@ -179,16 +180,13 @@ export function QuoteBuilderView() {
     () => Math.round((builderSteps.filter((step) => step.complete).length / builderSteps.length) * 100),
     [builderSteps],
   );
-  const builderLinks = useMemo(
-    () => [
-      { id: "builder-overview", label: "Overview", hint: "Progress + totals" },
-      { id: "builder-customer", label: "Customer", hint: "Lookup or add lead" },
-      { id: "builder-ai", label: "AI Draft", hint: "Prompt to quote" },
-      { id: "builder-draft", label: "Draft Quote", hint: "Starter + pricing" },
-      { id: "builder-export", label: "Export", hint: "Quotes + QuickBooks" },
-    ],
-    [],
-  );
+  const builderTabs = [
+    { id: "overview" as const, label: "Overview" },
+    { id: "customer" as const, label: "Customer" },
+    { id: "ai" as const, label: "AI Draft" },
+    { id: "draft" as const, label: "Draft Quote" },
+    { id: "export" as const, label: "Export" },
+  ];
   const aiQuoteUsed = session?.usage?.monthlyAiQuoteCount ?? 0;
   const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
   const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
@@ -371,7 +369,7 @@ export function QuoteBuilderView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
       <div className="space-y-6">
-          <Card variant="elevated" padding="md">
+          <Card variant="default" padding="md">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
                 <div className="grid gap-3 sm:grid-cols-3 xl:max-w-[420px]">
@@ -380,7 +378,7 @@ export function QuoteBuilderView() {
                   <BuilderSnapshotCard label="Quoted" value={String(quotedQuotesCount)} tone="orange" />
                 </div>
                 {aiQuoteLimit !== null ? (
-                  <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI drafts</p>
                       <span className="text-xs font-semibold text-slate-900">
@@ -395,11 +393,29 @@ export function QuoteBuilderView() {
                     />
                   </div>
                 ) : null}
-                <WorkspaceJumpBar links={builderLinks} />
+                <div className="flex flex-wrap gap-2">
+                  {builderTabs.map((tab) => {
+                    const active = tab.id === activeBuilderTab;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveBuilderTab(tab.id)}
+                        className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                          active
+                            ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="xl:w-[320px]">
-                <div className="rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current state</p>
                   <p className="mt-2 text-base font-semibold text-slate-900">
                     {activeCustomer ? activeCustomer.fullName : "No customer selected"}
@@ -410,7 +426,7 @@ export function QuoteBuilderView() {
                       : "Use the customer section first so the quote attaches to the right record."}
                   </p>
                   <div className="mt-4 grid gap-2">
-                    <div className="rounded-[16px] border border-slate-200 bg-white px-3 py-3">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Builder progress</p>
                       <p className="mt-1 text-2xl font-bold text-slate-900">{builderCompletionPercent}%</p>
                     </div>
@@ -429,18 +445,21 @@ export function QuoteBuilderView() {
             </div>
           </Card>
 
+          {activeBuilderTab === "overview" ? (
           <WorkspaceSection
             id="builder-overview"
-            step="Step 1"
+            step="Overview"
             title="Overview"
             description="Track builder progress, customer readiness, and quote throughput before drafting."
           >
             <BuilderWorkflowCard steps={builderSteps} progress={builderCompletionPercent} />
           </WorkspaceSection>
+          ) : null}
 
+          {activeBuilderTab === "customer" ? (
           <WorkspaceSection
             id="builder-customer"
-            step="Step 2"
+            step="Customer"
             title="Customer"
             description="Search an existing customer first. If they do not exist, add them fast and keep moving."
           >
@@ -490,15 +509,17 @@ export function QuoteBuilderView() {
               </Card>
             </div>
           </WorkspaceSection>
+          ) : null}
 
+          {activeBuilderTab === "ai" ? (
           <WorkspaceSection
             id="builder-ai"
-            step="Step 3"
+            step="AI Draft"
             title="AI Draft"
             description="Use AI when it helps, but keep it in a tight card so it does not compete with the main quote form."
           >
             {canUseChatToQuote ? (
-              <Card variant="blue" padding="lg">
+              <Card variant="default" padding="lg">
                 <CardHeader
                   title="Chat to Quote"
                   subtitle="Describe customer, scope, and pricing in one message. QuoteFly AI builds the draft."
@@ -540,7 +561,7 @@ export function QuoteBuilderView() {
                     placeholder="New quote for..."
                   />
                   {aiQuoteLimit !== null ? (
-                    <div className="rounded-[22px] border border-white/70 bg-white/90 px-3 py-3 shadow-sm">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
                       <ProgressBar
                         value={aiUsagePercent}
                         label="Monthly AI draft usage"
@@ -570,14 +591,16 @@ export function QuoteBuilderView() {
               />
             )}
           </WorkspaceSection>
+          ) : null}
 
+          {activeBuilderTab === "draft" ? (
           <WorkspaceSection
             id="builder-draft"
-            step="Step 4"
+            step="Draft Quote"
             title="Draft Quote"
             description="Use a starter job, tighten pricing, then create the quote and move into the desk."
           >
-            <Card variant="elevated" padding="lg">
+          <Card variant="default" padding="lg">
         <CardHeader title="Create Quote" subtitle="Use a saved starter job, then tune the scope and math before opening the desk." />
         <form onSubmit={(event) => void handleCreateQuote(event)} className="space-y-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -774,10 +797,12 @@ export function QuoteBuilderView() {
         </form>
             </Card>
           </WorkspaceSection>
+          ) : null}
 
+          {activeBuilderTab === "export" ? (
           <WorkspaceSection
             id="builder-export"
-            step="Step 5"
+            step="Export"
             title="Export"
             description="Review live quotes, select invoice-ready records, and hand off cleanly into QuickBooks."
           >
@@ -800,7 +825,7 @@ export function QuoteBuilderView() {
           </Button>
         </div>
 
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-[16px] border border-slate-200 bg-slate-50 p-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <Button
             type="button"
             size="sm"
@@ -858,7 +883,7 @@ export function QuoteBuilderView() {
           </span>
         </div>
 
-        <div className="overflow-hidden rounded-[18px] border border-slate-200 bg-white">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="hidden grid-cols-[48px_minmax(0,1.7fr)_minmax(0,1fr)_130px_110px_96px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:grid">
             <span>Select</span>
             <span>Quote</span>
@@ -901,6 +926,7 @@ export function QuoteBuilderView() {
       </Card>
             </div>
           </WorkspaceSection>
+          ) : null}
       </div>
 
       <QuickBooksGuideModal
@@ -1055,7 +1081,7 @@ function BuilderWorkflowCard({
   progress: number;
 }) {
   return (
-    <Card variant="blue" padding="lg">
+    <Card variant="default" padding="lg">
       <CardHeader
         title="Builder Workflow"
         subtitle="Follow this order on phone or desktop so customers and quotes stay clean."
