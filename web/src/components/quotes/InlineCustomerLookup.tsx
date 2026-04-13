@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { Phone, Search, UserPlus2 } from "lucide-react";
+import { Mail, Phone, Search, UserRoundPlus } from "lucide-react";
 import { api, ApiError, type Customer } from "../../lib/api";
-import { Button, Input } from "../ui";
 
 interface InlineCustomerLookupProps {
   selectedCustomer: Customer | null;
@@ -59,72 +58,78 @@ export function InlineCustomerLookup({
   }, [query, selectedCustomer]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="flex-1">
-          <Input
-            placeholder="Find by customer name, phone, or email"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            icon={<Search size={14} />}
-          />
+    <div className="w-full max-w-[560px]">
+      <div className="relative">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={
+                selectedCustomer
+                  ? "Find another customer by name, phone, or email"
+                  : "Find customer by name, phone, or email"
+              }
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-4 focus:ring-quotefly-blue/10"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onAddCustomer}
+            className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-quotefly-blue"
+          >
+            <UserRoundPlus size={15} />
+            <span>Add customer</span>
+          </button>
         </div>
-        <Button type="button" variant="outline" size="sm" icon={<UserPlus2 size={14} />} onClick={onAddCustomer}>
-          Add customer
-        </Button>
-      </div>
 
-      {selectedCustomer ? (
-        <div className="rounded-2xl border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-2.5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Selected</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">{selectedCustomer.fullName}</p>
-          <p className="mt-1 text-xs text-slate-600">
-            {selectedCustomer.phone}
-            {selectedCustomer.email ? ` / ${selectedCustomer.email}` : ""}
-          </p>
-        </div>
-      ) : null}
-
-      {query.trim().length >= 2 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white">
-          {loading ? (
-            <p className="px-3 py-3 text-sm text-slate-500">Searching customers…</p>
-          ) : error ? (
-            <p className="px-3 py-3 text-sm text-red-600">{error}</p>
-          ) : results.length ? (
-            <div className="divide-y divide-slate-200">
-              {results.map((customer) => (
-                <button
-                  key={customer.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectCustomer(customer);
-                    setQuery(customer.fullName);
-                    setResults([]);
-                  }}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-50"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                      <span className="inline-flex items-center gap-1">
-                        <Phone size={12} />
-                        {customer.phone}
-                      </span>
-                      {customer.email ? <span className="truncate">{customer.email}</span> : null}
+        {query.trim().length >= 2 ? (
+          <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_40px_rgba(15,23,42,0.12)]">
+            {loading ? (
+              <p className="px-3 py-3 text-sm text-slate-500">Searching customers...</p>
+            ) : error ? (
+              <p className="px-3 py-3 text-sm text-red-600">{error}</p>
+            ) : results.length ? (
+              <div className="max-h-[280px] divide-y divide-slate-200 overflow-y-auto">
+                {results.map((customer) => (
+                  <button
+                    key={customer.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectCustomer(customer);
+                      setQuery(customer.fullName);
+                      setResults([]);
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-50"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        <span className="inline-flex items-center gap-1">
+                          <Phone size={12} />
+                          {customer.phone}
+                        </span>
+                        {customer.email ? (
+                          <span className="inline-flex min-w-0 items-center gap-1">
+                            <Mail size={12} />
+                            <span className="truncate">{customer.email}</span>
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                    Use
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="px-3 py-3 text-sm text-slate-500">No customers matched that search.</p>
-          )}
-        </div>
-      ) : null}
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                      Use
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-3 text-sm text-slate-500">No customers matched that search.</p>
+            )}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

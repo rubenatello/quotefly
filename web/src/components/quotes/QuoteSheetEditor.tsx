@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { FileText, UserRound } from "lucide-react";
+import type { BrandingLogoPosition } from "../../lib/api";
 import { Badge } from "../ui";
 
 export function QuoteSheetEditor({
@@ -7,8 +8,10 @@ export function QuoteSheetEditor({
   onTitleChange,
   titlePlaceholder,
   businessName,
+  businessHint,
   customerName,
   customerHint,
+  headerTools,
   customerTools,
   preparedDateLabel,
   sentDateLabel,
@@ -16,14 +19,19 @@ export function QuoteSheetEditor({
   onOverviewChange,
   overviewPlaceholder,
   actions,
+  logoUrl,
+  logoPosition = "left",
+  accentColor = "#4F7FD2",
   children,
 }: {
   title: string;
   onTitleChange: (value: string) => void;
   titlePlaceholder?: string;
   businessName: string;
+  businessHint?: string;
   customerName: string;
   customerHint?: string;
+  headerTools?: ReactNode;
   customerTools?: ReactNode;
   preparedDateLabel: string;
   sentDateLabel: string;
@@ -31,34 +39,49 @@ export function QuoteSheetEditor({
   onOverviewChange: (value: string) => void;
   overviewPlaceholder?: string;
   actions?: ReactNode;
+  logoUrl?: string | null;
+  logoPosition?: BrandingLogoPosition;
+  accentColor?: string;
   children: ReactNode;
 }) {
+  const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+
   return (
     <div className="rounded-[24px] border border-slate-200 bg-slate-100/70 p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-4">
       <div className="rounded-[20px] border border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-        <div className="h-1.5 rounded-t-[20px] bg-quotefly-blue" />
+        <div className="h-1.5 rounded-t-[20px]" style={{ backgroundColor: accentColor }} />
 
-        <div className="flex flex-col gap-3 px-5 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
-            <input
-              value={title}
-              onChange={(event) => onTitleChange(event.target.value)}
-              placeholder={titlePlaceholder ?? "Untitled quote"}
-              className="mt-2 w-full border-0 bg-transparent px-0 text-2xl font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 focus:outline-none sm:text-[2rem]"
-            />
+        <div className="px-5 py-4 sm:px-6 sm:py-5">
+          {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start gap-4">
+                {logoPosition === "left" ? logo : null}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
+                  <input
+                    value={title}
+                    onChange={(event) => onTitleChange(event.target.value)}
+                    placeholder={titlePlaceholder ?? "Untitled quote"}
+                    className="mt-2 w-full border-0 bg-transparent px-0 text-2xl font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 focus:outline-none sm:text-[2rem]"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 self-start">
+              {logoPosition === "right" ? logo : null}
+              <Badge tone="blue" icon={<FileText size={12} />}>
+                Customer view
+              </Badge>
+              {actions}
+            </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Badge tone="blue" icon={<FileText size={12} />}>
-              Customer view
-            </Badge>
-            {actions}
-          </div>
+          {headerTools ? <div className="mt-4 flex justify-end">{headerTools}</div> : null}
         </div>
 
         <div className="space-y-6 border-t border-slate-200 px-5 py-5 sm:px-6 sm:py-6">
           <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <SheetParty label="Business" value={businessName} />
+            <SheetParty label="Business" value={businessName} hint={businessHint} />
             <SheetParty
               label="Customer"
               value={customerName}
@@ -87,6 +110,14 @@ export function QuoteSheetEditor({
           {children}
         </div>
       </div>
+    </div>
+  );
+}
+
+function BrandLogo({ logoUrl }: { logoUrl: string }) {
+  return (
+    <div className="flex h-14 max-w-[200px] items-center">
+      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
 }

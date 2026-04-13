@@ -41,7 +41,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type WorkPreset } from "../lib/api";
+import { api, type TenantBranding, type WorkPreset } from "../lib/api";
 import {
   buildPresetPayloadFromLine,
   joinQuoteLineDescription,
@@ -58,6 +58,21 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   if (unitType === "HOUR") return "Hours";
   if (unitType === "EACH") return "Units";
   return "Qty";
+}
+
+function buildBusinessHint(branding: TenantBranding | null): string | undefined {
+  if (!branding) return undefined;
+
+  const location = [branding.city, branding.state].filter(Boolean).join(", ");
+  const parts = [branding.businessPhone, branding.businessEmail, location].filter(
+    (value): value is string => Boolean(value && value.trim()),
+  );
+
+  return parts.length ? parts.join(" / ") : undefined;
+}
+
+function resolveQuoteAccentColor(branding: TenantBranding | null): string {
+  return branding?.componentColors?.headerBgColor ?? branding?.primaryColor ?? "#4F7FD2";
 }
 
 type DeskTab = "quote" | "send" | "history" | "log";
@@ -80,6 +95,7 @@ export function QuoteDeskView() {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
+  const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
     session,
     selectedQuoteId,
@@ -152,6 +168,26 @@ export function QuoteDeskView() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!session?.tenantId) return;
+
+    let mounted = true;
+    api.branding
+      .get(session.tenantId)
+      .then((result) => {
+        if (!mounted) return;
+        setBranding(result.branding);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setBranding(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [session?.tenantId]);
 
   useEffect(() => {
     if (!selectedQuote) {
@@ -261,9 +297,11 @@ export function QuoteDeskView() {
         quantity: line.quantity,
         unitPrice: line.unitPrice,
         lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
-      })),
+    })),
     [editableLines],
   );
+  const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
+  const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setEditableLines((current) =>
@@ -553,6 +591,7 @@ export function QuoteDeskView() {
               title={quoteEditForm.title}
               onTitleChange={(value) => setQuoteEditForm((prev) => ({ ...prev, title: value }))}
               businessName={session?.tenantName ?? "QuoteFly"}
+              businessHint={businessHint}
               customerName={customerName}
               customerHint={`${customerPhone}${customerEmail ? ` / ${customerEmail}` : ""}`}
               preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
@@ -560,6 +599,9 @@ export function QuoteDeskView() {
               overview={quoteEditForm.scopeText}
               onOverviewChange={(value) => setQuoteEditForm((prev) => ({ ...prev, scopeText: value }))}
               overviewPlaceholder="Optional overview shown near the top of the quote."
+              logoUrl={branding?.logoUrl ?? null}
+              logoPosition={branding?.logoPosition ?? "left"}
+              accentColor={quoteAccentColor}
               actions={
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
@@ -715,6 +757,7 @@ export function QuoteDeskView() {
             <div className={mobilePane === "preview" ? "block lg:hidden" : "hidden"}>
               <QuoteLivePreview
                 businessName={session?.tenantName ?? "QuoteFly"}
+                businessHint={businessHint}
                 customerName={customerName}
                 customerPhone={customerPhone}
                 customerEmail={customerEmail}
@@ -726,6 +769,9 @@ export function QuoteDeskView() {
                 customerSubtotal={customerSubtotal}
                 taxAmount={taxAmount}
                 totalAmount={totalAmount}
+                logoUrl={branding?.logoUrl ?? null}
+                logoPosition={branding?.logoPosition ?? "left"}
+                accentColor={quoteAccentColor}
               />
             </div>
 
@@ -993,6 +1039,7 @@ export function QuoteDeskView() {
         <ModalBody className="bg-slate-50">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
+            businessHint={businessHint}
             customerName={customerName}
             customerPhone={customerPhone}
             customerEmail={customerEmail}
@@ -1004,6 +1051,9 @@ export function QuoteDeskView() {
             customerSubtotal={customerSubtotal}
             taxAmount={taxAmount}
             totalAmount={totalAmount}
+            logoUrl={branding?.logoUrl ?? null}
+            logoPosition={branding?.logoPosition ?? "left"}
+            accentColor={quoteAccentColor}
           />
         </ModalBody>
       </Modal>

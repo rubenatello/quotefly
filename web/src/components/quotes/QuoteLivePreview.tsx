@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { FileText, UserRound } from "lucide-react";
+import type { BrandingLogoPosition } from "../../lib/api";
 import { money } from "../dashboard/DashboardContext";
 import { Badge } from "../ui";
 
@@ -14,6 +15,7 @@ export type QuotePreviewLine = {
 
 export function QuoteLivePreview({
   businessName,
+  businessHint,
   customerName,
   customerPhone,
   customerEmail,
@@ -25,8 +27,12 @@ export function QuoteLivePreview({
   customerSubtotal,
   taxAmount,
   totalAmount,
+  logoUrl,
+  logoPosition = "left",
+  accentColor = "#4F7FD2",
 }: {
   businessName: string;
+  businessHint?: string;
   customerName: string;
   customerPhone?: string | null;
   customerEmail?: string | null;
@@ -38,27 +44,43 @@ export function QuoteLivePreview({
   customerSubtotal: number;
   taxAmount: number;
   totalAmount: number;
+  logoUrl?: string | null;
+  logoPosition?: BrandingLogoPosition;
+  accentColor?: string;
 }) {
+  const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+
   return (
     <div className="rounded-[24px] border border-slate-200 bg-slate-100/70 p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-4">
       <div className="rounded-[20px] border border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-        <div className="h-1.5 rounded-t-[20px] bg-quotefly-blue" />
+        <div className="h-1.5 rounded-t-[20px]" style={{ backgroundColor: accentColor }} />
 
-        <div className="flex items-start justify-between gap-3 px-5 py-4 sm:px-6 sm:py-5">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Live quote preview</p>
-            <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-950 sm:text-xl">
-              {quoteTitle.trim() || "Untitled quote"}
-            </h3>
+        <div className="px-5 py-4 sm:px-6 sm:py-5">
+          {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start gap-4">
+                {logoPosition === "left" ? logo : null}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Live quote preview</p>
+                  <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-950 sm:text-xl">
+                    {quoteTitle.trim() || "Untitled quote"}
+                  </h3>
+                </div>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {logoPosition === "right" ? logo : null}
+              <Badge tone="blue" icon={<FileText size={12} />}>
+                Customer view
+              </Badge>
+            </div>
           </div>
-          <Badge tone="blue" icon={<FileText size={12} />}>
-            Customer view
-          </Badge>
         </div>
 
         <div className="space-y-6 border-t border-slate-200 px-5 py-5 sm:px-6 sm:py-6">
           <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <PreviewPartyBlock label="Business" value={businessName} />
+            <PreviewPartyBlock label="Business" value={businessName} hint={businessHint} />
             <PreviewPartyBlock
               label="Customer"
               value={customerName || "Select customer"}
@@ -121,6 +143,14 @@ export function QuoteLivePreview({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function BrandLogo({ logoUrl }: { logoUrl: string }) {
+  return (
+    <div className="flex h-14 max-w-[200px] items-center">
+      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
 }

@@ -180,6 +180,21 @@ export type BrandingBusinessProfile = {
   postalCode?: string | null;
 };
 
+export type TenantBranding = {
+  primaryColor: string;
+  templateId: BrandingTemplateId;
+  logoUrl?: string | null;
+  logoPosition?: BrandingLogoPosition;
+  businessEmail?: string | null;
+  businessPhone?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  componentColors?: BrandingComponentColors | null;
+};
+
 type DecimalLike = number | string;
 
 export type Customer = {
@@ -560,22 +575,7 @@ export const api = {
           name: string;
           timezone: string;
         };
-        branding:
-          | {
-              primaryColor: string;
-              templateId: BrandingTemplateId;
-              logoUrl?: string | null;
-              logoPosition?: BrandingLogoPosition;
-              businessEmail?: string | null;
-              businessPhone?: string | null;
-              addressLine1?: string | null;
-              addressLine2?: string | null;
-              city?: string | null;
-              state?: string | null;
-              postalCode?: string | null;
-              componentColors?: BrandingComponentColors | null;
-            }
-          | null;
+        branding: TenantBranding | null;
       }>(
         `/v1/tenants/${tenantId}/branding`,
       ),
@@ -597,20 +597,7 @@ export const api = {
           name: string;
           timezone: string;
         };
-        branding: {
-          primaryColor: string;
-          templateId: BrandingTemplateId;
-          logoUrl?: string | null;
-          logoPosition: BrandingLogoPosition;
-          businessEmail?: string | null;
-          businessPhone?: string | null;
-          addressLine1?: string | null;
-          addressLine2?: string | null;
-          city?: string | null;
-          state?: string | null;
-          postalCode?: string | null;
-          componentColors?: BrandingComponentColors | null;
-        };
+        branding: TenantBranding;
       }>(
         `/v1/tenants/${tenantId}/branding`,
         { method: "PUT", body: JSON.stringify(body) },

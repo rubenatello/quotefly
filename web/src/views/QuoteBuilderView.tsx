@@ -1,6 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Eye, Plus, Sparkles, X } from "lucide-react";
-import { FeatureLockedCard } from "../components/dashboard/DashboardUi";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -19,9 +18,10 @@ import {
   ModalBody,
   ModalHeader,
   PageHeader,
+  Select,
   Textarea,
 } from "../components/ui";
-import { api, type WorkPreset } from "../lib/api";
+import { api, type TenantBranding, type WorkPreset } from "../lib/api";
 import {
   buildPresetPayloadFromLine,
   joinQuoteLineDescription,
@@ -88,6 +88,21 @@ function buildAiPromptStarters(
   ];
 }
 
+function buildBusinessHint(branding: TenantBranding | null): string | undefined {
+  if (!branding) return undefined;
+
+  const location = [branding.city, branding.state].filter(Boolean).join(", ");
+  const parts = [branding.businessPhone, branding.businessEmail, location].filter(
+    (value): value is string => Boolean(value && value.trim()),
+  );
+
+  return parts.length ? parts.join(" / ") : undefined;
+}
+
+function resolveQuoteAccentColor(branding: TenantBranding | null): string {
+  return branding?.componentColors?.headerBgColor ?? branding?.primaryColor ?? "#4F7FD2";
+}
+
 type BuilderPane = "editor" | "preview";
 
 export function QuoteBuilderView() {
@@ -104,7 +119,9 @@ export function QuoteBuilderView() {
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
+  const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
     session,
     customers,
@@ -117,9 +134,7 @@ export function QuoteBuilderView() {
     aiQuoteLimit,
     chatPrompt,
     setChatPrompt,
-    createQuoteFromChatPrompt,
-    currentPlanLabel,
-    canAutoUpgradeMessage,
+    setChatParsed,
     quoteForm,
     setQuoteForm,
     createQuoteDraftFromForm,
@@ -127,6 +142,7 @@ export function QuoteBuilderView() {
     selectedQuoteId,
     navigateToQuote,
     loadCustomers,
+    loadQuotes,
   } = useDashboard();
 
   const activeCustomer = useMemo(
@@ -158,6 +174,26 @@ export function QuoteBuilderView() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!session?.tenantId) return;
+
+    let mounted = true;
+    api.branding
+      .get(session.tenantId)
+      .then((result) => {
+        if (!mounted) return;
+        setBranding(result.branding);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setBranding(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [session?.tenantId]);
 
   const availablePresets = useMemo(
     () =>
@@ -238,6 +274,43 @@ export function QuoteBuilderView() {
     () => buildAiPromptStarters(quoteForm.serviceType, activeCustomer ? { fullName: activeCustomer.fullName, phone: activeCustomer.phone } : null),
     [quoteForm.serviceType, activeCustomer],
   );
+  const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
+  const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
+
+  async function handleAiDraftSubmit(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!canUseChatToQuote) {
+      setError("AI drafting is not available on this workspace.");
+      return;
+    }
+
+    const prompt = chatPrompt.trim();
+    if (!prompt) {
+      setError("Enter a prompt before generating a quote.");
+      return;
+    }
+
+    track("builder_ai_modal_submit");
+    try {
+      const { quote, parsed } = await api.quotes.createFromChat({
+        prompt,
+        customerName: activeCustomer?.fullName ?? undefined,
+        customerPhone: activeCustomer?.phone ?? undefined,
+        customerEmail: activeCustomer?.email ?? undefined,
+      });
+
+      setChatParsed(parsed);
+      setChatPrompt("");
+      setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
+      await Promise.all([loadCustomers(), loadQuotes()]);
+      setAiModalOpen(false);
+      setNotice(`AI draft created for ${quote.customer?.fullName ?? parsed.customerName ?? "customer"}.`);
+      navigateToQuote(quote.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed creating quote from AI prompt.");
+    }
+  }
 
   function updateDraftLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setDraftLines((current) =>
@@ -416,9 +489,6 @@ export function QuoteBuilderView() {
         subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-              Preview PDF
-            </Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
           </div>
         }
@@ -447,94 +517,56 @@ export function QuoteBuilderView() {
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_340px]">
-        <div>
-          {canUseChatToQuote ? (
-            <Card variant="default" padding="md" className="h-full">
-              <CardHeader
-                title="AI quick start"
-                subtitle={`Start here when speed matters. Draft the first version with AI, then clean the quote line by line.`}
-                actions={
-                  aiQuoteLimit !== null ? (
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="rounded-[20px] border border-slate-200 bg-white px-4 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex-1">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">AI draft helper</p>
+                  {aiQuoteLimit !== null ? (
                     <Badge tone="blue">
-                      {session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} drafts
+                      {session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} drafts this month
                     </Badge>
-                  ) : null
-                }
-              />
-              <div className="mb-3 flex flex-wrap gap-2">
-                {aiPromptStarters.map((starter, index) => (
-                  <button
-                    key={`${quoteForm.serviceType}-${index}`}
-                    type="button"
-                    onClick={() => setChatPrompt(starter)}
-                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
-                  >
-                    {index === 0 ? "Use starter prompt" : "Alt prompt"}
-                  </button>
-                ))}
-              </div>
-              <div className="mb-3 grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)]">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600">Trade</label>
-                  <select
-                    value={quoteForm.serviceType}
-                    onChange={(event) =>
-                      setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-                    }
-                    className="mt-1 min-h-[42px] w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none"
-                  >
-                    {["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"].map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                  ) : null}
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                  Start with AI when speed matters. Then stay in the sheet and edit each title, description, cost, and price directly.
-                </div>
+                <p className="mt-1 text-sm text-slate-600">
+                  Use the AI prompt button inside the quote sheet header. It can use the selected customer or any phone or email you include in the prompt.
+                </p>
               </div>
-              <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px]" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
-                <Textarea
-                  label="Prompt"
-                  rows={5}
-                  placeholder="New quote for Alan Johnson. Replace 1,250 sq ft asphalt shingle roof..."
-                  value={chatPrompt}
-                  onChange={(event) => setChatPrompt(event.target.value)}
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="sm:w-48">
+                <Select
+                  label="Trade"
+                  value={quoteForm.serviceType}
+                  onChange={(event) =>
+                    setQuoteForm((prev) => ({
+                      ...prev,
+                      serviceType: event.target.value as typeof prev.serviceType,
+                    }))
+                  }
+                  options={[
+                    { value: "HVAC", label: "HVAC" },
+                    { value: "PLUMBING", label: "Plumbing" },
+                    { value: "FLOORING", label: "Flooring" },
+                    { value: "ROOFING", label: "Roofing" },
+                    { value: "GARDENING", label: "Gardening" },
+                    { value: "CONSTRUCTION", label: "Construction" },
+                  ]}
                 />
-                <div className="flex flex-col gap-3">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                    AI should get you to a first draft fast, not lock the quote. You still own every line, cost, and price.
-                  </div>
-                  <Button fullWidth loading={saving} icon={<Sparkles size={14} />}>
-                    Draft With AI
-                  </Button>
-                </div>
-              </form>
-            </Card>
-          ) : (
-            <FeatureLockedCard
-              title="AI draft helper"
-              description="AI-assisted quote drafting is not active on this workspace yet."
-              currentPlanLabel={currentPlanLabel}
-              requiredPlanLabel="Starter"
-              showUpgradeHint={canAutoUpgradeMessage}
-            />
-          )}
+              </div>
+            </div>
+          </div>
         </div>
 
         <Card variant="blue" padding="md" className="self-start">
           <CardHeader
             title="Quote actions"
-            subtitle="Keep PDF and create actions in view while you build."
-            actions={
-              <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                Preview PDF
-              </Button>
-            }
+            subtitle="Keep math and create actions visible while you build."
           />
           <div className="space-y-3 text-sm">
+            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
             <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
             <SummaryRow label="Tax" value={money(taxAmount)} />
             <SummaryRow label="Total" value={money(totalAmount)} strong />
@@ -550,11 +582,6 @@ export function QuoteBuilderView() {
             <Button fullWidth loading={saving} onClick={() => void handleCreateQuote()}>
               Create Quote
             </Button>
-            {selectedQuoteId ? (
-              <Button fullWidth variant="outline" onClick={() => navigateToQuote(selectedQuoteId)}>
-                Open Active Quote
-              </Button>
-            ) : null}
           </div>
         </Card>
       </div>
@@ -563,6 +590,7 @@ export function QuoteBuilderView() {
         <div className="lg:hidden">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
+            businessHint={businessHint}
             customerName={activeCustomer?.fullName ?? "Select customer"}
             customerPhone={activeCustomer?.phone ?? null}
             customerEmail={activeCustomer?.email ?? null}
@@ -574,6 +602,9 @@ export function QuoteBuilderView() {
             customerSubtotal={customerSubtotal}
             taxAmount={taxAmount}
             totalAmount={totalAmount}
+            logoUrl={branding?.logoUrl ?? null}
+            logoPosition={branding?.logoPosition ?? "left"}
+            accentColor={quoteAccentColor}
           />
         </div>
       ) : null}
@@ -584,9 +615,10 @@ export function QuoteBuilderView() {
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
             titlePlaceholder="Asphalt shingle roof replacement"
             businessName={session?.tenantName ?? "QuoteFly"}
+            businessHint={businessHint}
             customerName={activeCustomer?.fullName ?? "Select customer"}
             customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : "Use an existing customer or add one fast."}
-            customerTools={
+            headerTools={
               <InlineCustomerLookup
                 selectedCustomer={activeCustomer}
                 onSelectCustomer={(customer) => {
@@ -601,8 +633,20 @@ export function QuoteBuilderView() {
             overview={quoteForm.scopeText}
             onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
             overviewPlaceholder="Optional overview shown near the top of the quote."
+            logoUrl={branding?.logoUrl ?? null}
+            logoPosition={branding?.logoPosition ?? "left"}
+            accentColor={quoteAccentColor}
             actions={
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={<Sparkles size={14} />}
+                  onClick={() => setAiModalOpen(true)}
+                  disabled={!canUseChatToQuote}
+                >
+                  AI Prompt
+                </Button>
                 <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                   Preview PDF
                 </Button>
@@ -785,6 +829,88 @@ export function QuoteBuilderView() {
         }}
       />
 
+      <Modal open={aiModalOpen} onClose={() => setAiModalOpen(false)} size="lg" ariaLabel="Draft quote with AI">
+        <ModalHeader
+          title="Draft quote with AI"
+          description="Generate the first version of the quote, then clean it up line by line in the editable sheet."
+          onClose={() => setAiModalOpen(false)}
+        />
+        <ModalBody className="space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer context</p>
+              {activeCustomer ? <Badge tone="blue">Using selected customer</Badge> : null}
+            </div>
+            <p className="mt-1 text-sm text-slate-600">
+              {activeCustomer
+                ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`
+                : "No customer is locked yet. Select one in the quote sheet or include the name, phone, or email directly in the prompt."}
+            </p>
+          </div>
+
+          <form className="space-y-4" onSubmit={(event) => void handleAiDraftSubmit(event)}>
+            <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+              <Select
+                label="Trade"
+                value={quoteForm.serviceType}
+                onChange={(event) =>
+                  setQuoteForm((prev) => ({
+                    ...prev,
+                    serviceType: event.target.value as typeof prev.serviceType,
+                  }))
+                }
+                options={[
+                  { value: "HVAC", label: "HVAC" },
+                  { value: "PLUMBING", label: "Plumbing" },
+                  { value: "FLOORING", label: "Flooring" },
+                  { value: "ROOFING", label: "Roofing" },
+                  { value: "GARDENING", label: "Gardening" },
+                  { value: "CONSTRUCTION", label: "Construction" },
+                ]}
+              />
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                AI will draft the quote from the selected customer when available. Otherwise it will rely on the customer details typed into the prompt.
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {aiPromptStarters.map((starter, index) => (
+                <button
+                  key={`${quoteForm.serviceType}-${index}`}
+                  type="button"
+                  onClick={() => setChatPrompt(starter)}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                >
+                  {index === 0 ? "Use starter prompt" : "Alt prompt"}
+                </button>
+              ))}
+            </div>
+
+            <Textarea
+              label="Prompt"
+              rows={7}
+              placeholder="New quote for Alan Johnson 818-233-4333. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation."
+              value={chatPrompt}
+              onChange={(event) => setChatPrompt(event.target.value)}
+            />
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-500">
+                AI creates the first draft. You still control every title, description, cost, and price.
+              </p>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button type="button" variant="ghost" onClick={() => setAiModalOpen(false)}>
+                  Cancel
+                </Button>
+                <Button loading={saving} icon={<Sparkles size={14} />} disabled={!canUseChatToQuote}>
+                  Draft Quote Lines
+                </Button>
+              </div>
+            </div>
+          </form>
+        </ModalBody>
+      </Modal>
+
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
         <ModalHeader
           title="Quote preview"
@@ -794,6 +920,7 @@ export function QuoteBuilderView() {
         <ModalBody className="bg-slate-50">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
+            businessHint={businessHint}
             customerName={activeCustomer?.fullName ?? "Select customer"}
             customerPhone={activeCustomer?.phone ?? null}
             customerEmail={activeCustomer?.email ?? null}
@@ -805,6 +932,9 @@ export function QuoteBuilderView() {
             customerSubtotal={customerSubtotal}
             taxAmount={taxAmount}
             totalAmount={totalAmount}
+            logoUrl={branding?.logoUrl ?? null}
+            logoPosition={branding?.logoPosition ?? "left"}
+            accentColor={quoteAccentColor}
           />
         </ModalBody>
       </Modal>
