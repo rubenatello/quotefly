@@ -634,6 +634,11 @@ function buildAiQuoteContext(params: {
     email?: string | null;
     notes?: string | null;
   } | null;
+  customerActivity?: Array<{
+    title: string;
+    detail?: string | null;
+    occurredAt: Date;
+  }>;
   currentQuote?: {
     serviceType: z.infer<typeof ServiceTypeSchema>;
     title?: string;
@@ -666,6 +671,18 @@ function buildAiQuoteContext(params: {
       ]
         .filter(Boolean)
         .join("\n"),
+    );
+  }
+
+  if (params.customerActivity?.length) {
+    sections.push(
+      [
+        "Recent customer activity:",
+        ...params.customerActivity.map(
+          (event, index) =>
+            `- ${index + 1}. ${event.occurredAt.toISOString().slice(0, 10)} | ${event.title}${event.detail ? ` | ${event.detail.slice(0, 180)}` : ""}`,
+        ),
+      ].join("\n"),
     );
   }
 
@@ -1276,6 +1293,30 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    const customerActivityContext = selectedCustomer
+      ? await app.prisma.customerActivityEvent.findMany({
+          where: {
+            tenantId: claims.tenantId,
+            customerId: selectedCustomer.id,
+            deletedAtUtc: null,
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: {
+            title: true,
+            detail: true,
+            createdAt: true,
+          },
+        })
+          .then((events) =>
+            events.map((event) => ({
+              title: event.title,
+              detail: event.detail,
+              occurredAt: event.createdAt,
+            })),
+          )
+      : [];
+
     const similarQuotes = await loadSimilarQuoteContext(app.prisma, claims.tenantId, {
       serviceType: preliminaryServiceType,
       prompt: payload.prompt,
@@ -1293,6 +1334,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               notes: selectedCustomer.notes,
             }
           : null,
+      customerActivity: customerActivityContext,
       currentQuote: existingQuote
         ? {
             serviceType: existingQuote.serviceType,
@@ -1515,6 +1557,30 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       take: 8,
     });
 
+    const customerActivityContext = customer
+      ? await app.prisma.customerActivityEvent.findMany({
+          where: {
+            tenantId: claims.tenantId,
+            customerId: customer.id,
+            deletedAtUtc: null,
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: {
+            title: true,
+            detail: true,
+            createdAt: true,
+          },
+        })
+          .then((events) =>
+            events.map((event) => ({
+              title: event.title,
+              detail: event.detail,
+              occurredAt: event.createdAt,
+            })),
+          )
+      : [];
+
     const similarQuotes = await loadSimilarQuoteContext(app.prisma, claims.tenantId, {
       serviceType: preflightDraft.serviceType,
       prompt: payload.prompt,
@@ -1532,6 +1598,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               notes: customer.notes,
             }
           : null,
+        customerActivity: customerActivityContext,
         presets: contextPresets.map((preset) => ({
           name: preset.name,
           description: preset.description,

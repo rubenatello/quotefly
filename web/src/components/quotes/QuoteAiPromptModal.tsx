@@ -116,7 +116,7 @@ export function QuoteAiPromptModal({
               <div className="min-w-0">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Prompt</p>
                 <p className="mt-1 text-sm text-slate-600">
-                  AI uses the selected customer, customer notes, current quote sheet, saved jobs, and similar past quotes for the chosen trade when available.
+                  AI uses the selected customer, customer notes, recent activity, current quote sheet, saved jobs, and similar past quotes for the chosen trade when available.
                 </p>
               </div>
               {canUseStarterPrompts ? (
@@ -151,7 +151,7 @@ export function QuoteAiPromptModal({
               <ProgressBar value={progress} label="AI progress" hint={`${progress}%`} />
               <div className="mt-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-medium text-slate-800">{progressLabel}</p>
-                <p className="text-sm text-slate-600">Reading prompt, matching saved jobs, checking similar quotes, and preparing the quote sheet.</p>
+                <p className="text-sm text-slate-600">Reading prompt, checking customer context, matching saved jobs, reviewing similar quotes, and preparing the quote sheet.</p>
               </div>
             </div>
           ) : null}

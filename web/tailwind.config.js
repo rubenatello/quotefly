@@ -19,8 +19,8 @@ export default {
         "quotefly-warning": "#d97706",
       },
       fontFamily: {
-        "sans": ["Plus Jakarta Sans", "sans-serif"],
-        "display": ["Sora", "Plus Jakarta Sans", "sans-serif"],
+        "sans": ["DM Sans", "sans-serif"],
+        "display": ["Outfit", "DM Sans", "sans-serif"],
       },
     },
   },
