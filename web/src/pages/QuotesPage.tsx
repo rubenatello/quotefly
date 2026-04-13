@@ -17,6 +17,13 @@ import { useDashboard, formatDateTime, money } from "../components/dashboard/Das
 import { usePageView } from "../lib/analytics";
 import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import {
+  canNativePdfShareOnDevice,
+  fileLabel,
+  isLikelyMobileRuntime,
+  openPdfPreviewBlob,
+  sharePdfBlobNatively,
+} from "../lib/quote-pdf-actions";
 
 type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
@@ -25,16 +32,6 @@ const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", 
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
-}
-
-function fileLabel(value: string) {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 60) || "quote"
-  );
 }
 
 function customerInitials(fullName: string) {
@@ -146,17 +143,6 @@ function rawStatusHint(quote: Quote) {
   if (quote.status === "SENT_TO_CUSTOMER") return "Waiting on response";
   if (quote.status === "READY_FOR_REVIEW") return "Ready to send";
   return "Still being drafted";
-}
-
-function supportsNativeFileShare(file: File) {
-  if (typeof navigator === "undefined" || typeof navigator.share !== "function") return false;
-  const checker = (navigator as Navigator & { canShare?: (data?: ShareData) => boolean }).canShare;
-  if (typeof checker !== "function") return false;
-  try {
-    return checker.call(navigator, { files: [file] });
-  } catch {
-    return false;
-  }
 }
 
 function MetricCard({
@@ -469,20 +455,7 @@ export function QuotesPage() {
 
     try {
       const blob = await getPdfBlob(quote.id, { inline: true });
-      const objectUrl = URL.createObjectURL(blob);
-      const previewWindow = window.open(objectUrl, "_blank", "noopener,noreferrer");
-
-      if (!previewWindow) {
-        const anchor = document.createElement("a");
-        anchor.href = objectUrl;
-        anchor.target = "_blank";
-        anchor.rel = "noopener noreferrer";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      }
-
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      openPdfPreviewBlob(blob);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed opening quote PDF preview.");
     } finally {
@@ -544,17 +517,35 @@ export function QuotesPage() {
 
     try {
       const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
+      const shouldPreferAttachmentShare = isLikelyMobileRuntime();
+
+      if (shouldPreferAttachmentShare) {
+        const blob = await getPdfBlob(quote.id);
+        const shared = await sharePdfBlobNatively(blob, quote.title, draft);
+
+        if (shared) {
+          await recordOutboundAndMarkSent(quote, channel, draft);
+          setNotice(
+            `Share sheet opened with the quote PDF attached. Choose ${channel === "email" ? "Mail" : "Messages"} to send it.`,
+          );
+          return;
+        }
+      }
+
       await recordOutboundAndMarkSent(quote, channel, draft);
 
       if (channel === "email") {
         const mailto = `mailto:${quote.customer.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
         window.location.assign(mailto);
-        setNotice("Email app opened. Download the PDF first if you want to attach it.");
+        setNotice("Email app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your mail app.");
       } else {
         window.location.assign(`sms:${quote.customer.phone}?&body=${encodeURIComponent(draft.body)}`);
-        setNotice("Text app opened. Download the PDF first if you want to share the file separately.");
+        setNotice("Text app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your messages app.");
       }
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       setError(err instanceof ApiError ? err.message : `Failed opening ${channel} app.`);
     } finally {
       setPdfActionLoading(null);
@@ -572,18 +563,12 @@ export function QuotesPage() {
 
     try {
       const blob = await getPdfBlob(quote.id);
-      const file = new File([blob], `${fileLabel(quote.title)}.pdf`, { type: "application/pdf" });
-
-      if (!supportsNativeFileShare(file)) {
+      if (!canNativePdfShareOnDevice()) {
         throw new Error("Native PDF sharing is not available on this device.");
       }
 
       const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
-      await navigator.share({
-        title: draft.subject,
-        text: draft.body,
-        files: [file],
-      });
+      await sharePdfBlobNatively(blob, quote.title, draft);
 
       await recordOutboundAndMarkSent(quote, "copy", draft);
       setNotice("Native share sheet opened with the quote PDF.");
@@ -598,14 +583,8 @@ export function QuotesPage() {
   }
 
   const canUseNativeShare = useMemo(() => {
-    if (!pdfActionQuote) return false;
-    try {
-      const testFile = new File([new Blob(["test"], { type: "application/pdf" })], "quote.pdf", { type: "application/pdf" });
-      return supportsNativeFileShare(testFile);
-    } catch {
-      return false;
-    }
-  }, [pdfActionQuote]);
+    return canNativePdfShareOnDevice();
+  }, []);
 
   return (
     <div className="space-y-5">
@@ -730,7 +709,7 @@ export function QuotesPage() {
                 <p className="text-sm font-semibold text-slate-900">{pdfActionQuote.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  Preview first if you want to verify the layout. Download if you want a file to attach. Email and text actions open the device apps directly.
+                  Preview first if you want to verify the layout. On supported phones, Email App and Text App open the native share sheet with the PDF attached.
                 </p>
               </div>
             </div>

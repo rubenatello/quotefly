@@ -42,6 +42,7 @@ import {
   Textarea,
 } from "../components/ui";
 import { api, type TenantBranding, type WorkPreset } from "../lib/api";
+import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
   buildPresetPayloadFromLine,
   joinQuoteLineDescription,
@@ -96,6 +97,7 @@ export function QuoteDeskView() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
+  const canSharePdfFromDevice = useMemo(() => canNativePdfShareOnDevice(), []);
   const {
     session,
     selectedQuoteId,
@@ -873,7 +875,8 @@ export function QuoteDeskView() {
           <Card variant="blue" padding="md">
             <CardHeader title="Send notes" subtitle="QuoteFly opens the user’s native apps so V1 does not need a paid send service." />
             <div className="space-y-2 text-sm text-slate-700">
-              <p>Email and text actions mark the quote as sent and open the device’s app with the draft message.</p>
+              <p>Email and text actions use the native share sheet with the PDF attached on supported phones.</p>
+              <p>If file sharing is not available, QuoteFly falls back to the device app and you can attach the downloaded PDF manually.</p>
               <p>Sent date updates once the quote is marked sent.</p>
             </div>
           </Card>
@@ -1090,7 +1093,7 @@ export function QuoteDeskView() {
               }
             />
             <div className="rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-3 text-sm text-slate-700">
-              Confirming will mark the quote sent, log the action, and open the selected app.
+              Confirming will mark the quote sent, log the action, and {canSharePdfFromDevice ? "open the share sheet with the PDF when supported." : "open the selected app."}
             </div>
           </ModalBody>
           <ModalFooter>
@@ -1098,7 +1101,11 @@ export function QuoteDeskView() {
               Cancel
             </Button>
             <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
-              {sendComposer.channel === "copy" ? "Copy and Mark Sent" : "Open App and Mark Sent"}
+              {sendComposer.channel === "copy"
+                ? "Copy and Mark Sent"
+                : canSharePdfFromDevice
+                  ? "Share PDF and Mark Sent"
+                  : "Open App and Mark Sent"}
             </Button>
           </ModalFooter>
         </Modal>
