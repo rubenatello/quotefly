@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { FilePlus2, PanelLeftClose, PanelLeftOpen, UserPlus2 } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { FilePlus2, PanelLeftClose, PanelLeftOpen, Search, UserPlus2, X } from "lucide-react";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { CloseIcon } from "../Icons";
 import { cn } from "../../lib/utils";
@@ -56,19 +56,33 @@ export function CrmSidebar({
   entitlements,
   usage,
 }: CrmSidebarProps) {
+  const [navQuery, setNavQuery] = useState("");
   const displayPlanName = planName ?? "Starter";
   const showTrialBadge = Boolean(isTrial);
 
-  const sidebarWidthClass = collapsed ? "lg:w-[76px]" : "lg:w-[216px]";
+  const sidebarWidthClass = collapsed ? "lg:w-[76px]" : "lg:w-[224px]";
   const aiQuoteLimit = entitlements?.limits.aiQuotesPerMonth ?? null;
   const aiQuoteUsed = usage?.monthlyAiQuoteCount ?? 0;
   const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
   const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const normalizedNavQuery = navQuery.trim().toLowerCase();
+
+  const filteredOperationsLinks = useMemo(
+    () => operationsLinks.filter((link) => `${link.label} ${link.path}`.toLowerCase().includes(normalizedNavQuery)),
+    [operationsLinks, normalizedNavQuery],
+  );
+
+  const filteredSettingsLinks = useMemo(
+    () => settingsLinks.filter((link) => `${link.label} ${link.path}`.toLowerCase().includes(normalizedNavQuery)),
+    [settingsLinks, normalizedNavQuery],
+  );
+
+  const totalNavItems = filteredOperationsLinks.length + filteredSettingsLinks.length;
 
   return (
     <AppTooltipProvider>
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -82,11 +96,11 @@ export function CrmSidebar({
               aria-label="Go to customers"
             >
               {collapsed ? (
-                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-[0_8px_18px_rgba(15,23,42,0.05)]">
                   <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 object-contain" />
                 </span>
               ) : (
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="rounded-[22px] border border-slate-200 bg-white px-3 py-2 shadow-[0_8px_18px_rgba(15,23,42,0.05)]">
                   <img src="/logo.png" alt="QuoteFly" className="h-7 w-auto object-contain" />
                 </div>
               )}
@@ -95,7 +109,7 @@ export function CrmSidebar({
               type="button"
               onClick={onToggleCollapse}
               className={cn(
-                "hidden items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-slate-700 lg:inline-flex",
+                "hidden items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.05)] transition hover:border-slate-300 hover:text-slate-700 lg:inline-flex",
                 collapsed ? "h-10 w-10 self-center" : "h-10 w-10",
               )}
               title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -106,23 +120,55 @@ export function CrmSidebar({
           </div>
 
           {!collapsed ? (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => onQuickAction("new-customer")}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
-              >
-                <UserPlus2 size={15} className="text-quotefly-blue" />
-                New customer
-              </button>
-              <button
-                type="button"
-                onClick={() => onQuickAction("new-quote")}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-quotefly-blue bg-quotefly-blue px-3 py-2.5 text-sm font-medium text-white transition hover:bg-[#256fbf]"
-              >
-                <FilePlus2 size={15} />
-                New quote
-              </button>
+            <div className="space-y-3">
+              <div className="rounded-[22px] border border-slate-200 bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                <div className="relative">
+                  <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-quotefly-blue" />
+                  <input
+                    type="text"
+                    value={navQuery}
+                    onChange={(event) => setNavQuery(event.target.value)}
+                    placeholder="Search navigation"
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-11 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-quotefly-blue focus:bg-white focus:ring-2 focus:ring-quotefly-blue/10"
+                  />
+                  {navQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => setNavQuery("")}
+                      aria-label="Clear navigation search"
+                      className="absolute right-3 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      /
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-[22px] border border-slate-200 bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Quick add</p>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onQuickAction("new-quote")}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-quotefly-blue bg-quotefly-blue px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-[#256fbf]"
+                  >
+                    <FilePlus2 size={15} />
+                    New quote
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onQuickAction("new-customer")}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                  >
+                    <UserPlus2 size={15} className="text-quotefly-blue" />
+                    New customer
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -131,7 +177,7 @@ export function CrmSidebar({
                   type="button"
                   onClick={() => onQuickAction("new-customer")}
                   aria-label="New customer"
-                  className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                  className="inline-flex h-11 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
                 >
                   <UserPlus2 size={16} className="text-quotefly-blue" />
                 </button>
@@ -141,7 +187,7 @@ export function CrmSidebar({
                   type="button"
                   onClick={() => onQuickAction("new-quote")}
                   aria-label="New quote"
-                  className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-quotefly-blue bg-quotefly-blue text-white transition hover:bg-[#256fbf]"
+                  className="inline-flex h-11 w-full items-center justify-center rounded-2xl border border-quotefly-blue bg-quotefly-blue text-white transition hover:bg-[#256fbf]"
                 >
                   <FilePlus2 size={16} />
                 </button>
@@ -149,9 +195,15 @@ export function CrmSidebar({
             </div>
           )}
 
-          {!collapsed && <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Core workflow</p>}
+          {!collapsed ? (
+            <div className="flex items-center justify-between px-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</p>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">{totalNavItems}</span>
+            </div>
+          ) : null}
+
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
-            {operationsLinks.map((link) => {
+            {filteredOperationsLinks.map((link) => {
               const active = currentPage === link.path;
               const button = (
                 <button
@@ -161,13 +213,14 @@ export function CrmSidebar({
                   title={link.label}
                   aria-label={link.label}
                   className={cn(
-                    "group flex w-full items-center rounded-xl border text-sm font-medium transition-all",
+                    "group relative flex w-full items-center rounded-2xl border text-sm font-medium transition-all",
                     active
-                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900"
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900 shadow-[0_8px_20px_rgba(42,127,216,0.08)]"
                       : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900",
                     collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
+                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-quotefly-blue" /> : null}
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
@@ -180,12 +233,12 @@ export function CrmSidebar({
                     >
                       {link.icon}
                     </span>
-                    {!collapsed && (
+                    {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                         <span>{link.label}</span>
                         {active ? <span className="h-1.5 w-1.5 rounded-full bg-quotefly-blue" /> : null}
                       </span>
-                    )}
+                    ) : null}
                   </span>
                 </button>
               );
@@ -198,9 +251,9 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed && <p className="px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p>}
+          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
-            {settingsLinks.map((link) => {
+            {filteredSettingsLinks.map((link) => {
               const active = currentPage === link.path;
               const button = (
                 <button
@@ -210,13 +263,14 @@ export function CrmSidebar({
                   aria-label={link.label}
                   onClick={() => onNavigate(link.path)}
                   className={cn(
-                    "group flex w-full items-center rounded-xl border transition-all",
+                    "group relative flex w-full items-center rounded-2xl border transition-all",
                     active
-                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900"
+                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-slate-900 shadow-[0_8px_20px_rgba(42,127,216,0.08)]"
                       : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900",
                     collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
+                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-quotefly-blue" /> : null}
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
@@ -227,12 +281,12 @@ export function CrmSidebar({
                     >
                       {link.icon}
                     </span>
-                    {!collapsed && (
+                    {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                         <span>{link.label}</span>
                         {active ? <span className="h-1.5 w-1.5 rounded-full bg-quotefly-blue" /> : null}
                       </span>
-                    )}
+                    ) : null}
                   </span>
                   {collapsed ? (
                     <span className={cn("ml-1 h-2.5 w-2.5 rounded-full", active ? "bg-quotefly-blue" : "bg-slate-300")} />
@@ -245,23 +299,27 @@ export function CrmSidebar({
               );
 
               return (
-                <SidebarTooltip
-                  key={link.path}
-                  label={link.label}
-                  collapsed={collapsed}
-                >
+                <SidebarTooltip key={link.path} label={link.label} collapsed={collapsed}>
                   {button}
                 </SidebarTooltip>
               );
             })}
           </nav>
+
+          {!collapsed && navQuery && totalNavItems === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-sm text-slate-500">
+              No navigation matches for <span className="font-medium text-slate-700">{navQuery}</span>.
+            </div>
+          ) : null}
         </div>
 
         <div className={cn("mt-6 space-y-3", collapsed ? "px-2.5" : "px-3")}>
           {!collapsed && aiQuoteLimit !== null && usage ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+            <div className="rounded-[22px] border border-slate-200 bg-white px-3 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{showTrialBadge ? `Trial · ${displayPlanName}` : displayPlanName}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  {showTrialBadge ? `Trial · ${displayPlanName}` : displayPlanName}
+                </p>
                 <span className="text-xs font-semibold text-slate-900">
                   {aiQuoteUsed}/{aiQuoteLimit} AI
                 </span>
@@ -282,7 +340,7 @@ export function CrmSidebar({
               title="Sign Out"
               aria-label="Sign out"
               className={cn(
-                "rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50",
+                "rounded-2xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50",
                 collapsed ? "w-full px-0 text-center" : "w-full px-4",
               )}
             >

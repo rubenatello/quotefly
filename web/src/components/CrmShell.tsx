@@ -134,7 +134,7 @@ export function CrmShell({
 
       <div
         className={`mx-auto w-full max-w-[1480px] lg:grid ${
-          sidebarCollapsed ? "lg:grid-cols-[76px_1fr]" : "lg:grid-cols-[216px_1fr]"
+          sidebarCollapsed ? "lg:grid-cols-[76px_1fr]" : "lg:grid-cols-[224px_1fr]"
         }`}
       >
         <CrmSidebar
