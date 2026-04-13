@@ -1149,9 +1149,12 @@ function ExistingLineEditorRow({
         </div>
       </div>
 
-      <div className="hidden lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_72px_96px_96px_110px_140px] lg:items-start lg:gap-3">
+      <div className="hidden lg:grid lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_140px] lg:items-start lg:gap-3">
+        <div className="flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+          {index + 1}
+        </div>
         <Input value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} />
-        <Textarea rows={2} className="min-h-[84px]" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
+        <Textarea rows={2} className="min-h-[72px]" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
         <Input type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
         <Input type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
         <Input type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
@@ -1186,7 +1189,10 @@ function NewLineEditorRow({
 
   return (
     <div className="space-y-3">
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_72px_96px_96px_110px]">
+      <div className="grid gap-3 lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px]">
+        <div className="hidden lg:flex h-11 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+          New
+        </div>
         <Input
           label="Line"
           placeholder="Service or job name"
@@ -1196,7 +1202,7 @@ function NewLineEditorRow({
         <Textarea
           label="Description"
           rows={3}
-          className="lg:min-h-[84px]"
+          className="lg:min-h-[72px]"
           placeholder="Optional line description"
           value={line.details}
           onChange={(event) => onChange({ ...line, details: event.target.value })}

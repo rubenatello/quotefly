@@ -695,7 +695,8 @@ export function QuoteBuilderView() {
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="hidden grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_72px_96px_96px_110px_90px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_90px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                <span>#</span>
                 <span>Line</span>
                 <span>Description</span>
                 <span>Qty</span>
@@ -869,7 +870,7 @@ function DraftLineEditorRow({
   }, [line.id, startExpanded]);
 
   return (
-    <div className="px-4 py-4">
+    <div className="px-4 py-3">
       <div className="lg:hidden">
         <div className="rounded-2xl border border-slate-200 bg-slate-50">
           <button
@@ -924,7 +925,10 @@ function DraftLineEditorRow({
         </div>
       </div>
 
-      <div className="hidden lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_72px_96px_96px_110px_90px] lg:items-start lg:gap-3">
+      <div className="hidden lg:grid lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_90px] lg:items-start lg:gap-3">
+        <div className="flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+          {index + 1}
+        </div>
         <Input
           placeholder="Line"
           value={line.title}
@@ -932,7 +936,7 @@ function DraftLineEditorRow({
         />
         <Textarea
           rows={2}
-          className="min-h-[84px]"
+          className="min-h-[72px]"
           placeholder="Description"
           value={line.details}
           onChange={(event) => onChange(line.id, "details", event.target.value)}
