@@ -156,7 +156,11 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
         })}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={stageTone(stage)} icon={stageIcon(stage)} className="border-transparent bg-slate-900 text-white">
+        <Badge
+          tone={stageTone(stage)}
+          icon={stageIcon(stage)}
+          className={stage === "QUOTED" ? "border-transparent shadow-sm" : "border-transparent bg-slate-900 text-white shadow-sm"}
+        >
           {stageLabel(stage)}
         </Badge>
         <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">

@@ -235,7 +235,7 @@ interface BadgeProps {
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   blue: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
-  orange: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
+  orange: "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)]",
   emerald: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
   red: "text-red-600 border-red-200 bg-red-50",
   amber: "text-amber-700 border-amber-200 bg-amber-50",
@@ -249,7 +249,7 @@ const BADGE_TONES: Record<BadgeTone, string> = {
 
 export function Badge({ tone = "slate", icon, children, className = "" }: BadgeProps) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${BADGE_TONES[tone]} ${className}`}>
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", BADGE_TONES[tone], className)}>
       {icon}
       {children}
     </span>
