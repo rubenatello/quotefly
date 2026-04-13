@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Command, FilePlus2, MoreHorizontal, Plus, Search, Sparkles, UserPlus2 } from "lucide-react";
+import { FilePlus2, MoreHorizontal, Plus, Search, UserPlus2 } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
@@ -15,7 +15,6 @@ import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmCommandPalette } from "./crm/CrmCommandPalette";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
-import { Badge } from "./ui";
 
 interface CrmShellProps {
   currentPage: string;
@@ -82,7 +81,7 @@ export function CrmShell({
   children,
   fullName,
   planName,
-  planCode,
+  planCode: _planCode,
   isTrial,
   entitlements,
   usage,
@@ -111,8 +110,6 @@ export function CrmShell({
   };
 
   const pageMeta = PAGE_META[currentPage] ?? PAGE_META.customers;
-  const displayPlanName = planName ?? "Starter";
-
   return (
     <div className="min-h-screen bg-slate-50">
       <CrmMobileHeader
@@ -123,7 +120,6 @@ export function CrmShell({
         onQuickAction={onQuickAction}
         onLogout={onLogout}
         currentLabel={pageMeta.label}
-        planName={displayPlanName}
       />
       <CrmCommandPalette
         open={commandOpen}
@@ -212,21 +208,13 @@ export function CrmShell({
                 <button
                   type="button"
                   onClick={() => setCommandOpen(true)}
-                  className="inline-flex min-w-[216px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-white hover:text-slate-900"
+                  className="inline-flex min-w-[216px] items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-white hover:text-slate-900"
                 >
                   <span className="inline-flex items-center gap-2">
                     <Search size={15} />
                     Search or jump
                   </span>
-                  <span className="hidden rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-500 xl:inline-flex">
-                    <Command size={12} className="mr-1" />
-                    K
-                  </span>
                 </button>
-
-                <Badge tone={isTrial ? "orange" : planCode === "enterprise" ? "purple" : "blue"} icon={<Sparkles size={12} />}>
-                  {isTrial ? `Trial` : displayPlanName}
-                </Badge>
 
                 <DropdownMenuPrimitive.Root>
                   <DropdownMenuPrimitive.Trigger asChild>
@@ -244,7 +232,6 @@ export function CrmShell({
                       </span>
                       <span className="hidden text-left xl:block">
                         <span className="block max-w-[160px] truncate text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</span>
-                        <span className="block text-xs text-slate-500">{displayPlanName}</span>
                       </span>
                       <MoreHorizontal size={16} className="text-slate-400" />
                     </button>
@@ -257,7 +244,6 @@ export function CrmShell({
                     >
                       <div className="rounded-[18px] bg-slate-50 px-3 py-3">
                         <p className="text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</p>
-                        <p className="text-xs text-slate-500">{displayPlanName}</p>
                       </div>
                       <div className="mt-2 space-y-1">
                         {[

@@ -131,7 +131,6 @@ export function QuoteBuilderView() {
     setError,
     setNotice,
     canUseChatToQuote,
-    aiQuoteLimit,
     chatPrompt,
     setChatPrompt,
     setChatParsed,
@@ -517,54 +516,32 @@ export function QuoteBuilderView() {
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="rounded-[20px] border border-slate-200 bg-white px-4 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="flex-1">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">AI draft helper</p>
-                  {aiQuoteLimit !== null ? (
-                    <Badge tone="blue">
-                      {session?.usage?.monthlyAiQuoteCount ?? 0}/{aiQuoteLimit} drafts this month
-                    </Badge>
-                  ) : null}
-                </div>
-                <p className="mt-1 text-sm text-slate-600">
-                  Use the AI prompt button inside the quote sheet header. It can use the selected customer or any phone or email you include in the prompt.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="sm:w-48">
-                <Select
-                  label="Trade"
-                  value={quoteForm.serviceType}
-                  onChange={(event) =>
-                    setQuoteForm((prev) => ({
-                      ...prev,
-                      serviceType: event.target.value as typeof prev.serviceType,
-                    }))
-                  }
-                  options={[
-                    { value: "HVAC", label: "HVAC" },
-                    { value: "PLUMBING", label: "Plumbing" },
-                    { value: "FLOORING", label: "Flooring" },
-                    { value: "ROOFING", label: "Roofing" },
-                    { value: "GARDENING", label: "Gardening" },
-                    { value: "CONSTRUCTION", label: "Construction" },
-                  ]}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <Card variant="blue" padding="md" className="self-start">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <Card variant="blue" padding="md" className="order-2 self-start xl:sticky xl:top-24">
           <CardHeader
             title="Quote actions"
             subtitle="Keep math and create actions visible while you build."
           />
+          <div className="mb-4">
+            <Select
+              label="Trade"
+              value={quoteForm.serviceType}
+              onChange={(event) =>
+                setQuoteForm((prev) => ({
+                  ...prev,
+                  serviceType: event.target.value as typeof prev.serviceType,
+                }))
+              }
+              options={[
+                { value: "HVAC", label: "HVAC" },
+                { value: "PLUMBING", label: "Plumbing" },
+                { value: "FLOORING", label: "Flooring" },
+                { value: "ROOFING", label: "Roofing" },
+                { value: "GARDENING", label: "Gardening" },
+                { value: "CONSTRUCTION", label: "Construction" },
+              ]}
+            />
+          </div>
           <div className="space-y-3 text-sm">
             <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
             <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
@@ -584,33 +561,9 @@ export function QuoteBuilderView() {
             </Button>
           </div>
         </Card>
-      </div>
 
-      {mobilePane === "preview" ? (
-        <div className="lg:hidden">
-          <QuoteLivePreview
-            businessName={session?.tenantName ?? "QuoteFly"}
-            businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? "Select customer"}
-            customerPhone={activeCustomer?.phone ?? null}
-            customerEmail={activeCustomer?.email ?? null}
-            preparedDateLabel={preparedDateLabel}
-            sentDateLabel="N/A"
-            quoteTitle={quoteForm.title}
-            scopeText={quoteForm.scopeText}
-            lines={previewLines}
-            customerSubtotal={customerSubtotal}
-            taxAmount={taxAmount}
-            totalAmount={totalAmount}
-            logoUrl={branding?.logoUrl ?? null}
-            logoPosition={branding?.logoPosition ?? "left"}
-            accentColor={quoteAccentColor}
-          />
-        </div>
-      ) : null}
-
-      <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
-        <QuoteSheetEditor
+        <div className={`order-1 ${mobilePane === "preview" ? "hidden lg:block" : ""}`}>
+          <QuoteSheetEditor
             title={quoteForm.title}
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
             titlePlaceholder="Asphalt shingle roof replacement"
@@ -770,7 +723,31 @@ export function QuoteBuilderView() {
               </div>
             </div>
           </QuoteSheetEditor>
+        </div>
       </div>
+
+      {mobilePane === "preview" ? (
+        <div className="lg:hidden">
+          <QuoteLivePreview
+            businessName={session?.tenantName ?? "QuoteFly"}
+            businessHint={businessHint}
+            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerPhone={activeCustomer?.phone ?? null}
+            customerEmail={activeCustomer?.email ?? null}
+            preparedDateLabel={preparedDateLabel}
+            sentDateLabel="N/A"
+            quoteTitle={quoteForm.title}
+            scopeText={quoteForm.scopeText}
+            lines={previewLines}
+            customerSubtotal={customerSubtotal}
+            taxAmount={taxAmount}
+            totalAmount={totalAmount}
+            logoUrl={branding?.logoUrl ?? null}
+            logoPosition={branding?.logoPosition ?? "left"}
+            accentColor={quoteAccentColor}
+          />
+        </div>
+      ) : null}
 
       <div className="lg:hidden">
         <div className="h-24" />

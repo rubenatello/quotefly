@@ -108,22 +108,22 @@ function lifecycleIcon(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
   return <ReceiptText size={12} strokeWidth={2.2} />;
 }
 
-function lifecycleToneClass(stage: QuoteLifecycleStage, quote: Quote) {
-  if (stage === "DRAFT") return "border-slate-200 bg-slate-50 text-slate-600";
-  if (stage === "COMPLETED") return "border-quotefly-blue/15 bg-quotefly-blue/[0.05] text-quotefly-blue";
-  if (stage === "SENT") return "border-quotefly-orange/15 bg-quotefly-orange/[0.06] text-quotefly-orange";
-  if (stage === "CLOSED" && quote.status === "REJECTED") return "border-red-200 bg-red-50 text-red-600";
-  if (stage === "CLOSED") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+function lifecycleDarkClass(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
+  if (stage === "DRAFT") return "border-slate-700 bg-slate-700 text-white";
+  if (stage === "COMPLETED") return "border-[#2559b8] bg-[#2559b8] text-white";
+  if (stage === "SENT") return "border-[#d97706] bg-[#d97706] text-white";
+  if (stage === "CLOSED" && rawStatus === "REJECTED") return "border-red-600 bg-red-600 text-white";
+  if (stage === "CLOSED") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
+  return "border-emerald-600 bg-emerald-600 text-white";
 }
 
 function lifecycleStageBadgeClass(stage: QuoteLifecycleStage, quote: Quote, active: boolean, complete: boolean) {
   if (active) {
-    return `${lifecycleToneClass(stage, quote)} shadow-sm`;
+    return `${lifecycleDarkClass(stage, quote.status)} shadow-sm`;
   }
 
   if (complete) {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return `${lifecycleDarkClass(stage, quote.status)} shadow-sm`;
   }
 
   return "border-slate-200 bg-slate-50 text-slate-400";
@@ -174,27 +174,27 @@ function MetricCard({
 }) {
   const toneClasses =
     tone === "blue"
-      ? "border-quotefly-blue/15 bg-quotefly-blue/[0.04]"
+      ? "border-[#234f98] bg-[#234f98]"
       : tone === "orange"
-        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.05]"
+        ? "border-[#1f2f55] bg-[#1f2f55]"
         : tone === "emerald"
-          ? "border-emerald-200 bg-emerald-50/70"
-          : "border-slate-200 bg-slate-50/80";
+          ? "border-[#17624b] bg-[#17624b]"
+          : "border-[#334155] bg-[#334155]";
   const iconClasses =
     tone === "blue"
-      ? "bg-quotefly-blue/[0.10] text-quotefly-blue"
+      ? "bg-white/10 text-white"
       : tone === "orange"
-        ? "bg-quotefly-orange/[0.10] text-quotefly-orange"
+        ? "bg-white/10 text-white"
         : tone === "emerald"
-          ? "bg-emerald-100 text-emerald-700"
-          : "bg-white text-slate-600";
+          ? "bg-white/10 text-white"
+          : "bg-white/10 text-white";
   const barClasses =
     tone === "blue"
-      ? "bg-quotefly-blue"
+      ? "bg-[#5b8ee8]"
       : tone === "orange"
-        ? "bg-quotefly-orange"
+        ? "bg-[#f2a64c]"
         : tone === "emerald"
-          ? "bg-emerald-500"
+          ? "bg-emerald-300"
           : "bg-slate-300";
 
   return (
@@ -202,9 +202,9 @@ function MetricCard({
       <div className={`absolute bottom-0 left-0 top-0 w-1 ${barClasses}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="pl-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-          <p className="mt-1.5 text-[1.65rem] font-bold tracking-tight text-slate-900">{value}</p>
-          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
+          <p className="mt-1.5 text-[1.65rem] font-bold tracking-tight text-white">{value}</p>
+          <p className="mt-1 text-xs text-white/70">{hint}</p>
         </div>
         <span className={`inline-flex h-10 w-10 items-center justify-center rounded-full ${iconClasses}`}>
           {icon}
@@ -243,9 +243,7 @@ function StageCountCard({
           </span>
         ) : (
           <span
-            className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${
-              active ? "border-quotefly-blue/20 bg-white text-quotefly-blue" : "border-slate-200 bg-slate-50 text-slate-500"
-            }`}
+            className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleDarkClass(stage)}`}
           >
             {lifecycleInitial(stage)}
           </span>
@@ -270,7 +268,7 @@ function QuoteLifecycleMini({ quote }: { quote: Quote }) {
           return (
             <div key={item} className="flex items-center gap-1.5">
               <div
-                className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleStageBadgeClass(
+                className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleStageBadgeClass(
                   item,
                   quote,
                   active,

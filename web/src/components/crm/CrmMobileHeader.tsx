@@ -11,7 +11,6 @@ interface CrmMobileHeaderProps {
   onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   currentLabel: string;
-  planName?: string;
 }
 
 export function CrmMobileHeader({
@@ -22,7 +21,6 @@ export function CrmMobileHeader({
   onQuickAction,
   onLogout,
   currentLabel,
-  planName,
 }: CrmMobileHeaderProps) {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/96 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden">
@@ -42,9 +40,6 @@ export function CrmMobileHeader({
             </div>
             <div className="mt-0.5 flex items-center gap-2">
               <p className="truncate text-xs text-slate-500">QuoteFly workspace</p>
-              <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                {planName ?? "Starter"}
-              </span>
             </div>
           </div>
         </div>

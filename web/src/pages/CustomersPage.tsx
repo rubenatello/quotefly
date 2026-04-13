@@ -32,6 +32,14 @@ function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald
   return "emerald";
 }
 
+function stageDarkClass(stage: CustomerStage) {
+  if (stage === "NEW") return "border-slate-700 bg-slate-700 text-white";
+  if (stage === "CONTACTED") return "border-[#2559b8] bg-[#2559b8] text-white";
+  if (stage === "QUOTED") return "border-[#406fc7] bg-[#406fc7] text-white";
+  if (stage === "WORKING") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
+  return "border-emerald-600 bg-emerald-600 text-white";
+}
+
 function stageInitial(stage: CustomerStage) {
   if (stage === "NEW") return "N";
   if (stage === "CONTACTED") return "C";
@@ -50,26 +58,14 @@ function stageIcon(stage: CustomerStage) {
 
 function stageStateClasses(active: boolean, complete: boolean) {
   if (active) {
-    return "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue shadow-sm shadow-quotefly-blue/10";
+    return "";
   }
 
   if (complete) {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "";
   }
 
-  return "border-slate-200 bg-slate-50 text-slate-400";
-}
-
-function stageFilterBadgeClass(stage: CustomerStage, active: boolean) {
-  if (active) {
-    return "border-quotefly-blue/20 bg-white text-quotefly-blue";
-  }
-
-  if (stage === "NEW") return "border-slate-200 bg-slate-50 text-slate-500";
-  if (stage === "CONTACTED") return "border-quotefly-blue/15 bg-quotefly-blue/[0.05] text-quotefly-blue";
-  if (stage === "QUOTED") return "border-quotefly-orange/15 bg-quotefly-orange/[0.06] text-quotefly-orange";
-  if (stage === "WORKING") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-slate-200 bg-white text-slate-300";
 }
 
 function quoteNumber(quoteId: string) {
@@ -143,28 +139,27 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
           return (
             <div key={item} className="flex items-center gap-1.5">
               <div
-                className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full border text-[11px] font-bold ${stageStateClasses(
-                  active,
-                  complete,
-                )}`}
+                className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border text-[10px] font-bold ${
+                  active || complete ? stageDarkClass(item) : stageStateClasses(active, complete)
+                }`}
                 title={stageLabel(item)}
                 aria-label={stageLabel(item)}
               >
                 {stageInitial(item)}
               </div>
               {index < CUSTOMER_STAGE_ORDER.length - 1 ? (
-                <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-emerald-300" : "bg-slate-200"}`} />
+                <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-slate-400" : "bg-slate-200"}`} />
               ) : null}
             </div>
           );
         })}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={stageTone(stage)} icon={stageIcon(stage)}>
+        <Badge tone={stageTone(stage)} icon={stageIcon(stage)} className="border-transparent bg-slate-900 text-white">
           {stageLabel(stage)}
         </Badge>
         <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          <span className="text-slate-400">{stageInitial(stage)}</span>
+          <span className="text-slate-700">{stageInitial(stage)}</span>
           Current
         </span>
       </div>
@@ -201,7 +196,7 @@ function StageCountCard({
           </span>
         ) : (
           <span
-            className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full border text-[10px] font-bold ${stageFilterBadgeClass(stage, active)}`}
+            className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(stage)}`}
           >
             {stageInitial(stage)}
           </span>
@@ -308,7 +303,7 @@ function CustomerMobileCard({
           </div>
         </div>
         <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-[10px] font-bold text-quotefly-blue">
+          <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(stage)}`}>
             {stageInitial(stage)}
           </span>
           {stageLabel(stage)}
@@ -498,7 +493,7 @@ export function CustomersPage() {
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
-                <span>Pipeline</span>
+                <span>Status</span>
                 <span className="text-right">Actions</span>
               </div>
               <div className="divide-y divide-slate-200">
