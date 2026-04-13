@@ -173,6 +173,7 @@ export type BrandingComponentColors = {
 export type BrandingBusinessProfile = {
   businessEmail?: string | null;
   businessPhone?: string | null;
+  quoteMessageTemplate?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;
@@ -187,6 +188,7 @@ export type TenantBranding = {
   logoPosition?: BrandingLogoPosition;
   businessEmail?: string | null;
   businessPhone?: string | null;
+  quoteMessageTemplate?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;

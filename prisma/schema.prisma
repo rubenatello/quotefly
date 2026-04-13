@@ -109,6 +109,7 @@ model TenantBranding {
   templateId      String    @default("modern")
   businessEmail   String?
   businessPhone   String?
+  quoteMessageTemplate String?  @db.Text
   addressLine1    String?
   addressLine2    String?
   city            String?

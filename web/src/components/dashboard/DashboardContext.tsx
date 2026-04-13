@@ -15,6 +15,7 @@ import {
   type QuoteRevision,
   type QuoteStatus,
   type ServiceType,
+  type TenantBranding,
   type TenantEntitlements,
   type TenantUsageSnapshot,
 } from "../../lib/api";
@@ -23,6 +24,7 @@ import {
   openPdfPreviewBlob,
   sharePdfBlobNatively,
 } from "../../lib/quote-pdf-actions";
+import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
 
 /* ─────────────── Types ─────────────── */
 
@@ -200,24 +202,6 @@ function mapSendChannelToOutboundChannel(channel: SendChannel): QuoteOutboundCha
   return "COPY";
 }
 
-function buildQuoteMessageDraft(quote: Quote, customerName: string): { subject: string; body: string } {
-  const subject = `${quote.title} - Quote`;
-  const body = [
-    `Hi ${customerName},`,
-    "",
-    "Thanks for the opportunity to quote this project.",
-    "",
-    `Quote: ${quote.title}`,
-    `Total: ${money(quote.totalAmount)}`,
-    "",
-    "Scope:",
-    quote.scopeText,
-    "",
-    "Reply to confirm or ask for any revisions.",
-  ].join("\n");
-  return { subject, body };
-}
-
 /* ─────────────── Context Shape ─────────────── */
 
 export interface DashboardContextValue {
@@ -226,6 +210,7 @@ export interface DashboardContextValue {
   // Data
   customers: Customer[];
   quotes: Quote[];
+  branding: TenantBranding | null;
   selectedQuoteId: string | null;
   selectedQuote: Quote | null;
   quoteHistory: QuoteRevision[];
@@ -362,6 +347,7 @@ export function DashboardProvider({
 }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [branding, setBranding] = useState<TenantBranding | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
   const [search, setSearch] = useState("");
@@ -400,8 +386,6 @@ export function DashboardProvider({
 
   /* ─── Data loaders ─── */
 
-  useEffect(() => { void loadAll(); }, []);
-
   useEffect(() => {
     let mounted = true;
     api.onboarding.getRecommendedPresets(setupTrade)
@@ -424,9 +408,14 @@ export function DashboardProvider({
     setLoading(true);
     setError(null);
     try {
-      const [customerRes, quoteRes] = await Promise.all([api.customers.list({ limit: 100 }), api.quotes.list({ limit: 100 })]);
+      const [customerRes, quoteRes, brandingRes] = await Promise.all([
+        api.customers.list({ limit: 100 }),
+        api.quotes.list({ limit: 100 }),
+        session?.tenantId ? api.branding.get(session.tenantId) : Promise.resolve(null),
+      ]);
       setCustomers(customerRes.customers);
       setQuotes(quoteRes.quotes);
+      setBranding(brandingRes?.branding ?? null);
       setQuoteForm((prev) => ({ ...prev, customerId: prev.customerId || customerRes.customers[0]?.id || "" }));
       setSelectedQuoteId((prev) => prev || quoteRes.quotes[0]?.id || null);
     } catch (err) {
@@ -434,7 +423,9 @@ export function DashboardProvider({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [session?.tenantId]);
+
+  useEffect(() => { void loadAll(); }, [loadAll]);
 
   const loadQuotes = useCallback(async () => {
     try {
@@ -755,13 +746,19 @@ export function DashboardProvider({
     const customerRecord = selectedQuote.customer ?? customers.find((c) => c.id === selectedQuote.customerId);
     if (!customerRecord) { setError("Customer details are not loaded yet. Try selecting the quote again."); return; }
     if (channel === "email" && !customerRecord.email) { setError("Customer does not have an email address yet."); return; }
-    const draft = buildQuoteMessageDraft(selectedQuote, customerRecord.fullName);
+    const draft = buildQuoteMessageDraft({
+      customerName: customerRecord.fullName,
+      quoteTitle: selectedQuote.title,
+      quoteTotalAmount: selectedQuote.totalAmount,
+      scopeText: selectedQuote.scopeText,
+      branding,
+    });
     setSendComposer({
       channel, quoteId: selectedQuote.id,
       customerName: customerRecord.fullName, customerEmail: customerRecord.email ?? null, customerPhone: customerRecord.phone,
       subject: draft.subject, body: draft.body,
     });
-  }, [selectedQuote, customers]);
+  }, [selectedQuote, customers, branding]);
 
   const confirmSendComposer = useCallback(async () => {
     if (!sendComposer) return;
@@ -1114,7 +1111,7 @@ export function DashboardProvider({
   }, [lineItemForm.quantity, lineItemForm.unitCost, lineItemForm.unitPrice]);
 
   const value: DashboardContextValue = {
-    session, customers, quotes, selectedQuoteId, selectedQuote, quoteHistory, outboundEvents,
+    session, customers, quotes, branding, selectedQuoteId, selectedQuote, quoteHistory, outboundEvents,
     search, statusFilter, loading, saving, error, notice,
     historyMode, historyCustomerId, historyLoading, outboundEventsLoading,
     customerForm, quoteForm, quoteEditForm, lineItemForm,

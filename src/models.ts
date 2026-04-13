@@ -99,6 +99,7 @@ export interface TenantBrandingRow {
   templateId: string;
   businessEmail: string | null;
   businessPhone: string | null;
+  quoteMessageTemplate: string | null;
   addressLine1: string | null;
   addressLine2: string | null;
   city: string | null;

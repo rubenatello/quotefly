@@ -17,6 +17,7 @@ import { useDashboard, formatDateTime, money } from "../components/dashboard/Das
 import { usePageView } from "../lib/analytics";
 import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { buildQuoteMessageDraft } from "../lib/quote-message-template";
 import {
   canNativePdfShareOnDevice,
   fileLabel,
@@ -41,25 +42,6 @@ function customerInitials(fullName: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
-}
-
-function buildQuoteMessageDraft(quote: Quote, customerName: string): { subject: string; body: string } {
-  const subject = `${quote.title} - Quote`;
-  const body = [
-    `Hi ${customerName},`,
-    "",
-    "Thanks for the opportunity to quote this project.",
-    "",
-    `Quote: ${quote.title}`,
-    `Total: ${money(quote.totalAmount)}`,
-    "",
-    "Scope:",
-    quote.scopeText,
-    "",
-    "Reply to confirm or ask for any revisions.",
-  ].join("\n");
-
-  return { subject, body };
 }
 
 function mapSendChannelToOutboundChannel(channel: "email" | "sms" | "copy"): QuoteOutboundChannel {
@@ -391,6 +373,7 @@ export function QuotesPage() {
     navigateToQuote,
     navigateToBuilder,
     selectedQuoteId,
+    branding,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
@@ -516,7 +499,13 @@ export function QuotesPage() {
     setError(null);
 
     try {
-      const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
+      const draft = buildQuoteMessageDraft({
+        customerName: quote.customer.fullName,
+        quoteTitle: quote.title,
+        quoteTotalAmount: quote.totalAmount,
+        scopeText: quote.scopeText,
+        branding,
+      });
       const shouldPreferAttachmentShare = isLikelyMobileRuntime();
 
       if (shouldPreferAttachmentShare) {
@@ -567,7 +556,13 @@ export function QuotesPage() {
         throw new Error("Native PDF sharing is not available on this device.");
       }
 
-      const draft = buildQuoteMessageDraft(quote, quote.customer.fullName);
+      const draft = buildQuoteMessageDraft({
+        customerName: quote.customer.fullName,
+        quoteTitle: quote.title,
+        quoteTotalAmount: quote.totalAmount,
+        scopeText: quote.scopeText,
+        branding,
+      });
       await sharePdfBlobNatively(blob, quote.title, draft);
 
       await recordOutboundAndMarkSent(quote, "copy", draft);

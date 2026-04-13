@@ -17,6 +17,7 @@ import {
   Upload,
 } from "lucide-react";
 import { setSEOMetadata } from "../lib/seo";
+import { QUOTE_MESSAGE_TEMPLATE_TOKENS } from "../lib/quote-message-template";
 import {
   api,
   ApiError,
@@ -25,7 +26,7 @@ import {
   type BrandingLogoPosition,
   type BrandingTemplateId,
 } from "../lib/api";
-import { Badge, Button, Input, PageHeader, ProgressBar, Select } from "../components/ui";
+import { Badge, Button, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 
 interface BrandingPageProps {
@@ -61,6 +62,7 @@ interface LogoPositionOption {
 const EMPTY_BUSINESS_PROFILE: BrandingBusinessProfile = {
   businessEmail: "",
   businessPhone: "",
+  quoteMessageTemplate: "",
   addressLine1: "",
   addressLine2: "",
   city: "",
@@ -209,6 +211,7 @@ function normalizeBusinessProfile(branding?: BrandingBusinessProfile | null): Br
   return {
     businessEmail: branding?.businessEmail ?? "",
     businessPhone: branding?.businessPhone ?? "",
+    quoteMessageTemplate: branding?.quoteMessageTemplate ?? "",
     addressLine1: branding?.addressLine1 ?? "",
     addressLine2: branding?.addressLine2 ?? "",
     city: branding?.city ?? "",
@@ -248,6 +251,7 @@ function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): Bran
   return {
     businessEmail: normalize(profile.businessEmail),
     businessPhone: normalize(profile.businessPhone),
+    quoteMessageTemplate: normalize(profile.quoteMessageTemplate),
     addressLine1: normalize(profile.addressLine1),
     addressLine2: normalize(profile.addressLine2),
     city: normalize(profile.city),
@@ -616,6 +620,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const hasBusinessInfo = Boolean(
     businessProfile.businessEmail?.trim() ||
       businessProfile.businessPhone?.trim() ||
+      businessProfile.quoteMessageTemplate?.trim() ||
       businessProfile.addressLine1?.trim() ||
       businessProfile.city?.trim() ||
       businessProfile.state?.trim() ||
@@ -850,6 +855,35 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   onChange={(event) => updateBusinessField("businessPhone", event.target.value)}
                   placeholder="(555) 123-4567"
                 />
+                <div className="md:col-span-2">
+                  <Textarea
+                    label="Quote Message Template"
+                    rows={7}
+                    value={businessProfile.quoteMessageTemplate ?? ""}
+                    onChange={(event) => updateBusinessField("quoteMessageTemplate", event.target.value)}
+                    placeholder={[
+                      "Hi {customer_name},",
+                      "",
+                      "Thanks for the opportunity to quote this project.",
+                      "",
+                      "Quote: {quote_title}",
+                      "Total: {quote_total}",
+                      "",
+                      "Call: {business_phone}",
+                      "Email: {business_email}",
+                    ].join("\n")}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Used when QuoteFly opens Email App or Text App. Leave blank to use the default message.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {QUOTE_MESSAGE_TEMPLATE_TOKENS.map((token) => (
+                      <Badge key={token} tone="slate">
+                        {token}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
                 <Input
                   label="Address Line 1"
                   value={businessProfile.addressLine1 ?? ""}
