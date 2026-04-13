@@ -170,9 +170,9 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main className="crm-light min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
+        <main className="crm-light min-h-screen bg-slate-50 px-3 pb-24 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
-            <div className="mx-auto max-w-7xl">
+            <div className="mx-auto w-full max-w-[1840px]">
               <Routes>
                 <Route index element={<Navigate to="/app/customers" replace />} />
                 <Route path="customers" element={<CustomersPage />} />
