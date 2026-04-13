@@ -230,6 +230,9 @@ export type Quote = {
   customerPriceSubtotal: DecimalLike;
   taxAmount: DecimalLike;
   totalAmount: DecimalLike;
+  aiGeneratedAtUtc?: string | null;
+  aiPromptText?: string | null;
+  aiModel?: string | null;
   closedAtUtc?: string | null;
   jobCompletedAtUtc?: string | null;
   afterSaleFollowUpDueAtUtc?: string | null;

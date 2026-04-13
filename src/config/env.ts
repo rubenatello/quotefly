@@ -14,6 +14,8 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32).default("change-me-in-production-must-be-32-chars-min"),
+  OPENAI_API_KEY: z.string().default(""),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_PRICE_ID_STARTER: z.string().default(""),
@@ -33,4 +35,7 @@ const EnvSchema = z.object({
   TWILIO_WEBHOOK_AUTH_TOKEN: z.string().default(""),
 });
 
-export const env = EnvSchema.parse(process.env);
+export const env = EnvSchema.parse({
+  ...process.env,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? process.env.OPEN_API_KEY ?? "",
+});

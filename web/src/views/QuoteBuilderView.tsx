@@ -39,6 +39,55 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   return "Qty";
 }
 
+function buildAiPromptStarters(
+  serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
+  customer?: { fullName: string; phone: string } | null,
+) {
+  const customerLead = customer
+    ? `${customer.fullName} ${customer.phone}`
+    : "Alan Johnson 818-233-4333";
+
+  if (serviceType === "ROOFING") {
+    return [
+      `New quote for ${customerLead}. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation.`,
+      `Draft a roofing quote for ${customerLead}. Add roof deck inspection, flashing, and new architectural shingles.`,
+    ];
+  }
+
+  if (serviceType === "HVAC") {
+    return [
+      `New quote for ${customerLead}. Install a new AC condenser and reconnect refrigerant lines with startup testing.`,
+      `Draft an HVAC quote for ${customerLead}. Replace a furnace and include haul-away, install materials, and testing.`,
+    ];
+  }
+
+  if (serviceType === "PLUMBING") {
+    return [
+      `New quote for ${customerLead}. Replace a burst pipe section, patch wall access, and test the line after repair.`,
+      `Draft a plumbing quote for ${customerLead}. Install a new water heater with fittings, labor, and disposal.`,
+    ];
+  }
+
+  if (serviceType === "FLOORING") {
+    return [
+      `New quote for ${customerLead}. Install 650 square feet of LVP flooring with underlayment and trim.`,
+      `Draft a flooring quote for ${customerLead}. Remove old carpet and install new laminate flooring in the living room and hallway.`,
+    ];
+  }
+
+  if (serviceType === "GARDENING") {
+    return [
+      `New quote for ${customerLead}. Monthly landscaping maintenance with mowing, edging, cleanup, and shrub trimming.`,
+      `Draft a gardening quote for ${customerLead}. Refresh front-yard mulch beds, trim hedges, and haul debris.`,
+    ];
+  }
+
+  return [
+    `New quote for ${customerLead}. Remodel a small bathroom and include demolition, framing touchups, finish work, and cleanup.`,
+    `Draft a construction quote for ${customerLead}. Build a backyard patio cover and include labor, materials, and site cleanup.`,
+  ];
+}
+
 type BuilderPane = "editor" | "preview";
 
 export function QuoteBuilderView() {
@@ -189,6 +238,10 @@ export function QuoteBuilderView() {
         lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
       })),
     [filteredDraftLines],
+  );
+  const aiPromptStarters = useMemo(
+    () => buildAiPromptStarters(quoteForm.serviceType, activeCustomer ? { fullName: activeCustomer.fullName, phone: activeCustomer.phone } : null),
+    [quoteForm.serviceType, activeCustomer],
   );
 
   function updateDraftLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
@@ -399,6 +452,18 @@ export function QuoteBuilderView() {
                   ) : null
                 }
               />
+              <div className="mb-3 flex flex-wrap gap-2">
+                {aiPromptStarters.map((starter, index) => (
+                  <button
+                    key={`${quoteForm.serviceType}-${index}`}
+                    type="button"
+                    onClick={() => setChatPrompt(starter)}
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                  >
+                    {index === 0 ? "Use starter prompt" : "Alt prompt"}
+                  </button>
+                ))}
+              </div>
               <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px]" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
                 <Textarea
                   label="Prompt"

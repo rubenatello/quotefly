@@ -45,6 +45,8 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 2. Create a new secret key
 3. Add it to `.env` as `OPENAI_API_KEY`
 4. The AI service gracefully falls back to the regex parser if the key is missing
+5. Set `OPENAI_API_KEY` and `OPENAI_MODEL` in Railway for production API runtime
+6. Do not put the OpenAI secret in Vercel frontend env vars; QuoteFly calls OpenAI from the API layer only
 
 ### QuickBooks app setup
 1. Create an Intuit developer app

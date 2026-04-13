@@ -9,7 +9,7 @@ import {
   startOfNextUtcMonth,
 } from "../lib/subscription";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
-import { aiParseChatToQuotePrompt } from "../services/ai-quote";
+import { aiParseChatToQuotePrompt, getAiQuoteRuntimeInfo } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
@@ -647,6 +647,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt);
+    const aiRuntime = getAiQuoteRuntimeInfo();
     const detectedCustomerName = payload.customerName?.trim() || parsedDraft.customerName;
     const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(parsedDraft.customerPhone);
     const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(parsedDraft.customerEmail);
@@ -963,6 +964,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           taxAmount,
           totalAmount,
           aiGeneratedAtUtc: new Date(),
+          aiPromptText: payload.prompt,
+          aiModel: aiRuntime.model,
         },
       });
 

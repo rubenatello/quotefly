@@ -211,6 +211,8 @@ export interface QuoteRow {
   taxAmount: DecimalValue;
   totalAmount: DecimalValue;
   aiGeneratedAtUtc: UtcDate | null;
+  aiPromptText: string | null;
+  aiModel: string | null;
   sentAt: UtcDate | null;
   closedAtUtc: UtcDate | null;
   jobCompletedAtUtc: UtcDate | null;

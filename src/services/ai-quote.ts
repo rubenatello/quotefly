@@ -1,16 +1,25 @@
 import OpenAI from "openai";
+import { env } from "../config/env";
 import type { ParsedChatToQuoteDraft } from "./chat-to-quote";
 import { parseChatToQuotePrompt } from "./chat-to-quote";
 import { inferServiceType } from "./quote-generator";
 
-const AI_ENABLED = !!process.env.OPENAI_API_KEY;
+const AI_ENABLED = !!env.OPENAI_API_KEY;
+const AI_MODEL = env.OPENAI_MODEL || "gpt-4o-mini";
 
 let openaiClient: OpenAI | undefined;
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   }
   return openaiClient;
+}
+
+export function getAiQuoteRuntimeInfo() {
+  return {
+    enabled: AI_ENABLED,
+    model: AI_ENABLED ? AI_MODEL : "regex-fallback",
+  };
 }
 
 const SYSTEM_PROMPT = `You are a contractor quoting assistant. Extract structured data from a natural-language quote request.
@@ -57,7 +66,7 @@ export async function aiParseChatToQuotePrompt(
   try {
     const client = getOpenAI();
     const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+      model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 800,
       messages: [

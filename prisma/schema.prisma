@@ -275,6 +275,8 @@ model Quote {
   taxAmount                       Decimal                 @db.Decimal(10, 2)
   totalAmount                     Decimal                 @db.Decimal(10, 2)
   aiGeneratedAtUtc                DateTime?               @db.Timestamptz(3)
+  aiPromptText                    String?
+  aiModel                         String?
   sentAt                          DateTime?               @db.Timestamptz(3)
   closedAtUtc                     DateTime?               @db.Timestamptz(3)
   jobCompletedAtUtc               DateTime?               @db.Timestamptz(3)
