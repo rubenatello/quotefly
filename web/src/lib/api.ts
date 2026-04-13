@@ -305,6 +305,9 @@ export type QuoteRevision = {
   version: number;
   eventType: QuoteRevisionEventType;
   changedFields: string[];
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
   title: string;
   status: QuoteStatus;
   customerPriceSubtotal: DecimalLike;
@@ -326,11 +329,30 @@ export type QuoteOutboundEvent = {
   tenantId: string;
   quoteId: string;
   customerId: string;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
   channel: QuoteOutboundChannel;
   destination?: string | null;
   subject?: string | null;
   bodyPreview?: string | null;
   createdAt: string;
+};
+
+export type CustomerActivityEvent = {
+  id: string;
+  sourceType: "customer_event" | "quote_revision" | "quote_outbound";
+  eventType: string;
+  occurredAt: string;
+  title: string;
+  detail: string;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
+  quoteId?: string | null;
+  quoteTitle?: string | null;
+  version?: number | null;
+  channel?: QuoteOutboundChannel | null;
 };
 
 export type ChatToQuoteParsed = {
@@ -776,6 +798,14 @@ export const api = {
       request<void>(`/v1/customers/${customerId}`, {
         method: "DELETE",
       }),
+
+    activity: (customerId: string, query?: { limit?: number; offset?: number }) =>
+      request<{ items: CustomerActivityEvent[]; pagination: Pagination }>(
+        `/v1/customers/${customerId}/activity${toQueryString({
+          limit: query?.limit,
+          offset: query?.offset,
+        })}`,
+      ),
   },
 
   quotes: {

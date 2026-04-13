@@ -143,6 +143,7 @@ model Tenant {
   pricingProfiles                 PricingProfile[]
   quoteTemplates                  QuoteTemplate[]
   quotes                          Quote[]
+  customerActivityEvents          CustomerActivityEvent[]
   quoteDecisionSessions           QuoteDecisionSession[]
   smsMessages                     SmsMessage[]
   stripeCustomerId                String?
@@ -219,6 +220,7 @@ model Customer {
   deletedAtUtc           DateTime?               @db.Timestamptz(3)
   tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quotes                 Quote[]
+  activityEvents         CustomerActivityEvent[]
   revisions              QuoteRevision[]
   quoteOutboundEvents    QuoteOutboundEvent[]
   quickBooksCustomerMaps QuickBooksCustomerMap[]
@@ -328,6 +330,9 @@ model QuoteRevision {
   version               Int
   eventType             QuoteRevisionEventType @default(UPDATED)
   changedFields         String[]               @default([])
+  actorUserId           String?
+  actorEmail            String?
+  actorName             String?
   title                 String
   status                QuoteStatus
   customerPriceSubtotal Decimal                @db.Decimal(10, 2)
@@ -341,6 +346,29 @@ model QuoteRevision {
 
   @@index([quoteId, tenantId, version])
   @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model CustomerActivityEvent {
+  id           String    @id @default(cuid())
+  tenantId     String
+  customerId   String
+  actorUserId  String?
+  actorEmail   String?
+  actorName    String?
+  eventType    String
+  title        String
+  detail       String?
+  metadata     Json?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime? @db.Timestamptz(3)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer  @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
   @@index([tenantId, createdAt])
   @@index([tenantId, deletedAtUtc])
 }
@@ -511,6 +539,9 @@ model QuoteOutboundEvent {
   tenantId     String
   quoteId      String
   customerId   String
+  actorUserId  String?
+  actorEmail   String?
+  actorName    String?
   channel      QuoteOutboundChannel
   destination  String?
   subject      String?
@@ -523,6 +554,7 @@ model QuoteOutboundEvent {
 
   @@index([tenantId, quoteId, createdAt])
   @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
   @@index([tenantId, deletedAtUtc])
 }
 

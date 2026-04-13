@@ -2,6 +2,7 @@ import { LeadFollowUpStatus, Prisma, QuoteOutboundChannel, QuoteRevisionEventTyp
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { resolveActivityActor, type ActivityActor } from "../lib/activity";
 import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
 import {
   loadTenantEntitlements,
@@ -150,6 +151,9 @@ const QuoteRevisionSelect = {
   version: true,
   eventType: true,
   changedFields: true,
+  actorUserId: true,
+  actorEmail: true,
+  actorName: true,
   title: true,
   status: true,
   customerPriceSubtotal: true,
@@ -375,6 +379,7 @@ async function createQuoteRevision(
     quoteId: string;
     eventType: QuoteRevisionEventType;
     changedFields?: string[];
+    actor?: ActivityActor;
   },
 ) {
   const context = await getQuoteRevisionContext(tx, params.quoteId, params.tenantId);
@@ -400,6 +405,9 @@ async function createQuoteRevision(
       version,
       eventType: params.eventType,
       changedFields: params.changedFields ?? [],
+      actorUserId: params.actor?.actorUserId,
+      actorEmail: params.actor?.actorEmail,
+      actorName: params.actor?.actorName,
       title: context.title,
       status: context.status,
       customerPriceSubtotal: Number(context.customerPriceSubtotal),
@@ -582,6 +590,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteFromChatSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
     });
@@ -986,6 +995,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteId: createdQuote.id,
         eventType: "CREATED",
+        actor,
         changedFields: [
           "customerId",
           "serviceType",
@@ -1034,6 +1044,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
     const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -1102,6 +1113,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteId: createdQuote.id,
         eventType: "CREATED",
+        actor,
         changedFields: [
           "customerId",
           "serviceType",
@@ -1578,6 +1590,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = UpdateQuoteSchema.parse(request.body);
+    const actor = await resolveActivityActor(app.prisma, claims);
 
     const existingQuote = await app.prisma.quote.findFirst({
       where: {
@@ -1659,6 +1672,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteId: updatedQuote.id,
         eventType: revisionEventType,
+        actor,
         changedFields: Array.from(new Set(revisionChangedFields)),
       });
 
@@ -1725,6 +1739,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const { decision } = QuoteDecisionSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
 
     const status = decision === "send" ? "SENT_TO_CUSTOMER" : "READY_FOR_REVIEW";
     const sentAt = decision === "send" ? new Date() : null;
@@ -1757,6 +1772,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteId: updatedQuote.id,
         eventType: "DECISION",
+        actor,
         changedFields: ["status", "sentAt", "decisionSession.status"],
       });
 
@@ -1857,6 +1873,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const payload = CreateQuoteOutboundEventSchema.parse(request.body);
       const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
@@ -1911,6 +1928,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           quoteId: quote.id,
           customerId: quote.customerId,
+          actorUserId: actor.actorUserId,
+          actorEmail: actor.actorEmail,
+          actorName: actor.actorName,
           channel: payload.channel as QuoteOutboundChannel,
           destination,
           subject: payload.subject,
@@ -1924,6 +1944,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/quotes/:quoteId/line-items", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = CreateLineItemSchema.parse(request.body);
 
@@ -1949,6 +1970,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteId: updatedQuote.id,
         eventType: "LINE_ITEM_CHANGED",
+        actor,
         changedFields: [
           "lineItems.description",
           "lineItems.quantity",
@@ -1975,6 +1997,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const payload = UpdateLineItemSchema.parse(request.body);
 
@@ -2011,6 +2034,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           quoteId: updatedQuote.id,
           eventType: "LINE_ITEM_CHANGED",
+          actor,
           changedFields: [
             "lineItems.description",
             "lineItems.quantity",
@@ -2038,6 +2062,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const now = new Date();
 
@@ -2068,6 +2093,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           quoteId: updatedQuote.id,
           eventType: "LINE_ITEM_CHANGED",
+          actor,
           changedFields: [
             "lineItems",
             "internalCostSubtotal",

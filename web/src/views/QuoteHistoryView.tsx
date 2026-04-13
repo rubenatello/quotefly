@@ -21,7 +21,6 @@ export function QuoteHistoryView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      {/* ── Revision History ── */}
       {canViewQuoteHistory ? (
         <Card>
           <CardHeader
@@ -77,12 +76,12 @@ export function QuoteHistoryView() {
                   </div>
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                     <p className="text-slate-600">
-                      v{revision.version} · Customer: {revision.customer.fullName}
+                      v{revision.version} - Customer: {revision.customer.fullName} - By {revision.actorName || revision.actorEmail || "Unknown"}
                     </p>
                     <div className="flex items-center gap-2">
                       <QuoteStatusPill status={revision.status} compact />
                       <p className="text-slate-700">
-                        Subtotal {money(revision.customerPriceSubtotal)} · Total {money(revision.totalAmount)}
+                        Subtotal {money(revision.customerPriceSubtotal)} - Total {money(revision.totalAmount)}
                       </p>
                     </div>
                   </div>
@@ -106,7 +105,6 @@ export function QuoteHistoryView() {
         />
       )}
 
-      {/* ── Communication Log ── */}
       {canViewCommunicationLog ? (
         <Card>
           <CardHeader
@@ -132,6 +130,7 @@ export function QuoteHistoryView() {
                   <p className="mt-1 text-xs text-slate-500">
                     {event.destination ? `To: ${event.destination}` : "Destination not captured"}
                   </p>
+                  <p className="mt-1 text-xs text-slate-500">By {event.actorName || event.actorEmail || "Unknown"}</p>
                   {event.subject && <p className="mt-1 text-xs text-slate-600">Subject: {event.subject}</p>}
                 </div>
               ))}

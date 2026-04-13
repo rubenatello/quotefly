@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
-import type { Customer, Quote } from "../lib/api";
+import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
 type CustomerStage = "NEW" | "CONTACTED" | "QUOTED" | "WORKING" | "SOLD";
@@ -13,16 +13,6 @@ type CustomerRow = {
   customer: Customer;
   latestQuote: Quote | null;
   stage: CustomerStage;
-};
-
-type CustomerActivityItem = {
-  id: string;
-  occurredAt: string;
-  title: string;
-  detail: string;
-  actorLabel: string;
-  tone: "slate" | "blue" | "orange" | "emerald";
-  icon: ReactNode;
 };
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
@@ -274,7 +264,7 @@ function CustomerDesktopRow({
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
           {latestQuote ? (
             <span className="truncate">
-              {quoteNumber(latestQuote.id)} · {latestQuote.title}
+              {quoteNumber(latestQuote.id)} - {latestQuote.title}
             </span>
           ) : (
             <span>No quote yet</span>
@@ -390,133 +380,48 @@ function CustomerMobileCard({
   );
 }
 
-function buildCustomerActivity(customer: Customer, quotes: Quote[], actorLabel: string): CustomerActivityItem[] {
-  const items: CustomerActivityItem[] = [
-    {
-      id: `${customer.id}-created`,
-      occurredAt: customer.createdAt,
-      title: "Customer added",
-      detail: `${customer.fullName} was added to the workspace.`,
-      actorLabel,
-      tone: "blue",
-      icon: <ClipboardList size={14} strokeWidth={2.2} />,
-    },
-  ];
+function activityTone(item: CustomerActivityEvent): "slate" | "blue" | "orange" | "emerald" {
+  if (item.sourceType === "quote_outbound") return "orange";
+  if (
+    item.eventType === "ACCEPTED" ||
+    item.eventType === "WON" ||
+    item.eventType === "RESTORED" ||
+    item.title.toLowerCase().includes("accepted") ||
+    item.title.toLowerCase().includes("completed")
+  ) {
+    return "emerald";
+  }
+  if (item.eventType === "ARCHIVED" || item.eventType === "REJECTED") return "slate";
+  return "blue";
+}
 
-  if (customer.notes?.trim()) {
-    items.push({
-      id: `${customer.id}-notes`,
-      occurredAt: customer.updatedAt,
-      title: "Customer notes saved",
-      detail: customer.notes.trim(),
-      actorLabel,
-      tone: "slate",
-      icon: <FileText size={14} strokeWidth={2.2} />,
-    });
+function activityIcon(item: CustomerActivityEvent): ReactNode {
+  if (item.sourceType === "quote_outbound") {
+    if (item.channel === "SMS_APP") return <MessageSquare size={14} strokeWidth={2.2} />;
+    if (item.channel === "COPY") return <ClipboardList size={14} strokeWidth={2.2} />;
+    return <Send size={14} strokeWidth={2.2} />;
   }
 
-  if (customer.followUpUpdatedAtUtc) {
-    items.push({
-      id: `${customer.id}-follow-up`,
-      occurredAt: customer.followUpUpdatedAtUtc,
-      title: "Customer status updated",
-      detail: `Marked as ${customer.followUpStatus.replaceAll("_", " ").toLowerCase()}.`,
-      actorLabel,
-      tone: customer.followUpStatus === "WON" ? "emerald" : customer.followUpStatus === "LOST" ? "orange" : "blue",
-      icon: customer.followUpStatus === "FOLLOWED_UP" ? <PhoneCall size={14} strokeWidth={2.2} /> : <BadgeCheck size={14} strokeWidth={2.2} />,
-    });
+  const title = item.title.toLowerCase();
+  if (title.includes("quote drafted")) return <FilePlus2 size={14} strokeWidth={2.2} />;
+  if (title.includes("quote sent")) return <Send size={14} strokeWidth={2.2} />;
+  if (title.includes("accepted")) return <BadgeCheck size={14} strokeWidth={2.2} />;
+  if (title.includes("completed")) return <Wrench size={14} strokeWidth={2.2} />;
+  if (item.eventType === "STATUS_CHANGED") return <PhoneCall size={14} strokeWidth={2.2} />;
+  if (item.eventType === "NOTES_ADDED" || item.eventType === "NOTES_UPDATED" || item.eventType === "NOTES_CLEARED") {
+    return <FileText size={14} strokeWidth={2.2} />;
   }
+  if (item.eventType === "ARCHIVED") return <CircleDot size={14} strokeWidth={2.2} />;
+  return <ClipboardList size={14} strokeWidth={2.2} />;
+}
 
-  for (const quote of quotes) {
-    const quoteLabel = `${quoteNumber(quote.id)} · ${quote.title}`;
-    items.push({
-      id: `${quote.id}-created`,
-      occurredAt: quote.createdAt,
-      title: "Quote drafted",
-      detail: quoteLabel,
-      actorLabel,
-      tone: "blue",
-      icon: <FilePlus2 size={14} strokeWidth={2.2} />,
-    });
-
-    if (quote.sentAt) {
-      items.push({
-        id: `${quote.id}-sent`,
-        occurredAt: quote.sentAt,
-        title: "Quote sent",
-        detail: quoteLabel,
-        actorLabel,
-        tone: "orange",
-        icon: <Send size={14} strokeWidth={2.2} />,
-      });
-    }
-
-    if (quote.status === "ACCEPTED") {
-      items.push({
-        id: `${quote.id}-accepted`,
-        occurredAt: quote.closedAtUtc ?? quote.updatedAt,
-        title: "Quote accepted",
-        detail: quoteLabel,
-        actorLabel,
-        tone: "emerald",
-        icon: <BadgeCheck size={14} strokeWidth={2.2} />,
-      });
-    } else if (quote.status === "REJECTED") {
-      items.push({
-        id: `${quote.id}-rejected`,
-        occurredAt: quote.closedAtUtc ?? quote.updatedAt,
-        title: "Quote closed",
-        detail: `${quoteLabel} was closed as rejected.`,
-        actorLabel,
-        tone: "slate",
-        icon: <CircleDot size={14} strokeWidth={2.2} />,
-      });
-    }
-
-    if (quote.jobCompletedAtUtc) {
-      items.push({
-        id: `${quote.id}-completed`,
-        occurredAt: quote.jobCompletedAtUtc,
-        title: "Work completed",
-        detail: quoteLabel,
-        actorLabel,
-        tone: "emerald",
-        icon: <Wrench size={14} strokeWidth={2.2} />,
-      });
-    }
-
-    if (quote.afterSaleFollowUpDueAtUtc) {
-      items.push({
-        id: `${quote.id}-after-sale-due`,
-        occurredAt: quote.afterSaleFollowUpDueAtUtc,
-        title: "After-sale follow-up due",
-        detail: quoteLabel,
-        actorLabel,
-        tone: "slate",
-        icon: <MessageSquare size={14} strokeWidth={2.2} />,
-      });
-    }
-
-    if (quote.afterSaleFollowUpCompletedAtUtc) {
-      items.push({
-        id: `${quote.id}-after-sale-complete`,
-        occurredAt: quote.afterSaleFollowUpCompletedAtUtc,
-        title: "After-sale follow-up completed",
-        detail: quoteLabel,
-        actorLabel,
-        tone: "emerald",
-        icon: <BadgeCheck size={14} strokeWidth={2.2} />,
-      });
-    }
-  }
-
-  return items.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
+function activityActorLabel(item: CustomerActivityEvent): string {
+  return item.actorName?.trim() || item.actorEmail?.trim() || "Unknown";
 }
 
 export function CustomersPage() {
   usePageView("customers");
   const {
-    session,
     customers,
     quotes,
     loading,
@@ -532,6 +437,8 @@ export function CustomersPage() {
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
+  const [activityItems, setActivityItems] = useState<CustomerActivityEvent[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -543,6 +450,35 @@ export function CustomersPage() {
       setQuickCustomerOpen(true);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!activityCustomerId) {
+      setActivityItems([]);
+      setActivityLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    setActivityLoading(true);
+
+    api.customers
+      .activity(activityCustomerId, { limit: 50 })
+      .then((result) => {
+        if (!mounted) return;
+        setActivityItems(result.items);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setError(err instanceof Error ? err.message : "Failed loading customer activity.");
+      })
+      .finally(() => {
+        if (mounted) setActivityLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activityCustomerId, setError]);
 
   function closeQuickCustomerModal() {
     setQuickCustomerOpen(false);
@@ -611,14 +547,6 @@ export function CustomersPage() {
             .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
         : [],
     [quotes, selectedActivityRow],
-  );
-
-  const selectedActivityItems = useMemo(
-    () =>
-      selectedActivityRow
-        ? buildCustomerActivity(selectedActivityRow.customer, selectedActivityQuotes, session?.fullName ?? "Workspace user")
-        : [],
-    [selectedActivityQuotes, selectedActivityRow, session?.fullName],
   );
 
   return (
@@ -767,37 +695,42 @@ export function CustomersPage() {
               ) : null}
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                {selectedActivityItems.length ? (
-                  selectedActivityItems.map((item, index) => (
+                {activityLoading ? (
+                  <div className="px-4 py-6 text-sm text-slate-600">Loading activity...</div>
+                ) : activityItems.length ? (
+                  activityItems.map((item, index) => {
+                    const tone = activityTone(item);
+                    return (
                     <div
                       key={item.id}
                       className={`flex gap-3 px-4 py-4 ${index > 0 ? "border-t border-slate-200" : ""}`}
                     >
                       <span
                         className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                          item.tone === "blue"
+                          tone === "blue"
                             ? "bg-[#2559b8] text-white"
-                            : item.tone === "orange"
+                            : tone === "orange"
                               ? "bg-[#d97706] text-white"
-                              : item.tone === "emerald"
+                              : tone === "emerald"
                                 ? "bg-emerald-600 text-white"
                                 : "bg-slate-700 text-white"
                         }`}
                       >
-                        {item.icon}
+                        {activityIcon(item)}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-semibold text-slate-900">{item.title}</p>
                           <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
                         </div>
-                        <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+                        <p className="mt-1 text-sm text-slate-600">{item.detail || "No additional detail captured."}</p>
                         <div className="mt-2 flex items-center justify-end">
-                          <span className="text-[11px] font-medium text-slate-500">By {item.actorLabel}</span>
+                          <span className="text-[11px] font-medium text-slate-500">By {activityActorLabel(item)}</span>
                         </div>
                       </div>
                     </div>
-                  ))
+                  );
+                  })
                 ) : (
                   <div className="p-4">
                     <EmptyState title="No activity yet" description="Customer events will appear here as work moves from entry to sold." />

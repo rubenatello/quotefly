@@ -581,7 +581,7 @@ export function QuoteDeskView() {
             <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
               Start Another Quote
             </Button>
-            <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} · Sent {sentDateLabel}</p>
+            <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
           </div>
         </Card>
       </div>
@@ -935,7 +935,9 @@ export function QuoteDeskView() {
                       </div>
                       <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
                     </div>
-                    <p className="mt-2 text-xs text-slate-600">v{revision.version} · Total {money(revision.totalAmount)}</p>
+                    <p className="mt-2 text-xs text-slate-600">
+                      v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -974,6 +976,9 @@ export function QuoteDeskView() {
                     </div>
                     <p className="mt-2 text-xs text-slate-600">
                       {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      By {event.actorName || event.actorEmail || "Unknown"}
                     </p>
                     {event.subject ? <p className="mt-1 text-xs text-slate-500">Subject: {event.subject}</p> : null}
                   </div>

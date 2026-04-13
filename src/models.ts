@@ -173,6 +173,21 @@ export interface CustomerRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface CustomerActivityEventRow {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorName: string | null;
+  eventType: string;
+  title: string;
+  detail: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: UtcDate;
+  deletedAtUtc: UtcDate | null;
+}
+
 export interface PricingProfileRow {
   id: string;
   tenantId: string;
@@ -244,6 +259,9 @@ export interface QuoteRevisionRow {
   version: number;
   eventType: QuoteRevisionEventType;
   changedFields: string[];
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorName: string | null;
   title: string;
   status: QuoteStatus;
   customerPriceSubtotal: DecimalValue;
@@ -281,6 +299,9 @@ export interface QuoteOutboundEventRow {
   tenantId: string;
   quoteId: string;
   customerId: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorName: string | null;
   channel: QuoteOutboundChannel;
   destination: string | null;
   subject: string | null;
@@ -409,6 +430,7 @@ export const TABLE_RELATION_MAP = {
       "PricingProfile",
       "QuoteTemplate",
       "Quote",
+      "CustomerActivityEvent",
       "QuoteDecisionSession",
       "SmsMessage",
       "QuoteLineItem",
@@ -435,7 +457,7 @@ export const TABLE_RELATION_MAP = {
   },
   Customer: {
     belongsTo: ["Tenant"],
-    hasMany: ["Quote", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksCustomerMap"],
+    hasMany: ["Quote", "CustomerActivityEvent", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksCustomerMap"],
   },
   PricingProfile: {
     belongsTo: ["Tenant"],
@@ -452,6 +474,9 @@ export const TABLE_RELATION_MAP = {
   },
   QuoteRevision: {
     belongsTo: ["Tenant", "Quote", "Customer"],
+  },
+  CustomerActivityEvent: {
+    belongsTo: ["Tenant", "Customer"],
   },
   SmsMessage: {
     belongsTo: ["Tenant"],

@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activity";
 import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
 
 const LeadFollowUpStatusSchema = z.enum([
@@ -39,6 +40,8 @@ const CustomerParamsSchema = z.object({
   customerId: z.string().min(1),
 });
 
+const CustomerActivityQuerySchema = PaginationQuerySchema;
+
 const UpdateCustomerSchema = z
   .object({
     fullName: z.string().min(2).optional(),
@@ -51,10 +54,66 @@ const UpdateCustomerSchema = z
     message: "At least one field is required.",
   });
 
+function quoteNumber(quoteId: string): string {
+  return `QF-${quoteId.slice(0, 8).toUpperCase()}`;
+}
+
+function formatFollowUpStatus(status: z.infer<typeof LeadFollowUpStatusSchema>): string {
+  return status.replaceAll("_", " ").toLowerCase();
+}
+
+function buildRevisionTitle(
+  revision: {
+    eventType: string;
+    status: string;
+  },
+): string {
+  if (revision.eventType === "CREATED") return "Quote drafted";
+  if (revision.eventType === "LINE_ITEM_CHANGED") return "Quote lines updated";
+  if (revision.eventType === "DECISION") {
+    if (revision.status === "SENT_TO_CUSTOMER") return "Quote sent";
+    if (revision.status === "ACCEPTED") return "Quote accepted";
+    if (revision.status === "REJECTED") return "Quote closed";
+    return "Quote decision updated";
+  }
+  if (revision.eventType === "STATUS_CHANGED") {
+    if (revision.status === "SENT_TO_CUSTOMER") return "Quote sent";
+    if (revision.status === "ACCEPTED") return "Quote accepted";
+    if (revision.status === "REJECTED") return "Quote closed";
+    if (revision.status === "READY_FOR_REVIEW") return "Quote completed";
+    return "Quote status updated";
+  }
+  return "Quote updated";
+}
+
+function buildRevisionDetail(
+  revision: {
+    quote: { id: string; title: string };
+    status: string;
+    changedFields: string[];
+  },
+): string {
+  const label = `${quoteNumber(revision.quote.id)} - ${revision.quote.title}`;
+  if (revision.status === "REJECTED") return `${label} was marked rejected.`;
+  if (revision.status === "ACCEPTED") return `${label} was marked accepted.`;
+  if (revision.status === "SENT_TO_CUSTOMER") return label;
+  if (revision.changedFields.length > 0) {
+    return `${label} - ${revision.changedFields.join(", ")}`;
+  }
+  return label;
+}
+
+function buildOutboundTitle(channel: "EMAIL_APP" | "SMS_APP" | "COPY"): string {
+  if (channel === "EMAIL_APP") return "Quote prepared for email";
+  if (channel === "SMS_APP") return "Quote prepared for text";
+  return "Quote message copied";
+}
+
 export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
 
     const normalizedEmail = payload.email?.toLowerCase() ?? null;
     const phoneMatch = await app.prisma.customer.findUnique({
@@ -131,17 +190,43 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ error: "Customer selected for merge was not found." });
       }
 
-      const customer = await app.prisma.customer.update({
-        where: { id: target.id },
-        data: {
-          fullName: payload.fullName,
-          phone: payload.phone,
-          email: normalizedEmail,
-          notes: payload.notes,
-          followUpStatus: payload.followUpStatus,
-          followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
-          deletedAtUtc: null,
-        },
+      const customer = await app.prisma.$transaction(async (tx) => {
+        const mergedCustomer = await tx.customer.update({
+          where: { id: target.id },
+          data: {
+            fullName: payload.fullName,
+            phone: payload.phone,
+            email: normalizedEmail,
+            notes: payload.notes,
+            followUpStatus: payload.followUpStatus,
+            followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+            deletedAtUtc: null,
+          },
+        });
+
+        await createCustomerActivityEvent(tx, {
+          tenantId: claims.tenantId,
+          customerId: mergedCustomer.id,
+          actor,
+          eventType: target.deletedAtUtc ? "RESTORED" : "MERGED",
+          title: target.deletedAtUtc ? "Customer restored" : "Customer merged",
+          detail: target.deletedAtUtc
+            ? `${mergedCustomer.fullName} was restored and updated.`
+            : `${mergedCustomer.fullName} was merged into the existing customer record.`,
+        });
+
+        if (payload.notes?.trim()) {
+          await createCustomerActivityEvent(tx, {
+            tenantId: claims.tenantId,
+            customerId: mergedCustomer.id,
+            actor,
+            eventType: "NOTES_UPDATED",
+            title: "Customer notes updated",
+            detail: payload.notes.trim().slice(0, 500),
+          });
+        }
+
+        return mergedCustomer;
       });
 
       return reply.send({
@@ -159,16 +244,51 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const customer = await app.prisma.customer.create({
-        data: {
+      const customer = await app.prisma.$transaction(async (tx) => {
+        const createdCustomer = await tx.customer.create({
+          data: {
+            tenantId: claims.tenantId,
+            fullName: payload.fullName,
+            phone: payload.phone,
+            email: normalizedEmail,
+            notes: payload.notes,
+            followUpStatus: payload.followUpStatus,
+            followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+          },
+        });
+
+        await createCustomerActivityEvent(tx, {
           tenantId: claims.tenantId,
-          fullName: payload.fullName,
-          phone: payload.phone,
-          email: normalizedEmail,
-          notes: payload.notes,
-          followUpStatus: payload.followUpStatus,
-          followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
-        },
+          customerId: createdCustomer.id,
+          actor,
+          eventType: "CREATED",
+          title: "Customer added",
+          detail: `${createdCustomer.fullName} was added to the workspace.`,
+        });
+
+        if (payload.followUpStatus) {
+          await createCustomerActivityEvent(tx, {
+            tenantId: claims.tenantId,
+            customerId: createdCustomer.id,
+            actor,
+            eventType: "STATUS_CHANGED",
+            title: "Customer status updated",
+            detail: `Marked as ${formatFollowUpStatus(payload.followUpStatus)}.`,
+          });
+        }
+
+        if (payload.notes?.trim()) {
+          await createCustomerActivityEvent(tx, {
+            tenantId: claims.tenantId,
+            customerId: createdCustomer.id,
+            actor,
+            eventType: "NOTES_ADDED",
+            title: "Customer notes added",
+            detail: payload.notes.trim().slice(0, 500),
+          });
+        }
+
+        return createdCustomer;
       });
 
       return reply.code(201).send({ customer });
@@ -238,10 +358,174 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     return { customer };
   });
 
+  app.get("/customers/:customerId/activity", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { customerId } = CustomerParamsSchema.parse(request.params);
+    const query = CustomerActivityQuerySchema.parse(request.query);
+
+    const customer = await app.prisma.customer.findFirst({
+      where: {
+        id: customerId,
+        ...tenantActiveScope(claims.tenantId),
+      },
+      select: { id: true, fullName: true },
+    });
+
+    if (!customer) {
+      return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
+
+    const take = Math.min(query.limit + query.offset + 10, 120);
+
+    const [customerEvents, revisions, outboundEvents, customerEventCount, revisionCount, outboundCount] = await Promise.all([
+      app.prisma.customerActivityEvent.findMany({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        orderBy: { createdAt: "desc" },
+        take,
+      }),
+      app.prisma.quoteRevision.findMany({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        orderBy: [{ createdAt: "desc" }, { version: "desc" }],
+        take,
+        select: {
+          id: true,
+          quoteId: true,
+          version: true,
+          eventType: true,
+          changedFields: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          actorUserId: true,
+          actorEmail: true,
+          actorName: true,
+          quote: {
+            select: {
+              id: true,
+              title: true,
+            },
+          },
+        },
+      }),
+      app.prisma.quoteOutboundEvent.findMany({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        orderBy: { createdAt: "desc" },
+        take,
+        select: {
+          id: true,
+          quoteId: true,
+          channel: true,
+          destination: true,
+          subject: true,
+          bodyPreview: true,
+          createdAt: true,
+          actorUserId: true,
+          actorEmail: true,
+          actorName: true,
+          quote: {
+            select: {
+              id: true,
+              title: true,
+            },
+          },
+        },
+      }),
+      app.prisma.customerActivityEvent.count({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      }),
+      app.prisma.quoteRevision.count({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      }),
+      app.prisma.quoteOutboundEvent.count({
+        where: {
+          customerId: customer.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      }),
+    ]);
+
+    const items = [
+      ...customerEvents.map((event) => ({
+        id: event.id,
+        sourceType: "customer_event" as const,
+        eventType: event.eventType,
+        occurredAt: event.createdAt,
+        title: event.title,
+        detail: event.detail ?? "",
+        actorUserId: event.actorUserId,
+        actorEmail: event.actorEmail,
+        actorName: event.actorName,
+        quoteId: null,
+        quoteTitle: null,
+        version: null,
+        channel: null,
+      })),
+      ...revisions.map((revision) => ({
+        id: revision.id,
+        sourceType: "quote_revision" as const,
+        eventType: revision.eventType,
+        occurredAt: revision.createdAt,
+        title: buildRevisionTitle(revision),
+        detail: buildRevisionDetail(revision),
+        actorUserId: revision.actorUserId,
+        actorEmail: revision.actorEmail,
+        actorName: revision.actorName,
+        quoteId: revision.quote.id,
+        quoteTitle: revision.quote.title,
+        version: revision.version,
+        channel: null,
+      })),
+      ...outboundEvents.map((event) => ({
+        id: event.id,
+        sourceType: "quote_outbound" as const,
+        eventType: event.channel,
+        occurredAt: event.createdAt,
+        title: buildOutboundTitle(event.channel),
+        detail: event.destination
+          ? `${quoteNumber(event.quote.id)} - ${event.quote.title} - ${event.destination}`
+          : `${quoteNumber(event.quote.id)} - ${event.quote.title}`,
+        actorUserId: event.actorUserId,
+        actorEmail: event.actorEmail,
+        actorName: event.actorName,
+        quoteId: event.quote.id,
+        quoteTitle: event.quote.title,
+        version: null,
+        channel: event.channel,
+      })),
+    ]
+      .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
+      .slice(query.offset, query.offset + query.limit);
+
+    return {
+      items,
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total: customerEventCount + revisionCount + outboundCount,
+      },
+    };
+  });
+
   app.patch("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const payload = UpdateCustomerSchema.parse(request.body);
+    const actor = await resolveActivityActor(app.prisma, claims);
 
     const existing = await app.prisma.customer.findFirst({
       where: {
@@ -268,16 +552,58 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const customer = await app.prisma.customer.update({
-      where: { id: existing.id },
-      data: {
-        fullName: payload.fullName,
-        phone: payload.phone,
-        email: payload.email,
-        notes: payload.notes,
-        followUpStatus: payload.followUpStatus,
-        followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
-      },
+    const customer = await app.prisma.$transaction(async (tx) => {
+      const updatedCustomer = await tx.customer.update({
+        where: { id: existing.id },
+        data: {
+          fullName: payload.fullName,
+          phone: payload.phone,
+          email: payload.email,
+          notes: payload.notes,
+          followUpStatus: payload.followUpStatus,
+          followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+        },
+      });
+
+      const changedIdentityFields: string[] = [];
+      if (payload.fullName !== undefined && payload.fullName !== existing.fullName) changedIdentityFields.push("name");
+      if (payload.phone !== undefined && payload.phone !== existing.phone) changedIdentityFields.push("phone");
+      if (payload.email !== undefined && payload.email !== existing.email) changedIdentityFields.push("email");
+
+      if (changedIdentityFields.length > 0) {
+        await createCustomerActivityEvent(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedCustomer.id,
+          actor,
+          eventType: "UPDATED",
+          title: "Customer updated",
+          detail: `Updated ${changedIdentityFields.join(", ")}.`,
+        });
+      }
+
+      if (payload.notes !== undefined && payload.notes !== existing.notes) {
+        await createCustomerActivityEvent(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedCustomer.id,
+          actor,
+          eventType: payload.notes?.trim() ? "NOTES_UPDATED" : "NOTES_CLEARED",
+          title: payload.notes?.trim() ? "Customer notes updated" : "Customer notes cleared",
+          detail: payload.notes?.trim() ? payload.notes.trim().slice(0, 500) : "Notes were cleared.",
+        });
+      }
+
+      if (payload.followUpStatus && payload.followUpStatus !== existing.followUpStatus) {
+        await createCustomerActivityEvent(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedCustomer.id,
+          actor,
+          eventType: "STATUS_CHANGED",
+          title: "Customer status updated",
+          detail: `Marked as ${formatFollowUpStatus(payload.followUpStatus)}.`,
+        });
+      }
+
+      return updatedCustomer;
     });
 
     return { customer };
@@ -286,6 +612,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.delete("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
+    const actor = await resolveActivityActor(app.prisma, claims);
 
     const existing = await app.prisma.customer.findFirst({
       where: {
@@ -299,9 +626,20 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    await app.prisma.customer.update({
-      where: { id: existing.id },
-      data: { deletedAtUtc: new Date() },
+    await app.prisma.$transaction(async (tx) => {
+      await createCustomerActivityEvent(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        actor,
+        eventType: "ARCHIVED",
+        title: "Customer archived",
+        detail: "Customer was archived from the workspace.",
+      });
+
+      await tx.customer.update({
+        where: { id: existing.id },
+        data: { deletedAtUtc: new Date() },
+      });
     });
 
     return reply.code(204).send();
