@@ -738,7 +738,9 @@ export function QuoteDeskView() {
               overviewPlaceholder="Optional overview shown near the top of the quote."
               logoUrl={branding?.logoUrl ?? null}
               logoPosition={branding?.logoPosition ?? "left"}
+              templateId={branding?.templateId ?? "modern"}
               accentColor={quoteAccentColor}
+              componentColors={branding?.componentColors ?? null}
               readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
@@ -941,7 +943,9 @@ export function QuoteDeskView() {
                 totalAmount={totalAmount}
                 logoUrl={branding?.logoUrl ?? null}
                 logoPosition={branding?.logoPosition ?? "left"}
+                templateId={branding?.templateId ?? "modern"}
                 accentColor={quoteAccentColor}
+                componentColors={branding?.componentColors ?? null}
               />
             </div>
 
@@ -1347,7 +1351,9 @@ export function QuoteDeskView() {
             totalAmount={totalAmount}
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
+            templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
+            componentColors={branding?.componentColors ?? null}
           />
         </ModalBody>
       </Modal>

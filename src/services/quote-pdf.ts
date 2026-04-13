@@ -1,6 +1,6 @@
 import PDFDocument from "pdfkit";
 
-export type QuotePdfTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
+export type QuotePdfTemplateId = "modern" | "professional" | "minimal";
 export type QuotePdfLogoPosition = "left" | "center" | "right";
 
 export interface QuoteComponentColors {
@@ -95,22 +95,10 @@ const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
     secondaryColor: "#f8fafc",
     textDark: "#0f172a",
   },
-  bold: {
-    headerStyle: "block",
-    accentColor: "#2a7fd8",
-    secondaryColor: "#111827",
-    textDark: "#0f172a",
-  },
   minimal: {
     headerStyle: "minimal",
     accentColor: "#2a7fd8",
     secondaryColor: "#ffffff",
-    textDark: "#0f172a",
-  },
-  classic: {
-    headerStyle: "card",
-    accentColor: "#f46036",
-    secondaryColor: "#fff7ed",
     textDark: "#0f172a",
   },
 };
@@ -187,8 +175,11 @@ function buildFooterText(data: QuotePdfData): string {
 }
 
 function safeTemplateId(templateId: string): QuotePdfTemplateId {
-  if (templateId === "professional" || templateId === "bold" || templateId === "minimal" || templateId === "classic") {
-    return templateId;
+  if (templateId === "minimal") {
+    return "minimal";
+  }
+  if (templateId === "professional" || templateId === "bold" || templateId === "classic") {
+    return "professional";
   }
   return "modern";
 }

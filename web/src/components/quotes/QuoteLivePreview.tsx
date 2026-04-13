@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { FileText, UserRound } from "lucide-react";
-import type { BrandingLogoPosition } from "../../lib/api";
+import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
 import { money } from "../dashboard/DashboardContext";
 import { Badge } from "../ui";
+import { getQuoteTemplateOption } from "./quote-template";
 
 export type QuotePreviewLine = {
   id: string;
@@ -29,7 +30,9 @@ export function QuoteLivePreview({
   totalAmount,
   logoUrl,
   logoPosition = "left",
+  templateId = "modern",
   accentColor = "#4F7FD2",
+  componentColors,
 }: {
   businessName: string;
   businessHint?: string;
@@ -46,16 +49,37 @@ export function QuoteLivePreview({
   totalAmount: number;
   logoUrl?: string | null;
   logoPosition?: BrandingLogoPosition;
+  templateId?: BrandingTemplateId;
   accentColor?: string;
+  componentColors?: BrandingComponentColors | null;
 }) {
   const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+  const template = getQuoteTemplateOption(templateId);
+  const sectionLabelColor = componentColors?.sectionTitleColor ?? "#64748b";
+  const tableHeaderBgColor = componentColors?.tableHeaderBgColor ?? accentColor;
+  const tableHeaderTextColor = componentColors?.tableHeaderTextColor ?? getContrastingTextColor(tableHeaderBgColor);
+  const totalsColor = componentColors?.totalsColor ?? accentColor;
 
   return (
-    <div className="rounded-[20px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2.5 shadow-[var(--qf-shadow-sm)] sm:p-3">
-      <div className="rounded-[16px] border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
-        <div className="h-1.5 rounded-t-[16px]" style={{ backgroundColor: accentColor }} />
+    <div
+      className={`rounded-[20px] border border-[var(--qf-border)] p-2.5 shadow-[var(--qf-shadow-sm)] sm:p-3 ${
+        template.id === "minimal" ? "bg-white" : "bg-[var(--qf-panel-muted)]"
+      }`}
+    >
+      <div
+        className={`rounded-[16px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-md)] ${
+          template.id === "professional" ? "bg-slate-50/70" : "bg-[var(--qf-panel)]"
+        }`}
+      >
+        {template.headerStyle === "bar" ? <div className="h-1.5 rounded-t-[16px]" style={{ backgroundColor: accentColor }} /> : null}
 
-        <div className="px-5 py-4 sm:px-6 sm:py-5">
+        <div className={`px-5 py-4 sm:px-6 sm:py-5 ${template.headerStyle === "card" ? "relative sm:pl-9" : ""}`}>
+          {template.headerStyle === "card" ? (
+            <div
+              className="absolute bottom-5 left-5 top-5 hidden w-1 rounded-full sm:block"
+              style={{ backgroundColor: accentColor }}
+            />
+          ) : null}
           {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -80,29 +104,35 @@ export function QuoteLivePreview({
 
         <div className="space-y-5 border-t border-[var(--qf-border)] px-5 py-5 sm:px-6 sm:py-5">
           <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <PreviewPartyBlock label="Business" value={businessName} hint={businessHint} />
+            <PreviewPartyBlock label="Business" value={businessName} hint={businessHint} labelColor={sectionLabelColor} />
             <PreviewPartyBlock
               label="Customer"
               value={customerName || "Select customer"}
               hint={[customerPhone, customerEmail].filter(Boolean).join(" / ") || "Customer details will show here."}
               icon={<UserRound size={14} />}
+              labelColor={sectionLabelColor}
             />
           </div>
 
           <div className="grid gap-4 border-y border-[var(--qf-border)] py-4 sm:grid-cols-2">
-            <PreviewMeta label="Prepared" value={preparedDateLabel} />
-            <PreviewMeta label="Sent" value={sentDateLabel || "N/A"} />
+            <PreviewMeta label="Prepared" value={preparedDateLabel} labelColor={sectionLabelColor} />
+            <PreviewMeta label="Sent" value={sentDateLabel || "N/A"} labelColor={sectionLabelColor} />
           </div>
 
           {scopeText.trim() ? (
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Overview</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>
+                Overview
+              </p>
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{scopeText}</p>
             </div>
           ) : null}
 
           <div className="overflow-hidden rounded-xl border border-[var(--qf-border)]">
-            <div className="hidden grid-cols-[minmax(0,1.6fr)_72px_96px_110px] gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 md:grid">
+            <div
+              className="hidden grid-cols-[minmax(0,1.6fr)_72px_96px_110px] gap-3 border-b border-[var(--qf-border)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] md:grid"
+              style={{ backgroundColor: tableHeaderBgColor, color: tableHeaderTextColor }}
+            >
               <span>Line</span>
               <span>Qty</span>
               <span>Price</span>
@@ -124,7 +154,7 @@ export function QuoteLivePreview({
                     <div className="grid grid-cols-3 gap-2 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2 md:contents md:rounded-none md:border-0 md:bg-transparent md:p-0">
                       <PreviewLineMeta label="Qty" value={line.quantity} />
                       <PreviewLineMeta label="Price" value={money(line.unitPrice)} />
-                      <PreviewLineMeta label="Total" value={money(line.lineTotal)} strong />
+                      <PreviewLineMeta label="Total" value={money(line.lineTotal)} strong accentColor={totalsColor} />
                     </div>
                   </div>
                 ))
@@ -139,7 +169,7 @@ export function QuoteLivePreview({
             <div className="ml-auto max-w-[280px] space-y-2">
             <PreviewTotalRow label="Subtotal" value={money(customerSubtotal)} />
             <PreviewTotalRow label="Tax" value={money(taxAmount)} />
-            <PreviewTotalRow label="Total" value={money(totalAmount)} strong />
+            <PreviewTotalRow label="Total" value={money(totalAmount)} strong accentColor={totalsColor} />
           </div>
         </div>
       </div>
@@ -160,15 +190,19 @@ function PreviewPartyBlock({
   value,
   hint,
   icon,
+  labelColor,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon?: ReactNode;
+  labelColor?: string;
 }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: labelColor ?? "#64748b" }}>
+        {label}
+      </p>
       <div className="mt-2 flex items-start gap-2">
         {icon ? <span className="mt-0.5 text-slate-400">{icon}</span> : null}
         <div className="min-w-0">
@@ -180,10 +214,12 @@ function PreviewPartyBlock({
   );
 }
 
-function PreviewMeta({ label, value }: { label: string; value: string }) {
+function PreviewMeta({ label, value, labelColor }: { label: string; value: string; labelColor?: string }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: labelColor ?? "#64748b" }}>
+        {label}
+      </p>
       <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
@@ -193,15 +229,19 @@ function PreviewLineMeta({
   label,
   value,
   strong,
+  accentColor,
 }: {
   label: string;
   value: string;
   strong?: boolean;
+  accentColor?: string;
 }) {
   return (
     <div className="space-y-1 md:space-y-0">
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 md:hidden">{label}</p>
-      <p className={`text-xs md:text-sm ${strong ? "font-semibold text-slate-900" : "text-slate-700"}`}>{value}</p>
+      <p className={`text-xs md:text-sm ${strong ? "font-semibold" : "text-slate-700"}`} style={strong ? { color: accentColor ?? "#0f172a" } : undefined}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -210,15 +250,28 @@ function PreviewTotalRow({
   label,
   value,
   strong,
+  accentColor,
 }: {
   label: string;
   value: string;
   strong?: boolean;
+  accentColor?: string;
 }) {
   return (
     <div className="flex items-center justify-between rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm">
       <span className="text-slate-600">{label}</span>
-      <span className={strong ? "font-semibold text-slate-950" : "font-medium text-slate-900"}>{value}</span>
+      <span className={strong ? "font-semibold" : "font-medium text-slate-900"} style={strong ? { color: accentColor ?? "#0f172a" } : undefined}>
+        {value}
+      </span>
     </div>
   );
+}
+
+function getContrastingTextColor(color: string): string {
+  const safe = /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#4F7FD2";
+  const red = Number.parseInt(safe.slice(1, 3), 16);
+  const green = Number.parseInt(safe.slice(3, 5), 16);
+  const blue = Number.parseInt(safe.slice(5, 7), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.62 ? "#111111" : "#ffffff";
 }

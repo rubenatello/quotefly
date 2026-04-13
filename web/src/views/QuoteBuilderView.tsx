@@ -654,7 +654,9 @@ export function QuoteBuilderView() {
             overviewPlaceholder="Optional overview shown near the top of the quote."
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
+            templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
+            componentColors={branding?.componentColors ?? null}
             actions={
               <div className="flex items-center gap-2">
                 <Button
@@ -810,7 +812,9 @@ export function QuoteBuilderView() {
             totalAmount={totalAmount}
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
+            templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
+            componentColors={branding?.componentColors ?? null}
           />
         </div>
       ) : null}
@@ -921,7 +925,9 @@ export function QuoteBuilderView() {
             totalAmount={totalAmount}
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
+            templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
+            componentColors={branding?.componentColors ?? null}
           />
         </ModalBody>
       </Modal>

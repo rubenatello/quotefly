@@ -24,26 +24,23 @@ import {
   type BrandingBusinessProfile,
   type BrandingComponentColors,
   type BrandingLogoPosition,
-  type BrandingTemplateId,
 } from "../lib/api";
 import { Badge, Button, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
+import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import {
+  QUOTE_TEMPLATE_OPTIONS,
+  getQuoteTemplateOption,
+  normalizeQuoteTemplateId,
+  type QuoteTemplateOption,
+  type StandardQuoteTemplateId,
+} from "../components/quotes/quote-template";
 
 interface BrandingPageProps {
   tenantId?: string;
 }
 
 type BrandingSectionId = "business" | "logo" | "colors" | "templates" | "preview";
-type TemplateHeaderStyle = "bar" | "card" | "block" | "minimal";
-
-interface TemplateOption {
-  id: BrandingTemplateId;
-  name: string;
-  description: string;
-  preview: string;
-  headerStyle: TemplateHeaderStyle;
-  bestFor: string;
-}
 
 interface BrandingSectionConfig {
   id: BrandingSectionId;
@@ -89,49 +86,6 @@ const COLOR_COMPONENTS: Array<{ key: keyof BrandingComponentColors; label: strin
   { key: "tableHeaderTextColor", label: "Table Header Text", description: "Text color used inside the line-item table header." },
   { key: "totalsColor", label: "Totals", description: "Subtotal, tax, and total emphasis color." },
   { key: "footerTextColor", label: "Footer Text", description: "Footer and metadata text color." },
-];
-
-const TEMPLATE_OPTIONS: TemplateOption[] = [
-  {
-    id: "modern",
-    name: "Modern Clean",
-    description: "Top bar layout with clean spacing for fast readability.",
-    preview: "bg-white",
-    headerStyle: "bar",
-    bestFor: "Fast field quotes",
-  },
-  {
-    id: "professional",
-    name: "Professional",
-    description: "Structured card header for a formal business look.",
-    preview: "bg-slate-50",
-    headerStyle: "card",
-    bestFor: "Office-ready estimates",
-  },
-  {
-    id: "bold",
-    name: "Bold",
-    description: "High-contrast block header that stands out immediately.",
-    preview: "bg-slate-100",
-    headerStyle: "block",
-    bestFor: "Sales-forward proposals",
-  },
-  {
-    id: "minimal",
-    name: "Minimal",
-    description: "Minimal ink style for no-friction, text-first quoting.",
-    preview: "bg-white",
-    headerStyle: "minimal",
-    bestFor: "Clean no-frills estimates",
-  },
-  {
-    id: "classic",
-    name: "Classic",
-    description: "Balanced card style with a timeless proposal feel.",
-    preview: "bg-orange-50",
-    headerStyle: "card",
-    bestFor: "Traditional contractors",
-  },
 ];
 
 const LOGO_POSITION_OPTIONS: LogoPositionOption[] = [
@@ -391,7 +345,7 @@ function TemplateMiniPreview({
   active,
   onSelect,
 }: {
-  template: TemplateOption;
+  template: QuoteTemplateOption;
   active: boolean;
   onSelect: () => void;
 }) {
@@ -430,15 +384,6 @@ function TemplateMiniPreview({
             </div>
             <div className="mt-3 h-14 rounded-2xl border border-slate-200 bg-white/85" />
           </>
-        ) : template.headerStyle === "block" ? (
-          <>
-            <div className="rounded-2xl bg-slate-900 p-3">
-              <div className="mb-2 h-1.5 w-full rounded-full bg-quotefly-orange" />
-              <div className="h-2 w-1/2 rounded-full bg-white/90" />
-              <div className="mt-2 h-2 w-1/3 rounded-full bg-white/55" />
-            </div>
-            <div className="mt-3 h-14 rounded-2xl border border-slate-200 bg-white/85" />
-          </>
         ) : (
           <>
             <div className="border-b border-slate-300 pb-2">
@@ -465,93 +410,6 @@ function TemplateMiniPreview({
   );
 }
 
-function PreviewQuoteHeader({
-  template,
-  companyName,
-  logo,
-  logoPosition,
-  headerColor,
-  headerTextColor,
-}: {
-  template: TemplateOption;
-  companyName: string;
-  logo: string | null;
-  logoPosition: BrandingLogoPosition;
-  headerColor: string;
-  headerTextColor: string;
-}) {
-  const logoRowClass =
-    logoPosition === "center"
-      ? "justify-center"
-      : logoPosition === "right"
-        ? "justify-end"
-        : "justify-start";
-  const contentAlignClass =
-    logoPosition === "center"
-      ? "items-center text-center"
-      : logoPosition === "right"
-        ? "items-end text-right"
-        : "items-start text-left";
-  const headingColor = template.headerStyle === "block" ? headerTextColor : "#0f172a";
-  const subtitleColor =
-    template.headerStyle === "block" ? "text-white/70" : "text-slate-500";
-  const metaToneClass =
-    template.headerStyle === "block" ? "text-white/75 border-white/15" : "text-slate-500 border-slate-200";
-
-  return (
-    <div
-      className={`mb-6 overflow-hidden ${
-        template.headerStyle === "minimal"
-          ? "border-b border-slate-300 pb-5"
-          : template.headerStyle === "block"
-            ? "rounded-[24px] border border-slate-900/10 shadow-sm"
-            : "rounded-[24px] border border-slate-200 shadow-sm"
-      } ${template.headerStyle === "card" ? "bg-slate-50" : "bg-white"}`}
-      style={template.headerStyle === "block" ? { backgroundColor: headerColor } : undefined}
-    >
-      {template.headerStyle === "bar" ? (
-        <div className="h-1.5" style={{ backgroundColor: headerColor }} />
-      ) : null}
-
-      <div className={`relative px-5 py-5 sm:px-6 ${template.headerStyle === "card" ? "sm:pl-9" : ""}`}>
-        {template.headerStyle === "card" ? (
-          <div
-            className="absolute bottom-5 left-5 top-5 hidden w-1 rounded-full sm:block"
-            style={{ backgroundColor: headerColor }}
-          />
-        ) : null}
-
-        <div className={`flex ${logoRowClass}`}>
-          {logo ? (
-            <img
-              src={logo}
-              alt="Logo"
-              className={`object-contain ${template.headerStyle === "minimal" ? "h-10 max-w-[120px]" : "h-12 max-w-[140px]"} rounded bg-white/90 p-1.5`}
-            />
-          ) : (
-            <div className={`rounded-2xl border border-dashed ${template.headerStyle === "block" ? "border-white/30 bg-white/10" : "border-slate-200 bg-slate-50"} h-12 w-12`} />
-          )}
-        </div>
-
-        <div className={`mt-4 flex flex-col ${contentAlignClass}`}>
-          <h4
-            className={`font-display ${template.headerStyle === "minimal" ? "text-[1.25rem]" : "text-[1.45rem]"} font-semibold tracking-tight`}
-            style={{ color: headingColor }}
-          >
-            {companyName}
-          </h4>
-          <p className={`mt-1 text-sm ${subtitleColor}`}>Customer quote</p>
-        </div>
-
-        <div className={`mt-5 flex items-center justify-between gap-4 border-t pt-3 text-[12px] font-medium ${metaToneClass}`}>
-          <span>Prepared April 10, 2026</span>
-          <span>Quote #12345</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function BrandingPage({ tenantId }: BrandingPageProps) {
   useEffect(() => {
     setSEOMetadata({
@@ -572,7 +430,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const [brandColor, setBrandColor] = useState("#5B85AA");
   const [timezone, setTimezone] = useState(browserTimezone);
   const [businessProfile, setBusinessProfile] = useState<BrandingBusinessProfile>(EMPTY_BUSINESS_PROFILE);
-  const [selectedTemplate, setSelectedTemplate] = useState<BrandingTemplateId>("modern");
+  const [selectedTemplate, setSelectedTemplate] = useState<StandardQuoteTemplateId>("modern");
   const [componentColors, setComponentColors] = useState<BrandingComponentColors>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
@@ -597,7 +455,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
         if (!branding) return;
 
         setBrandColor(branding.primaryColor);
-        setSelectedTemplate(branding.templateId);
+        setSelectedTemplate(normalizeQuoteTemplateId(branding.templateId));
         setLogoPosition(branding.logoPosition ?? "left");
         setComponentColors(branding.componentColors ?? {});
         setBusinessProfile(normalizeBusinessProfile(branding));
@@ -611,11 +469,11 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   }, [browserTimezone, effectiveTenantId]);
 
   const selectedTemplateIndex = useMemo(() => {
-    const index = TEMPLATE_OPTIONS.findIndex((template) => template.id === selectedTemplate);
+    const index = QUOTE_TEMPLATE_OPTIONS.findIndex((template) => template.id === selectedTemplate);
     return index >= 0 ? index : 0;
   }, [selectedTemplate]);
 
-  const activeTemplate = TEMPLATE_OPTIONS[selectedTemplateIndex];
+  const activeTemplate = QUOTE_TEMPLATE_OPTIONS[selectedTemplateIndex] ?? getQuoteTemplateOption(selectedTemplate);
   const businessAddressLines = formatBusinessAddress(businessProfile);
   const hasBusinessInfo = Boolean(
     businessProfile.businessEmail?.trim() ||
@@ -643,8 +501,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   }));
 
   const moveTemplate = (offset: -1 | 1) => {
-    const nextIndex = (selectedTemplateIndex + offset + TEMPLATE_OPTIONS.length) % TEMPLATE_OPTIONS.length;
-    setSelectedTemplate(TEMPLATE_OPTIONS[nextIndex].id);
+    const nextIndex = (selectedTemplateIndex + offset + QUOTE_TEMPLATE_OPTIONS.length) % QUOTE_TEMPLATE_OPTIONS.length;
+    setSelectedTemplate(QUOTE_TEMPLATE_OPTIONS[nextIndex].id);
   };
 
   const toggleSection = (sectionId: BrandingSectionId) => {
@@ -744,12 +602,22 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   };
 
   const previewHeaderColor = getComponentColorValue("headerBgColor");
-  const previewHeaderTextColor = getComponentColorValue("headerTextColor");
-  const previewSectionTitleColor = getComponentColorValue("sectionTitleColor");
-  const previewTableHeaderColor = getComponentColorValue("tableHeaderBgColor");
-  const previewTableHeaderTextColor = getComponentColorValue("tableHeaderTextColor");
-  const previewTotalsColor = getComponentColorValue("totalsColor");
-  const previewFooterColor = getComponentColorValue("footerTextColor");
+  const previewBusinessHint = [
+    ...businessAddressLines,
+    businessProfile.businessPhone?.trim(),
+    businessProfile.businessEmail?.trim(),
+  ]
+    .filter(Boolean)
+    .join(" / ");
+  const previewComponentColors: BrandingComponentColors = {
+    headerBgColor: previewHeaderColor,
+    headerTextColor: getComponentColorValue("headerTextColor"),
+    sectionTitleColor: getComponentColorValue("sectionTitleColor"),
+    tableHeaderBgColor: getComponentColorValue("tableHeaderBgColor"),
+    tableHeaderTextColor: getComponentColorValue("tableHeaderTextColor"),
+    totalsColor: getComponentColorValue("totalsColor"),
+    footerTextColor: getComponentColorValue("footerTextColor"),
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
@@ -1154,7 +1022,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 </div>
 
                 <div className="-mx-1 mt-4 flex gap-3 overflow-x-auto px-1 pb-1">
-                  {TEMPLATE_OPTIONS.map((template) => (
+                  {QUOTE_TEMPLATE_OPTIONS.map((template) => (
                     <TemplateMiniPreview
                       key={template.id}
                       template={template}
@@ -1187,90 +1055,35 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     {activeTemplate.name}
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-8 text-black">
-                <PreviewQuoteHeader
-                  template={activeTemplate}
-                  companyName={companyName}
-                  logo={logo}
+                <QuoteLivePreview
+                  businessName={companyName}
+                  businessHint={previewBusinessHint || "Add address, phone, or email to show sender details here."}
+                  customerName="John Doe"
+                  customerPhone="(555) 123-4567"
+                  customerEmail="john@example.com"
+                  preparedDateLabel="Apr 10, 2026"
+                  sentDateLabel="N/A"
+                  quoteTitle="Install/replace furnace unit"
+                  scopeText="Install new condenser and indoor coil, pressure test the system, verify refrigerant levels, and confirm startup performance."
+                  lines={[
+                    {
+                      id: "preview-line-1",
+                      title: "Equipment and installation labor",
+                      details: "Includes startup testing, haul-away, and final system checks.",
+                      quantity: "1",
+                      unitPrice: "2450",
+                      lineTotal: 2450,
+                    },
+                  ]}
+                  customerSubtotal={2450}
+                  taxAmount={0}
+                  totalAmount={2450}
+                  logoUrl={logo}
                   logoPosition={logoPosition}
-                  headerColor={previewHeaderColor}
-                  headerTextColor={previewHeaderTextColor}
+                  templateId={selectedTemplate}
+                  accentColor={previewHeaderColor}
+                  componentColors={previewComponentColors}
                 />
-
-                <div className="mb-6 grid gap-4 md:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200 bg-white/70 p-4">
-                    <h5 className="mb-2 font-semibold" style={{ color: previewSectionTitleColor }}>
-                      From
-                    </h5>
-                    <p className="text-sm font-semibold text-slate-900">{companyName}</p>
-                    {businessAddressLines.length > 0 ? (
-                      businessAddressLines.map((line) => (
-                        <p key={line} className="text-sm text-slate-600">{line}</p>
-                      ))
-                    ) : (
-                      <p className="text-sm text-slate-500">Add business address to show sender details here.</p>
-                    )}
-                    {businessProfile.businessPhone ? (
-                      <p className="text-sm text-slate-600">{businessProfile.businessPhone}</p>
-                    ) : null}
-                    {businessProfile.businessEmail ? (
-                      <p className="text-sm text-slate-600">{businessProfile.businessEmail}</p>
-                    ) : null}
-                  </div>
-
-                  <div className="rounded-lg border border-slate-200 bg-white/70 p-4">
-                    <h5 className="mb-2 font-semibold" style={{ color: previewSectionTitleColor }}>
-                      Prepared For
-                    </h5>
-                    <p className="text-sm font-semibold text-slate-900">John Doe</p>
-                    <p className="text-sm text-slate-600">john@example.com</p>
-                    <p className="text-sm text-slate-600">(555) 123-4567</p>
-                  </div>
-                </div>
-
-                <div className="mb-6">
-                  <h5 className="mb-2 font-semibold" style={{ color: previewSectionTitleColor }}>
-                    Scope of Work
-                  </h5>
-                  <p className="text-sm text-slate-600">
-                    Install new condenser and indoor coil, pressure test the system, verify refrigerant levels, and confirm startup performance.
-                  </p>
-                </div>
-
-                <table className="mb-6 w-full text-sm">
-                  <thead>
-                    <tr style={{ backgroundColor: previewTableHeaderColor, color: previewTableHeaderTextColor }}>
-                      <th className="py-2 pl-2 text-left font-semibold">Description</th>
-                      <th className="py-2 pr-2 text-right font-semibold">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b border-slate-200">
-                      <td className="py-2">Equipment and installation labor</td>
-                      <td className="text-right">$2,450.00</td>
-                    </tr>
-                    <tr>
-                      <td className="py-2 font-semibold">Total</td>
-                      <td className="text-right font-semibold" style={{ color: previewTotalsColor }}>
-                        $2,450.00
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div
-                  className="rounded-lg border px-4 py-4 text-center font-semibold text-slate-700"
-                  style={{ borderColor: previewHeaderColor }}
-                >
-                  Valid for 30 days
-                </div>
-
-                <p className="mt-4 text-center text-xs" style={{ color: previewFooterColor }}>
-                  Questions about this quote? Contact {companyName}
-                  {businessProfile.businessPhone ? ` at ${businessProfile.businessPhone}` : ""}
-                  {businessProfile.businessEmail ? ` or ${businessProfile.businessEmail}` : ""} / Timezone: {timezone}
-                </p>
-              </div>
               </div>
             </BrandingSectionCard>
           </div>
