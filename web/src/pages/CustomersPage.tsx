@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
+import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
@@ -205,6 +205,81 @@ function StageCountCard({
         <span className="text-sm font-semibold text-slate-900">{count}</span>
       </div>
     </button>
+  );
+}
+
+function StageFlowButton({
+  stage,
+  count,
+  active,
+  onClick,
+}: {
+  stage: CustomerStage;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group min-w-fit rounded-2xl border px-3 py-2.5 text-left transition sm:px-4 ${
+        active
+          ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+      }`}
+      aria-pressed={active}
+    >
+      <div className="flex items-center gap-2.5">
+        <span
+          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold ${
+            active ? "border-white/20 bg-white/10 text-white" : stageDarkClass(stage)
+          }`}
+        >
+          {stageInitial(stage)}
+        </span>
+        <div className="min-w-0">
+          <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${active ? "text-white/75" : "text-slate-500"}`}>
+            {stageLabel(stage)}
+          </p>
+          <p className={`mt-0.5 text-sm font-semibold ${active ? "text-white" : "text-slate-900"}`}>{count}</p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function CustomerPipelineFilterStrip({
+  totalCount,
+  stageCounts,
+  stageFilter,
+  onChange,
+}: {
+  totalCount: number;
+  stageCounts: Record<CustomerStage, number>;
+  stageFilter: CustomerStage | "ALL";
+  onChange: (stage: CustomerStage | "ALL") => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <StageCountCard label="All" count={totalCount} stage="ALL" active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
+        <div className="hidden h-px w-6 shrink-0 bg-slate-200 sm:block" />
+        <div className="flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 px-2 py-2 sm:gap-2 sm:px-3">
+          {CUSTOMER_STAGE_ORDER.map((stage, index) => (
+            <div key={stage} className="flex items-center gap-1.5 sm:gap-2">
+              <StageFlowButton stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
+              {index < CUSTOMER_STAGE_ORDER.length - 1 ? (
+                <span className="inline-flex h-8 w-6 shrink-0 items-center justify-center text-slate-300">
+                  <ChevronRight size={16} strokeWidth={2.2} />
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="px-1 text-xs text-slate-500">Follow the flow from new lead to sold, or tap any stage to filter the board.</p>
+    </div>
   );
 }
 
@@ -579,19 +654,12 @@ export function CustomersPage() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-        <StageCountCard label="All" count={customerRows.length} stage="ALL" active={stageFilter === "ALL"} onClick={() => setStageFilter("ALL")} />
-        {CUSTOMER_STAGE_ORDER.map((stage) => (
-          <StageCountCard
-            key={stage}
-            label={stageLabel(stage)}
-            count={stageCounts[stage]}
-            stage={stage}
-            active={stageFilter === stage}
-            onClick={() => setStageFilter(stage)}
-          />
-        ))}
-      </div>
+      <CustomerPipelineFilterStrip
+        totalCount={customerRows.length}
+        stageCounts={stageCounts}
+        stageFilter={stageFilter}
+        onChange={setStageFilter}
+      />
 
       <Card variant="default" padding="md">
         <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-end lg:justify-between">
