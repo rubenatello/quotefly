@@ -158,9 +158,14 @@ export function QuoteAiPromptModal({
         </ModalBody>
 
         <ModalFooter className="justify-between gap-3">
-          <p className="max-w-[34rem] text-sm text-slate-500">
-            AI builds the first draft only. You still review every line title, description, cost, and price before saving.
-          </p>
+          <div className="max-w-[34rem] space-y-1">
+            <p className="text-sm text-slate-500">
+              AI builds the first draft only. You still review every line title, description, cost, and price before saving.
+            </p>
+            <p className="text-xs font-medium text-amber-700">
+              AI can make mistakes. Please revise the quote before sending.
+            </p>
+          </div>
           <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
             <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
               Cancel
