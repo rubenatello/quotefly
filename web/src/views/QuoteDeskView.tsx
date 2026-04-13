@@ -5,9 +5,11 @@ import {
   ChevronUp,
   Eye,
   FileOutput,
+  Lock,
   Mail,
   MessageSquare,
   Plus,
+  RotateCcw,
   Save,
   Send,
   X,
@@ -95,6 +97,8 @@ export function QuoteDeskView() {
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
+  const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const canSharePdfFromDevice = useMemo(() => canNativePdfShareOnDevice(), []);
@@ -203,6 +207,15 @@ export function QuoteDeskView() {
     setMobilePane("editor");
   }, [selectedQuote?.id, selectedQuote?.updatedAt]);
 
+  const requiresExplicitUnlock = useMemo(() => {
+    if (!selectedQuote) return false;
+    return ["SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"].includes(selectedQuote.status);
+  }, [selectedQuote?.id, selectedQuote?.status]);
+
+  useEffect(() => {
+    setIsEditUnlocked(!requiresExplicitUnlock);
+  }, [selectedQuote?.id, requiresExplicitUnlock]);
+
   const availablePresets = useMemo(
     () =>
       presetLibrary
@@ -304,6 +317,31 @@ export function QuoteDeskView() {
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
+  const isQuoteLocked = requiresExplicitUnlock && !isEditUnlocked;
+  const metadataDirty = useMemo(() => {
+    if (!selectedQuote) return false;
+    return (
+      quoteEditForm.serviceType !== selectedQuote.serviceType ||
+      quoteEditForm.status !== selectedQuote.status ||
+      quoteEditForm.jobStatus !== selectedQuote.jobStatus ||
+      quoteEditForm.afterSaleFollowUpStatus !== selectedQuote.afterSaleFollowUpStatus ||
+      quoteEditForm.title !== selectedQuote.title ||
+      quoteEditForm.scopeText !== selectedQuote.scopeText ||
+      String(Number(quoteEditForm.taxAmount)) !== String(Number(selectedQuote.taxAmount))
+    );
+  }, [quoteEditForm, selectedQuote]);
+  const hasDraftNewLine = useMemo(
+    () =>
+      Boolean(
+        newLine.title.trim() ||
+          newLine.details.trim() ||
+          String(newLine.quantity) !== "1" ||
+          String(newLine.unitCost) !== "0" ||
+          String(newLine.unitPrice) !== "0",
+      ),
+    [newLine],
+  );
+  const hasUnsavedQuoteSheetChanges = metadataDirty || dirtyLineIds.length > 0 || hasDraftNewLine;
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setEditableLines((current) =>
@@ -312,6 +350,10 @@ export function QuoteDeskView() {
   }
 
   async function saveLine(lineId: string) {
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
     const line = editableLines.find((entry) => entry.id === lineId);
     if (!line || !line.title.trim()) {
       setError("Each line needs a title before it can be saved.");
@@ -338,6 +380,10 @@ export function QuoteDeskView() {
   }
 
   async function addNewLine() {
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
     if (!newLine.title.trim()) {
       setError("Add a line title before inserting a new row.");
       return;
@@ -369,6 +415,10 @@ export function QuoteDeskView() {
   }
 
   async function handleSaveQuoteSheet() {
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
     track("quote_sheet_save");
     await persistSelectedQuote();
     if (dirtyLineIds.length) {
@@ -376,7 +426,34 @@ export function QuoteDeskView() {
     }
   }
 
+  function handleUnlockEditing() {
+    setIsEditUnlocked(true);
+    setUnlockConfirmOpen(false);
+    setNotice("Quote unlocked. Any saved edits will be tracked in history.");
+  }
+
+  function revertQuoteSheetToLastSaved() {
+    if (!selectedQuote) return;
+    setQuoteEditForm({
+      serviceType: selectedQuote.serviceType,
+      status: selectedQuote.status,
+      jobStatus: selectedQuote.jobStatus,
+      afterSaleFollowUpStatus: selectedQuote.afterSaleFollowUpStatus,
+      title: selectedQuote.title,
+      scopeText: selectedQuote.scopeText,
+      taxAmount: String(Number(selectedQuote.taxAmount)),
+    });
+    setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
+    setNewLine(makeEditableQuoteLine());
+    setPresetPromptLine(null);
+    setNotice("Reverted to the last saved quote version.");
+  }
+
   function loadPresetToNewLine(preset: WorkPreset) {
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
     setNewLine(
       makeEditableQuoteLine({
         title: preset.name,
@@ -391,6 +468,10 @@ export function QuoteDeskView() {
   }
 
   async function addPresetToQuote(preset: WorkPreset) {
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
     track("quote_line_preset_add");
     await addLineItemDraft(
       {
@@ -503,87 +584,26 @@ export function QuoteDeskView() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <Card variant="default" padding="md">
-          <div className="grid gap-3 md:grid-cols-[180px_180px_minmax(0,1fr)]">
-            <Select
-              label="Trade"
-              value={quoteEditForm.serviceType}
-              onChange={(event) =>
-                setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-              }
-              options={[
-                { value: "HVAC", label: "HVAC" },
-                { value: "PLUMBING", label: "PLUMBING" },
-                { value: "FLOORING", label: "FLOORING" },
-                { value: "ROOFING", label: "ROOFING" },
-                { value: "GARDENING", label: "GARDENING" },
-                { value: "CONSTRUCTION", label: "CONSTRUCTION" },
-              ]}
-            />
-            <Select
-              label="Quote status"
-              value={quoteEditForm.status}
-              onChange={(event) =>
-                setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
-              }
-              options={[
-                { value: "DRAFT", label: "Draft" },
-                { value: "READY_FOR_REVIEW", label: "Completed" },
-                { value: "SENT_TO_CUSTOMER", label: "Sent" },
-                { value: "ACCEPTED", label: "Closed" },
-                { value: "REJECTED", label: "Lost" },
-              ]}
-            />
-            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pt-5 md:pt-0 md:items-end md:justify-end">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
-                    activeTab === tab.id
-                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </Card>
-
-        <Card variant="blue" padding="md" className="self-start">
-          <CardHeader title="Quote summary" subtitle="Internal totals, pricing health, and save actions stay here." />
-          <div className="space-y-3 text-sm">
-            <SummaryRow label="Line items" value={String(lineItemCount)} />
-            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
-            <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-            <div className="space-y-1">
-              <Input
-                label="Tax"
-                type="number"
-                min="0"
-                step="0.01"
-                value={quoteEditForm.taxAmount}
-                onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
-              />
-            </div>
-            <SummaryRow label="Total" value={money(totalAmount)} strong />
-            <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-            <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
-          </div>
-          <div className="mt-4 grid gap-2">
-            <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-              Save Quote Sheet
-            </Button>
-            <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
-              Start Another Quote
-            </Button>
-            <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
-          </div>
-        </Card>
+      <div className="-mx-1 flex flex-wrap items-center gap-2 overflow-x-auto px-1">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+              activeTab === tab.id
+                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        {isQuoteLocked ? (
+          <Badge tone="amber" icon={<Lock size={12} />}>
+            Locked until you unlock edits
+          </Badge>
+        ) : null}
       </div>
 
       {activeTab === "quote" ? (
@@ -604,19 +624,30 @@ export function QuoteDeskView() {
               logoUrl={branding?.logoUrl ?? null}
               logoPosition={branding?.logoPosition ?? "left"}
               accentColor={quoteAccentColor}
+              readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                     Preview PDF
                   </Button>
-                  {dirtyLineIds.length ? (
-                    <Badge tone="amber">{dirtyLineIds.length} line edit{dirtyLineIds.length === 1 ? "" : "s"} pending</Badge>
+                  {isQuoteLocked ? (
+                    <Button variant="outline" size="sm" icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
+                      Unlock to edit
+                    </Button>
+                  ) : hasUnsavedQuoteSheetChanges ? (
+                    <Badge tone="amber">Unsaved edits</Badge>
                   ) : (
                     <Badge tone="blue">Line editor live</Badge>
                   )}
                 </div>
               }
             >
+              {isQuoteLocked ? (
+                <Alert tone="warning">
+                  This quote is locked because it has already been sent or closed. Unlock it to edit. All saved changes will be tracked.
+                </Alert>
+              ) : null}
+
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
@@ -638,12 +669,13 @@ export function QuoteDeskView() {
                           step="0.01"
                           value={selectedPresetQuantity}
                           onChange={(event) => setSelectedPresetQuantity(event.target.value)}
+                          disabled={isQuoteLocked}
                         />
                       </div>
-                      <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)}>
+                      <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)} disabled={isQuoteLocked}>
                         Load to new row
                       </Button>
-                      <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)}>
+                      <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)} disabled={isQuoteLocked}>
                         Add to quote
                       </Button>
                     </div>
@@ -671,12 +703,13 @@ export function QuoteDeskView() {
                         step="0.01"
                         value={selectedPresetQuantity}
                         onChange={(event) => setSelectedPresetQuantity(event.target.value)}
+                        disabled={isQuoteLocked}
                       />
                       <div className="grid grid-cols-2 gap-2">
-                        <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)}>
+                        <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)} disabled={isQuoteLocked}>
                           Load row
                         </Button>
-                        <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)}>
+                        <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)} disabled={isQuoteLocked}>
                           Add to quote
                         </Button>
                       </div>
@@ -734,6 +767,7 @@ export function QuoteDeskView() {
                     index={index}
                     dirty={dirtyLineIds.includes(line.id)}
                     startExpanded={dirtyLineIds.includes(line.id)}
+                    readOnly={isQuoteLocked}
                     onChange={updateEditableLine}
                     onSave={saveLine}
                     onDelete={() => setLineItemPendingDeleteId(line.id)}
@@ -744,10 +778,14 @@ export function QuoteDeskView() {
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Add line</p>
-                          <p className="mt-1 text-sm text-slate-600">Keep adding rows directly in the quote sheet.</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {isQuoteLocked
+                              ? "Unlock the quote to add new rows."
+                              : "Keep adding rows directly in the quote sheet."}
+                          </p>
                         </div>
                       </div>
-                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} />
+                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} readOnly={isQuoteLocked} />
                     </div>
                   </div>
                 </div>
@@ -779,18 +817,91 @@ export function QuoteDeskView() {
 
             <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden lg:block" : ""}>
               <CardHeader
-                title="Customer-facing totals"
-                subtitle="Keep the quote sheet primary and open the PDF preview when you want the final document view."
-                actions={
-                  <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                    Preview PDF
-                  </Button>
-                }
+                title="Quote actions"
+                subtitle="Use the same control rail whether you are opening, reviewing, or editing a quote."
               />
+              <div className="mb-4 space-y-3">
+                <Select
+                  label="Trade"
+                  value={quoteEditForm.serviceType}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+                  }
+                  disabled={isQuoteLocked}
+                  options={[
+                    { value: "HVAC", label: "HVAC" },
+                    { value: "PLUMBING", label: "PLUMBING" },
+                    { value: "FLOORING", label: "FLOORING" },
+                    { value: "ROOFING", label: "ROOFING" },
+                    { value: "GARDENING", label: "GARDENING" },
+                    { value: "CONSTRUCTION", label: "CONSTRUCTION" },
+                  ]}
+                />
+                <Select
+                  label="Quote status"
+                  value={quoteEditForm.status}
+                  onChange={(event) =>
+                    setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
+                  }
+                  disabled={isQuoteLocked}
+                  options={[
+                    { value: "DRAFT", label: "Draft" },
+                    { value: "READY_FOR_REVIEW", label: "Completed" },
+                    { value: "SENT_TO_CUSTOMER", label: "Sent" },
+                    { value: "ACCEPTED", label: "Closed" },
+                    { value: "REJECTED", label: "Lost" },
+                  ]}
+                />
+              </div>
               <div className="space-y-3 text-sm">
+                <SummaryRow label="Line items" value={String(lineItemCount)} />
                 <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-                <SummaryRow label="Tax" value={money(taxAmount)} />
+                <div className="space-y-1">
+                  <Input
+                    label="Tax"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quoteEditForm.taxAmount}
+                    onChange={(event) => setQuoteEditForm((prev) => ({ ...prev, taxAmount: event.target.value }))}
+                    disabled={isQuoteLocked}
+                  />
+                </div>
                 <SummaryRow label="Total" value={money(totalAmount)} strong />
+                <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
+                <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
+                <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+              </div>
+              <div className="mt-4 space-y-2 text-sm text-slate-700">
+                <ChecklistItem compact complete={Boolean(selectedQuote.customerId)} label="Customer attached" />
+                <ChecklistItem compact complete={Boolean(quoteEditForm.title.trim())} label="Quote title present" />
+                <ChecklistItem compact complete={lineItemCount > 0} label={`${lineItemCount} line${lineItemCount === 1 ? "" : "s"} in quote`} />
+              </div>
+              {isQuoteLocked ? (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                  This quote is currently locked because it has already been sent or closed.
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-2">
+                {isQuoteLocked ? (
+                  <Button fullWidth icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
+                    Unlock to Edit
+                  </Button>
+                ) : (
+                  <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
+                    Save Quote Sheet
+                  </Button>
+                )}
+                <Button fullWidth variant="outline" icon={<RotateCcw size={14} />} onClick={revertQuoteSheetToLastSaved} disabled={!hasUnsavedQuoteSheetChanges}>
+                  Revert to Last Saved
+                </Button>
+                <Button fullWidth variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                  Preview PDF
+                </Button>
+                <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                  Start Another Quote
+                </Button>
+                <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
               </div>
             </Card>
 
@@ -844,9 +955,15 @@ export function QuoteDeskView() {
               >
                 {mobilePane === "preview" ? "Edit Quote" : "Preview"}
               </Button>
-              <Button loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-                Save Quote
-              </Button>
+              {isQuoteLocked ? (
+                <Button icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
+                  Unlock
+                </Button>
+              ) : (
+                <Button loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
+                  Save Quote
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -1007,6 +1124,21 @@ export function QuoteDeskView() {
         loading={saving}
       />
 
+      <ConfirmModal
+        open={unlockConfirmOpen}
+        onClose={() => setUnlockConfirmOpen(false)}
+        onConfirm={handleUnlockEditing}
+        title="Unlock quote for editing"
+        description="This quote has already been sent or closed. If you unlock it and save changes, the update will be tracked in quote history."
+        confirmLabel="Unlock quote"
+        confirmVariant="warning"
+      >
+        <div className="space-y-2 text-sm text-slate-600">
+          <p>Use this when you need to revise a sent quote, correct pricing, or update scope after the customer has already seen it.</p>
+          <p>Revert only resets unsaved edits in the current session. Saved changes remain in the audit trail.</p>
+        </div>
+      </ConfirmModal>
+
       <SaveLinePresetModal
         open={Boolean(presetPromptLine)}
         line={presetPromptLine}
@@ -1144,10 +1276,30 @@ function SummaryRow({
   );
 }
 
+function ChecklistItem({
+  complete,
+  label,
+  compact,
+}: {
+  complete: boolean;
+  label: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-[var(--qf-border)] bg-white"}`}>
+      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+        {complete ? "OK" : "-"}
+      </span>
+      <span className="text-sm text-slate-700">{label}</span>
+    </div>
+  );
+}
+
 function ExistingLineEditorRow({
   line,
   index,
   dirty,
+  readOnly,
   startExpanded,
   onChange,
   onSave,
@@ -1156,6 +1308,7 @@ function ExistingLineEditorRow({
   line: EditableQuoteLine;
   index: number;
   dirty: boolean;
+  readOnly?: boolean;
   startExpanded?: boolean;
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onSave: (lineId: string) => Promise<void>;
@@ -1195,20 +1348,20 @@ function ExistingLineEditorRow({
           </button>
           <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
             <div className="mb-2 flex items-center justify-end gap-2">
-              <Button size="sm" variant="outline" icon={<Save size={14} />} onClick={() => void onSave(line.id)} disabled={!dirty}>
+              <Button size="sm" variant="outline" icon={<Save size={14} />} onClick={() => void onSave(line.id)} disabled={!dirty || readOnly}>
                 Save
               </Button>
-              <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={onDelete}>
+              <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={onDelete} disabled={readOnly}>
                 Remove
               </Button>
             </div>
             <div className="space-y-3">
-              <Input label="Line" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} />
-              <Textarea label="Description" rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
+              <Input label="Line" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+              <Textarea label="Description" rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
               <div className="grid grid-cols-3 gap-2">
-                <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-                <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-                <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+                <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+                <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+                <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
               </div>
               <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
@@ -1222,11 +1375,11 @@ function ExistingLineEditorRow({
         <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           {index + 1}
         </div>
-        <Input className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} />
-        <Textarea rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+        <Input className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+        <Textarea rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}
         </div>
@@ -1237,7 +1390,7 @@ function ExistingLineEditorRow({
             icon={<Save size={14} />}
             className="w-9 px-0"
             onClick={() => void onSave(line.id)}
-            disabled={!dirty}
+            disabled={!dirty || readOnly}
             aria-label="Save line"
             title="Save line"
           />
@@ -1247,6 +1400,7 @@ function ExistingLineEditorRow({
             icon={<X size={14} />}
             className="w-9 px-0 text-slate-500 hover:text-red-600"
             onClick={onDelete}
+            disabled={readOnly}
             aria-label="Remove line"
             title="Remove line"
           />
@@ -1261,11 +1415,13 @@ function NewLineEditorRow({
   onChange,
   onAdd,
   saving,
+  readOnly,
 }: {
   line: EditableQuoteLine;
   onChange: (line: EditableQuoteLine) => void;
   onAdd: () => Promise<void>;
   saving: boolean;
+  readOnly?: boolean;
 }) {
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
 
@@ -1281,6 +1437,7 @@ function NewLineEditorRow({
           placeholder="Service or job name"
           value={line.title}
           onChange={(event) => onChange({ ...line, title: event.target.value })}
+          disabled={readOnly}
         />
         <Textarea
           label="Description"
@@ -1289,10 +1446,11 @@ function NewLineEditorRow({
           placeholder="Optional line description"
           value={line.details}
           onChange={(event) => onChange({ ...line, details: event.target.value })}
+          disabled={readOnly}
         />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
         <div className="space-y-1">
           <label className="block text-xs font-medium text-slate-600">Total</label>
           <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5 text-sm font-semibold text-slate-900 tabular-nums">
@@ -1305,10 +1463,11 @@ function NewLineEditorRow({
           variant="ghost"
           icon={<X size={14} />}
           onClick={() => onChange(makeEditableQuoteLine())}
+          disabled={readOnly}
         >
           Clear
         </Button>
-        <Button icon={<Plus size={14} />} loading={saving} onClick={() => void onAdd()}>
+        <Button icon={<Plus size={14} />} loading={saving} onClick={() => void onAdd()} disabled={readOnly}>
           Add line
         </Button>
       </div>

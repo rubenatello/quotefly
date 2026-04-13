@@ -22,6 +22,7 @@ export function QuoteSheetEditor({
   logoUrl,
   logoPosition = "left",
   accentColor = "#4F7FD2",
+  readOnly = false,
   children,
 }: {
   title: string;
@@ -42,6 +43,7 @@ export function QuoteSheetEditor({
   logoUrl?: string | null;
   logoPosition?: BrandingLogoPosition;
   accentColor?: string;
+  readOnly?: boolean;
   children: ReactNode;
 }) {
   const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
@@ -63,7 +65,12 @@ export function QuoteSheetEditor({
                     value={title}
                     onChange={(event) => onTitleChange(event.target.value)}
                     placeholder={titlePlaceholder ?? "Untitled quote"}
-                    className="mt-2 w-full border-0 bg-transparent px-0 text-[1.7rem] font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 focus:outline-none sm:text-[1.9rem]"
+                    readOnly={readOnly}
+                    className={`mt-2 w-full border-0 px-0 text-[1.7rem] font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 sm:text-[1.9rem] ${
+                      readOnly
+                        ? "cursor-default bg-transparent focus:outline-none"
+                        : "bg-transparent focus:outline-none"
+                    }`}
                   />
                 </div>
               </div>
@@ -103,7 +110,12 @@ export function QuoteSheetEditor({
               value={overview}
               onChange={(event) => onOverviewChange(event.target.value)}
               placeholder={overviewPlaceholder ?? "Optional overview shown near the top of the quote."}
-              className="mt-2 min-h-[104px] w-full rounded-xl border border-[var(--qf-border)] bg-white px-4 py-3 text-sm leading-6 text-slate-800 placeholder:text-slate-400 focus:border-[var(--qf-brand-blue)] focus:outline-none focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)]"
+              readOnly={readOnly}
+              className={`mt-2 min-h-[104px] w-full rounded-xl border border-[var(--qf-border)] px-4 py-3 text-sm leading-6 text-slate-800 placeholder:text-slate-400 ${
+                readOnly
+                  ? "cursor-default bg-slate-50 focus:outline-none"
+                  : "bg-white focus:border-[var(--qf-brand-blue)] focus:outline-none focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)]"
+              }`}
             />
           </div>
 
