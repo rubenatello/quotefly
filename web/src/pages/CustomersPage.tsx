@@ -20,6 +20,7 @@ type CustomerActivityItem = {
   occurredAt: string;
   title: string;
   detail: string;
+  actorLabel: string;
   tone: "slate" | "blue" | "orange" | "emerald";
   icon: ReactNode;
 };
@@ -389,13 +390,14 @@ function CustomerMobileCard({
   );
 }
 
-function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerActivityItem[] {
+function buildCustomerActivity(customer: Customer, quotes: Quote[], actorLabel: string): CustomerActivityItem[] {
   const items: CustomerActivityItem[] = [
     {
       id: `${customer.id}-created`,
       occurredAt: customer.createdAt,
       title: "Customer added",
       detail: `${customer.fullName} was added to the workspace.`,
+      actorLabel,
       tone: "blue",
       icon: <ClipboardList size={14} strokeWidth={2.2} />,
     },
@@ -407,6 +409,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
       occurredAt: customer.updatedAt,
       title: "Customer notes saved",
       detail: customer.notes.trim(),
+      actorLabel,
       tone: "slate",
       icon: <FileText size={14} strokeWidth={2.2} />,
     });
@@ -418,6 +421,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
       occurredAt: customer.followUpUpdatedAtUtc,
       title: "Customer status updated",
       detail: `Marked as ${customer.followUpStatus.replaceAll("_", " ").toLowerCase()}.`,
+      actorLabel,
       tone: customer.followUpStatus === "WON" ? "emerald" : customer.followUpStatus === "LOST" ? "orange" : "blue",
       icon: customer.followUpStatus === "FOLLOWED_UP" ? <PhoneCall size={14} strokeWidth={2.2} /> : <BadgeCheck size={14} strokeWidth={2.2} />,
     });
@@ -430,6 +434,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
       occurredAt: quote.createdAt,
       title: "Quote drafted",
       detail: quoteLabel,
+      actorLabel,
       tone: "blue",
       icon: <FilePlus2 size={14} strokeWidth={2.2} />,
     });
@@ -440,6 +445,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.sentAt,
         title: "Quote sent",
         detail: quoteLabel,
+        actorLabel,
         tone: "orange",
         icon: <Send size={14} strokeWidth={2.2} />,
       });
@@ -451,6 +457,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.closedAtUtc ?? quote.updatedAt,
         title: "Quote accepted",
         detail: quoteLabel,
+        actorLabel,
         tone: "emerald",
         icon: <BadgeCheck size={14} strokeWidth={2.2} />,
       });
@@ -460,6 +467,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.closedAtUtc ?? quote.updatedAt,
         title: "Quote closed",
         detail: `${quoteLabel} was closed as rejected.`,
+        actorLabel,
         tone: "slate",
         icon: <CircleDot size={14} strokeWidth={2.2} />,
       });
@@ -471,6 +479,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.jobCompletedAtUtc,
         title: "Work completed",
         detail: quoteLabel,
+        actorLabel,
         tone: "emerald",
         icon: <Wrench size={14} strokeWidth={2.2} />,
       });
@@ -482,6 +491,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.afterSaleFollowUpDueAtUtc,
         title: "After-sale follow-up due",
         detail: quoteLabel,
+        actorLabel,
         tone: "slate",
         icon: <MessageSquare size={14} strokeWidth={2.2} />,
       });
@@ -493,6 +503,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
         occurredAt: quote.afterSaleFollowUpCompletedAtUtc,
         title: "After-sale follow-up completed",
         detail: quoteLabel,
+        actorLabel,
         tone: "emerald",
         icon: <BadgeCheck size={14} strokeWidth={2.2} />,
       });
@@ -505,6 +516,7 @@ function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerAct
 export function CustomersPage() {
   usePageView("customers");
   const {
+    session,
     customers,
     quotes,
     loading,
@@ -602,8 +614,11 @@ export function CustomersPage() {
   );
 
   const selectedActivityItems = useMemo(
-    () => (selectedActivityRow ? buildCustomerActivity(selectedActivityRow.customer, selectedActivityQuotes) : []),
-    [selectedActivityQuotes, selectedActivityRow],
+    () =>
+      selectedActivityRow
+        ? buildCustomerActivity(selectedActivityRow.customer, selectedActivityQuotes, session?.fullName ?? "Workspace user")
+        : [],
+    [selectedActivityQuotes, selectedActivityRow, session?.fullName],
   );
 
   return (
@@ -751,10 +766,13 @@ export function CustomersPage() {
                 </div>
               ) : null}
 
-              <div className="space-y-3">
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 {selectedActivityItems.length ? (
-                  selectedActivityItems.map((item) => (
-                    <div key={item.id} className="flex gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  selectedActivityItems.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className={`flex gap-3 px-4 py-4 ${index > 0 ? "border-t border-slate-200" : ""}`}
+                    >
                       <span
                         className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
                           item.tone === "blue"
@@ -774,11 +792,16 @@ export function CustomersPage() {
                           <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
                         </div>
                         <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+                        <div className="mt-2 flex items-center justify-end">
+                          <span className="text-[11px] font-medium text-slate-500">By {item.actorLabel}</span>
+                        </div>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <EmptyState title="No activity yet" description="Customer events will appear here as work moves from entry to sold." />
+                  <div className="p-4">
+                    <EmptyState title="No activity yet" description="Customer events will appear here as work moves from entry to sold." />
+                  </div>
                 )}
               </div>
             </>
