@@ -82,7 +82,10 @@ export function QuoteSheetEditor({
               <div className="flex items-start gap-4">
                 {logoPosition === "left" ? logo : null}
                 <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accentColor }} />
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
+                  </div>
                   <input
                     value={title}
                     onChange={(event) => onTitleChange(event.target.value)}
@@ -99,7 +102,7 @@ export function QuoteSheetEditor({
             </div>
             <div className="flex shrink-0 items-center gap-1.5 self-start">
               {logoPosition === "right" ? logo : null}
-              <Badge tone="blue" icon={<FileText size={12} />}>
+              <Badge tone="blue" icon={<FileText size={12} />} className="border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)]">
                 Customer view
               </Badge>
               {actions}

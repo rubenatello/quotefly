@@ -745,7 +745,7 @@ export function QuoteDeskView() {
               actions={
                 <div className="flex items-center gap-2">
                   <Button
-                    variant="outline"
+                    variant="secondary"
                     size="sm"
                     icon={<Sparkles size={14} />}
                     onClick={() => {
@@ -760,7 +760,7 @@ export function QuoteDeskView() {
                     AI Prompt
                   </Button>
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                    Preview PDF
+                    Preview
                   </Button>
                   {isQuoteLocked ? (
                     <Button variant="outline" size="sm" icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
