@@ -16,6 +16,7 @@ type CustomerRow = {
 };
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
+const ACTIVITY_PAGE_SIZE = 5;
 
 function stageLabel(stage: CustomerStage) {
   if (stage === "NEW") return "New";
@@ -439,6 +440,8 @@ export function CustomersPage() {
   const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<CustomerActivityEvent[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [activityPage, setActivityPage] = useState(1);
+  const [activityTotal, setActivityTotal] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -452,9 +455,14 @@ export function CustomersPage() {
   }, [searchParams]);
 
   useEffect(() => {
+    setActivityPage(1);
+  }, [activityCustomerId]);
+
+  useEffect(() => {
     if (!activityCustomerId) {
       setActivityItems([]);
       setActivityLoading(false);
+      setActivityTotal(0);
       return;
     }
 
@@ -462,10 +470,14 @@ export function CustomersPage() {
     setActivityLoading(true);
 
     api.customers
-      .activity(activityCustomerId, { limit: 50 })
+      .activity(activityCustomerId, {
+        limit: ACTIVITY_PAGE_SIZE,
+        offset: (activityPage - 1) * ACTIVITY_PAGE_SIZE,
+      })
       .then((result) => {
         if (!mounted) return;
         setActivityItems(result.items);
+        setActivityTotal(result.pagination.total);
       })
       .catch((err) => {
         if (!mounted) return;
@@ -478,7 +490,7 @@ export function CustomersPage() {
     return () => {
       mounted = false;
     };
-  }, [activityCustomerId, setError]);
+  }, [activityCustomerId, activityPage, setError]);
 
   function closeQuickCustomerModal() {
     setQuickCustomerOpen(false);
@@ -548,6 +560,8 @@ export function CustomersPage() {
         : [],
     [quotes, selectedActivityRow],
   );
+
+  const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
 
   return (
     <div className="space-y-5">
@@ -737,6 +751,36 @@ export function CustomersPage() {
                   </div>
                 )}
               </div>
+
+              {activityTotal > ACTIVITY_PAGE_SIZE ? (
+                <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-500">
+                    Showing {Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal)}-
+                    {Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal)} of {activityTotal} events
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setActivityPage((current) => Math.max(1, current - 1))}
+                      disabled={activityPage === 1 || activityLoading}
+                    >
+                      Previous
+                    </Button>
+                    <span className="text-xs font-medium text-slate-600">
+                      Page {activityPage} of {totalActivityPages}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setActivityPage((current) => Math.min(totalActivityPages, current + 1))}
+                      disabled={activityPage >= totalActivityPages || activityLoading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </>
           ) : null}
         </ModalBody>
