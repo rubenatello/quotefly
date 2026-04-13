@@ -51,9 +51,9 @@ export function QuoteLivePreview({
   const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
 
   return (
-    <div className="rounded-[24px] border border-slate-200 bg-slate-100/70 p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-4">
-      <div className="rounded-[20px] border border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-        <div className="h-1.5 rounded-t-[20px]" style={{ backgroundColor: accentColor }} />
+    <div className="rounded-[20px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2.5 shadow-[var(--qf-shadow-sm)] sm:p-3">
+      <div className="rounded-[16px] border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
+        <div className="h-1.5 rounded-t-[16px]" style={{ backgroundColor: accentColor }} />
 
         <div className="px-5 py-4 sm:px-6 sm:py-5">
           {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
@@ -63,7 +63,7 @@ export function QuoteLivePreview({
                 {logoPosition === "left" ? logo : null}
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Live quote preview</p>
-                  <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-950 sm:text-xl">
+                  <h3 className="mt-2 text-[1.3rem] font-semibold tracking-tight text-slate-950 sm:text-[1.45rem]">
                     {quoteTitle.trim() || "Untitled quote"}
                   </h3>
                 </div>
@@ -78,7 +78,7 @@ export function QuoteLivePreview({
           </div>
         </div>
 
-        <div className="space-y-6 border-t border-slate-200 px-5 py-5 sm:px-6 sm:py-6">
+        <div className="space-y-5 border-t border-[var(--qf-border)] px-5 py-5 sm:px-6 sm:py-5">
           <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <PreviewPartyBlock label="Business" value={businessName} hint={businessHint} />
             <PreviewPartyBlock
@@ -89,7 +89,7 @@ export function QuoteLivePreview({
             />
           </div>
 
-          <div className="grid gap-4 border-y border-slate-200 py-4 sm:grid-cols-2">
+          <div className="grid gap-4 border-y border-[var(--qf-border)] py-4 sm:grid-cols-2">
             <PreviewMeta label="Prepared" value={preparedDateLabel} />
             <PreviewMeta label="Sent" value={sentDateLabel || "N/A"} />
           </div>
@@ -101,8 +101,8 @@ export function QuoteLivePreview({
             </div>
           ) : null}
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
-            <div className="hidden grid-cols-[minmax(0,1.6fr)_72px_96px_110px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 md:grid">
+          <div className="overflow-hidden rounded-xl border border-[var(--qf-border)]">
+            <div className="hidden grid-cols-[minmax(0,1.6fr)_72px_96px_110px] gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 md:grid">
               <span>Line</span>
               <span>Qty</span>
               <span>Price</span>
@@ -113,7 +113,7 @@ export function QuoteLivePreview({
                 lines.map((line) => (
                   <div
                     key={line.id}
-                    className="space-y-3 px-4 py-3 text-sm md:grid md:grid-cols-[minmax(0,1.6fr)_72px_96px_110px] md:gap-3 md:space-y-0"
+                    className="space-y-3 px-4 py-2.5 text-sm md:grid md:grid-cols-[minmax(0,1.6fr)_72px_96px_110px] md:gap-3 md:space-y-0"
                   >
                     <div className="min-w-0">
                       <p className="font-semibold text-slate-900">{line.title || "Untitled line"}</p>
@@ -121,7 +121,7 @@ export function QuoteLivePreview({
                         <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-slate-500">{line.details}</p>
                       ) : null}
                     </div>
-                    <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 md:contents md:rounded-none md:border-0 md:bg-transparent md:p-0">
+                    <div className="grid grid-cols-3 gap-2 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2 md:contents md:rounded-none md:border-0 md:bg-transparent md:p-0">
                       <PreviewLineMeta label="Qty" value={line.quantity} />
                       <PreviewLineMeta label="Price" value={money(line.unitPrice)} />
                       <PreviewLineMeta label="Total" value={money(line.lineTotal)} strong />
@@ -136,7 +136,7 @@ export function QuoteLivePreview({
             </div>
           </div>
 
-          <div className="ml-auto max-w-[280px] space-y-2">
+            <div className="ml-auto max-w-[280px] space-y-2">
             <PreviewTotalRow label="Subtotal" value={money(customerSubtotal)} />
             <PreviewTotalRow label="Tax" value={money(taxAmount)} />
             <PreviewTotalRow label="Total" value={money(totalAmount)} strong />
@@ -149,8 +149,8 @@ export function QuoteLivePreview({
 
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
-    <div className="flex h-14 max-w-[200px] items-center">
-      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
+    <div className="flex h-12 max-w-[180px] items-center">
+      <img src={logoUrl} alt="Company logo" className="max-h-10 w-auto max-w-full object-contain" />
     </div>
   );
 }
@@ -216,7 +216,7 @@ function PreviewTotalRow({
   strong?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+    <div className="flex items-center justify-between rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm">
       <span className="text-slate-600">{label}</span>
       <span className={strong ? "font-semibold text-slate-950" : "font-medium text-slate-900"}>{value}</span>
     </div>

@@ -954,7 +954,7 @@ function SummaryRow({
   tone?: "good" | "bad";
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5">
       <span className="text-sm text-slate-600">{label}</span>
       <span
         className={`text-sm font-semibold ${
@@ -977,7 +977,7 @@ function ChecklistItem({
   compact?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-xl border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}>
+    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-[var(--qf-border)] bg-white"}`}>
       <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
         {complete ? "OK" : "-"}
       </span>
@@ -1009,9 +1009,9 @@ function DraftLineEditorRow({
   }, [line.id, startExpanded]);
 
   return (
-    <div className="px-4 py-3">
+    <div className="px-3 py-2.5 lg:hover:bg-[var(--qf-panel-muted)]/60">
       <div className="lg:hidden">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50">
+        <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
           <button
             type="button"
             onClick={() => setExpanded((current) => !current)}
@@ -1033,7 +1033,7 @@ function DraftLineEditorRow({
                   event.stopPropagation();
                   onInsertBelow(line.id);
                 }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-quotefly-blue"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-[var(--qf-border-strong)] hover:text-quotefly-blue"
                 aria-label="Add line below"
               >
                 <Plus size={14} />
@@ -1044,12 +1044,12 @@ function DraftLineEditorRow({
                   event.stopPropagation();
                   onRemove(line.id);
                 }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
                 aria-label="Remove line"
               >
                 <X size={14} />
               </button>
-              <span className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
+              <span className="rounded-lg border border-[var(--qf-border)] bg-white p-2 text-slate-500">
                 {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
             </div>
@@ -1075,7 +1075,7 @@ function DraftLineEditorRow({
                 <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
                 <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
               </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
+              <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
               </div>
               <div className="flex justify-end gap-2">
@@ -1091,26 +1091,27 @@ function DraftLineEditorRow({
         </div>
       </div>
 
-      <div className="hidden lg:grid lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_96px] lg:items-start lg:gap-3">
-        <div className="flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+      <div className="hidden lg:grid lg:grid-cols-[36px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_108px_88px] lg:items-start lg:gap-2.5">
+        <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           {index + 1}
         </div>
         <Input
+          className="min-h-[38px] rounded-lg"
           placeholder="Line"
           value={line.title}
           onChange={(event) => onChange(line.id, "title", event.target.value)}
         />
         <Textarea
           rows={2}
-          className="min-h-[72px]"
+          className="min-h-[64px] rounded-lg"
           placeholder="Description"
           value={line.details}
           onChange={(event) => onChange(line.id, "details", event.target.value)}
         />
-        <Input type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-        <Input type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-        <Input type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-900">
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+        <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">

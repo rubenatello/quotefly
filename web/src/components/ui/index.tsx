@@ -17,21 +17,21 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "border-quotefly-blue bg-quotefly-blue text-white hover:bg-[#256fbf] active:bg-[#1f5f9f]",
+    "border-[var(--qf-brand-blue)] bg-[var(--qf-brand-blue)] text-white shadow-[var(--qf-shadow-sm)] hover:bg-[#285fbb] active:bg-[#214fa6]",
   secondary:
-    "border-quotefly-orange bg-quotefly-orange text-white hover:bg-[#dd532a] active:bg-[#c74921]",
+    "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)] hover:bg-[#de7b19] active:bg-[#c96b11]",
   outline:
-    "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100",
-  ghost: "border-transparent bg-transparent text-slate-700 hover:bg-slate-100 active:bg-slate-200",
+    "border-[var(--qf-border)] bg-white text-slate-700 hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)] active:bg-slate-100",
+  ghost: "border-transparent bg-transparent text-slate-700 hover:bg-[var(--qf-panel-muted)] active:bg-slate-100",
   danger: "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 active:bg-red-200",
-  success: "bg-quotefly-blue/10 text-quotefly-blue border-quotefly-blue/20 hover:bg-quotefly-blue/15 active:bg-quotefly-blue/20",
+  success: "bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)] border-[color:rgba(47,111,214,0.18)] hover:bg-[color:rgba(47,111,214,0.12)] active:bg-[color:rgba(47,111,214,0.16)]",
   warning: "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 active:bg-amber-200",
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: "min-h-[32px] px-3.5 py-1.5 text-xs gap-1.5",
-  md: "min-h-[40px] px-4.5 py-2 text-sm gap-2",
-  lg: "min-h-[46px] px-5.5 py-2.5 text-base gap-2.5",
+  sm: "min-h-[31px] px-3 py-1.5 text-xs gap-1.5",
+  md: "min-h-[38px] px-4 py-2 text-sm gap-2",
+  lg: "min-h-[44px] px-5 py-2.5 text-base gap-2.5",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -40,7 +40,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center rounded-xl border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center rounded-lg border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50",
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         fullWidth && "w-full",
@@ -83,9 +83,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[42px] w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
+              "min-h-[38px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
               icon && "pl-10",
-              error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-slate-200",
+              error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-[var(--qf-border)]",
               className,
             )}
             {...rest}
@@ -121,8 +121,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[42px] w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
-            error ? "border-red-300" : "border-slate-200",
+            "min-h-[38px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+            error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
           {...rest}
@@ -160,8 +160,8 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[120px] w-full rounded-lg border bg-white px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none",
-            error ? "border-red-300" : "border-slate-200",
+            "min-h-[110px] w-full rounded-lg border bg-white px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+            error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
           {...rest}
@@ -183,10 +183,10 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const CARD_VARIANTS: Record<CardVariant, string> = {
-  default: "border-slate-200 bg-white",
-  blue: "border-quotefly-blue/15 bg-quotefly-blue/[0.035]",
-  amber: "border-quotefly-orange/15 bg-quotefly-orange/[0.045]",
-  elevated: "border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]",
+  default: "border-[var(--qf-border)] bg-[var(--qf-panel)]",
+  blue: "border-[color:rgba(47,111,214,0.14)] bg-[var(--qf-panel-subtle)]",
+  amber: "border-[color:rgba(242,140,40,0.18)] bg-[var(--qf-brand-orange-soft)]",
+  elevated: "border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]",
 };
 
 const CARD_PADDING: Record<string, string> = {
@@ -199,7 +199,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ variant = "default", padding = "md", className = "", children, ...rest }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-2xl border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
+      className={cn("rounded-xl border", CARD_VARIANTS[variant], CARD_PADDING[padding], className)}
       {...rest}
     >
       {children}
