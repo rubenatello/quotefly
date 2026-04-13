@@ -1,10 +1,11 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, Eye, Plus, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, Plus, Sparkles, X } from "lucide-react";
 import { FeatureLockedCard } from "../components/dashboard/DashboardUi";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
+import { InlineCustomerLookup } from "../components/quotes/InlineCustomerLookup";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
 import {
@@ -18,7 +19,6 @@ import {
   ModalBody,
   ModalHeader,
   PageHeader,
-  Select,
   Textarea,
 } from "../components/ui";
 import { api, type WorkPreset } from "../lib/api";
@@ -128,11 +128,6 @@ export function QuoteBuilderView() {
     navigateToQuote,
     loadCustomers,
   } = useDashboard();
-
-  const customerOptions = customers.map((customer) => ({
-    value: customer.id,
-    label: `${customer.fullName} (${customer.phone})`,
-  }));
 
   const activeCustomer = useMemo(
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
@@ -250,8 +245,7 @@ export function QuoteBuilderView() {
     );
   }
 
-  function addBlankLine() {
-    const previousLine = draftLines[draftLines.length - 1];
+  function maybeQueuePresetPrompt(previousLine?: EditableQuoteLine | null) {
     if (
       previousLine &&
       previousLine.title.trim() &&
@@ -268,7 +262,23 @@ export function QuoteBuilderView() {
         ),
       );
     }
-    setDraftLines((current) => [...current, makeEditableQuoteLine()]);
+  }
+
+  function addBlankLine(afterLineId?: string) {
+    const previousLine = afterLineId
+      ? draftLines.find((line) => line.id === afterLineId) ?? draftLines[draftLines.length - 1]
+      : draftLines[draftLines.length - 1];
+
+    maybeQueuePresetPrompt(previousLine);
+
+    setDraftLines((current) => {
+      if (!afterLineId) return [...current, makeEditableQuoteLine()];
+      const insertIndex = current.findIndex((line) => line.id === afterLineId);
+      if (insertIndex === -1) return [...current, makeEditableQuoteLine()];
+      const next = [...current];
+      next.splice(insertIndex + 1, 0, makeEditableQuoteLine());
+      return next;
+    });
   }
 
   function removeDraftLine(lineId: string) {
@@ -464,6 +474,27 @@ export function QuoteBuilderView() {
                   </button>
                 ))}
               </div>
+              <div className="mb-3 grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)]">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600">Trade</label>
+                  <select
+                    value={quoteForm.serviceType}
+                    onChange={(event) =>
+                      setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
+                    }
+                    className="mt-1 min-h-[42px] w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-all focus:border-quotefly-blue focus:ring-4 focus:ring-quotefly-blue/10 focus:outline-none"
+                  >
+                    {["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                  Start with AI when speed matters. Then stay in the sheet and edit each title, description, cost, and price directly.
+                </div>
+              </div>
               <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px]" onSubmit={(event) => void createQuoteFromChatPrompt(event)}>
                 <Textarea
                   label="Prompt"
@@ -528,38 +559,6 @@ export function QuoteBuilderView() {
         </Card>
       </div>
 
-      <Card variant="default" padding="md">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_auto]">
-          <Select
-            label="Customer"
-            value={quoteForm.customerId}
-            onChange={(event) => selectQuoteCustomer(event.target.value)}
-            options={customerOptions}
-            placeholder="Select customer"
-          />
-          <Select
-            label="Trade"
-            value={quoteForm.serviceType}
-            onChange={(event) =>
-              setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
-            }
-            options={[
-              { value: "HVAC", label: "HVAC" },
-              { value: "PLUMBING", label: "PLUMBING" },
-              { value: "FLOORING", label: "FLOORING" },
-              { value: "ROOFING", label: "ROOFING" },
-              { value: "GARDENING", label: "GARDENING" },
-              { value: "CONSTRUCTION", label: "CONSTRUCTION" },
-            ]}
-          />
-          <div className="flex items-end">
-            <Button fullWidth variant="outline" icon={<Plus size={14} />} onClick={() => setQuickCustomerOpen(true)}>
-              Add Customer
-            </Button>
-          </div>
-        </div>
-      </Card>
-
       {mobilePane === "preview" ? (
         <div className="lg:hidden">
           <QuoteLivePreview
@@ -587,6 +586,16 @@ export function QuoteBuilderView() {
             businessName={session?.tenantName ?? "QuoteFly"}
             customerName={activeCustomer?.fullName ?? "Select customer"}
             customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : "Use an existing customer or add one fast."}
+            customerTools={
+              <InlineCustomerLookup
+                selectedCustomer={activeCustomer}
+                onSelectCustomer={(customer) => {
+                  selectQuoteCustomer(customer.id);
+                  setNotice(`${customer.fullName} loaded into the quote.`);
+                }}
+                onAddCustomer={() => setQuickCustomerOpen(true)}
+              />
+            }
             preparedDateLabel={preparedDateLabel}
             sentDateLabel="N/A"
             overview={quoteForm.scopeText}
@@ -596,9 +605,6 @@ export function QuoteBuilderView() {
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                   Preview PDF
-                </Button>
-                <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addBlankLine}>
-                  Add line
                 </Button>
               </div>
             }
@@ -695,7 +701,7 @@ export function QuoteBuilderView() {
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="hidden grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_90px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_96px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                 <span>#</span>
                 <span>Line</span>
                 <span>Description</span>
@@ -703,7 +709,7 @@ export function QuoteBuilderView() {
                 <span>Cost</span>
                 <span>Price</span>
                 <span>Total</span>
-                <span className="text-right">Remove</span>
+                <span className="text-right">Actions</span>
               </div>
               <div className="divide-y divide-slate-200">
                 {draftLines.map((line, index) => (
@@ -713,6 +719,7 @@ export function QuoteBuilderView() {
                     index={index}
                     startExpanded={!line.title.trim() && !line.details.trim()}
                     onChange={updateDraftLine}
+                    onInsertBelow={addBlankLine}
                     onRemove={removeDraftLine}
                   />
                 ))}
@@ -854,12 +861,14 @@ function DraftLineEditorRow({
   index,
   startExpanded,
   onChange,
+  onInsertBelow,
   onRemove,
 }: {
   line: EditableQuoteLine;
   index: number;
   startExpanded?: boolean;
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
+  onInsertBelow: (lineId?: string) => void;
   onRemove: (lineId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
@@ -887,17 +896,36 @@ function DraftLineEditorRow({
                 <span>Total {money(lineTotal)}</span>
               </div>
             </div>
-            <span className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
-              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onInsertBelow(line.id);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-quotefly-blue"
+                aria-label="Add line below"
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove(line.id);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
+                aria-label="Remove line"
+              >
+                <X size={14} />
+              </button>
+              <span className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
+                {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </span>
+            </div>
           </button>
 
           <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
-            <div className="mb-2 flex items-center justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => onRemove(line.id)}>
-                Remove
-              </Button>
-            </div>
             <div className="space-y-3">
               <Input
                 label="Line"
@@ -920,12 +948,20 @@ function DraftLineEditorRow({
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
               </div>
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="outline" icon={<Plus size={14} />} onClick={() => onInsertBelow(line.id)}>
+                  Add below
+                </Button>
+                <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={() => onRemove(line.id)}>
+                  Remove
+                </Button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="hidden lg:grid lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_90px] lg:items-start lg:gap-3">
+      <div className="hidden lg:grid lg:grid-cols-[40px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_110px_96px] lg:items-start lg:gap-3">
         <div className="flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
           {index + 1}
         </div>
@@ -947,10 +983,25 @@ function DraftLineEditorRow({
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-900">
           {money(lineTotal)}
         </div>
-        <div className="flex justify-end">
-          <Button size="sm" variant="ghost" onClick={() => onRemove(line.id)}>
-            Remove
-          </Button>
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            icon={<Plus size={14} />}
+            className="w-9 px-0"
+            onClick={() => onInsertBelow(line.id)}
+            aria-label="Add line below"
+            title="Add line below"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<X size={14} />}
+            className="w-9 px-0 text-slate-500 hover:text-red-600"
+            onClick={() => onRemove(line.id)}
+            aria-label="Remove line"
+            title="Remove line"
+          />
         </div>
       </div>
     </div>

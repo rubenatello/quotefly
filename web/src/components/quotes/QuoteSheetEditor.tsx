@@ -9,6 +9,7 @@ export function QuoteSheetEditor({
   businessName,
   customerName,
   customerHint,
+  customerTools,
   preparedDateLabel,
   sentDateLabel,
   overview,
@@ -23,6 +24,7 @@ export function QuoteSheetEditor({
   businessName: string;
   customerName: string;
   customerHint?: string;
+  customerTools?: ReactNode;
   preparedDateLabel: string;
   sentDateLabel: string;
   overview: string;
@@ -62,6 +64,7 @@ export function QuoteSheetEditor({
               value={customerName}
               hint={customerHint}
               icon={<UserRound size={14} />}
+              tools={customerTools}
             />
           </div>
 
@@ -93,11 +96,13 @@ function SheetParty({
   value,
   hint,
   icon,
+  tools,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon?: ReactNode;
+  tools?: ReactNode;
 }) {
   return (
     <div>
@@ -107,6 +112,7 @@ function SheetParty({
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900 sm:text-[15px]">{value}</p>
           {hint ? <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p> : null}
+          {tools ? <div className="mt-3">{tools}</div> : null}
         </div>
       </div>
     </div>

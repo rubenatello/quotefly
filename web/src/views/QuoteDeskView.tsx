@@ -10,6 +10,7 @@ import {
   Plus,
   Save,
   Send,
+  X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import {
@@ -694,13 +695,19 @@ export function QuoteDeskView() {
                     onDelete={() => setLineItemPendingDeleteId(line.id)}
                     />
                   ))}
+                  <div className="px-4 py-4">
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Add line</p>
+                          <p className="mt-1 text-sm text-slate-600">Keep adding rows directly in the quote sheet.</p>
+                        </div>
+                      </div>
+                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} />
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <Card variant="default" padding="md">
-                <CardHeader title="Add line" subtitle="Use this row to insert a new charge into the quote." />
-                <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} />
-              </Card>
             </QuoteSheetEditor>
           </div>
 
@@ -1126,10 +1133,10 @@ function ExistingLineEditorRow({
           </button>
           <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
             <div className="mb-2 flex items-center justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => void onSave(line.id)} disabled={!dirty}>
+              <Button size="sm" variant="outline" icon={<Save size={14} />} onClick={() => void onSave(line.id)} disabled={!dirty}>
                 Save
               </Button>
-              <Button size="sm" variant="ghost" onClick={onDelete}>
+              <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={onDelete}>
                 Remove
               </Button>
             </div>
@@ -1162,12 +1169,25 @@ function ExistingLineEditorRow({
           {money(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={() => void onSave(line.id)} disabled={!dirty}>
-            Save
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onDelete}>
-            Remove
-          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            icon={<Save size={14} />}
+            className="w-9 px-0"
+            onClick={() => void onSave(line.id)}
+            disabled={!dirty}
+            aria-label="Save line"
+            title="Save line"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<X size={14} />}
+            className="w-9 px-0 text-slate-500 hover:text-red-600"
+            onClick={onDelete}
+            aria-label="Remove line"
+            title="Remove line"
+          />
         </div>
       </div>
     </div>
@@ -1217,9 +1237,16 @@ function NewLineEditorRow({
           </div>
         </div>
       </div>
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="ghost"
+          icon={<X size={14} />}
+          onClick={() => onChange(makeEditableQuoteLine())}
+        >
+          Clear
+        </Button>
         <Button icon={<Plus size={14} />} loading={saving} onClick={() => void onAdd()}>
-          Add line to quote
+          Add line
         </Button>
       </div>
     </div>
