@@ -187,8 +187,8 @@ export function QuoteSheetEditor({
 
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
-    <div className="flex h-12 max-w-[180px] items-center">
-      <img src={logoUrl} alt="Company logo" className="max-h-10 w-auto max-w-full object-contain" />
+    <div className="flex h-14 max-w-[220px] items-center">
+      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
 }

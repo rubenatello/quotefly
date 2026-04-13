@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -437,11 +437,12 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Record<BrandingSectionId, boolean>>({
     business: true,
-    logo: false,
+    logo: true,
     colors: false,
     templates: true,
     preview: true,
   });
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!effectiveTenantId) return;
@@ -451,6 +452,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       .then(({ tenant, branding }) => {
         setCompanyName(tenant.name);
         setTimezone(tenant.timezone === "UTC" ? browserTimezone : tenant.timezone);
+        setLogo(branding?.logoUrl ?? null);
 
         if (!branding) return;
 
@@ -459,9 +461,6 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
         setLogoPosition(branding.logoPosition ?? "left");
         setComponentColors(branding.componentColors ?? {});
         setBusinessProfile(normalizeBusinessProfile(branding));
-        if (branding.logoUrl) {
-          setLogo(branding.logoUrl);
-        }
       })
       .catch(() => {
         // Silently ignore while auth/session is not ready yet.
@@ -530,7 +529,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
     try {
       const componentColorPayload = Object.keys(componentColors).length > 0 ? componentColors : null;
 
-      await api.branding.save(effectiveTenantId, {
+      const result = await api.branding.save(effectiveTenantId, {
         logoUrl: logo ?? null,
         logoPosition,
         primaryColor: brandColor,
@@ -539,6 +538,15 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
         businessProfile: normalizeBusinessProfileForSave(businessProfile),
         componentColors: componentColorPayload,
       });
+
+      setCompanyName(result.tenant.name);
+      setTimezone(result.tenant.timezone === "UTC" ? browserTimezone : result.tenant.timezone);
+      setBrandColor(result.branding.primaryColor);
+      setSelectedTemplate(normalizeQuoteTemplateId(result.branding.templateId));
+      setLogo(result.branding.logoUrl ?? null);
+      setLogoPosition(result.branding.logoPosition ?? "left");
+      setComponentColors(result.branding.componentColors ?? {});
+      setBusinessProfile(normalizeBusinessProfile(result.branding));
 
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
@@ -646,7 +654,19 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                 </div>
                 <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Logo</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? "Uploaded" : "Optional"}</p>
+                  {logo ? (
+                    <div className="mt-2 flex items-center gap-3">
+                      <div className="flex h-11 w-16 items-center justify-center rounded-xl border border-slate-200 bg-white px-2">
+                        <img src={logo} alt="Saved logo" className="max-h-8 w-auto max-w-full object-contain" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Active</p>
+                        <p className="text-xs text-slate-500">Editor, preview, and PDF</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm font-semibold text-slate-900">Not uploaded</p>
+                  )}
                 </div>
                 <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Placement</p>
@@ -693,6 +713,9 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? "Save failed"}</span> : null}
                   {!effectiveTenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
                 </div>
+                <p className="text-xs leading-5 text-slate-500">
+                  Save applies your logo, template, and colors across the quote editor, live preview, and downloaded PDF.
+                </p>
               </div>
             </WorkspaceRailCard>
           </aside>
@@ -819,17 +842,31 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
             >
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div className="space-y-4">
+                  <input ref={logoInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
                   {logo ? (
-                    <div className="flex min-h-[180px] items-center justify-center rounded-xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
-                      <img src={logo} alt="Your logo" className="max-h-28 max-w-full object-contain" />
-                    </div>
+                    <>
+                      <div className="flex min-h-[180px] items-center justify-center rounded-xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
+                        <img src={logo} alt="Your logo" className="max-h-28 max-w-full object-contain" />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button type="button" variant="outline" icon={<Upload size={14} />} onClick={() => logoInputRef.current?.click()}>
+                          Replace Logo
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => setLogo(null)}>
+                          Remove Logo
+                        </Button>
+                        <p className="text-xs leading-5 text-slate-500">
+                          Current logo is ready. Save branding to publish it across the quote editor, preview, and PDF.
+                        </p>
+                      </div>
+                    </>
                   ) : (
                     <label className="block">
                       <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
                       <div className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
                         <Upload size={28} className="mx-auto mb-3 text-slate-400" />
-                        <p className="text-sm font-medium text-slate-700">Click to upload logo</p>
-                        <p className="mt-1 text-xs text-slate-400">PNG, JPG up to 5MB</p>
+                        <p className="text-sm font-medium text-slate-700">Upload logo</p>
+                        <p className="mt-1 text-xs text-slate-400">PNG or JPG, automatically resized for the quote editor and PDF.</p>
                       </div>
                     </label>
                   )}
@@ -885,16 +922,15 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     <li>Keep the logo wide enough for PDF headers.</li>
                     <li>Test against lighter and darker template headers.</li>
                   </ul>
-                  {logo && (
-                    <Button
-                      onClick={() => setLogo(null)}
-                      variant="outline"
-                      fullWidth
-                      className="mt-5"
-                    >
-                      Remove Logo
-                    </Button>
-                  )}
+                  <div className="mt-5 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Current status</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? "Logo selected" : "No logo selected"}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      {logo
+                        ? "Your logo should appear in the quote editor header, preview modal, and PDF after you save branding."
+                        : "Upload a logo here to brand the quote editor, live preview, and final PDF."}
+                    </p>
+                  </div>
                 </div>
               </div>
             </BrandingSectionCard>
