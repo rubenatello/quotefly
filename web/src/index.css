@@ -9,8 +9,8 @@
   --color-quotefly-blue: #2f6fd6;
   --color-quotefly-orange: #f28c28;
   --color-quotefly-gold: #4c5fa8;
-  --font-sans: "Manrope", sans-serif;
-  --font-display: "Space Grotesk", sans-serif;
+  --font-sans: "Plus Jakarta Sans", sans-serif;
+  --font-display: "Sora", "Plus Jakarta Sans", sans-serif;
 }
 
 :root {
@@ -53,7 +53,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "Manrope", "Segoe UI", sans-serif;
+  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
   letter-spacing: -0.01em;
   font-feature-settings: "ss01" 1, "cv10" 1, "cv11" 1;
   color: #0f172a;
@@ -65,7 +65,7 @@ h2,
 h3,
 h4,
 .font-display {
-  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-family: "Sora", "Plus Jakarta Sans", sans-serif;
 }
 
 #root {
