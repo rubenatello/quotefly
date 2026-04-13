@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Save,
   Send,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
@@ -23,6 +24,7 @@ import {
 } from "../components/dashboard/DashboardUi";
 import { QuickLookupCard } from "../components/dashboard/QuickLookupCard";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
@@ -51,6 +53,7 @@ import {
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
+  toEditableQuoteLineFromDraft,
   toEditableQuoteLine,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
@@ -78,6 +81,34 @@ function resolveQuoteAccentColor(branding: TenantBranding | null): string {
   return branding?.componentColors?.headerBgColor ?? branding?.primaryColor ?? "#4F7FD2";
 }
 
+function buildDeskAiPromptStarters(
+  serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
+  customerName: string,
+  customerPhone: string,
+  quoteTitle: string,
+) {
+  const customerLead = `${customerName} ${customerPhone}`.trim();
+
+  if (serviceType === "ROOFING") {
+    return [
+      `Revise ${quoteTitle} for ${customerLead}. Add permit fee, cleanup, and stronger customer-facing scope wording.`,
+      `Update ${quoteTitle} for ${customerLead}. Include flashing, disposal, and warranty language.`,
+    ];
+  }
+
+  if (serviceType === "HVAC") {
+    return [
+      `Revise ${quoteTitle} for ${customerLead}. Add startup testing, thermostat hookup, and cleanup.`,
+      `Update ${quoteTitle} for ${customerLead}. Add haul-away, install materials, and a clearer customer overview.`,
+    ];
+  }
+
+  return [
+    `Revise ${quoteTitle} for ${customerLead}. Add any missing line items, tighten the scope, and keep the quote customer-friendly.`,
+    `Update ${quoteTitle} for ${customerLead}. Make the quote clearer for the customer and add any missing job lines.`,
+  ];
+}
+
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
 
@@ -97,6 +128,8 @@ export function QuoteDeskView() {
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiSubmitting, setAiSubmitting] = useState(false);
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
@@ -114,6 +147,10 @@ export function QuoteDeskView() {
     notice,
     setError,
     setNotice,
+    canUseChatToQuote,
+    chatPrompt,
+    setChatPrompt,
+    setChatParsed,
     persistSelectedQuote,
     updateQuoteLifecycle,
     openSendComposer,
@@ -317,6 +354,17 @@ export function QuoteDeskView() {
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
+  const selectedQuoteTitle = selectedQuote?.title ?? "Current quote";
+  const aiPromptStarters = useMemo(
+    () =>
+      buildDeskAiPromptStarters(
+        quoteEditForm.serviceType,
+        customerName,
+        customerPhone,
+        quoteEditForm.title || selectedQuoteTitle,
+      ),
+    [customerName, customerPhone, quoteEditForm.serviceType, quoteEditForm.title, selectedQuoteTitle],
+  );
   const isQuoteLocked = requiresExplicitUnlock && !isEditUnlocked;
   const metadataDirty = useMemo(() => {
     if (!selectedQuote) return false;
@@ -423,6 +471,73 @@ export function QuoteDeskView() {
     await persistSelectedQuote();
     if (dirtyLineIds.length) {
       await saveAllLineEdits();
+    }
+  }
+
+  async function handleAiSuggestSubmit(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!selectedQuote) {
+      setError("Open a quote before using AI suggestions.");
+      return;
+    }
+
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
+
+    if (!canUseChatToQuote) {
+      setError("AI drafting is not available on this workspace.");
+      return;
+    }
+
+    const prompt = chatPrompt.trim();
+    if (!prompt) {
+      setError("Enter a prompt before generating a quote.");
+      return;
+    }
+
+    track("quote_desk_ai_modal_submit");
+    try {
+      setAiSubmitting(true);
+      const { customer, parsed, suggestion } = await api.quotes.suggestWithAi({
+        prompt,
+        quoteId: selectedQuote.id,
+        customerId: selectedQuote.customerId,
+        serviceType: quoteEditForm.serviceType,
+        currentTitle: quoteEditForm.title || undefined,
+        currentScopeText: quoteEditForm.scopeText || undefined,
+        currentLineItems: editableLines.map((line) => ({
+          description: joinQuoteLineDescription(line.title, line.details),
+          quantity: Number(line.quantity) || 1,
+          unitCost: Number(line.unitCost) || 0,
+          unitPrice: Number(line.unitPrice) || 0,
+        })),
+      });
+
+      setChatParsed(parsed);
+      setChatPrompt("");
+      setQuoteEditForm((prev) => ({
+        ...prev,
+        serviceType: suggestion.serviceType,
+        title: suggestion.title,
+        scopeText: suggestion.scopeText,
+        taxAmount: String(suggestion.taxAmount),
+      }));
+      setEditableLines(
+        suggestion.lineItems.length
+          ? suggestion.lineItems.map((lineItem) => toEditableQuoteLineFromDraft(lineItem))
+          : [makeEditableQuoteLine()],
+      );
+      setNewLine(makeEditableQuoteLine());
+      setAiModalOpen(false);
+      setMobilePane("editor");
+      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. Review the sheet, then save tracked edits.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
+    } finally {
+      setAiSubmitting(false);
     }
   }
 
@@ -627,6 +742,21 @@ export function QuoteDeskView() {
               readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={<Sparkles size={14} />}
+                    onClick={() => {
+                      if (isQuoteLocked) {
+                        setUnlockConfirmOpen(true);
+                        return;
+                      }
+                      setAiModalOpen(true);
+                    }}
+                    disabled={!canUseChatToQuote}
+                  >
+                    AI Prompt
+                  </Button>
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                     Preview PDF
                   </Button>
@@ -1168,6 +1298,30 @@ export function QuoteDeskView() {
           loadPresetToNewLine(selectedPreset);
           setPresetPickerOpen(false);
         }}
+      />
+
+      <QuoteAiPromptModal
+        open={aiModalOpen}
+        onClose={() => setAiModalOpen(false)}
+        serviceType={quoteEditForm.serviceType}
+        onServiceTypeChange={(value) =>
+          setQuoteEditForm((prev) => ({
+            ...prev,
+            serviceType: value,
+          }))
+        }
+        prompt={chatPrompt}
+        onPromptChange={setChatPrompt}
+        starterPrompts={aiPromptStarters}
+        onUseStarterPrompt={setChatPrompt}
+        customerContextText={`${customerName}${customerPhone ? ` • ${customerPhone}` : ""}${customerEmail ? ` • ${customerEmail}` : ""}`}
+        customerContextBadge="Using current quote"
+        loading={aiSubmitting}
+        disabled={!canUseChatToQuote}
+        onSubmit={(event) => void handleAiSuggestSubmit(event)}
+        title="Revise quote with AI"
+        description="Apply an AI suggestion into the current quote sheet, then review and save the tracked edits."
+        submitLabel="Apply AI Suggestion"
       />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">

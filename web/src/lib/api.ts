@@ -369,6 +369,34 @@ export type ChatToQuoteResult = {
   parsed: ChatToQuoteParsed;
 };
 
+export type AiQuoteSuggestion = {
+  serviceType: ServiceType;
+  title: string;
+  scopeText: string;
+  internalCostSubtotal: number;
+  customerPriceSubtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  model: string;
+  lineItems: Array<{
+    description: string;
+    quantity: number;
+    unitCost: number;
+    unitPrice: number;
+  }>;
+};
+
+export type AiQuoteSuggestionResult = {
+  customer?: {
+    id: string;
+    fullName: string;
+    phone: string;
+    email?: string | null;
+  } | null;
+  parsed: ChatToQuoteParsed;
+  suggestion: AiQuoteSuggestion;
+};
+
 export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
 export type WorkPresetUnitType = "FLAT" | "SQ_FT" | "HOUR" | "EACH";
 
@@ -872,6 +900,25 @@ export const api = {
       customerEmail?: string;
     }) =>
       request<ChatToQuoteResult>(`/v1/quotes/chat-draft`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    suggestWithAi: (body: {
+      prompt: string;
+      quoteId?: string;
+      customerId?: string;
+      serviceType?: ServiceType;
+      currentTitle?: string;
+      currentScopeText?: string;
+      currentLineItems?: Array<{
+        description: string;
+        quantity: number;
+        unitCost: number;
+        unitPrice: number;
+      }>;
+    }) =>
+      request<AiQuoteSuggestionResult>(`/v1/quotes/ai-suggest`, {
         method: "POST",
         body: JSON.stringify(body),
       }),

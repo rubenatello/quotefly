@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Eye, Plus, Sparkles, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { InlineCustomerLookup } from "../components/quotes/InlineCustomerLookup";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
@@ -28,6 +29,7 @@ import {
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
+  toEditableQuoteLineFromDraft,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
@@ -120,6 +122,7 @@ export function QuoteBuilderView() {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiSubmitting, setAiSubmitting] = useState(false);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
@@ -141,7 +144,6 @@ export function QuoteBuilderView() {
     selectedQuoteId,
     navigateToQuote,
     loadCustomers,
-    loadQuotes,
   } = useDashboard();
 
   const activeCustomer = useMemo(
@@ -292,22 +294,49 @@ export function QuoteBuilderView() {
 
     track("builder_ai_modal_submit");
     try {
-      const { quote, parsed } = await api.quotes.createFromChat({
+      setAiSubmitting(true);
+      const { customer, parsed, suggestion } = await api.quotes.suggestWithAi({
         prompt,
-        customerName: activeCustomer?.fullName ?? undefined,
-        customerPhone: activeCustomer?.phone ?? undefined,
-        customerEmail: activeCustomer?.email ?? undefined,
+        customerId: activeCustomer?.id ?? undefined,
+        serviceType: quoteForm.serviceType,
+        currentTitle: quoteForm.title || undefined,
+        currentScopeText: quoteForm.scopeText || undefined,
+        currentLineItems: filteredDraftLines.map((line) => ({
+          description: joinQuoteLineDescription(line.title, line.details),
+          quantity: Number(line.quantity) || 1,
+          unitCost: Number(line.unitCost) || 0,
+          unitPrice: Number(line.unitPrice) || 0,
+        })),
       });
 
       setChatParsed(parsed);
       setChatPrompt("");
-      setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
-      await Promise.all([loadCustomers(), loadQuotes()]);
+      if (customer) {
+        selectQuoteCustomer(customer.id);
+      }
+      setQuoteForm((prev) => ({
+        ...prev,
+        customerId: customer?.id ?? prev.customerId,
+        serviceType: suggestion.serviceType,
+        title: suggestion.title,
+        scopeText: suggestion.scopeText,
+        internalCostSubtotal: String(suggestion.internalCostSubtotal),
+        customerPriceSubtotal: String(suggestion.customerPriceSubtotal),
+        taxAmount: String(suggestion.taxAmount),
+      }));
+      setDraftLines(
+        suggestion.lineItems.length
+          ? suggestion.lineItems.map((lineItem) => toEditableQuoteLineFromDraft(lineItem))
+          : [makeEditableQuoteLine()],
+      );
+      await loadCustomers();
       setAiModalOpen(false);
-      setNotice(`AI draft created for ${quote.customer?.fullName ?? parsed.customerName ?? "customer"}.`);
-      navigateToQuote(quote.id);
+      setMobilePane("editor");
+      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. Review the sheet, then create the quote.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed creating quote from AI prompt.");
+      setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
+    } finally {
+      setAiSubmitting(false);
     }
   }
 
@@ -843,87 +872,31 @@ export function QuoteBuilderView() {
         }}
       />
 
-      <Modal open={aiModalOpen} onClose={() => setAiModalOpen(false)} size="lg" ariaLabel="Draft quote with AI">
-        <ModalHeader
-          title="Draft quote with AI"
-          description="Generate the first version of the quote, then clean it up line by line in the editable sheet."
-          onClose={() => setAiModalOpen(false)}
-        />
-        <ModalBody className="space-y-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer context</p>
-              {activeCustomer ? <Badge tone="blue">Using selected customer</Badge> : null}
-            </div>
-            <p className="mt-1 text-sm text-slate-600">
-              {activeCustomer
-                ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`
-                : "No customer is locked yet. Select one in the quote sheet or include the name, phone, or email directly in the prompt."}
-            </p>
-          </div>
-
-          <form className="space-y-4" onSubmit={(event) => void handleAiDraftSubmit(event)}>
-            <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
-              <Select
-                label="Trade"
-                value={quoteForm.serviceType}
-                onChange={(event) =>
-                  setQuoteForm((prev) => ({
-                    ...prev,
-                    serviceType: event.target.value as typeof prev.serviceType,
-                  }))
-                }
-                options={[
-                  { value: "HVAC", label: "HVAC" },
-                  { value: "PLUMBING", label: "Plumbing" },
-                  { value: "FLOORING", label: "Flooring" },
-                  { value: "ROOFING", label: "Roofing" },
-                  { value: "GARDENING", label: "Gardening" },
-                  { value: "CONSTRUCTION", label: "Construction" },
-                ]}
-              />
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-                AI will draft the quote from the selected customer when available. Otherwise it will rely on the customer details typed into the prompt.
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {aiPromptStarters.map((starter, index) => (
-                <button
-                  key={`${quoteForm.serviceType}-${index}`}
-                  type="button"
-                  onClick={() => setChatPrompt(starter)}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
-                >
-                  {index === 0 ? "Use starter prompt" : "Alt prompt"}
-                </button>
-              ))}
-            </div>
-
-            <Textarea
-              label="Prompt"
-              rows={7}
-              placeholder="New quote for Alan Johnson 818-233-4333. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation."
-              value={chatPrompt}
-              onChange={(event) => setChatPrompt(event.target.value)}
-            />
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-slate-500">
-                AI creates the first draft. You still control every title, description, cost, and price.
-              </p>
-              <div className="flex flex-col-reverse gap-2 sm:flex-row">
-                <Button type="button" variant="ghost" onClick={() => setAiModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button loading={saving} icon={<Sparkles size={14} />} disabled={!canUseChatToQuote}>
-                  Draft Quote Lines
-                </Button>
-              </div>
-            </div>
-          </form>
-        </ModalBody>
-      </Modal>
+      <QuoteAiPromptModal
+        open={aiModalOpen}
+        onClose={() => setAiModalOpen(false)}
+        serviceType={quoteForm.serviceType}
+        onServiceTypeChange={(value) =>
+          setQuoteForm((prev) => ({
+            ...prev,
+            serviceType: value,
+          }))
+        }
+        prompt={chatPrompt}
+        onPromptChange={setChatPrompt}
+        starterPrompts={aiPromptStarters}
+        onUseStarterPrompt={setChatPrompt}
+        customerContextText={
+          activeCustomer
+            ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`
+            : "No customer is locked yet. Select one in the quote sheet or include the name, phone, or email directly in the prompt."
+        }
+        customerContextBadge={activeCustomer ? "Using selected customer" : null}
+        loading={aiSubmitting}
+        disabled={!canUseChatToQuote}
+        onSubmit={(event) => void handleAiDraftSubmit(event)}
+        submitLabel="Apply AI Suggestion"
+      />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
         <ModalHeader

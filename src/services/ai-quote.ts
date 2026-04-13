@@ -46,6 +46,9 @@ Rules:
 - serviceType must be one of the 6 options above, inferred from context.
 - title should be a short professional quote title (e.g. "Roof Replacement Quote").
 - scopeText should be a clean, professional description of the work scope based on the prompt.
+- You may receive extra context about the current customer, current quote draft, and saved jobs. Use that context when it is relevant.
+- If current quote context is provided, preserve the same trade unless the user clearly asks to change it.
+- If saved job names or pricing hints are provided, prefer those names when they fit the requested work.
 - If the customer name, phone, or email are not mentioned, set them to null.
 - squareFeetEstimate should only be set if explicitly mentioned.
 - estimatedTotalAmount is the total customer-facing price if mentioned.
@@ -57,6 +60,9 @@ Rules:
 
 export async function aiParseChatToQuotePrompt(
   rawPrompt: string,
+  options?: {
+    context?: string;
+  },
 ): Promise<ParsedChatToQuoteDraft> {
   // If OpenAI is not configured, fall back to regex parser
   if (!AI_ENABLED) {
@@ -65,13 +71,16 @@ export async function aiParseChatToQuotePrompt(
 
   try {
     const client = getOpenAI();
+    const userMessage = options?.context?.trim()
+      ? `Context:\n${options.context.trim()}\n\nUser request:\n${rawPrompt}`
+      : rawPrompt;
     const completion = await client.chat.completions.create({
       model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 800,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: rawPrompt },
+        { role: "user", content: userMessage },
       ],
     });
 

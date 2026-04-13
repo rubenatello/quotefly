@@ -1,4 +1,4 @@
-import { LeadFollowUpStatus, Prisma, QuoteOutboundChannel, QuoteRevisionEventType } from "@prisma/client";
+import { LeadFollowUpStatus, Prisma, PrismaClient, QuoteOutboundChannel, QuoteRevisionEventType } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
@@ -9,7 +9,7 @@ import {
   startOfCurrentUtcMonth,
   startOfNextUtcMonth,
 } from "../lib/subscription";
-import { parseChatToQuotePrompt } from "../services/chat-to-quote";
+import { parseChatToQuotePrompt, type ParsedChatToQuoteDraft } from "../services/chat-to-quote";
 import { aiParseChatToQuotePrompt, getAiQuoteRuntimeInfo } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
@@ -141,6 +141,26 @@ const CreateQuoteFromChatSchema = z.object({
   customerName: z.string().trim().min(2).max(120).optional(),
   customerPhone: z.string().trim().min(7).max(40).optional(),
   customerEmail: z.string().trim().email().optional(),
+});
+
+const SuggestQuoteWithAiSchema = z.object({
+  prompt: z.string().trim().min(12).max(5000),
+  quoteId: z.string().min(1).optional(),
+  customerId: z.string().min(1).optional(),
+  serviceType: ServiceTypeSchema.optional(),
+  currentTitle: z.string().trim().max(220).optional(),
+  currentScopeText: z.string().trim().max(5000).optional(),
+  currentLineItems: z
+    .array(
+      z.object({
+        description: z.string().trim().min(1).max(5000),
+        quantity: z.number().positive(),
+        unitCost: z.number().nonnegative(),
+        unitPrice: z.number().nonnegative(),
+      }),
+    )
+    .max(100)
+    .optional(),
 });
 
 
@@ -573,6 +593,393 @@ function resolveChatQuoteScopeText(
   return parsedScopeText;
 }
 
+type AiSuggestedLineItem = {
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+};
+
+type AiSuggestedQuoteDraft = {
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+  title: string;
+  scopeText: string;
+  internalCostSubtotal: number;
+  customerPriceSubtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  lineItems: AiSuggestedLineItem[];
+  model: string;
+};
+
+function buildAiQuoteContext(params: {
+  customer?: {
+    fullName: string;
+    phone: string;
+    email?: string | null;
+  } | null;
+  currentQuote?: {
+    serviceType: z.infer<typeof ServiceTypeSchema>;
+    title?: string;
+    scopeText?: string;
+    lineItems?: AiSuggestedLineItem[];
+  } | null;
+  presets?: Array<{
+    name: string;
+    description?: string | null;
+    unitType: string;
+    unitCost: number;
+    unitPrice: number;
+  }>;
+  pricingProfile?: {
+    laborRate: number;
+    materialMarkup: number;
+  } | null;
+}) {
+  const sections: string[] = [];
+
+  if (params.customer) {
+    sections.push(
+      [
+        "Customer context:",
+        `- Name: ${params.customer.fullName}`,
+        `- Phone: ${params.customer.phone}`,
+        params.customer.email ? `- Email: ${params.customer.email}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  if (params.currentQuote) {
+    sections.push(
+      [
+        "Current quote draft:",
+        `- Trade: ${params.currentQuote.serviceType}`,
+        params.currentQuote.title ? `- Title: ${params.currentQuote.title}` : null,
+        params.currentQuote.scopeText ? `- Scope: ${params.currentQuote.scopeText}` : null,
+        params.currentQuote.lineItems?.length
+          ? `- Current lines:\n${params.currentQuote.lineItems
+              .map(
+                (line, index) =>
+                  `  ${index + 1}. ${line.description} | qty ${line.quantity} | cost ${line.unitCost} | price ${line.unitPrice}`,
+              )
+              .join("\n")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  if (params.pricingProfile) {
+    sections.push(
+      [
+        "Pricing hints:",
+        `- Labor rate: ${params.pricingProfile.laborRate.toFixed(2)}`,
+        `- Material markup: ${(params.pricingProfile.materialMarkup * 100).toFixed(1)}%`,
+      ].join("\n"),
+    );
+  }
+
+  if (params.presets?.length) {
+    sections.push(
+      [
+        "Saved jobs and pricing:",
+        ...params.presets.map(
+          (preset) =>
+            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType} | cost ${preset.unitCost.toFixed(
+              2,
+            )} | price ${preset.unitPrice.toFixed(2)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n");
+}
+
+async function buildAiSuggestedQuoteDraft(
+  prisma: Prisma.TransactionClient | PrismaClient,
+  tenantId: string,
+  params: {
+    prompt: string;
+    parsedDraft: ParsedChatToQuoteDraft;
+    serviceTypeOverride?: z.infer<typeof ServiceTypeSchema>;
+  },
+): Promise<AiSuggestedQuoteDraft> {
+  const serviceType = params.serviceTypeOverride ?? params.parsedDraft.serviceType;
+  const pricingProfile = await prisma.pricingProfile.findFirst({
+    where: {
+      tenantId,
+      serviceType,
+    },
+    orderBy: {
+      isDefault: "desc",
+    },
+  });
+
+  const tenantPresets = await prisma.workPreset.findMany({
+    where: {
+      tenantId,
+      serviceType,
+      deletedAtUtc: null,
+    },
+    orderBy: [{ category: "asc" }, { name: "asc" }],
+  });
+
+  const laborRate = Number(pricingProfile?.laborRate ?? defaultLaborRate(serviceType));
+  const materialMarkup = Number(pricingProfile?.materialMarkup ?? defaultMaterialMarkup(serviceType));
+  const estimatedUnits = params.parsedDraft.squareFeetEstimate ?? 100;
+  const taxAmount = roundCurrency(params.parsedDraft.estimatedTaxAmount ?? 0);
+
+  const matchedStandardPreset = findBestStandardWorkPresetMatch(
+    serviceType,
+    `${params.prompt} ${params.parsedDraft.title} ${params.parsedDraft.scopeText}`,
+    { primaryOnly: true },
+  );
+  const matchedTenantPreset = matchedStandardPreset
+    ? tenantPresets.find((preset) => preset.catalogKey === matchedStandardPreset.catalogKey) ?? null
+    : null;
+  const matchedPreset = matchedTenantPreset
+    ? {
+        name: matchedTenantPreset.name,
+        description: matchedTenantPreset.description,
+        unitType: matchedTenantPreset.unitType,
+        defaultQuantity: Number(matchedTenantPreset.defaultQuantity),
+        unitCost: Number(matchedTenantPreset.unitCost),
+        unitPrice: Number(matchedTenantPreset.unitPrice),
+        quantityMode: matchedStandardPreset?.quantityMode ?? "default",
+      }
+    : matchedStandardPreset
+      ? {
+          name: matchedStandardPreset.name,
+          description: matchedStandardPreset.description,
+          unitType: matchedStandardPreset.unitType,
+          defaultQuantity: matchedStandardPreset.defaultQuantity,
+          unitCost: matchedStandardPreset.unitCost,
+          unitPrice: matchedStandardPreset.unitPrice,
+          quantityMode: matchedStandardPreset.quantityMode ?? "default",
+        }
+      : null;
+
+  const hasExplicitSubtotalTarget =
+    (params.parsedDraft.estimatedTotalAmount ?? 0) > 0 || (params.parsedDraft.estimatedInternalCostAmount ?? 0) > 0;
+
+  const supplementalPresetMatches =
+    matchedStandardPreset && !hasExplicitSubtotalTarget
+      ? findStandardWorkPresetMatches(
+          serviceType,
+          `${params.prompt} ${params.parsedDraft.title} ${params.parsedDraft.scopeText}`,
+          {
+            excludeCatalogKeys: [matchedStandardPreset.catalogKey],
+            minimumScore: 4,
+          },
+        )
+          .map((match) => match.preset)
+          .filter((preset) => !preset.isPrimaryJob)
+          .slice(0, 3)
+      : [];
+
+  const supplementalPresets = supplementalPresetMatches.map((preset) => {
+    const tenantPreset = tenantPresets.find((tenantItem) => tenantItem.catalogKey === preset.catalogKey);
+    return tenantPreset
+      ? {
+          name: tenantPreset.name,
+          description: tenantPreset.description,
+          unitType: tenantPreset.unitType,
+          defaultQuantity: Number(tenantPreset.defaultQuantity),
+          unitCost: Number(tenantPreset.unitCost),
+          unitPrice: Number(tenantPreset.unitPrice),
+          quantityMode: preset.quantityMode ?? "default",
+        }
+      : {
+          name: preset.name,
+          description: preset.description,
+          unitType: preset.unitType,
+          defaultQuantity: preset.defaultQuantity,
+          unitCost: preset.unitCost,
+          unitPrice: preset.unitPrice,
+          quantityMode: preset.quantityMode ?? "default",
+        };
+  });
+
+  let customerPriceSubtotal = roundCurrency(params.parsedDraft.estimatedTotalAmount ?? 0);
+  if (customerPriceSubtotal <= 0 && matchedPreset) {
+    const matchedQuantity = inferPresetQuantity(
+      matchedPreset.unitType,
+      matchedPreset.defaultQuantity,
+      params.parsedDraft.squareFeetEstimate,
+      matchedPreset.quantityMode,
+    );
+    customerPriceSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitPrice);
+  }
+  if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+    const primaryQuantity = inferPresetQuantity(
+      matchedPreset.unitType,
+      matchedPreset.defaultQuantity,
+      params.parsedDraft.squareFeetEstimate,
+      matchedPreset.quantityMode,
+    );
+    const supplementalSubtotal = supplementalPresets.reduce((sum, preset) => {
+      const quantity = inferPresetQuantity(
+        preset.unitType,
+        preset.defaultQuantity,
+        params.parsedDraft.squareFeetEstimate,
+        preset.quantityMode,
+      );
+      return sum + quantity * preset.unitPrice;
+    }, 0);
+    customerPriceSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitPrice + supplementalSubtotal);
+  }
+  if (customerPriceSubtotal <= 0) {
+    const baselineInternalCost = roundCurrency(estimatedUnits * laborRate);
+    customerPriceSubtotal = roundCurrency(baselineInternalCost * (1 + materialMarkup));
+  }
+
+  let internalCostSubtotal = roundCurrency(params.parsedDraft.estimatedInternalCostAmount ?? 0);
+  if (internalCostSubtotal <= 0 && matchedPreset) {
+    const matchedQuantity = inferPresetQuantity(
+      matchedPreset.unitType,
+      matchedPreset.defaultQuantity,
+      params.parsedDraft.squareFeetEstimate,
+      matchedPreset.quantityMode,
+    );
+    internalCostSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitCost);
+  }
+  if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+    const primaryQuantity = inferPresetQuantity(
+      matchedPreset.unitType,
+      matchedPreset.defaultQuantity,
+      params.parsedDraft.squareFeetEstimate,
+      matchedPreset.quantityMode,
+    );
+    const supplementalSubtotal = supplementalPresets.reduce((sum, preset) => {
+      const quantity = inferPresetQuantity(
+        preset.unitType,
+        preset.defaultQuantity,
+        params.parsedDraft.squareFeetEstimate,
+        preset.quantityMode,
+      );
+      return sum + quantity * preset.unitCost;
+    }, 0);
+    internalCostSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitCost + supplementalSubtotal);
+  }
+  if (internalCostSubtotal <= 0) {
+    const divisor = 1 + Math.max(materialMarkup, 0.05);
+    internalCostSubtotal = roundCurrency(customerPriceSubtotal / divisor);
+  }
+
+  const totalAmount = calculateQuoteTotal(customerPriceSubtotal, taxAmount);
+  const title = matchedPreset?.name ?? params.parsedDraft.title;
+  const scopeText = resolveChatQuoteScopeText(
+    params.parsedDraft.scopeText,
+    params.prompt,
+    matchedPreset?.description,
+  );
+
+  const lineItems = matchedPreset
+    ? (() => {
+        const primaryQuantity = inferPresetQuantity(
+          matchedPreset.unitType,
+          matchedPreset.defaultQuantity,
+          params.parsedDraft.squareFeetEstimate,
+          matchedPreset.quantityMode,
+        );
+        const primaryLineItems = [
+          {
+            description: matchedPreset.name,
+            quantity: primaryQuantity,
+            unitCost: roundCurrency(matchedPreset.unitCost),
+            unitPrice: roundCurrency(matchedPreset.unitPrice),
+          },
+        ];
+
+        const supplementalLineItems = supplementalPresets.map((preset) => ({
+          description: preset.name,
+          quantity: inferPresetQuantity(
+            preset.unitType,
+            preset.defaultQuantity,
+            params.parsedDraft.squareFeetEstimate,
+            preset.quantityMode,
+          ),
+          unitCost: roundCurrency(preset.unitCost),
+          unitPrice: roundCurrency(preset.unitPrice),
+        }));
+
+        const allLineItems = [...primaryLineItems, ...supplementalLineItems];
+        const rawCustomerSubtotal = allLineItems.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice, 0);
+        const rawInternalSubtotal = allLineItems.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitCost, 0);
+
+        return allLineItems.map((lineItem) => ({
+          ...lineItem,
+          unitCost:
+            rawInternalSubtotal > 0
+              ? roundCurrency(lineItem.unitCost * (internalCostSubtotal / rawInternalSubtotal))
+              : lineItem.unitCost,
+          unitPrice:
+            rawCustomerSubtotal > 0
+              ? roundCurrency(lineItem.unitPrice * (customerPriceSubtotal / rawCustomerSubtotal))
+              : lineItem.unitPrice,
+        }));
+      })()
+    : (() => {
+        const laborPercent = laborSplit(serviceType);
+        const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
+        const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
+        const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
+        const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
+
+        const suggestions =
+          params.parsedDraft.lineItems.length > 0
+            ? params.parsedDraft.lineItems
+            : [
+                { kind: "LABOR" as const, description: `${serviceType} labor`, quantity: 1 },
+                { kind: "MATERIAL" as const, description: "Materials and install supplies", quantity: 1 },
+              ];
+
+        const laborQuantityTotal = Math.max(
+          suggestions.filter((lineItem) => lineItem.kind === "LABOR").reduce((sum, lineItem) => sum + Math.max(lineItem.quantity, 1), 0),
+          1,
+        );
+        const materialQuantityTotal = Math.max(
+          suggestions.filter((lineItem) => lineItem.kind === "MATERIAL").reduce((sum, lineItem) => sum + Math.max(lineItem.quantity, 1), 0),
+          1,
+        );
+
+        return suggestions.map((lineItem) => {
+          const quantity = Number(Math.max(1, lineItem.quantity).toFixed(2));
+          if (lineItem.kind === "LABOR") {
+            return {
+              description: lineItem.description || `${serviceType} labor`,
+              quantity,
+              unitCost: roundCurrency(laborInternalTotal / laborQuantityTotal),
+              unitPrice: roundCurrency(laborCustomerTotal / laborQuantityTotal),
+            };
+          }
+
+          return {
+            description: lineItem.description || "Materials and install supplies",
+            quantity,
+            unitCost: roundCurrency(materialInternalTotal / materialQuantityTotal),
+            unitPrice: roundCurrency(materialCustomerTotal / materialQuantityTotal),
+          };
+        });
+      })();
+
+  return {
+    serviceType,
+    title,
+    scopeText,
+    internalCostSubtotal,
+    customerPriceSubtotal,
+    taxAmount,
+    totalAmount,
+    lineItems,
+    model: getAiQuoteRuntimeInfo().model,
+  };
+}
+
 function inferPresetQuantity(
   unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH",
   defaultQuantity: number,
@@ -587,6 +994,199 @@ function inferPresetQuantity(
 }
 
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
+  app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const payload = SuggestQuoteWithAiSchema.parse(request.body);
+    const claims = getJwtClaims(request);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    if (entitlements.limits.aiQuotesPerMonth !== null) {
+      const periodStart = startOfCurrentUtcMonth();
+      const periodEnd = startOfNextUtcMonth();
+      const monthlyAiQuoteCount = await app.prisma.quote.count({
+        where: {
+          ...tenantActiveScope(claims.tenantId),
+          aiGeneratedAtUtc: {
+            gte: periodStart,
+            lt: periodEnd,
+          },
+        },
+      });
+
+      if (monthlyAiQuoteCount >= entitlements.limits.aiQuotesPerMonth) {
+        const requiredPlan =
+          entitlements.planCode === "starter" ? "professional" : "enterprise";
+        return reply.code(403).send({
+          code: "PLAN_LIMIT_EXCEEDED",
+          error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI-generated quotes per month. You can still revise existing quotes manually.`,
+          feature: "aiQuotesPerMonth",
+          currentPlan: entitlements.planCode,
+          requiredPlan,
+          limit: entitlements.limits.aiQuotesPerMonth,
+          used: monthlyAiQuoteCount,
+        });
+      }
+    }
+
+    const existingQuote = payload.quoteId
+      ? await app.prisma.quote.findFirst({
+          where: {
+            id: payload.quoteId,
+            ...tenantActiveScope(claims.tenantId),
+          },
+          include: {
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                email: true,
+                phone: true,
+              },
+            },
+            lineItems: {
+              where: tenantActiveScope(claims.tenantId),
+              orderBy: { createdAt: "asc" },
+              select: {
+                description: true,
+                quantity: true,
+                unitCost: true,
+                unitPrice: true,
+              },
+            },
+          },
+        })
+      : null;
+
+    if (payload.quoteId && !existingQuote) {
+      return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+
+    let selectedCustomer = payload.customerId
+      ? await app.prisma.customer.findFirst({
+          where: {
+            id: payload.customerId,
+            ...tenantActiveScope(claims.tenantId),
+          },
+        })
+      : existingQuote?.customer ?? null;
+
+    const preflightDraft = parseChatToQuotePrompt(payload.prompt);
+    const preliminaryServiceType =
+      existingQuote?.serviceType ?? payload.serviceType ?? preflightDraft.serviceType;
+
+    const contextPresets = await app.prisma.workPreset.findMany({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: preliminaryServiceType,
+        deletedAtUtc: null,
+      },
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+      take: 8,
+    });
+
+    const contextPricingProfile = await app.prisma.pricingProfile.findFirst({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: preliminaryServiceType,
+      },
+      orderBy: {
+        isDefault: "desc",
+      },
+    });
+
+    const contextPrompt = buildAiQuoteContext({
+      customer: selectedCustomer
+        ? {
+            fullName: selectedCustomer.fullName,
+            phone: selectedCustomer.phone,
+            email: selectedCustomer.email,
+          }
+        : null,
+      currentQuote: existingQuote
+        ? {
+            serviceType: existingQuote.serviceType,
+            title: existingQuote.title,
+            scopeText: existingQuote.scopeText,
+            lineItems: existingQuote.lineItems.map((lineItem) => ({
+              description: lineItem.description,
+              quantity: Number(lineItem.quantity),
+              unitCost: Number(lineItem.unitCost),
+              unitPrice: Number(lineItem.unitPrice),
+            })),
+          }
+        : payload.currentTitle || payload.currentScopeText || payload.currentLineItems?.length
+          ? {
+              serviceType: preliminaryServiceType,
+              title: payload.currentTitle,
+              scopeText: payload.currentScopeText,
+              lineItems: payload.currentLineItems,
+            }
+          : null,
+      presets: contextPresets.map((preset) => ({
+        name: preset.name,
+        description: preset.description,
+        unitType: preset.unitType,
+        unitCost: Number(preset.unitCost),
+        unitPrice: Number(preset.unitPrice),
+      })),
+      pricingProfile: contextPricingProfile
+        ? {
+            laborRate: Number(contextPricingProfile.laborRate),
+            materialMarkup: Number(contextPricingProfile.materialMarkup),
+          }
+        : null,
+    });
+
+    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+      context: contextPrompt,
+    });
+
+    const customerPhone = normalizeNullablePhone(parsedDraft.customerPhone);
+    const customerEmail = normalizeNullableEmail(parsedDraft.customerEmail);
+
+    if (!selectedCustomer && customerPhone) {
+      selectedCustomer = await app.prisma.customer.findFirst({
+        where: {
+          phone: customerPhone,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      });
+    }
+
+    if (!selectedCustomer && customerEmail) {
+      selectedCustomer = await app.prisma.customer.findFirst({
+        where: {
+          email: customerEmail,
+          ...tenantActiveScope(claims.tenantId),
+        },
+      });
+    }
+
+    const suggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
+      prompt: payload.prompt,
+      parsedDraft,
+      serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
+    });
+
+    return reply.send({
+      customer: selectedCustomer,
+      parsed: {
+        customerName: parsedDraft.customerName,
+        customerPhone: parsedDraft.customerPhone,
+        customerEmail: parsedDraft.customerEmail,
+        serviceType: suggestion.serviceType,
+        squareFeetEstimate: parsedDraft.squareFeetEstimate,
+        estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
+      },
+      suggestion,
+    });
+  });
+
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteFromChatSchema.parse(request.body);
     const claims = getJwtClaims(request);

@@ -131,6 +131,23 @@ export function toEditableQuoteLine(lineItem: QuoteLineItem): EditableQuoteLine 
   };
 }
 
+export function toEditableQuoteLineFromDraft(lineItem: {
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+}): EditableQuoteLine {
+  const { title, details } = splitQuoteLineDescription(lineItem.description);
+
+  return makeEditableQuoteLine({
+    title,
+    details,
+    quantity: String(Number(lineItem.quantity)),
+    unitCost: Number(lineItem.unitCost).toFixed(2),
+    unitPrice: Number(lineItem.unitPrice).toFixed(2),
+  });
+}
+
 export function makeEditableQuoteLine(seed?: Partial<EditableQuoteLine>): EditableQuoteLine {
   const localId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
