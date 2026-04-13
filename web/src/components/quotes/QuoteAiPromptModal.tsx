@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Sparkles } from "lucide-react";
 import type { ServiceType } from "../../lib/api";
-import { Badge, Button, Modal, ModalBody, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
+import { Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
 
 const AI_PROGRESS_STAGES = [
   { value: 18, label: "Reading prompt" },
@@ -82,86 +82,95 @@ export function QuoteAiPromptModal({
   return (
     <Modal open={open} onClose={loading ? () => {} : onClose} size="lg" ariaLabel={title}>
       <ModalHeader title={title} description={description} onClose={loading ? undefined : onClose} />
-      <ModalBody className="space-y-4">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer context</p>
-            {customerContextBadge ? <Badge tone="blue">{customerContextBadge}</Badge> : null}
-          </div>
-          <p className="mt-1 text-sm text-slate-600">{customerContextText}</p>
-        </div>
+      <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
+        <ModalBody className="space-y-5 pb-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_190px]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer context</p>
+                {customerContextBadge ? <Badge tone="blue">{customerContextBadge}</Badge> : null}
+              </div>
+              <p className="mt-1.5 text-sm leading-6 text-slate-700">{customerContextText}</p>
+            </div>
 
-        {loading ? (
-          <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-[color:rgba(47,111,214,0.05)] px-4 py-4">
-            <ProgressBar value={progress} label="AI progress" hint={`${progress}%`} />
-            <p className="mt-3 text-sm font-medium text-slate-800">{progressLabel}</p>
-            <p className="mt-1 text-sm text-slate-600">
-              QuoteFly is reading the prompt, matching saved jobs, and preparing the sheet for review.
-            </p>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
+              <Select
+                label="Trade"
+                value={serviceType}
+                onChange={(event) => onServiceTypeChange(event.target.value as ServiceType)}
+                options={[
+                  { value: "HVAC", label: "HVAC" },
+                  { value: "PLUMBING", label: "Plumbing" },
+                  { value: "FLOORING", label: "Flooring" },
+                  { value: "ROOFING", label: "Roofing" },
+                  { value: "GARDENING", label: "Gardening" },
+                  { value: "CONSTRUCTION", label: "Construction" },
+                ]}
+                disabled={loading}
+              />
+            </div>
           </div>
-        ) : null}
 
-        <form className="space-y-4" onSubmit={onSubmit}>
-          <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
-            <Select
-              label="Trade"
-              value={serviceType}
-              onChange={(event) => onServiceTypeChange(event.target.value as ServiceType)}
-              options={[
-                { value: "HVAC", label: "HVAC" },
-                { value: "PLUMBING", label: "Plumbing" },
-                { value: "FLOORING", label: "Flooring" },
-                { value: "ROOFING", label: "Roofing" },
-                { value: "GARDENING", label: "Gardening" },
-                { value: "CONSTRUCTION", label: "Construction" },
-              ]}
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Prompt</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  AI uses the selected customer, current quote sheet, and saved jobs for the chosen trade when available.
+                </p>
+              </div>
+              {canUseStarterPrompts ? (
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  {starterPrompts!.map((starter, index) => (
+                    <button
+                      key={`${serviceType}-${index}`}
+                      type="button"
+                      onClick={() => onUseStarterPrompt?.(starter)}
+                      disabled={loading}
+                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {index === 0 ? "Starter prompt" : `Alt ${index}`}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <Textarea
+              className="mt-4 min-h-[260px] text-[15px] leading-7"
+              rows={9}
+              placeholder="New quote for Alan Johnson 818-233-4333. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation."
+              value={prompt}
+              onChange={(event) => onPromptChange(event.target.value)}
               disabled={loading}
             />
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-              AI uses the customer, the current quote sheet, and saved jobs for this trade when that context is available.
-            </div>
           </div>
 
-          {canUseStarterPrompts ? (
-            <div className="flex flex-wrap gap-2">
-              {starterPrompts!.map((starter, index) => (
-                <button
-                  key={`${serviceType}-${index}`}
-                  type="button"
-                  onClick={() => onUseStarterPrompt?.(starter)}
-                  disabled={loading}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {index === 0 ? "Use starter prompt" : "Alt prompt"}
-                </button>
-              ))}
+          {loading ? (
+            <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-[color:rgba(47,111,214,0.05)] px-4 py-4">
+              <ProgressBar value={progress} label="AI progress" hint={`${progress}%`} />
+              <div className="mt-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-medium text-slate-800">{progressLabel}</p>
+                <p className="text-sm text-slate-600">Reading prompt, matching saved jobs, and preparing the quote sheet.</p>
+              </div>
             </div>
           ) : null}
+        </ModalBody>
 
-          <Textarea
-            label="Prompt"
-            rows={7}
-            placeholder="Add a permit fee, update the roof scope, and make the quote more customer-friendly."
-            value={prompt}
-            onChange={(event) => onPromptChange(event.target.value)}
-            disabled={loading}
-          />
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-500">
-              AI applies a suggested draft into the quote sheet. You still review every title, description, cost, and price.
-            </p>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row">
-              <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
-                Cancel
-              </Button>
-              <Button type="submit" loading={loading} icon={<Sparkles size={14} />} disabled={disabled}>
-                {submitLabel}
-              </Button>
-            </div>
+        <ModalFooter className="justify-between gap-3">
+          <p className="max-w-[34rem] text-sm text-slate-500">
+            AI builds the first draft only. You still review every line title, description, cost, and price before saving.
+          </p>
+          <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={loading} icon={<Sparkles size={14} />} disabled={disabled}>
+              {submitLabel}
+            </Button>
           </div>
-        </form>
-      </ModalBody>
+        </ModalFooter>
+      </form>
     </Modal>
   );
 }
