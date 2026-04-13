@@ -558,8 +558,8 @@ export function AdminPage({ session }: AdminPageProps) {
             description="Keep billing, integrations, and team access aligned from one operator surface."
           >
             <Card variant="blue" padding="lg">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div className="max-w-2xl space-y-3">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(0,1.35fr)_minmax(460px,580px)] 2xl:items-start">
+          <div className="min-w-0 max-w-3xl space-y-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Workspace control center</p>
               <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">Keep billing, integrations, and team access aligned.</h2>
@@ -572,7 +572,7 @@ export function AdminPage({ session }: AdminPageProps) {
             ) : null}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:w-[620px] xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2">
             <AdminMetricCard
               icon={<PriceIcon size={16} />}
               label="Current access"
@@ -905,15 +905,15 @@ function AdminMetricCard({
   hint: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+    <div className="h-full rounded-xl border border-slate-200 bg-white px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
         <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600">
           {icon}
         </span>
       </div>
-      <p className="mt-2 text-lg font-semibold text-slate-900">{value}</p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
+      <p className="mt-2 text-base font-semibold leading-6 text-slate-900 sm:text-lg">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p>
     </div>
   );
 }
