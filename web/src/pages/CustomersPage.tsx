@@ -1,7 +1,7 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, CircleDot, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Wrench } from "lucide-react";
+﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { Alert, Badge, Button, Card, EmptyState, Input, PageHeader } from "../components/ui";
+import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import type { Customer, Quote } from "../lib/api";
@@ -13,6 +13,15 @@ type CustomerRow = {
   customer: Customer;
   latestQuote: Quote | null;
   stage: CustomerStage;
+};
+
+type CustomerActivityItem = {
+  id: string;
+  occurredAt: string;
+  title: string;
+  detail: string;
+  tone: "slate" | "blue" | "orange" | "emerald";
+  icon: ReactNode;
 };
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
@@ -213,17 +222,30 @@ function CustomerDesktopRow({
   onStartQuote,
   onCallCustomer,
   onTextCustomer,
+  onOpenActivity,
 }: {
   row: CustomerRow;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
   onCallCustomer: (phone: string) => void;
   onTextCustomer: (phone: string) => void;
+  onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div className="hidden grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 px-4 py-3 lg:grid lg:items-center">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpenActivity(customer.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenActivity(customer.id);
+        }
+      }}
+      className="hidden cursor-pointer grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 px-4 py-3 lg:grid lg:items-center"
+    >
       <div className="min-w-0">
         <div className="flex items-center gap-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
@@ -260,13 +282,16 @@ function CustomerDesktopRow({
       </div>
 
       <div className="flex justify-end gap-1.5">
-        <Button size="sm" variant="ghost" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)} aria-label="Call customer" />
-        <Button size="sm" variant="ghost" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)} aria-label="Text customer" />
+        <Button size="sm" variant="ghost" icon={<Phone size={14} />} onClick={(event) => { event.stopPropagation(); onCallCustomer(customer.phone); }} aria-label="Call customer" />
+        <Button size="sm" variant="ghost" icon={<MessageSquare size={14} />} onClick={(event) => { event.stopPropagation(); onTextCustomer(customer.phone); }} aria-label="Text customer" />
         <Button
           size="sm"
           variant={latestQuote ? "outline" : "primary"}
           icon={<FilePlus2 size={14} />}
-          onClick={() => (latestQuote ? onOpenQuote(latestQuote.id) : onStartQuote(customer.id))}
+          onClick={(event) => {
+            event.stopPropagation();
+            latestQuote ? onOpenQuote(latestQuote.id) : onStartQuote(customer.id);
+          }}
         >
           {latestQuote ? "Open" : "Quote"}
         </Button>
@@ -281,17 +306,30 @@ function CustomerMobileCard({
   onStartQuote,
   onCallCustomer,
   onTextCustomer,
+  onOpenActivity,
 }: {
   row: CustomerRow;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
   onCallCustomer: (phone: string) => void;
   onTextCustomer: (phone: string) => void;
+  onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div className="space-y-3 px-4 py-4 lg:hidden">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpenActivity(customer.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenActivity(customer.id);
+        }
+      }}
+      className="space-y-3 px-4 py-4 lg:hidden"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex items-center gap-3">
           <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
@@ -335,20 +373,133 @@ function CustomerMobileCard({
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)}>
+        <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={(event) => { event.stopPropagation(); onCallCustomer(customer.phone); }}>
           Call
         </Button>
-        <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)}>
+        <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={(event) => { event.stopPropagation(); onTextCustomer(customer.phone); }}>
           Text
         </Button>
         {latestQuote ? (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={(event) => { event.stopPropagation(); onOpenQuote(latestQuote.id); }}>Open</Button>
         ) : (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onStartQuote(customer.id)}>Quote</Button>
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={(event) => { event.stopPropagation(); onStartQuote(customer.id); }}>Quote</Button>
         )}
       </div>
     </div>
   );
+}
+
+function buildCustomerActivity(customer: Customer, quotes: Quote[]): CustomerActivityItem[] {
+  const items: CustomerActivityItem[] = [
+    {
+      id: `${customer.id}-created`,
+      occurredAt: customer.createdAt,
+      title: "Customer added",
+      detail: `${customer.fullName} was added to the workspace.`,
+      tone: "blue",
+      icon: <ClipboardList size={14} strokeWidth={2.2} />,
+    },
+  ];
+
+  if (customer.notes?.trim()) {
+    items.push({
+      id: `${customer.id}-notes`,
+      occurredAt: customer.updatedAt,
+      title: "Customer notes saved",
+      detail: customer.notes.trim(),
+      tone: "slate",
+      icon: <FileText size={14} strokeWidth={2.2} />,
+    });
+  }
+
+  if (customer.followUpUpdatedAtUtc) {
+    items.push({
+      id: `${customer.id}-follow-up`,
+      occurredAt: customer.followUpUpdatedAtUtc,
+      title: "Customer status updated",
+      detail: `Marked as ${customer.followUpStatus.replaceAll("_", " ").toLowerCase()}.`,
+      tone: customer.followUpStatus === "WON" ? "emerald" : customer.followUpStatus === "LOST" ? "orange" : "blue",
+      icon: customer.followUpStatus === "FOLLOWED_UP" ? <PhoneCall size={14} strokeWidth={2.2} /> : <BadgeCheck size={14} strokeWidth={2.2} />,
+    });
+  }
+
+  for (const quote of quotes) {
+    const quoteLabel = `${quoteNumber(quote.id)} · ${quote.title}`;
+    items.push({
+      id: `${quote.id}-created`,
+      occurredAt: quote.createdAt,
+      title: "Quote drafted",
+      detail: quoteLabel,
+      tone: "blue",
+      icon: <FilePlus2 size={14} strokeWidth={2.2} />,
+    });
+
+    if (quote.sentAt) {
+      items.push({
+        id: `${quote.id}-sent`,
+        occurredAt: quote.sentAt,
+        title: "Quote sent",
+        detail: quoteLabel,
+        tone: "orange",
+        icon: <Send size={14} strokeWidth={2.2} />,
+      });
+    }
+
+    if (quote.status === "ACCEPTED") {
+      items.push({
+        id: `${quote.id}-accepted`,
+        occurredAt: quote.closedAtUtc ?? quote.updatedAt,
+        title: "Quote accepted",
+        detail: quoteLabel,
+        tone: "emerald",
+        icon: <BadgeCheck size={14} strokeWidth={2.2} />,
+      });
+    } else if (quote.status === "REJECTED") {
+      items.push({
+        id: `${quote.id}-rejected`,
+        occurredAt: quote.closedAtUtc ?? quote.updatedAt,
+        title: "Quote closed",
+        detail: `${quoteLabel} was closed as rejected.`,
+        tone: "slate",
+        icon: <CircleDot size={14} strokeWidth={2.2} />,
+      });
+    }
+
+    if (quote.jobCompletedAtUtc) {
+      items.push({
+        id: `${quote.id}-completed`,
+        occurredAt: quote.jobCompletedAtUtc,
+        title: "Work completed",
+        detail: quoteLabel,
+        tone: "emerald",
+        icon: <Wrench size={14} strokeWidth={2.2} />,
+      });
+    }
+
+    if (quote.afterSaleFollowUpDueAtUtc) {
+      items.push({
+        id: `${quote.id}-after-sale-due`,
+        occurredAt: quote.afterSaleFollowUpDueAtUtc,
+        title: "After-sale follow-up due",
+        detail: quoteLabel,
+        tone: "slate",
+        icon: <MessageSquare size={14} strokeWidth={2.2} />,
+      });
+    }
+
+    if (quote.afterSaleFollowUpCompletedAtUtc) {
+      items.push({
+        id: `${quote.id}-after-sale-complete`,
+        occurredAt: quote.afterSaleFollowUpCompletedAtUtc,
+        title: "After-sale follow-up completed",
+        detail: quoteLabel,
+        tone: "emerald",
+        icon: <BadgeCheck size={14} strokeWidth={2.2} />,
+      });
+    }
+  }
+
+  return items.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
 }
 
 export function CustomersPage() {
@@ -368,6 +519,7 @@ export function CustomersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -433,6 +585,26 @@ export function CustomersPage() {
       return haystack.includes(normalizedSearch);
     });
   }, [customerRows, searchTerm, stageFilter]);
+
+  const selectedActivityRow = useMemo(
+    () => (activityCustomerId ? customerRows.find((row) => row.customer.id === activityCustomerId) ?? null : null),
+    [activityCustomerId, customerRows],
+  );
+
+  const selectedActivityQuotes = useMemo(
+    () =>
+      selectedActivityRow
+        ? quotes
+            .filter((quote) => quote.customerId === selectedActivityRow.customer.id)
+            .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+        : [],
+    [quotes, selectedActivityRow],
+  );
+
+  const selectedActivityItems = useMemo(
+    () => (selectedActivityRow ? buildCustomerActivity(selectedActivityRow.customer, selectedActivityQuotes) : []),
+    [selectedActivityQuotes, selectedActivityRow],
+  );
 
   return (
     <div className="space-y-5">
@@ -505,6 +677,7 @@ export function CustomersPage() {
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
                       onTextCustomer={openTextComposer}
+                      onOpenActivity={setActivityCustomerId}
                     />
                     <CustomerMobileCard
                       row={row}
@@ -512,6 +685,7 @@ export function CustomersPage() {
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
                       onTextCustomer={openTextComposer}
+                      onOpenActivity={setActivityCustomerId}
                     />
                   </div>
                 ))}
@@ -540,6 +714,101 @@ export function CustomersPage() {
           }
         }}
       />
+
+      <Modal open={Boolean(selectedActivityRow)} onClose={() => setActivityCustomerId(null)} size="lg" ariaLabel="Customer activity history">
+        <ModalHeader
+          title={selectedActivityRow ? `${selectedActivityRow.customer.fullName} activity` : "Customer activity"}
+          description={selectedActivityRow ? "Timeline of customer entry, contact, quotes, and work progress." : undefined}
+          onClose={() => setActivityCustomerId(null)}
+        />
+        <ModalBody className="space-y-5">
+          {selectedActivityRow ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer since</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(selectedActivityRow.customer.createdAt)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current status</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(selectedActivityRow.stage)}`}>
+                      {stageInitial(selectedActivityRow.stage)}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-900">{stageLabel(selectedActivityRow.stage)}</span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quotes on record</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{selectedActivityQuotes.length}</p>
+                </div>
+              </div>
+
+              {selectedActivityRow.customer.notes?.trim() ? (
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current notes</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{selectedActivityRow.customer.notes.trim()}</p>
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                {selectedActivityItems.length ? (
+                  selectedActivityItems.map((item) => (
+                    <div key={item.id} className="flex gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                      <span
+                        className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                          item.tone === "blue"
+                            ? "bg-[#2559b8] text-white"
+                            : item.tone === "orange"
+                              ? "bg-[#d97706] text-white"
+                              : item.tone === "emerald"
+                                ? "bg-emerald-600 text-white"
+                                : "bg-slate-700 text-white"
+                        }`}
+                      >
+                        {item.icon}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                          <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <EmptyState title="No activity yet" description="Customer events will appear here as work moves from entry to sold." />
+                )}
+              </div>
+            </>
+          ) : null}
+        </ModalBody>
+        {selectedActivityRow ? (
+          <ModalFooter className="justify-between">
+            <div className="text-xs text-slate-500">
+              Open a quote from this customer when you need pricing, send actions, or PDF work.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setActivityCustomerId(null)}>
+                Close
+              </Button>
+              <Button
+                onClick={() => {
+                  setActivityCustomerId(null);
+                  if (selectedActivityRow.latestQuote) {
+                    navigateToQuote(selectedActivityRow.latestQuote.id);
+                  } else {
+                    navigateToBuilder(selectedActivityRow.customer.id);
+                  }
+                }}
+              >
+                {selectedActivityRow.latestQuote ? "Open Quote" : "Start Quote"}
+              </Button>
+            </div>
+          </ModalFooter>
+        ) : null}
+      </Modal>
     </div>
   );
 }
