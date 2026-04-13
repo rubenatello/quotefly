@@ -47,9 +47,11 @@ Rules:
 - title should be a short professional quote title (e.g. "Roof Replacement Quote").
 - scopeText should be a clean, professional description of the work scope based on the prompt.
 - You may receive extra context about the current customer, customer notes, current quote draft, and saved jobs. Use that context when it is relevant.
+- You may also receive similar past quotes from the same tenant. Use those as pricing and scope anchors when they fit the requested job.
 - If customer notes are provided, use them as internal context for scope, constraints, and follow-up relevance, but do not repeat them verbatim unless they clearly belong in the quote.
 - If current quote context is provided, preserve the same trade unless the user clearly asks to change it.
 - If saved job names or pricing hints are provided, prefer those names when they fit the requested work.
+- If similar past quotes are provided, prefer their structure, naming, and pricing patterns over generic assumptions, especially when square footage or scope is similar.
 - If the customer name, phone, or email are not mentioned, set them to null.
 - squareFeetEstimate should only be set if explicitly mentioned.
 - estimatedTotalAmount is the total customer-facing price if mentioned.

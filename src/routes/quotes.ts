@@ -613,6 +613,20 @@ type AiSuggestedQuoteDraft = {
   model: string;
 };
 
+type SimilarQuoteContext = {
+  id: string;
+  title: string;
+  scopeText: string;
+  totalAmount: number;
+  status: z.infer<typeof QuoteStatusSchema>;
+  updatedAt: Date;
+  lineItems: Array<{
+    description: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+};
+
 function buildAiQuoteContext(params: {
   customer?: {
     fullName: string;
@@ -637,6 +651,7 @@ function buildAiQuoteContext(params: {
     laborRate: number;
     materialMarkup: number;
   } | null;
+  similarQuotes?: SimilarQuoteContext[];
 }) {
   const sections: string[] = [];
 
@@ -699,7 +714,172 @@ function buildAiQuoteContext(params: {
     );
   }
 
+  if (params.similarQuotes?.length) {
+    sections.push(
+      [
+        "Similar tenant quotes:",
+        ...params.similarQuotes.map((quote, index) => {
+          const scopePreview = quote.scopeText.trim().slice(0, 180);
+          const linesPreview = quote.lineItems
+            .slice(0, 3)
+            .map(
+              (lineItem, lineIndex) =>
+                `    ${lineIndex + 1}. ${lineItem.description} | qty ${lineItem.quantity} | price ${lineItem.unitPrice.toFixed(2)}`,
+            )
+            .join("\n");
+          return [
+            `- Example ${index + 1}: [${quote.status}] ${quote.title} | total ${quote.totalAmount.toFixed(2)} | updated ${quote.updatedAt.toISOString().slice(0, 10)}`,
+            scopePreview ? `  Scope: ${scopePreview}` : null,
+            linesPreview ? `  Lines:\n${linesPreview}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+        }),
+      ].join("\n"),
+    );
+  }
+
   return sections.join("\n\n");
+}
+
+const AI_CONTEXT_STOP_WORDS = new Set([
+  "and",
+  "the",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "into",
+  "then",
+  "your",
+  "will",
+  "have",
+  "about",
+  "include",
+  "includes",
+  "need",
+  "new",
+  "quote",
+  "customer",
+  "install",
+  "replace",
+  "replacement",
+  "service",
+]);
+
+function aiContextTokens(...values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) =>
+          normalizeTextForComparison(value ?? "")
+            .split(" ")
+            .filter((token) => token.length >= 3 && !AI_CONTEXT_STOP_WORDS.has(token)),
+        )
+        .filter(Boolean),
+    ),
+  );
+}
+
+function scoreSimilarQuote(
+  queryTokens: string[],
+  quote: {
+    title: string;
+    scopeText: string;
+    lineItems: Array<{ description: string }>;
+    status: z.infer<typeof QuoteStatusSchema>;
+  },
+) {
+  const titleText = normalizeTextForComparison(quote.title);
+  const scopeText = normalizeTextForComparison(quote.scopeText);
+  const linesText = normalizeTextForComparison(quote.lineItems.map((line) => line.description).join(" "));
+
+  let score = 0;
+  for (const token of queryTokens) {
+    if (titleText.includes(token)) score += 4;
+    if (scopeText.includes(token)) score += 2;
+    if (linesText.includes(token)) score += 2;
+  }
+
+  if (quote.status === "ACCEPTED") score += 5;
+  if (quote.status === "SENT_TO_CUSTOMER") score += 3;
+  if (quote.status === "READY_FOR_REVIEW") score += 2;
+
+  return score;
+}
+
+async function loadSimilarQuoteContext(
+  prisma: Prisma.TransactionClient | PrismaClient,
+  tenantId: string,
+  params: {
+    serviceType: z.infer<typeof ServiceTypeSchema>;
+    prompt: string;
+    title?: string | null;
+    scopeText?: string | null;
+    excludeQuoteId?: string | null;
+  },
+): Promise<SimilarQuoteContext[]> {
+  const recentQuotes = await prisma.quote.findMany({
+    where: {
+      tenantId,
+      serviceType: params.serviceType,
+      deletedAtUtc: null,
+      status: {
+        in: ["ACCEPTED", "SENT_TO_CUSTOMER", "READY_FOR_REVIEW", "DRAFT"],
+      },
+      ...(params.excludeQuoteId ? { id: { not: params.excludeQuoteId } } : {}),
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 24,
+    select: {
+      id: true,
+      title: true,
+      scopeText: true,
+      totalAmount: true,
+      status: true,
+      updatedAt: true,
+      lineItems: {
+        where: { deletedAtUtc: null },
+        orderBy: { createdAt: "asc" },
+        select: {
+          description: true,
+          quantity: true,
+          unitPrice: true,
+        },
+      },
+    },
+  });
+
+  const queryTokens = aiContextTokens(params.prompt, params.title, params.scopeText);
+
+  return recentQuotes
+    .map((quote) => ({
+      id: quote.id,
+      title: quote.title,
+      scopeText: quote.scopeText,
+      totalAmount: Number(quote.totalAmount),
+      status: quote.status,
+      updatedAt: quote.updatedAt,
+      lineItems: quote.lineItems.map((lineItem) => ({
+        description: lineItem.description,
+        quantity: Number(lineItem.quantity),
+        unitPrice: Number(lineItem.unitPrice),
+      })),
+      score: scoreSimilarQuote(queryTokens, {
+        title: quote.title,
+        scopeText: quote.scopeText,
+        lineItems: quote.lineItems.map((lineItem) => ({ description: lineItem.description })),
+        status: quote.status,
+      }),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return right.updatedAt.getTime() - left.updatedAt.getTime();
+    })
+    .filter((quote, index) => quote.score > 0 || index < 3)
+    .slice(0, 4)
+    .map(({ score: _score, ...quote }) => quote);
 }
 
 async function buildAiSuggestedQuoteDraft(
@@ -1096,6 +1276,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    const similarQuotes = await loadSimilarQuoteContext(app.prisma, claims.tenantId, {
+      serviceType: preliminaryServiceType,
+      prompt: payload.prompt,
+      title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
+      scopeText: existingQuote?.scopeText ?? payload.currentScopeText ?? preflightDraft.scopeText,
+      excludeQuoteId: existingQuote?.id ?? payload.quoteId ?? null,
+    });
+
     const contextPrompt = buildAiQuoteContext({
       customer: selectedCustomer
           ? {
@@ -1138,6 +1326,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             materialMarkup: Number(contextPricingProfile.materialMarkup),
           }
         : null,
+      similarQuotes,
     });
 
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
@@ -1256,11 +1445,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt);
+    const preflightDraft = await aiParseChatToQuotePrompt(payload.prompt);
     const aiRuntime = getAiQuoteRuntimeInfo();
-    const detectedCustomerName = payload.customerName?.trim() || parsedDraft.customerName;
-    const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(parsedDraft.customerPhone);
-    const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(parsedDraft.customerEmail);
+    const detectedCustomerName = payload.customerName?.trim() || preflightDraft.customerName;
+    const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(preflightDraft.customerPhone);
+    const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(preflightDraft.customerEmail);
 
     let customer = customerPhone
       ? await app.prisma.customer.findFirst({
@@ -1305,6 +1494,60 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
       });
     }
+
+    const contextPricingProfile = await app.prisma.pricingProfile.findFirst({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: preflightDraft.serviceType,
+      },
+      orderBy: {
+        isDefault: "desc",
+      },
+    });
+
+    const contextPresets = await app.prisma.workPreset.findMany({
+      where: {
+        tenantId: claims.tenantId,
+        serviceType: preflightDraft.serviceType,
+        deletedAtUtc: null,
+      },
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+      take: 8,
+    });
+
+    const similarQuotes = await loadSimilarQuoteContext(app.prisma, claims.tenantId, {
+      serviceType: preflightDraft.serviceType,
+      prompt: payload.prompt,
+      title: preflightDraft.title,
+      scopeText: preflightDraft.scopeText,
+    });
+
+    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+      context: buildAiQuoteContext({
+        customer: customer
+          ? {
+              fullName: customer.fullName,
+              phone: customer.phone,
+              email: customer.email,
+              notes: customer.notes,
+            }
+          : null,
+        presets: contextPresets.map((preset) => ({
+          name: preset.name,
+          description: preset.description,
+          unitType: preset.unitType,
+          unitCost: Number(preset.unitCost),
+          unitPrice: Number(preset.unitPrice),
+        })),
+        pricingProfile: contextPricingProfile
+          ? {
+              laborRate: Number(contextPricingProfile.laborRate),
+              materialMarkup: Number(contextPricingProfile.materialMarkup),
+            }
+          : null,
+        similarQuotes,
+      }),
+    });
 
     const pricingProfile = await app.prisma.pricingProfile.findFirst({
       where: {
