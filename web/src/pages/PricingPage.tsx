@@ -24,7 +24,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
       features: [
         "Up to 600 quotes/month",
-        "30 AI quote drafts/month",
+        "30 AI credits/month",
         "Quick customer intake and lead pipeline",
         "PDF quote generation",
         "Customer and quote status tracking",
@@ -43,7 +43,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       description: "Planned for the next release once advanced analytics, history, and accounting workflows are fully hardened.",
       features: [
         "Everything in Starter, plus:",
-        "300 AI quote drafts/month",
+        "300 AI credits/month",
         "Advanced analytics and reporting",
         "Customer communication log",
         "Quote versioning and history",
@@ -62,7 +62,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       description: "Planned after Professional for larger operations that need deeper automation and integration control.",
       features: [
         "Everything in Professional, plus:",
-        "800 AI quote drafts/month",
+        "800 AI credits/month",
         "Unlimited team members",
         "Advanced AI automation layer",
         "API access and audit logs",
@@ -91,6 +91,10 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     {
       q: "Do you support QuickBooks?",
       a: "Not as a sellable launch feature. Starter is focused on customer management, quoting, and PDF workflow first. Accounting integrations are planned after launch.",
+    },
+    {
+      q: "How does AI usage work?",
+      a: "AI is metered by prompt usage, not by quotes sent. Each AI draft or AI revision uses one AI credit, while manual edits do not.",
     },
     {
       q: "Do you offer annual billing?",
@@ -204,6 +208,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         <div className="mx-auto max-w-4xl text-center">
           <h2 className="mb-4 text-3xl font-bold text-slate-900">Start with Starter</h2>
           <p className="mb-8 text-lg text-slate-600">No credit card required. Full access to the launch workflow for 14 days.</p>
+          <p className="mb-5 text-sm text-slate-500">AI credits apply when you use AI to draft or revise a quote. Manual quote edits do not consume AI usage.</p>
           <button
             onClick={onOpenAuth}
             className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-blue-600"

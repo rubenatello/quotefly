@@ -737,7 +737,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 </div>
                 <div>
                   <p className="font-medium text-slate-900">Use Chat to Quote</p>
-                  <p className="mt-1 text-sm text-slate-600">Once trade defaults exist, AI quote drafts become materially more useful.</p>
+                  <p className="mt-1 text-sm text-slate-600">Once trade defaults exist, AI quote suggestions become materially more useful.</p>
                 </div>
               </div>
               <Button variant="outline" fullWidth onClick={() => navigate("/app/branding")}>

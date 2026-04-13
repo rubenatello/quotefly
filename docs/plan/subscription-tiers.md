@@ -7,13 +7,14 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 ### Starter (`starter`)
 
 - Price: `$19/month`
+- Launch availability: `Sellable now`
 - Intended buyer: solo operators and early-stage contractors
 - Core limits:
   - Up to 600 quotes/month
   - Up to 7 team members
   - 30-day quote history
 - Included capabilities:
-  - AI-assisted quote drafting (30 per month)
+  - AI-assisted quote credits (30 per month)
   - Fast customer intake and lead pipeline
   - Branded PDF quote generation
   - QuickBooks-friendly invoice CSV export
@@ -22,6 +23,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 ### Professional (`professional`)
 
 - Price: `$59/month`
+- Launch availability: `Visible, not sellable yet`
 - Intended buyer: growing contractor teams
 - Core limits:
   - Up to 5,000 quotes/month
@@ -29,7 +31,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - 180-day quote history
 - Included capabilities:
   - Everything in Starter
-  - AI-assisted quote drafting (300 per month)
+  - AI-assisted quote credits (300 per month)
   - Advanced analytics and reporting
   - Customer communication log
   - Quote versioning and history
@@ -39,6 +41,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 ### Enterprise (`enterprise`)
 
 - Price: `$249/month`
+- Launch availability: `Visible, not sellable yet`
 - Intended buyer: larger operations requiring governance and integration
 - Core limits:
   - Unlimited quotes
@@ -46,13 +49,19 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Full historical access
 - Included capabilities:
   - Everything in Professional
-  - AI-assisted quote drafting (800 per month)
+  - AI-assisted quote credits (800 per month)
   - QuickBooks-friendly export workflow with direct sync roadmap
   - API access
   - Custom branding and integration support
   - Dedicated account manager
   - SLA and priority support
   - Audit logs
+
+## AI Usage Notes
+
+- AI is metered by prompt usage, not by quotes sent.
+- Each AI draft or AI revision consumes `1` AI credit.
+- Manual quote edits do not consume AI credits.
 
 ## Stripe Product Setup
 
@@ -61,6 +70,11 @@ Create three recurring monthly Prices in Stripe:
 - `QuoteFly Starter Monthly` -> `STRIPE_PRICE_ID_STARTER`
 - `QuoteFly Professional Monthly` -> `STRIPE_PRICE_ID_PROFESSIONAL`
 - `QuoteFly Enterprise Monthly` -> `STRIPE_PRICE_ID_ENTERPRISE`
+
+Current launch posture:
+
+- `Starter` is the only plan sold at launch.
+- `Professional` and `Enterprise` may stay visible in the app and on the pricing page, but checkout remains off until those workflows are hardened.
 
 Recommended metadata on each Stripe Product:
 

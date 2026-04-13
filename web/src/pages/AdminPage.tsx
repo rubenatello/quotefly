@@ -70,7 +70,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
     seatText: "Up to 7 users",
-    aiQuoteText: "30 AI quote drafts / month",
+    aiQuoteText: "30 AI credits / month",
     historyText: "30-day quote history",
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
@@ -87,7 +87,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after launch for stronger visibility, revisions, and accounting workflows.",
     seatText: "Up to 15 users",
-    aiQuoteText: "300 AI quote drafts / month",
+    aiQuoteText: "300 AI credits / month",
     historyText: "180-day quote history",
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
@@ -104,7 +104,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after Professional for larger operations that need governance and automation.",
     seatText: "Unlimited users",
-    aiQuoteText: "800 AI quote drafts / month",
+    aiQuoteText: "800 AI credits / month",
     historyText: "Unlimited quote history",
     accentClassName: "border-slate-300 bg-slate-100",
     features: [
