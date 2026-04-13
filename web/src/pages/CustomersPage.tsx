@@ -1,7 +1,7 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader } from "../components/ui";
+import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
@@ -521,6 +521,8 @@ export function CustomersPage() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityPage, setActivityPage] = useState(1);
   const [activityTotal, setActivityTotal] = useState(0);
+  const [customerNotesDraft, setCustomerNotesDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -537,6 +539,25 @@ export function CustomersPage() {
     setActivityPage(1);
   }, [activityCustomerId]);
 
+  const loadCustomerActivity = useCallback(
+    async (customerId: string, page: number) => {
+      setActivityLoading(true);
+      try {
+        const result = await api.customers.activity(customerId, {
+          limit: ACTIVITY_PAGE_SIZE,
+          offset: (page - 1) * ACTIVITY_PAGE_SIZE,
+        });
+        setActivityItems(result.items);
+        setActivityTotal(result.pagination.total);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed loading customer activity.");
+      } finally {
+        setActivityLoading(false);
+      }
+    },
+    [setError],
+  );
+
   useEffect(() => {
     if (!activityCustomerId) {
       setActivityItems([]);
@@ -545,31 +566,8 @@ export function CustomersPage() {
       return;
     }
 
-    let mounted = true;
-    setActivityLoading(true);
-
-    api.customers
-      .activity(activityCustomerId, {
-        limit: ACTIVITY_PAGE_SIZE,
-        offset: (activityPage - 1) * ACTIVITY_PAGE_SIZE,
-      })
-      .then((result) => {
-        if (!mounted) return;
-        setActivityItems(result.items);
-        setActivityTotal(result.pagination.total);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed loading customer activity.");
-      })
-      .finally(() => {
-        if (mounted) setActivityLoading(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [activityCustomerId, activityPage, setError]);
+    void loadCustomerActivity(activityCustomerId, activityPage);
+  }, [activityCustomerId, activityPage, loadCustomerActivity]);
 
   function closeQuickCustomerModal() {
     setQuickCustomerOpen(false);
@@ -641,6 +639,31 @@ export function CustomersPage() {
   );
 
   const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
+  const notesChanged =
+    (selectedActivityRow?.customer.notes?.trim() ?? "") !== customerNotesDraft.trim();
+
+  useEffect(() => {
+    setCustomerNotesDraft(selectedActivityRow?.customer.notes ?? "");
+  }, [selectedActivityRow?.customer.id, selectedActivityRow?.customer.notes]);
+
+  async function saveCustomerNotes() {
+    if (!selectedActivityRow || notesSaving) return;
+
+    const nextNotes = customerNotesDraft.trim();
+    setNotesSaving(true);
+    try {
+      await api.customers.update(selectedActivityRow.customer.id, {
+        notes: nextNotes || null,
+      });
+      await loadAll();
+      await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
+      setNotice(nextNotes ? "Customer notes saved." : "Customer notes cleared.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed saving customer notes.");
+    } finally {
+      setNotesSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -773,12 +796,33 @@ export function CustomersPage() {
                 </div>
               </div>
 
-              {selectedActivityRow.customer.notes?.trim() ? (
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current notes</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{selectedActivityRow.customer.notes.trim()}</p>
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer notes</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Keep property details, objections, promises, and follow-up context here for your team and future AI follow-up drafts.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => void saveCustomerNotes()}
+                    disabled={!notesChanged || notesSaving}
+                    loading={notesSaving}
+                  >
+                    Save Notes
+                  </Button>
                 </div>
-              ) : null}
+                <div className="mt-3">
+                  <Textarea
+                    rows={5}
+                    placeholder="Add customer notes, callback context, property details, or anything your team and AI should know."
+                    value={customerNotesDraft}
+                    onChange={(event) => setCustomerNotesDraft(event.target.value)}
+                    disabled={notesSaving}
+                  />
+                </div>
+              </div>
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 {activityLoading ? (
@@ -884,4 +928,9 @@ export function CustomersPage() {
     </div>
   );
 }
+
+
+
+
+
 

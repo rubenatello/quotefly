@@ -618,6 +618,7 @@ function buildAiQuoteContext(params: {
     fullName: string;
     phone: string;
     email?: string | null;
+    notes?: string | null;
   } | null;
   currentQuote?: {
     serviceType: z.infer<typeof ServiceTypeSchema>;
@@ -646,6 +647,7 @@ function buildAiQuoteContext(params: {
         `- Name: ${params.customer.fullName}`,
         `- Phone: ${params.customer.phone}`,
         params.customer.email ? `- Email: ${params.customer.email}` : null,
+        params.customer.notes?.trim() ? `- Notes: ${params.customer.notes.trim()}` : null,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -1040,6 +1042,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 fullName: true,
                 email: true,
                 phone: true,
+                notes: true,
               },
             },
             lineItems: {
@@ -1095,12 +1098,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     const contextPrompt = buildAiQuoteContext({
       customer: selectedCustomer
-        ? {
-            fullName: selectedCustomer.fullName,
-            phone: selectedCustomer.phone,
-            email: selectedCustomer.email,
-          }
-        : null,
+          ? {
+              fullName: selectedCustomer.fullName,
+              phone: selectedCustomer.phone,
+              email: selectedCustomer.email,
+              notes: selectedCustomer.notes,
+            }
+          : null,
       currentQuote: existingQuote
         ? {
             serviceType: existingQuote.serviceType,

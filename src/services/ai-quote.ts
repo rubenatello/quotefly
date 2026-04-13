@@ -46,7 +46,8 @@ Rules:
 - serviceType must be one of the 6 options above, inferred from context.
 - title should be a short professional quote title (e.g. "Roof Replacement Quote").
 - scopeText should be a clean, professional description of the work scope based on the prompt.
-- You may receive extra context about the current customer, current quote draft, and saved jobs. Use that context when it is relevant.
+- You may receive extra context about the current customer, customer notes, current quote draft, and saved jobs. Use that context when it is relevant.
+- If customer notes are provided, use them as internal context for scope, constraints, and follow-up relevance, but do not repeat them verbatim unless they clearly belong in the quote.
 - If current quote context is provided, preserve the same trade unless the user clearly asks to change it.
 - If saved job names or pricing hints are provided, prefer those names when they fit the requested work.
 - If the customer name, phone, or email are not mentioned, set them to null.

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader } from "../ui";
+import { Alert, Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
 import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
 
 type QuickCustomerIntent = "save" | "quote";
@@ -19,12 +19,14 @@ type QuickCustomerForm = {
   fullName: string;
   phone: string;
   email: string;
+  notes: string;
 };
 
 const EMPTY_FORM: QuickCustomerForm = {
   fullName: "",
   phone: "",
   email: "",
+  notes: "",
 };
 
 function normalizePayload(form: QuickCustomerForm) {
@@ -32,6 +34,7 @@ function normalizePayload(form: QuickCustomerForm) {
     fullName: form.fullName.trim(),
     phone: form.phone.trim(),
     email: form.email.trim() || null,
+    notes: form.notes.trim() || null,
   };
 }
 
@@ -137,6 +140,15 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
           placeholder="Optional"
           value={form.email}
           onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+          disabled={saving}
+        />
+
+        <Textarea
+          label="Customer notes"
+          rows={4}
+          placeholder="Internal notes, property details, concerns, preferences, or follow-up context for your team and AI."
+          value={form.notes}
+          onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
           disabled={saving}
         />
 
