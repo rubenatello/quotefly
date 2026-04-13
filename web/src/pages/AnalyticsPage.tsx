@@ -635,7 +635,7 @@ export function AnalyticsPage() {
               {session?.usage ? (
                 <div className="mt-4 grid gap-2 text-sm text-slate-700">
                   <p><span className="font-semibold text-slate-900">Quotes used:</span> {session.usage.monthlyQuoteCount}</p>
-                  <p><span className="font-semibold text-slate-900">AI drafts used:</span> {session.usage.monthlyAiQuoteCount}</p>
+                  <p><span className="font-semibold text-slate-900">AI credits used:</span> {session.usage.monthlyAiQuoteCount}</p>
                 </div>
               ) : null}
             </div>

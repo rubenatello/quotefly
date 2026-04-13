@@ -490,7 +490,7 @@ export function AdminPage({ session }: AdminPageProps) {
             {aiQuoteLimit !== null ? (
               <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Draft Usage</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Credit Usage</p>
                   <span className="text-xs font-semibold text-slate-900">
                     {aiQuoteUsed}/{aiQuoteLimit}
                   </span>
@@ -498,7 +498,7 @@ export function AdminPage({ session }: AdminPageProps) {
                 <ProgressBar
                   value={aiUsagePercent}
                   label="Monthly AI usage"
-                  hint={aiQuoteRemaining === 0 ? "Limit reached for this month" : `${aiQuoteRemaining} AI drafts remaining`}
+                  hint={aiQuoteRemaining === 0 ? "Limit reached for this month" : `${aiQuoteRemaining} AI credits remaining`}
                   className="mt-3"
                 />
               </div>
@@ -593,7 +593,7 @@ export function AdminPage({ session }: AdminPageProps) {
             />
             <AdminMetricCard
               icon={<ClockIcon size={16} />}
-              label="AI drafts"
+              label="AI credits"
               value={aiQuoteLimit === null ? "Unlimited" : `${aiQuoteUsed}/${aiQuoteLimit}`}
               hint={aiQuoteLimit === null ? "No monthly cap" : `${aiQuoteRemaining} remaining this month`}
             />

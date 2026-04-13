@@ -3,6 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { getJwtClaims } from "../lib/auth";
+import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
 import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
 
@@ -253,7 +254,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const periodStart = startOfCurrentUtcMonth();
     const periodEnd = startOfNextUtcMonth();
-    const [monthlyQuoteCount, monthlyAiQuoteCount] = await Promise.all([
+    const [monthlyQuoteCount, aiUsageSnapshot] = await Promise.all([
       app.prisma.quote.count({
         where: {
           tenantId: claims.tenantId,
@@ -264,16 +265,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           },
         },
       }),
-      app.prisma.quote.count({
-        where: {
-          tenantId: claims.tenantId,
-          deletedAtUtc: null,
-          aiGeneratedAtUtc: {
-            gte: periodStart,
-            lt: periodEnd,
-          },
-        },
-      }),
+      loadMonthlyAiUsageSnapshot(
+        app.prisma,
+        claims.tenantId,
+        entitlements.limits.aiQuotesPerMonth,
+      ),
     ]);
 
     return {
@@ -285,10 +281,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         isTrial: entitlements.isTrial,
         entitlements,
         usage: {
-          periodStartUtc: periodStart,
-          periodEndUtc: periodEnd,
+          periodStartUtc: aiUsageSnapshot.periodStartUtc,
+          periodEndUtc: aiUsageSnapshot.periodEndUtc,
           monthlyQuoteCount,
-          monthlyAiQuoteCount,
+          monthlyAiQuoteCount: aiUsageSnapshot.monthlyUsed,
         },
       },
       role: membership.role,

@@ -73,6 +73,11 @@ enum QuoteOutboundChannel {
   COPY
 }
 
+enum AiUsageEventType {
+  DRAFT
+  REVISE
+}
+
 enum PresetCategory {
   LABOR
   MATERIAL
@@ -144,6 +149,7 @@ model Tenant {
   quoteTemplates                  QuoteTemplate[]
   quotes                          Quote[]
   customerActivityEvents          CustomerActivityEvent[]
+  aiUsageEvents                   AiUsageEvent[]
   quoteDecisionSessions           QuoteDecisionSession[]
   smsMessages                     SmsMessage[]
   stripeCustomerId                String?
@@ -174,6 +180,7 @@ model User {
   updatedAt    DateTime     @updatedAt @db.Timestamptz(3)
   deletedAtUtc DateTime?    @db.Timestamptz(3)
   tenantLink   TenantUser[]
+  aiUsageEvents AiUsageEvent[]
 
   @@index([deletedAtUtc])
 }
@@ -223,6 +230,7 @@ model Customer {
   activityEvents         CustomerActivityEvent[]
   revisions              QuoteRevision[]
   quoteOutboundEvents    QuoteOutboundEvent[]
+  aiUsageEvents          AiUsageEvent[]
   quickBooksCustomerMaps QuickBooksCustomerMap[]
 
   @@unique([tenantId, phone])
@@ -294,6 +302,7 @@ model Quote {
   decisionSessions                QuoteDecisionSession[]
   revisions                       QuoteRevision[]
   outboundEvents                  QuoteOutboundEvent[]
+  aiUsageEvents                   AiUsageEvent[]
   quickBooksInvoiceSyncs          QuickBooksInvoiceSync[]
 
   @@unique([id, tenantId])
@@ -302,6 +311,32 @@ model Quote {
   @@index([tenantId, jobStatus])
   @@index([tenantId, afterSaleFollowUpStatus])
   @@index([tenantId, aiGeneratedAtUtc])
+  @@index([tenantId, deletedAtUtc])
+}
+
+model AiUsageEvent {
+  id             String           @id @default(cuid())
+  tenantId       String
+  quoteId        String?
+  customerId     String?
+  actorUserId    String?
+  actorEmail     String?
+  actorName      String?
+  eventType      AiUsageEventType
+  creditsConsumed Int             @default(1)
+  promptText     String           @db.Text
+  model          String?
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  deletedAtUtc   DateTime?        @db.Timestamptz(3)
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote          Quote?           @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  customer       Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  actorUser      User?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, eventType, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
+  @@index([tenantId, quoteId, createdAt])
   @@index([tenantId, deletedAtUtc])
 }
 

@@ -304,7 +304,7 @@ export function CrmSidebar({
               </div>
               <ProgressBar
                 value={aiUsagePercent}
-                label="Monthly AI quote usage"
+                label="Monthly AI credit usage"
                 hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
                 className="mt-3"
               />

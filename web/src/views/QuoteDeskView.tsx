@@ -501,7 +501,7 @@ export function QuoteDeskView() {
     track("quote_desk_ai_modal_submit");
     try {
       setAiSubmitting(true);
-      const { customer, parsed, suggestion } = await api.quotes.suggestWithAi({
+      const { customer, parsed, suggestion, usage } = await api.quotes.suggestWithAi({
         prompt,
         quoteId: selectedQuote.id,
         customerId: selectedQuote.customerId,
@@ -533,7 +533,11 @@ export function QuoteDeskView() {
       setNewLine(makeEditableQuoteLine());
       setAiModalOpen(false);
       setMobilePane("editor");
-      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. Review the sheet, then save tracked edits.`);
+      const usageSummary =
+        usage.monthlyRemaining === null
+          ? `${usage.consumedCredits} AI credit used.`
+          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
+      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${usageSummary} Review the sheet, then save tracked edits.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
     } finally {

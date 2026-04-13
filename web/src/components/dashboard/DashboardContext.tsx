@@ -606,7 +606,7 @@ export function DashboardProvider({
     if (!prompt) { setError("Enter a prompt before generating a quote."); return; }
     setSaving(true); setError(null);
     try {
-      const { quote, parsed } = await api.quotes.createFromChat({ prompt });
+      const { quote, parsed, usage } = await api.quotes.createFromChat({ prompt });
       setChatParsed(parsed);
       setChatPrompt("");
       setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
@@ -618,7 +618,11 @@ export function DashboardProvider({
         setQuoteHistory(revisions);
       }
       const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
-      setNotice(`Draft quote created for ${customerName}. Review details, then use Email App, Text App, or PDF actions.`);
+      const usageSummary =
+        usage.monthlyRemaining === null
+          ? `${usage.consumedCredits} AI credit used.`
+          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
+      setNotice(`Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`);
       navigateToQuote(quote.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");

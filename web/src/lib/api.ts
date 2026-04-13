@@ -364,9 +364,17 @@ export type ChatToQuoteParsed = {
   estimatedTotalAmount?: number | null;
 };
 
+export type AiUsageSummary = {
+  consumedCredits: number;
+  monthlyUsed: number;
+  monthlyLimit: number | null;
+  monthlyRemaining: number | null;
+};
+
 export type ChatToQuoteResult = {
   quote: Quote;
   parsed: ChatToQuoteParsed;
+  usage: AiUsageSummary;
 };
 
 export type AiQuoteSuggestion = {
@@ -395,6 +403,7 @@ export type AiQuoteSuggestionResult = {
   } | null;
   parsed: ChatToQuoteParsed;
   suggestion: AiQuoteSuggestion;
+  usage: AiUsageSummary;
 };
 
 export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";

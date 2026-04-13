@@ -2,6 +2,7 @@ import { LeadFollowUpStatus, Prisma, PrismaClient, QuoteOutboundChannel, QuoteRe
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
 import { resolveActivityActor, type ActivityActor } from "../lib/activity";
 import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
 import {
@@ -997,6 +998,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = SuggestQuoteWithAiSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
     });
@@ -1005,32 +1007,24 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    if (entitlements.limits.aiQuotesPerMonth !== null) {
-      const periodStart = startOfCurrentUtcMonth();
-      const periodEnd = startOfNextUtcMonth();
-      const monthlyAiQuoteCount = await app.prisma.quote.count({
-        where: {
-          ...tenantActiveScope(claims.tenantId),
-          aiGeneratedAtUtc: {
-            gte: periodStart,
-            lt: periodEnd,
-          },
-        },
-      });
+    const { blocked, snapshot } = await assertAiUsageAvailable(
+      app.prisma,
+      claims.tenantId,
+      entitlements,
+    );
 
-      if (monthlyAiQuoteCount >= entitlements.limits.aiQuotesPerMonth) {
-        const requiredPlan =
-          entitlements.planCode === "starter" ? "professional" : "enterprise";
-        return reply.code(403).send({
-          code: "PLAN_LIMIT_EXCEEDED",
-          error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI-generated quotes per month. You can still revise existing quotes manually.`,
-          feature: "aiQuotesPerMonth",
-          currentPlan: entitlements.planCode,
-          requiredPlan,
-          limit: entitlements.limits.aiQuotesPerMonth,
-          used: monthlyAiQuoteCount,
-        });
-      }
+    if (blocked) {
+      const requiredPlan =
+        entitlements.planCode === "starter" ? "professional" : "enterprise";
+      return reply.code(403).send({
+        code: "PLAN_LIMIT_EXCEEDED",
+        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit.`,
+        feature: "aiQuotesPerMonth",
+        currentPlan: entitlements.planCode,
+        requiredPlan,
+        limit: entitlements.limits.aiQuotesPerMonth,
+        used: snapshot.monthlyUsed,
+      });
     }
 
     const existingQuote = payload.quoteId
@@ -1173,6 +1167,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
     });
 
+    await createAiUsageEvent(app.prisma, {
+      tenantId: claims.tenantId,
+      quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+      customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
+      actor,
+      eventType: existingQuote ? "REVISE" : "DRAFT",
+      promptText: payload.prompt,
+      model: suggestion.model,
+    });
+
     return reply.send({
       customer: selectedCustomer,
       parsed: {
@@ -1184,6 +1188,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
       },
       suggestion,
+      usage: buildAiUsageResponse(snapshot),
     });
   });
 
@@ -1227,32 +1232,24 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (entitlements.limits.aiQuotesPerMonth !== null) {
-      const periodStart = startOfCurrentUtcMonth();
-      const periodEnd = startOfNextUtcMonth();
-      const monthlyAiQuoteCount = await app.prisma.quote.count({
-        where: {
-          ...tenantActiveScope(claims.tenantId),
-          aiGeneratedAtUtc: {
-            gte: periodStart,
-            lt: periodEnd,
-          },
-        },
-      });
+    const { blocked, snapshot } = await assertAiUsageAvailable(
+      app.prisma,
+      claims.tenantId,
+      entitlements,
+    );
 
-      if (monthlyAiQuoteCount >= entitlements.limits.aiQuotesPerMonth) {
-        const requiredPlan =
-          entitlements.planCode === "starter" ? "professional" : "enterprise";
-        return reply.code(403).send({
-          code: "PLAN_LIMIT_EXCEEDED",
-          error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI-generated quotes per month. You can still revise existing quotes manually.`,
-          feature: "aiQuotesPerMonth",
-          currentPlan: entitlements.planCode,
-          requiredPlan,
-          limit: entitlements.limits.aiQuotesPerMonth,
-          used: monthlyAiQuoteCount,
-        });
-      }
+    if (blocked) {
+      const requiredPlan =
+        entitlements.planCode === "starter" ? "professional" : "enterprise";
+      return reply.code(403).send({
+        code: "PLAN_LIMIT_EXCEEDED",
+        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit.`,
+        feature: "aiQuotesPerMonth",
+        currentPlan: entitlements.planCode,
+        requiredPlan,
+        limit: entitlements.limits.aiQuotesPerMonth,
+        used: snapshot.monthlyUsed,
+      });
     }
 
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt);
@@ -1609,6 +1606,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         ],
       });
 
+      await createAiUsageEvent(tx, {
+        tenantId: claims.tenantId,
+        quoteId: createdQuote.id,
+        customerId: customer.id,
+        actor,
+        eventType: "DRAFT",
+        promptText: payload.prompt,
+        model: aiRuntime.model,
+      });
+
       return tx.quote.findFirst({
         where: {
           id: createdQuote.id,
@@ -1638,6 +1645,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         squareFeetEstimate: parsedDraft.squareFeetEstimate,
         estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
       },
+      usage: buildAiUsageResponse(snapshot),
     });
   });
 

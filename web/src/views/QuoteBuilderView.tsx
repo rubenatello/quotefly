@@ -295,7 +295,7 @@ export function QuoteBuilderView() {
     track("builder_ai_modal_submit");
     try {
       setAiSubmitting(true);
-      const { customer, parsed, suggestion } = await api.quotes.suggestWithAi({
+      const { customer, parsed, suggestion, usage } = await api.quotes.suggestWithAi({
         prompt,
         customerId: activeCustomer?.id ?? undefined,
         serviceType: quoteForm.serviceType,
@@ -332,7 +332,11 @@ export function QuoteBuilderView() {
       await loadCustomers();
       setAiModalOpen(false);
       setMobilePane("editor");
-      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. Review the sheet, then create the quote.`);
+      const usageSummary =
+        usage.monthlyRemaining === null
+          ? `${usage.consumedCredits} AI credit used.`
+          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
+      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${usageSummary} Review the sheet, then create the quote.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
     } finally {
