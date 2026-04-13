@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { FileText, UserRound } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, FileText, UserRound } from "lucide-react";
 import type { BrandingLogoPosition } from "../../lib/api";
 import { Badge } from "../ui";
 
@@ -47,6 +47,7 @@ export function QuoteSheetEditor({
   children: ReactNode;
 }) {
   const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
 
   return (
     <div className="rounded-[20px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2.5 shadow-[var(--qf-shadow-sm)] sm:p-3">
@@ -87,36 +88,67 @@ export function QuoteSheetEditor({
         </div>
 
         <div className="space-y-5 border-t border-[var(--qf-border)] px-5 py-5 sm:px-6 sm:py-5">
-          <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <SheetParty label="Business" value={businessName} hint={businessHint} />
-            <SheetParty
-              label="Customer"
-              value={customerName}
-              hint={customerHint}
-              icon={<UserRound size={14} />}
-              tools={customerTools}
-            />
+          <div className="sm:hidden">
+            <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{customerName}</p>
+                  {customerHint ? <p className="mt-1 text-xs leading-5 text-slate-500">{customerHint}</p> : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMobileDetailsOpen((current) => !current)}
+                  className="inline-flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg border border-[var(--qf-border)] bg-white px-3 text-xs font-medium text-slate-700"
+                >
+                  {mobileDetailsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  {mobileDetailsOpen ? "Hide details" : "Show details"}
+                </button>
+              </div>
+              {customerTools ? <div className="mt-3">{customerTools}</div> : null}
+              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--qf-border)] pt-3">
+                <SheetMeta label="Prepared" value={preparedDateLabel} compact />
+                <SheetMeta label="Sent" value={sentDateLabel} compact />
+              </div>
+            </div>
           </div>
 
-          <div className="grid gap-4 border-y border-[var(--qf-border)] py-4 sm:grid-cols-2">
-            <SheetMeta label="Prepared" value={preparedDateLabel} />
-            <SheetMeta label="Sent" value={sentDateLabel} />
-          </div>
+          <div className={`space-y-5 ${mobileDetailsOpen ? "" : "hidden"} sm:block`}>
+            <div className="hidden gap-5 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <SheetParty label="Business" value={businessName} hint={businessHint} />
+              <SheetParty
+                label="Customer"
+                value={customerName}
+                hint={customerHint}
+                icon={<UserRound size={14} />}
+                tools={customerTools}
+              />
+            </div>
 
-          <div>
-            <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Overview</label>
-            <textarea
-              rows={3}
-              value={overview}
-              onChange={(event) => onOverviewChange(event.target.value)}
-              placeholder={overviewPlaceholder ?? "Optional overview shown near the top of the quote."}
-              readOnly={readOnly}
-              className={`mt-2 min-h-[104px] w-full rounded-xl border border-[var(--qf-border)] px-4 py-3 text-sm leading-6 text-slate-800 placeholder:text-slate-400 ${
-                readOnly
-                  ? "cursor-default bg-slate-50 focus:outline-none"
-                  : "bg-white focus:border-[var(--qf-brand-blue)] focus:outline-none focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)]"
-              }`}
-            />
+            <div className="hidden gap-4 border-y border-[var(--qf-border)] py-4 sm:grid sm:grid-cols-2">
+              <SheetMeta label="Prepared" value={preparedDateLabel} />
+              <SheetMeta label="Sent" value={sentDateLabel} />
+            </div>
+
+            <div className="sm:hidden rounded-xl border border-[var(--qf-border)] bg-white px-3 py-3">
+              <SheetParty label="Business" value={businessName} hint={businessHint} />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Overview</label>
+              <textarea
+                rows={3}
+                value={overview}
+                onChange={(event) => onOverviewChange(event.target.value)}
+                placeholder={overviewPlaceholder ?? "Optional overview shown near the top of the quote."}
+                readOnly={readOnly}
+                className={`mt-2 min-h-[104px] w-full rounded-xl border border-[var(--qf-border)] px-4 py-3 text-sm leading-6 text-slate-800 placeholder:text-slate-400 ${
+                  readOnly
+                    ? "cursor-default bg-slate-50 focus:outline-none"
+                    : "bg-white focus:border-[var(--qf-brand-blue)] focus:outline-none focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)]"
+                }`}
+              />
+            </div>
           </div>
 
           {children}
@@ -162,11 +194,11 @@ function SheetParty({
   );
 }
 
-function SheetMeta({ label, value }: { label: string; value: string }) {
+function SheetMeta({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
   return (
     <div>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
+      <p className={`text-sm font-semibold text-slate-900 ${compact ? "mt-1" : "mt-2"}`}>{value}</p>
     </div>
   );
 }

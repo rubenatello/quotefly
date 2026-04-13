@@ -513,11 +513,48 @@ export function QuoteBuilderView() {
           >
             {pane.label}
           </button>
-        ))}
+          ))}
       </div>
 
+      <Card variant="default" padding="sm" className="lg:hidden">
+        <div className="grid gap-3">
+          <Select
+            label="Trade"
+            value={quoteForm.serviceType}
+            onChange={(event) =>
+              setQuoteForm((prev) => ({
+                ...prev,
+                serviceType: event.target.value as typeof prev.serviceType,
+              }))
+            }
+            options={[
+              { value: "HVAC", label: "HVAC" },
+              { value: "PLUMBING", label: "Plumbing" },
+              { value: "FLOORING", label: "Flooring" },
+              { value: "ROOFING", label: "Roofing" },
+              { value: "GARDENING", label: "Gardening" },
+              { value: "CONSTRUCTION", label: "Construction" },
+            ]}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="outline" size="sm" icon={<Sparkles size={14} />} onClick={() => setAiModalOpen(true)} disabled={!canUseChatToQuote}>
+              AI Prompt
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPresetPickerOpen(true)}>
+              Browse Jobs
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setQuickCustomerOpen(true)}>
+              Add Customer
+            </Button>
+            <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900">
+              Total {money(totalAmount)}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-        <Card variant="blue" padding="md" className="order-2 self-start xl:sticky xl:top-24">
+        <Card variant="blue" padding="md" className="order-2 hidden self-start lg:block xl:sticky xl:top-24">
           <CardHeader
             title="Quote actions"
             subtitle="Keep math and create actions visible while you build."
