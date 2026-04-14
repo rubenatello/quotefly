@@ -5,6 +5,7 @@ import { Alert, Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, Mod
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
+import { formatUsPhoneDisplay, phoneMatchesSearch, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
 type CustomerStage = "NEW" | "CONTACTED" | "QUOTED" | "WORKING" | "SOLD";
@@ -87,11 +88,11 @@ function customerInitials(fullName: string) {
 }
 
 function openDialer(phone: string) {
-  window.location.assign(`tel:${phone}`);
+  window.location.assign(`tel:${toPhoneHrefValue(phone)}`);
 }
 
 function openTextComposer(phone: string) {
-  window.location.assign(`sms:${phone}`);
+  window.location.assign(`sms:${toPhoneHrefValue(phone)}`);
 }
 
 function getLatestQuoteMap(quotes: Quote[]) {
@@ -333,7 +334,7 @@ function CustomerDesktopRow({
         </div>
       </div>
 
-      <div className="truncate text-sm text-slate-700">{customer.phone}</div>
+      <div className="truncate text-sm text-slate-700">{formatUsPhoneDisplay(customer.phone)}</div>
 
       <div className="min-w-0">
         {customer.email ? (
@@ -426,7 +427,7 @@ function CustomerMobileCard({
       <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Phone</p>
-          <p className="mt-1 truncate">{customer.phone}</p>
+          <p className="mt-1 truncate">{formatUsPhoneDisplay(customer.phone)}</p>
         </div>
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</p>
@@ -614,7 +615,6 @@ export function CustomersPage() {
 
       const haystack = [
         row.customer.fullName,
-        row.customer.phone,
         row.customer.email ?? "",
         row.latestQuote?.title ?? "",
         row.latestQuote ? quoteNumber(row.latestQuote.id) : "",
@@ -622,7 +622,7 @@ export function CustomersPage() {
         .join(" ")
         .toLowerCase();
 
-      return haystack.includes(normalizedSearch);
+      return haystack.includes(normalizedSearch) || phoneMatchesSearch(row.customer.phone, searchTerm);
     });
   }, [customerRows, searchTerm, stageFilter]);
 

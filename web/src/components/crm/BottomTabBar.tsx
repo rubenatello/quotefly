@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode } from "react";
 import {
-  ClockIcon,
+  AnalyticsIcon,
   CustomerIcon,
   InvoiceIcon,
   QuoteIcon,
@@ -17,7 +17,7 @@ interface TabItem {
 const TABS: TabItem[] = [
   { path: "/app/customers", label: "Customers", icon: <CustomerIcon size={20} /> },
   { path: "/app/quotes", label: "Quotes", icon: <QuoteIcon size={20} /> },
-  { path: "/app/analytics", label: "Analytics", icon: <ClockIcon size={20} /> },
+  { path: "/app/analytics", label: "Analytics", icon: <AnalyticsIcon size={20} /> },
   { path: "/app/branding", label: "Branding", icon: <InvoiceIcon size={20} /> },
   { path: "/app/settings", label: "Settings", icon: <SettingsIcon size={20} /> },
 ];

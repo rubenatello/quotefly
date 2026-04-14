@@ -10,6 +10,8 @@
     "dev:web": "npm --prefix web run dev",
     "dev:web:host": "npm --prefix web run dev -- --host",
     "dev:all": "concurrently -k -n API,WEB,DB \"npm run dev:api\" \"npm run dev:web\" \"npm run prisma:studio\"",
+    "eval:ai": "tsx scripts/ai-quote-eval.ts --mode=parser",
+    "eval:ai:model": "tsx scripts/ai-quote-eval.ts --mode=ai",
     "build": "tsc -p tsconfig.json",
     "build:web": "npm --prefix web run build",
     "start": "node dist/server.js",

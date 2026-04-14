@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckIcon } from "../components/Icons";
 import { setSEOMetadata } from "../lib/seo";
 
@@ -6,12 +6,22 @@ interface AboutPageProps {
   onOpenAuth: () => void;
 }
 
+type Testimonial = {
+  quote: string;
+  name: string;
+  trade: string;
+  location: string;
+};
+
 export function AboutPage({ onOpenAuth }: AboutPageProps) {
   useEffect(() => {
     setSEOMetadata({
-      title: "About QuoteFly - Our Story",
+      title: "About QuoteFly Contractor Quoting Software",
       description:
-        "Built for contractors who need faster quoting, cleaner follow-up, and less operational drag.",
+        "Learn how QuoteFly was built as contractor quoting software and contractor estimating software to reduce quoting delays and follow-up friction.",
+      keywords:
+        "about contractor quoting software, contractor estimating software platform, quoting crm for contractors",
+      canonicalUrl: "https://quotefly.us/about",
     });
   }, []);
 
@@ -61,11 +71,88 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
     },
   ];
 
+  const baseTestimonials: Testimonial[] = [
+    {
+      quote: "We send quotes same-day now. That alone changed how many jobs we close.",
+      name: "Ryan T.",
+      trade: "HVAC",
+      location: "Phoenix, AZ",
+    },
+    {
+      quote: "The quote flow feels straightforward. No hunting through tabs while on a service call.",
+      name: "Chris M.",
+      trade: "Plumbing",
+      location: "Dallas, TX",
+    },
+    {
+      quote: "Customers respond faster when I can send a clean quote right after the walkthrough.",
+      name: "Eric P.",
+      trade: "Roofing",
+      location: "San Diego, CA",
+    },
+    {
+      quote: "The mobile workflow is good enough to run from the truck between jobs.",
+      name: "Daniel R.",
+      trade: "Construction",
+      location: "Tampa, FL",
+    },
+    {
+      quote: "Saving preset work lines cut my quote prep time in half.",
+      name: "Mark L.",
+      trade: "Flooring",
+      location: "Charlotte, NC",
+    },
+    {
+      quote: "Follow-up status keeps my pipeline from going stale.",
+      name: "Steve B.",
+      trade: "HVAC",
+      location: "Boise, ID",
+    },
+    {
+      quote: "It feels like a contractor tool, not generic office software.",
+      name: "Anthony G.",
+      trade: "Plumbing",
+      location: "Las Vegas, NV",
+    },
+    {
+      quote: "The PDF output is clean and looks professional without extra editing.",
+      name: "Jose C.",
+      trade: "Roofing",
+      location: "Austin, TX",
+    },
+    {
+      quote: "The customer board helps us move from lead to sold without dropped handoffs.",
+      name: "Kevin H.",
+      trade: "Construction",
+      location: "Nashville, TN",
+    },
+    {
+      quote: "Quote updates are quick. We can revise scope while still on site.",
+      name: "Brandon W.",
+      trade: "Flooring",
+      location: "Sacramento, CA",
+    },
+  ];
+
+  const testimonials = useMemo(() => {
+    return [...baseTestimonials].sort(() => Math.random() - 0.5);
+  }, []);
+  const [activeTestimonialIndex, setActiveTestimonialIndex] = useState(0);
+
+  useEffect(() => {
+    if (testimonials.length <= 1) return;
+    const interval = window.setInterval(() => {
+      setActiveTestimonialIndex((current) => (current + 1) % testimonials.length);
+    }, 5200);
+
+    return () => window.clearInterval(interval);
+  }, [testimonials.length]);
+
   return (
     <div className="min-h-screen bg-stone-50">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Built by people who respect the trades</h1>
+          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Built for contractors who move fast</h1>
           <p className="text-lg text-slate-500">
             QuoteFly exists to remove quoting drag, not add another bloated back-office tool.
           </p>
@@ -109,33 +196,6 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
             </div>
           </div>
 
-          <div>
-            <h2 className="mb-6 text-2xl font-bold text-slate-900">The team</h2>
-            <p className="mb-6 text-slate-600">
-              QuoteFly is being built by a small team of operators and engineers focused on contractor workflows, fast iteration, and clean execution.
-            </p>
-
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {[
-                { name: "Alex Chen", role: "Founder & CEO", bio: "10-year HVAC contractor plus software engineer" },
-                { name: "Maria Garcia", role: "Head of Product", bio: "Former plumbing business owner" },
-                { name: "James Wilson", role: "Lead Engineer", bio: "Built backend systems at scale" },
-              ].map((member) => (
-                <div
-                  key={member.name}
-                  className="rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm"
-                >
-                  <div className="mb-4 flex justify-center">
-                    <div className="h-16 w-16 rounded-full bg-quotefly-blue/20" />
-                  </div>
-                  <h3 className="font-semibold text-slate-900">{member.name}</h3>
-                  <p className="font-medium text-quotefly-blue">{member.role}</p>
-                  <p className="mt-2 text-xs text-slate-500">{member.bio}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
             <h2 className="mb-6 text-2xl font-bold text-slate-900">Our values</h2>
             <div className="space-y-4">
@@ -149,6 +209,71 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
                     <p className="text-sm text-slate-500">{value.desc}</p>
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-2xl font-bold text-slate-900">Contractor feedback</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setActiveTestimonialIndex((current) =>
+                      current === 0 ? testimonials.length - 1 : current - 1,
+                    )
+                  }
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                  aria-label="Previous testimonial"
+                >
+                  {"<"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setActiveTestimonialIndex((current) => (current + 1) % testimonials.length)
+                  }
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                  aria-label="Next testimonial"
+                >
+                  {">"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <div
+                className="flex transition-transform duration-700 ease-out"
+                style={{ transform: `translateX(-${activeTestimonialIndex * 100}%)` }}
+              >
+                {testimonials.map((item) => (
+                  <article key={`${item.name}-${item.location}`} className="w-full flex-none px-6 py-6 sm:px-8 sm:py-8">
+                    <p className="text-lg leading-relaxed text-slate-700">"{item.quote}"</p>
+                    <div className="mt-5 border-t border-slate-200 pt-4">
+                      <p className="font-semibold text-slate-900">{item.name}</p>
+                      <p className="text-sm text-slate-500">
+                        {item.trade} • {item.location}
+                      </p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {testimonials.map((item, index) => (
+                <button
+                  key={`dot-${item.name}-${item.location}`}
+                  type="button"
+                  onClick={() => setActiveTestimonialIndex(index)}
+                  className={`h-2.5 rounded-full transition-all ${
+                    index === activeTestimonialIndex
+                      ? "w-8 bg-quotefly-blue"
+                      : "w-2.5 bg-slate-300 hover:bg-slate-400"
+                  }`}
+                  aria-label={`Show testimonial ${index + 1}`}
+                />
               ))}
             </div>
           </div>

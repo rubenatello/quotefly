@@ -27,6 +27,12 @@ Owner: Product + Engineering
 - Quote mutation refresh path now skips unnecessary outbound-log fetches and runs history refresh as non-blocking follow-up work.
 - Duplicate full-page dashboard reloads were removed from Customers/Quotes/Analytics mounts; key quote/customer mutation flows now use targeted refreshes instead of `loadAll`.
 - Duplicate customer workflow now supports `Use Existing` (fast/no-write path), defaults phone matches to existing-record flow, and keeps merge updates to non-empty incoming profile fields while restoring archived matches.
+- Marketing SEO pass updated core metadata, keyword targeting, canonical handling, and landing-page FAQ schema for contractor quoting/estimating search terms.
+- AI quote parser now uses typo-tolerant trade/preset matching and weighted trade scoring to reduce misclassification on misspelled prompts.
+- AI quality gate script added for repeatable scoring before deploy (`npm run eval:ai`, optional live-model mode `npm run eval:ai:model`).
+- AI prompt-remaining estimate now adapts to each tenant's observed per-run AI spend (with conservative safety buffer) so larger prompts reduce remaining estimate sooner.
+- Internal superuser AI quality console added (`/app/internal/admin/ai-quality`) with server-side superuser gating via `SUPERUSER_EMAILS`.
+- AI model context is now compacted/truncated to a safe budget before calls to protect latency and token spend.
 
 ## Purpose
 
@@ -75,6 +81,7 @@ Launch working caps aligned to baseline:
 - Secondary compatibility field: monthly AI credit counters still exist in API payloads for backward compatibility.
 - Default runtime model remains `gpt-4o-mini` unless economics are recalculated and approved.
 - Re-run economics whenever paying-tenant count or infra cost changes.
+- AI quality gate: keep parser/eval score >= `92/100` before deploy; target `95+/100` for launch freeze confidence.
 
 ## Mobile/Desktop UX Audit
 
@@ -147,6 +154,13 @@ Open follow-up:
 | Customer/quote creation latency pass | Engineering | Completed | 2026-04-14 | Batched quote line writes in `POST /quotes`; quick-customer callbacks now refresh customers only |
 | Customer duplicate-check hardening (phone + email) | Engineering | Completed | 2026-04-14 | Parallel duplicate lookup on create + email conflict guard on update; normalized tenant-scoped matching |
 | Duplicate workflow UX+logic pass (Use Existing / strong phone match) | Engineering | Completed | 2026-04-14 | Exact phone matches now default to existing-record path; Add as New disabled on phone match; merge updates apply non-empty fields and restore archived records |
+| Marketing SEO optimization (quoting/estimating keywords) | Engineering | Completed | 2026-04-14 | Updated landing/pricing/solutions/about/support metadata, canonical tags, sitemap entries, and added FAQ structured data for target keyword coverage |
+| AI typo-tolerant parsing + trade scoring hardening | Engineering | Completed | 2026-04-14 | Added fuzzy token matching for service inference and catalog matching across core trades |
+| AI quality gate script (`eval:ai`) | Engineering | Completed | 2026-04-14 | Added repeatable scoring script with typo-heavy cross-trade prompts and pass/fail threshold |
+| Dynamic AI prompt-cost estimator by tenant | Engineering | Completed | 2026-04-14 | Remaining-prompt estimate now uses observed monthly spend/run with safety multiplier instead of fixed constant only |
+| Internal superuser AI quality console + protected APIs | Engineering | Completed | 2026-04-14 | Added `/v1/internal/ai-quality/*` and `/app/internal/admin/ai-quality`; access restricted by superuser email allowlist |
+| AI context token-budget safety guard | Engineering | Completed | 2026-04-14 | AI context now compacts and trims to fixed safety limits before model calls |
+| AI run feedback data model + endpoints (thumbs up/down + reason) | Engineering | Not started | 2026-04-20 | Needed to measure real satisfaction and close loop to 95+ |
 | Quote mutation refresh latency pass | Engineering | Completed | 2026-04-14 | Removed duplicate outbound-event reloads after mutations and made history refresh async/non-blocking |
 | Route/mutation refresh optimization pass | Engineering | Completed | 2026-04-14 | Removed duplicate `loadAll()` on major pages and replaced several mutation full-refreshes with targeted `loadQuotes`/`loadCustomers` calls |
 | Full responsive QA pass (customer -> quote -> send) | Product + Engineering | In progress | 2026-04-26 | Code-level sweep done; device-width run still required |

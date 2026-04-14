@@ -44,6 +44,8 @@ export type AiUsageTrace = {
 };
 
 export const DEFAULT_ESTIMATED_PROMPT_COST_USD = 0.001615;
+const ESTIMATED_PROMPT_COST_SAFETY_MULTIPLIER = 1.1;
+const MIN_COST_SAMPLE_COUNT = 5;
 
 function roundUsd(value: number) {
   return Number(value.toFixed(6));
@@ -61,20 +63,39 @@ export async function loadMonthlyAiUsageSnapshot(
   const periodStartUtc = startOfCurrentUtcMonth(now);
   const periodEndUtc = startOfNextUtcMonth(now);
 
-  const aggregate = await prisma.aiUsageEvent.aggregate({
-    where: {
-      tenantId,
-      deletedAtUtc: null,
-      createdAt: {
-        gte: periodStartUtc,
-        lt: periodEndUtc,
+  const baseWhere: Prisma.AiUsageEventWhereInput = {
+    tenantId,
+    deletedAtUtc: null,
+    createdAt: {
+      gte: periodStartUtc,
+      lt: periodEndUtc,
+    },
+  };
+
+  const [aggregate, costedAggregate] = await Promise.all([
+    prisma.aiUsageEvent.aggregate({
+      where: baseWhere,
+      _sum: {
+        creditsConsumed: true,
+        estimatedCostUsd: true,
       },
-    },
-    _sum: {
-      creditsConsumed: true,
-      estimatedCostUsd: true,
-    },
-  });
+    }),
+    prisma.aiUsageEvent.aggregate({
+      where: {
+        ...baseWhere,
+        estimatedCostUsd: {
+          gt: 0,
+        },
+      },
+      _sum: {
+        creditsConsumed: true,
+        estimatedCostUsd: true,
+      },
+      _count: {
+        _all: true,
+      },
+    }),
+  ]);
 
   const monthlyCreditsUsed = aggregate._sum.creditsConsumed ?? 0;
   const monthlyCreditsLimit = limits.credits ?? null;
@@ -89,10 +110,26 @@ export async function loadMonthlyAiUsageSnapshot(
     monthlySpendLimitUsd !== null && monthlySpendLimitUsd > 0
       ? Number(Math.min((monthlySpendUsedUsd / monthlySpendLimitUsd) * 100, 100).toFixed(2))
       : null;
+  const observedCostedSamples = costedAggregate._count._all ?? 0;
+  const observedCredits = Number(costedAggregate._sum.creditsConsumed ?? 0);
+  const observedSpendUsd = Number(costedAggregate._sum.estimatedCostUsd ?? 0);
+  const observedPromptCostUsd =
+    observedCostedSamples >= MIN_COST_SAMPLE_COUNT && observedCredits > 0
+      ? observedSpendUsd / observedCredits
+      : null;
+  const estimatedPromptCostUsd = roundUsd(
+    observedPromptCostUsd && Number.isFinite(observedPromptCostUsd) && observedPromptCostUsd > 0
+      ? Math.max(
+          DEFAULT_ESTIMATED_PROMPT_COST_USD,
+          observedPromptCostUsd * ESTIMATED_PROMPT_COST_SAFETY_MULTIPLIER,
+        )
+      : DEFAULT_ESTIMATED_PROMPT_COST_USD,
+  );
+
   const estimatedPromptsRemaining =
     monthlySpendRemainingUsd === null
       ? null
-      : Math.max(Math.floor(monthlySpendRemainingUsd / DEFAULT_ESTIMATED_PROMPT_COST_USD), 0);
+      : Math.max(Math.floor(monthlySpendRemainingUsd / estimatedPromptCostUsd), 0);
 
   return {
     periodStartUtc,
@@ -104,7 +141,7 @@ export async function loadMonthlyAiUsageSnapshot(
     monthlySpendLimitUsd,
     monthlySpendRemainingUsd,
     monthlySpendUsagePercent,
-    estimatedPromptCostUsd: DEFAULT_ESTIMATED_PROMPT_COST_USD,
+    estimatedPromptCostUsd,
     estimatedPromptsRemaining,
   };
 }

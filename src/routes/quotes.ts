@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
+import { normalizeCustomerPhone } from "../lib/phone";
 import {
   PaginationQuerySchema,
   tenantActiveCustomerScope,
@@ -854,7 +855,7 @@ function normalizeNullableEmail(value?: string): string | undefined {
 
 function normalizeNullablePhone(value?: string): string | undefined {
   if (!value) return undefined;
-  const normalized = value.trim();
+  const normalized = normalizeCustomerPhone(value);
   return normalized || undefined;
 }
 
@@ -1185,6 +1186,7 @@ function assessAiSuggestionConfidence(params: {
   } | null;
   customerActivityCount: number;
   presetCount: number;
+  standardPresetCount?: number;
   similarQuotes: SimilarQuoteContext[];
   targetAmount?: number | null;
 }) {
@@ -1195,6 +1197,7 @@ function assessAiSuggestionConfidence(params: {
   if (params.customer?.notes?.trim()) score += 1;
   if (params.customerActivityCount > 0) score += 1;
   if (params.presetCount > 0) score += 2;
+  if ((params.standardPresetCount ?? 0) > 0) score += 2;
   if (params.similarQuotes.length > 0) score += 2;
   if (params.similarQuotes.some((quote) => quote.status === "ACCEPTED")) score += 2;
   else if (params.similarQuotes.some((quote) => quote.status === "SENT_TO_CUSTOMER")) score += 1;
@@ -1236,6 +1239,7 @@ function buildAiSuggestionInsight(params: {
   } | null;
   customerActivityCount: number;
   presetCount: number;
+  standardPresetCount?: number;
   similarQuotes: SimilarQuoteContext[];
   targetAmount?: number | null;
   patch: AiQuotePatchResult;
@@ -1245,6 +1249,7 @@ function buildAiSuggestionInsight(params: {
     customer: params.customer,
     customerActivityCount: params.customerActivityCount,
     presetCount: params.presetCount,
+    standardPresetCount: params.standardPresetCount,
     similarQuotes: params.similarQuotes,
     targetAmount: params.targetAmount,
   });
@@ -1294,6 +1299,13 @@ function buildAiSuggestionInsight(params: {
     sources.push({
       type: "saved_jobs",
       label: `${params.presetCount} saved job${params.presetCount === 1 ? "" : "s"} and pricing hints`,
+    });
+  }
+
+  if ((params.standardPresetCount ?? 0) > 0) {
+    sources.push({
+      type: "trade_catalog",
+      label: `${params.standardPresetCount} standard trade catalog match${params.standardPresetCount === 1 ? "" : "es"}`,
     });
   }
 
@@ -1355,6 +1367,7 @@ function buildAiContextSourceHints(params: {
   } | null;
   customerActivityCount: number;
   presetCount: number;
+  standardPresetCount?: number;
   similarQuotes: SimilarQuoteContext[];
 }) {
   const hints: string[] = [];
@@ -1367,10 +1380,77 @@ function buildAiContextSourceHints(params: {
   if (params.presetCount > 0) {
     hints.push(`${params.presetCount} saved jobs`);
   }
+  if ((params.standardPresetCount ?? 0) > 0) {
+    hints.push(`${params.standardPresetCount} catalog matches`);
+  }
   if (params.similarQuotes.length > 0) {
     hints.push(`${params.similarQuotes.length} similar quotes`);
   }
   return hints.slice(0, 4);
+}
+
+function buildStandardCatalogMatchesForAiContext(params: {
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+  prompt: string;
+  title?: string | null;
+  scopeText?: string | null;
+  lineItemDescriptions?: string[];
+  tenantPresets?: Array<{
+    catalogKey: string | null;
+    name: string;
+    description: string | null;
+    unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+    unitCost: Prisma.Decimal | number;
+    unitPrice: Prisma.Decimal | number;
+  }>;
+  minimumScore?: number;
+  limit?: number;
+}) {
+  const normalizedContextText = [
+    params.prompt,
+    params.title ?? "",
+    params.scopeText ?? "",
+    ...(params.lineItemDescriptions ?? []),
+  ]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join(" ");
+
+  if (!normalizedContextText) {
+    return [];
+  }
+
+  const tenantCatalogPresetMap = new Map<
+    string,
+    {
+      name: string;
+      description: string | null;
+      unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+      unitCost: Prisma.Decimal | number;
+      unitPrice: Prisma.Decimal | number;
+    }
+  >();
+  for (const preset of params.tenantPresets ?? []) {
+    if (preset.catalogKey) {
+      tenantCatalogPresetMap.set(preset.catalogKey, preset);
+    }
+  }
+
+  return findStandardWorkPresetMatches(params.serviceType, normalizedContextText, {
+    minimumScore: params.minimumScore ?? 3,
+  })
+    .slice(0, params.limit ?? 6)
+    .map((match) => {
+      const tenantPreset = tenantCatalogPresetMap.get(match.preset.catalogKey);
+      return {
+        name: tenantPreset?.name ?? match.preset.name,
+        description: tenantPreset?.description ?? match.preset.description,
+        unitType: tenantPreset?.unitType ?? match.preset.unitType,
+        unitCost: Number(tenantPreset?.unitCost ?? match.preset.unitCost),
+        unitPrice: Number(tenantPreset?.unitPrice ?? match.preset.unitPrice),
+        score: match.score,
+      };
+    });
 }
 
 function startAiSuggestionStream(reply: FastifyReply) {
@@ -1484,7 +1564,14 @@ type AiSuggestionInsight = {
   summary: string;
   reasons: string[];
   sources: Array<{
-    type: "current_quote" | "customer" | "customer_notes" | "customer_activity" | "saved_jobs" | "similar_quote";
+    type:
+      | "current_quote"
+      | "customer"
+      | "customer_notes"
+      | "customer_activity"
+      | "saved_jobs"
+      | "trade_catalog"
+      | "similar_quote";
     label: string;
   }>;
   confidence: {
@@ -1591,6 +1678,14 @@ function buildAiQuoteContext(params: {
     unitCost: number;
     unitPrice: number;
   }>;
+  standardCatalogMatches?: Array<{
+    name: string;
+    description?: string | null;
+    unitType: string;
+    unitCost: number;
+    unitPrice: number;
+    score?: number;
+  }>;
   pricingProfile?: {
     laborRate: number;
     materialMarkup: number;
@@ -1665,6 +1760,20 @@ function buildAiQuoteContext(params: {
             `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType} | cost ${preset.unitCost.toFixed(
               2,
             )} | price ${preset.unitPrice.toFixed(2)}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  if (params.standardCatalogMatches?.length) {
+    sections.push(
+      [
+        "Standard trade catalog matches:",
+        ...params.standardCatalogMatches.map(
+          (preset) =>
+            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType} | cost ${preset.unitCost.toFixed(
+              2,
+            )} | price ${preset.unitPrice.toFixed(2)}${typeof preset.score === "number" ? ` | match ${preset.score}` : ""}`,
         ),
       ].join("\n"),
     );
@@ -2517,9 +2626,30 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       excludeQuoteId: existingQuote?.id ?? payload.quoteId ?? null,
     });
 
+    const standardCatalogMatches = buildStandardCatalogMatchesForAiContext({
+      serviceType: preliminaryServiceType,
+      prompt: payload.prompt,
+      title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
+      scopeText: existingQuote?.scopeText ?? payload.currentScopeText ?? preflightDraft.scopeText,
+      lineItemDescriptions:
+        payload.currentLineItems?.map((lineItem) => lineItem.description) ??
+        existingQuote?.lineItems.map((lineItem) => lineItem.description) ??
+        [],
+      tenantPresets: contextPresets.map((preset) => ({
+        catalogKey: preset.catalogKey ?? null,
+        name: preset.name,
+        description: preset.description ?? null,
+        unitType: preset.unitType,
+        unitCost: preset.unitCost,
+        unitPrice: preset.unitPrice,
+      })),
+      minimumScore: 2,
+      limit: 7,
+    });
+
     stream.progress(
       "retrieving_workspace_context",
-      `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"} and ${similarQuotes.length} similar quote${similarQuotes.length === 1 ? "" : "s"} for ${preliminaryServiceType.toLowerCase()}.`,
+      `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"}, ${standardCatalogMatches.length} catalog match${standardCatalogMatches.length === 1 ? "" : "es"}, and ${similarQuotes.length} similar quote${similarQuotes.length === 1 ? "" : "s"} for ${preliminaryServiceType.toLowerCase()}.`,
       {
         sourceHints: buildAiContextSourceHints({
           customer: selectedCustomer
@@ -2529,6 +2659,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             : null,
           customerActivityCount: customerActivityContext.length,
           presetCount: contextPresets.length,
+          standardPresetCount: standardCatalogMatches.length,
           similarQuotes,
         }),
       },
@@ -2609,6 +2740,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         unitCost: Number(preset.unitCost),
         unitPrice: Number(preset.unitPrice),
       })),
+      standardCatalogMatches,
       pricingProfile: contextPricingProfile
         ? {
             laborRate: Number(contextPricingProfile.laborRate),
@@ -2630,6 +2762,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             : null,
           customerActivityCount: customerActivityContext.length,
           presetCount: contextPresets.length,
+          standardPresetCount: standardCatalogMatches.length,
           similarQuotes,
         }),
       },
@@ -2713,6 +2846,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           unitCost: Number(preset.unitCost),
           unitPrice: Number(preset.unitPrice),
         })),
+        standardCatalogMatches,
         pricingProfile: contextPricingProfile
           ? {
               laborRate: Number(contextPricingProfile.laborRate),
@@ -2737,6 +2871,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             },
             customerActivityCount: customerActivityContext.length,
             presetCount: contextPresets.length,
+            standardPresetCount: standardCatalogMatches.length,
             similarQuotes,
           }),
         },
@@ -2782,9 +2917,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         })
       : null;
 
-    const patch = revisionPlan
+    const hasMeaningfulCurrentLines = Boolean(
+      currentQuoteContext?.lineItems?.some((lineItem) => isMeaningfulAiLine(lineItem)),
+    );
+    const revisionPatch = revisionPlan
       ? applyAiRevisionPlan(currentQuoteContext?.lineItems ?? [], baselineSuggestion, revisionPlan)
-      : buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems);
+      : null;
+    const shouldFallbackToDeterministicPatch = Boolean(
+      revisionPlan &&
+        !hasMeaningfulCurrentLines &&
+        revisionPatch &&
+        revisionPatch.lineChanges.length === 0,
+    );
+    const patch = shouldFallbackToDeterministicPatch
+      ? buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems)
+      : (revisionPatch ?? buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems));
 
     const resolvedServiceType = revisionPlan?.serviceType ?? baselineSuggestion.serviceType;
     const resolvedTitle =
@@ -2838,6 +2985,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         : null,
       customerActivityCount: customerActivityContext.length,
       presetCount: contextPresets.length,
+      standardPresetCount: standardCatalogMatches.length,
       similarQuotes,
       targetAmount: suggestion.totalAmount,
       patch,
@@ -3084,6 +3232,23 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       targetAmount: preflightDraft.estimatedTotalAmount,
     });
 
+    const standardCatalogMatches = buildStandardCatalogMatchesForAiContext({
+      serviceType: preflightDraft.serviceType,
+      prompt: payload.prompt,
+      title: preflightDraft.title,
+      scopeText: preflightDraft.scopeText,
+      tenantPresets: contextPresets.map((preset) => ({
+        catalogKey: preset.catalogKey ?? null,
+        name: preset.name,
+        description: preset.description ?? null,
+        unitType: preset.unitType,
+        unitCost: preset.unitCost,
+        unitPrice: preset.unitPrice,
+      })),
+      minimumScore: 2,
+      limit: 7,
+    });
+
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
       context: appendAiPromptStructureHints(buildAiQuoteContext({
         customer: customer
@@ -3102,6 +3267,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           unitCost: Number(preset.unitCost),
           unitPrice: Number(preset.unitPrice),
         })),
+        standardCatalogMatches,
         pricingProfile: contextPricingProfile
           ? {
               laborRate: Number(contextPricingProfile.laborRate),
@@ -3367,6 +3533,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         : null,
       customerActivityCount: customerActivityContext.length,
       presetCount: contextPresets.length,
+      standardPresetCount: standardCatalogMatches.length,
       similarQuotes,
       targetAmount: totalAmount,
       patch: {

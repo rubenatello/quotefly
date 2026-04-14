@@ -159,6 +159,52 @@ export type AuthSessionPayload = {
     usage?: TenantUsageSnapshot;
   };
   role: string;
+  isSuperuser?: boolean;
+};
+
+export type InternalAiQualitySummary = {
+  windowDays: number;
+  windowStartUtc: string;
+  generatedAtUtc: string;
+  totals: {
+    totalRuns: number;
+    activeTenants: number;
+    totalCreditsConsumed: number;
+    totalSpendUsd: number;
+    totalPromptTokens: number;
+    totalCompletionTokens: number;
+    totalTokens: number;
+  };
+  averages: {
+    spendUsdPerRun: number;
+    promptTokensPerRun: number;
+    completionTokensPerRun: number;
+    totalTokensPerRun: number;
+  };
+  confidence: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+  models: Array<{
+    model: string;
+    runCount: number;
+    spendUsd: number;
+    averageTokensPerRun: number;
+  }>;
+};
+
+export type InternalAiQualityTenantRow = {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug?: string | null;
+  runCount: number;
+  spendUsd: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  averageSpendUsdPerRun: number;
+  averageTokensPerRun: number;
 };
 
 export type QuoteStatus =
@@ -726,6 +772,28 @@ export const api = {
       request<AuthPayload>("/v1/auth/signin", { method: "POST", body: JSON.stringify(body) }),
 
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
+  },
+
+  internal: {
+    aiQuality: {
+      summary: (query?: { days?: number }) =>
+        request<InternalAiQualitySummary>(
+          `/v1/internal/ai-quality/summary${toQueryString({
+            days: query?.days,
+          })}`,
+        ),
+      tenants: (query?: { days?: number; limit?: number }) =>
+        request<{
+          windowDays: number;
+          windowStartUtc: string;
+          tenants: InternalAiQualityTenantRow[];
+        }>(
+          `/v1/internal/ai-quality/tenants${toQueryString({
+            days: query?.days,
+            limit: query?.limit,
+          })}`,
+        ),
+    },
   },
 
   billing: {

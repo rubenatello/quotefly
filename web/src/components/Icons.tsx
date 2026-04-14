@@ -8,6 +8,7 @@ import {
   MessageSquare,
   CheckCircle,
   Clock,
+  LineChart,
   DollarSign,
   Send,
   Edit,
@@ -110,3 +111,8 @@ export const ClockIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => 
   <Clock ref={ref} {...props} />
 ));
 ClockIcon.displayName = "ClockIcon";
+
+export const AnalyticsIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <LineChart ref={ref} {...props} />
+));
+AnalyticsIcon.displayName = "AnalyticsIcon";

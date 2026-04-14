@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Alert, Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
 import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
+import { formatUsPhoneDisplay, formatUsPhoneInput } from "../../lib/phone";
 
 type QuickCustomerIntent = "save" | "quote";
 
@@ -33,7 +34,7 @@ const EMPTY_FORM: QuickCustomerForm = {
 function normalizePayload(form: QuickCustomerForm) {
   return {
     fullName: form.fullName.trim(),
-    phone: form.phone.trim(),
+    phone: formatUsPhoneDisplay(form.phone) || form.phone.trim(),
     email: form.email.trim() || null,
     notes: form.notes.trim() || null,
   };
@@ -162,9 +163,11 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
           />
           <Input
             label="Phone"
-            placeholder="818-233-4333"
+            placeholder="(818) 233-4333"
             value={form.phone}
-            onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
+            onChange={(event) =>
+              setForm((prev) => ({ ...prev, phone: formatUsPhoneInput(event.target.value) }))
+            }
             disabled={saving}
           />
         </div>
@@ -218,7 +221,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
                   />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-slate-900">{match.fullName}</p>
-                    <p className="mt-1 text-xs text-slate-600">{match.phone}</p>
+                    <p className="mt-1 text-xs text-slate-600">{formatUsPhoneDisplay(match.phone)}</p>
                     <p className="mt-1 truncate text-xs text-slate-500">{match.email ?? "No email"}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {match.matchReasons.map((reason) => (

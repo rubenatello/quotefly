@@ -34,6 +34,7 @@ import {
 } from "../lib/api";
 import { formatAiUsageNotice } from "../lib/ai-credits";
 import { setSEOMetadata } from "../lib/seo";
+import { formatUsPhoneDisplay, formatUsPhoneInput, toPhoneHrefValue } from "../lib/phone";
 
 interface DashboardPageProps {
   session?: {
@@ -98,9 +99,16 @@ const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", unitCost
 const CHAT_PROMPT_EXAMPLE =
   "New quote for Alan Johnson 818-233-4333. He has a roof that is about 1,250 square feet and wants to replace his roof-shingles. We will remove old and aged roofing and check for any damage underneath and apply new layer as needed. Whole job should cost about 8,500 using standard asphalt shingles.";
 
+const USD_FORMATTER = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 function money(value: string | number): string {
   const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+  return Number.isFinite(amount) ? USD_FORMATTER.format(amount) : "$0.00";
 }
 
 function safeAmount(value: string | number | null | undefined): number {
@@ -162,7 +170,7 @@ function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadF
 function normalizeCustomerPayload(form: CustomerForm): CreateCustomerPayload {
   return {
     fullName: form.fullName.trim(),
-    phone: form.phone.trim(),
+    phone: formatUsPhoneDisplay(form.phone) || form.phone.trim(),
     email: form.email.trim() ? form.email.trim().toLowerCase() : null,
   };
 }
@@ -691,7 +699,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
         const mailto = `mailto:${recipient}?subject=${encodeURIComponent(sendComposer.subject)}&body=${encodeURIComponent(sendComposer.body)}`;
         window.location.assign(mailto);
       } else if (sendComposer.channel === "sms") {
-        const smsLink = `sms:${sendComposer.customerPhone}?&body=${encodeURIComponent(sendComposer.body)}`;
+        const smsLink = `sms:${toPhoneHrefValue(sendComposer.customerPhone)}?&body=${encodeURIComponent(sendComposer.body)}`;
         window.location.assign(smsLink);
       } else {
         if (!navigator.clipboard) {
@@ -1169,7 +1177,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
             <form onSubmit={createCustomer} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">Quick Customer</h2>
               <input placeholder="Full name" required value={customerForm.fullName} onChange={(event) => setCustomerForm((prev) => ({ ...prev, fullName: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
-              <input placeholder="Phone" required value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
+              <input placeholder="Phone" required value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: formatUsPhoneInput(event.target.value) }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
               <input placeholder="Email (optional)" type="email" value={customerForm.email} onChange={(event) => setCustomerForm((prev) => ({ ...prev, email: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
               <button type="submit" disabled={saving} className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white">{saving ? "Saving..." : "Create Customer"}</button>
             </form>
@@ -1179,7 +1187,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               <select value={quoteForm.customerId} required onChange={(event) => setQuoteForm((prev) => ({ ...prev, customerId: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
                 <option value="">Select customer</option>
                 {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>{customer.fullName} ({customer.phone})</option>
+                  <option key={customer.id} value={customer.id}>{customer.fullName} ({formatUsPhoneDisplay(customer.phone)})</option>
                 ))}
               </select>
               <select value={quoteForm.serviceType} onChange={(event) => setQuoteForm((prev) => ({ ...prev, serviceType: event.target.value as ServiceType }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
@@ -1684,7 +1692,7 @@ function DuplicateCustomerModal({
               />
               <span className="text-sm font-medium text-slate-900">{match.fullName}</span>
               <p className="text-xs text-slate-600">
-                {match.phone} {match.email ? `| ${match.email}` : ""}
+                {formatUsPhoneDisplay(match.phone)} {match.email ? `| ${match.email}` : ""}
               </p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {match.matchReasons.map((reason) => (
@@ -1775,7 +1783,7 @@ function SendComposerModal({
             <p className="text-sm text-slate-600">To: {state.customerEmail ?? "No email set"}</p>
           )}
           {state.channel === "sms" && (
-            <p className="text-sm text-slate-600">To: {state.customerPhone}</p>
+            <p className="text-sm text-slate-600">To: {formatUsPhoneDisplay(state.customerPhone)}</p>
           )}
         </div>
 

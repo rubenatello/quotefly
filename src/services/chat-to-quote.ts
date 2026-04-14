@@ -1,5 +1,5 @@
 import { ServiceCategory, inferServiceType } from "./quote-generator";
-import { findBestStandardWorkPresetMatch } from "./work-preset-catalog";
+import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "./work-preset-catalog";
 
 export interface ChatQuoteLineItemSuggestion {
   description: string;
@@ -57,10 +57,10 @@ function extractNamedAmount(prompt: string, patterns: RegExp[]): number | null {
 
 function extractCustomerName(prompt: string): string | undefined {
   const primaryMatch = prompt.match(
-    /\b(?:new\s+quote|quote|estimate)\s+for\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=[,.\d]|$)/i,
+    /\b(?:new\s+quote|quote|estimate)\s+for\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=\s*(?:[,.\d]|$))/i,
   );
   const fallbackMatch = prompt.match(
-    /\bfor\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=[,.\d]|$)/i,
+    /\bfor\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=\s*(?:[,.\d]|$))/i,
   );
   const candidate = primaryMatch?.[1] ?? fallbackMatch?.[1];
   if (!candidate) return undefined;
@@ -144,6 +144,25 @@ function inferLaborQuantity(serviceType: ServiceCategory, squareFeetEstimate: nu
   return Number(Math.max(1, squareFeetEstimate / 100).toFixed(2));
 }
 
+function inferCatalogQuantity(
+  preset: {
+    unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+    defaultQuantity: number;
+    quantityMode?: "default" | "project_area";
+  },
+  squareFeetEstimate: number | null,
+): number {
+  if (
+    preset.quantityMode === "project_area" &&
+    preset.unitType === "SQ_FT" &&
+    squareFeetEstimate &&
+    squareFeetEstimate > 0
+  ) {
+    return Number(squareFeetEstimate.toFixed(2));
+  }
+  return Number(Math.max(1, preset.defaultQuantity).toFixed(2));
+}
+
 export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraft {
   const prompt = normalizePrompt(rawPrompt);
   const serviceType = inferServiceType(prompt);
@@ -166,6 +185,48 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
   const customerName = extractCustomerName(prompt);
   const customerPhone = prompt.match(PHONE_PATTERN)?.[0];
   const customerEmail = prompt.match(EMAIL_PATTERN)?.[0]?.toLowerCase();
+  const primaryStandardPresetMatch =
+    findStandardWorkPresetMatches(serviceType, prompt, {
+      primaryOnly: true,
+      minimumScore: 2,
+    })[0] ?? null;
+  const supplementalStandardPresetMatches = primaryStandardPresetMatch
+    ? findStandardWorkPresetMatches(serviceType, prompt, {
+        excludeCatalogKeys: [primaryStandardPresetMatch.preset.catalogKey],
+        minimumScore: 3,
+      })
+        .filter((match) => !match.preset.isPrimaryJob)
+        .slice(0, 2)
+    : [];
+  const additionalPrimaryPresetMatches = primaryStandardPresetMatch
+    ? findStandardWorkPresetMatches(serviceType, prompt, {
+        excludeCatalogKeys: [primaryStandardPresetMatch.preset.catalogKey],
+        minimumScore: 4,
+      })
+        .filter((match) => match.preset.isPrimaryJob)
+        .slice(0, 1)
+    : [];
+  const standardPresetMatches = primaryStandardPresetMatch
+    ? [primaryStandardPresetMatch, ...supplementalStandardPresetMatches, ...additionalPrimaryPresetMatches].slice(0, 3)
+    : findStandardWorkPresetMatches(serviceType, prompt, {
+        minimumScore: 3,
+      }).slice(0, 2);
+  const matchedLineItems =
+    standardPresetMatches.length > 0
+      ? standardPresetMatches.map((match) => ({
+          description: match.preset.name,
+          quantity: inferCatalogQuantity(
+            {
+              unitType: match.preset.unitType,
+              defaultQuantity: match.preset.defaultQuantity,
+              quantityMode: match.preset.quantityMode,
+            },
+            squareFeetEstimate,
+          ),
+          sectionType: "INCLUDED" as const,
+          sectionLabel: null,
+        }))
+      : [];
 
   return {
     customerName,
@@ -178,15 +239,18 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
     estimatedTotalAmount,
     estimatedTaxAmount,
     estimatedInternalCostAmount,
-    lineItems: [
-      {
-        description: laborDescription(serviceType, squareFeetEstimate),
-        quantity: inferLaborQuantity(serviceType, squareFeetEstimate),
-      },
-      {
-        description: inferMaterialDescription(serviceType, prompt),
-        quantity: 1,
-      },
-    ],
+    lineItems:
+      matchedLineItems.length > 0
+        ? matchedLineItems
+        : [
+            {
+              description: laborDescription(serviceType, squareFeetEstimate),
+              quantity: inferLaborQuantity(serviceType, squareFeetEstimate),
+            },
+            {
+              description: inferMaterialDescription(serviceType, prompt),
+              quantity: 1,
+            },
+          ],
   };
 }

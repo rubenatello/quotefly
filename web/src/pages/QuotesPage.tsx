@@ -19,6 +19,7 @@ import { usePageView } from "../lib/analytics";
 import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { buildQuoteMessageDraft } from "../lib/quote-message-template";
+import { toPhoneHrefValue } from "../lib/phone";
 import {
   canNativePdfShareOnDevice,
   fileLabel,
@@ -548,7 +549,7 @@ export function QuotesPage() {
         window.location.assign(mailto);
         setNotice("Email app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your mail app.");
       } else {
-        window.location.assign(`sms:${quote.customer.phone}?&body=${encodeURIComponent(draft.body)}`);
+        window.location.assign(`sms:${toPhoneHrefValue(quote.customer.phone)}?&body=${encodeURIComponent(draft.body)}`);
         setNotice("Text app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your messages app.");
       }
     } catch (err) {

@@ -6,6 +6,7 @@ import { QuoteStatusPill } from "./DashboardUi";
 import { CustomerIcon, EmailIcon, MessageIcon, QuoteIcon } from "../Icons";
 import { Button, Card, CardHeader, EmptyState, Input, Skeleton } from "../ui";
 import { api, ApiError, type Customer, type Quote } from "../../lib/api";
+import { formatUsPhoneDisplay } from "../../lib/phone";
 
 type ActionVariant = "primary" | "secondary" | "outline" | "ghost";
 
@@ -123,7 +124,7 @@ export function QuickLookupCard({
                   active={customer.id === activeCustomerId}
                   title={customer.fullName}
                   meta={[
-                    { icon: <MessageIcon size={12} />, label: customer.phone },
+                    { icon: <MessageIcon size={12} />, label: formatUsPhoneDisplay(customer.phone) },
                     ...(customer.email ? [{ icon: <EmailIcon size={12} />, label: customer.email }] : []),
                   ]}
                   actionLabel={customer.id === activeCustomerId ? "Selected" : customerActionLabel}

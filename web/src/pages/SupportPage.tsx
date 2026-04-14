@@ -11,6 +11,9 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
       title: "Support - QuoteFly",
       description:
         "Get help with billing, setup, quote workflows, and workspace issues in QuoteFly.",
+      keywords:
+        "contractor quoting software support, contractor estimating software help, quote workflow support",
+      canonicalUrl: "https://quotefly.us/support",
     });
   }, []);
 

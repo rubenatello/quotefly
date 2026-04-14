@@ -7,15 +7,66 @@ interface LandingPageProps {
 }
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
+  const seoFaqs = [
+    {
+      q: "What is contractor quoting software?",
+      a: "Contractor quoting software helps service businesses create, price, send, and track quotes from one workflow.",
+    },
+    {
+      q: "Is QuoteFly also contractor estimating software?",
+      a: "Yes. QuoteFly supports estimating labor, materials, markup, and customer totals before you send the final quote.",
+    },
+    {
+      q: "Which trades can use QuoteFly?",
+      a: "HVAC, plumbing, roofing, flooring, construction, and landscaping teams can use the same core quote workflow.",
+    },
+    {
+      q: "Can I send branded quote PDFs from my phone?",
+      a: "Yes. QuoteFly is mobile-first and lets you generate and share branded quote PDFs from the field.",
+    },
+    {
+      q: "Does QuoteFly include customer tracking?",
+      a: "Yes. QuoteFly includes customer intake, follow-up status tracking, and quote pipeline visibility.",
+    },
+  ];
+
   useEffect(() => {
     setSEOMetadata({
-      title: "QuoteFly - Fast Quoting CRM for Contractors",
+      title: "Contractor Quoting Software and Estimating Software",
       description:
-        "Add leads, draft quotes fast, and send branded PDFs from one mobile-first CRM built for contractors.",
+        "QuoteFly is contractor quoting software and contractor estimating software for field teams. Add leads, estimate fast, and send branded quote PDFs.",
       keywords:
-        "contractor quoting software, contractor CRM, chat to quote, HVAC quotes, plumbing quotes, roofing estimates",
+        "contractor quoting software, contractor estimating software, estimate software for contractors, contractor estimate app, contractor quote app, hvac estimating software, plumbing estimating software, roofing estimating software",
+      canonicalUrl: "https://quotefly.us/",
       ogType: "website",
     });
+  }, []);
+
+  useEffect(() => {
+    const scriptId = "qf-landing-faq-jsonld";
+    const existing = document.getElementById(scriptId);
+    if (existing) existing.remove();
+
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.type = "application/ld+json";
+    script.text = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: seoFaqs.map((item) => ({
+        "@type": "Question",
+        name: item.q,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: item.a,
+        },
+      })),
+    });
+    document.head.appendChild(script);
+
+    return () => {
+      script.remove();
+    };
   }, []);
 
   const testimonials = [
@@ -93,11 +144,11 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           </div>
 
           <h1 className="mb-6 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
-            Quote faster. Follow up better. Close more work.
+            Contractor quoting software and estimating software built for field teams
           </h1>
 
           <p className="mb-8 text-lg text-slate-600 sm:text-xl">
-            QuoteFly gives contractors one clean place to add leads, build quotes, send branded PDFs, and keep jobs moving.
+            QuoteFly gives contractors one place to intake customers, build estimates, send branded quotes, and track follow-up without workflow drag.
           </p>
 
           <div className="flex flex-col gap-4 sm:flex-row sm:justify-center">
@@ -133,6 +184,18 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-3xl font-bold text-slate-900">One platform for quoting and estimating</h2>
+          <p className="mt-4 text-slate-600">
+            QuoteFly combines <strong>contractor quoting software</strong> and <strong>contractor estimating software</strong> so crews can move from lead details to priced scope and customer-ready PDF in one system.
+          </p>
+          <p className="mt-3 text-slate-600">
+            Common use cases include HVAC estimate software workflows, plumbing estimate workflows, roofing replacement quotes, and flooring project pricing.
+          </p>
         </div>
       </section>
 
@@ -173,6 +236,20 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                 </div>
                 <p className="text-slate-700 italic">"{testimonial.text}"</p>
               </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-10 text-center text-3xl font-bold text-slate-900">Contractor quoting software FAQ</h2>
+          <div className="space-y-4">
+            {seoFaqs.map((faq) => (
+              <article key={faq.q} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-lg font-semibold text-slate-900">{faq.q}</h3>
+                <p className="mt-2 text-slate-600">{faq.a}</p>
+              </article>
             ))}
           </div>
         </div>

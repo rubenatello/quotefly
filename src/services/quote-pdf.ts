@@ -108,8 +108,15 @@ const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
   },
 };
 
+const USD_FORMATTER = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`;
+  return USD_FORMATTER.format(value);
 }
 
 function formatQuantity(value: number): string {

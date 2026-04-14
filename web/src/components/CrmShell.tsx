@@ -5,7 +5,7 @@ import { FilePlus2, MoreHorizontal, Plus, Search, UserPlus2 } from "lucide-react
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
-  ClockIcon,
+  AnalyticsIcon,
   CustomerIcon,
   InvoiceIcon,
   QuoteIcon,
@@ -33,7 +33,7 @@ interface CrmShellProps {
 const OPERATIONS_LINKS: readonly CrmNavLink[] = [
   { label: "Customers", path: "customers", icon: <CustomerIcon size={15} /> },
   { label: "Quotes", path: "quotes", icon: <QuoteIcon size={15} /> },
-  { label: "Analytics", path: "analytics", icon: <ClockIcon size={15} /> },
+  { label: "Analytics", path: "analytics", icon: <AnalyticsIcon size={15} /> },
   { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
 ] as const;
 

@@ -9,10 +9,11 @@ interface PricingPageProps {
 export function PricingPage({ onOpenAuth }: PricingPageProps) {
   useEffect(() => {
     setSEOMetadata({
-      title: "Pricing - QuoteFly",
+      title: "Contractor Quoting Software Pricing",
       description:
-        "Simple, transparent pricing for contractor teams. Start free for 14 days and upgrade when your crew needs more seats and automation.",
-      keywords: "contractor software pricing, quote tool cost, contractor CRM pricing",
+        "Pricing for contractor quoting software and contractor estimating software. Start with QuoteFly Starter and scale as your crew grows.",
+      keywords: "contractor quoting software pricing, contractor estimating software pricing, contractor estimate app cost, hvac quoting software pricing, plumbing quoting software pricing",
+      canonicalUrl: "https://quotefly.us/pricing",
     });
   }, []);
 
@@ -106,9 +107,9 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Simple, transparent pricing</h1>
+          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Contractor quoting software pricing</h1>
           <p className="text-lg text-slate-600">
-            Starter is the launch plan. It covers fast customer intake, quoting, and follow-up today. Advanced plans are being staged after the core workflow hardens.
+            QuoteFly pricing for contractor quoting software and contractor estimating software. Starter is live now, with advanced tiers staged after core workflow hardening.
           </p>
 
           <div className="mt-8 flex items-center justify-center gap-4">

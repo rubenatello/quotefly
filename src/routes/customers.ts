@@ -1,8 +1,13 @@
 import { FastifyPluginAsync } from "fastify";
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activity";
+import {
+  normalizeCustomerPhone,
+  normalizePhoneSearchDigits,
+  phoneNumbersEquivalent,
+} from "../lib/phone";
 import {
   PaginationQuerySchema,
   tenantActiveCustomerScope,
@@ -130,23 +135,102 @@ function isInactiveDuplicateMatch(match: {
   return Boolean(match.archivedAtUtc || match.deletedAtUtc);
 }
 
+const PHONE_DIGITS_SQL = Prisma.sql`
+  CASE
+    WHEN LENGTH(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g')) = 11
+      AND LEFT(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g'), 1) = '1'
+    THEN RIGHT(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g'), 10)
+    ELSE REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g')
+  END
+`;
+
+function formatCustomerPhoneResponse<T extends { phone: string }>(customer: T): T {
+  return {
+    ...customer,
+    phone: normalizeCustomerPhone(customer.phone),
+  };
+}
+
+async function loadPhoneMatchIds(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  tenantId: string,
+  normalizedPhoneDigits: string,
+  options?: { excludeCustomerId?: string; limit?: number; activeOnly?: boolean },
+) {
+  const limit = options?.limit ?? 5;
+  const excludeClause = options?.excludeCustomerId
+    ? Prisma.sql`AND "id" <> ${options.excludeCustomerId}`
+    : Prisma.empty;
+  const activeScopeClause = options?.activeOnly
+    ? Prisma.sql`AND "archivedAtUtc" IS NULL AND "deletedAtUtc" IS NULL`
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "Customer"
+    WHERE "tenantId" = ${tenantId}
+      ${excludeClause}
+      ${activeScopeClause}
+      AND ${PHONE_DIGITS_SQL} = ${normalizedPhoneDigits}
+    ORDER BY "createdAt" DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map((row) => row.id);
+}
+
+async function loadPhoneSearchMatchIds(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  tenantId: string,
+  normalizedSearchDigits: string,
+) {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "Customer"
+    WHERE "tenantId" = ${tenantId}
+      AND "archivedAtUtc" IS NULL
+      AND "deletedAtUtc" IS NULL
+      AND ${PHONE_DIGITS_SQL} LIKE ${`%${normalizedSearchDigits}%`}
+    ORDER BY "createdAt" DESC
+    LIMIT 200
+  `);
+
+  return rows.map((row) => row.id);
+}
+
 export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
     const actor = await resolveActivityActor(app.prisma, claims);
 
-    const normalizedPhone = payload.phone.trim();
+    const normalizedPhone = normalizeCustomerPhone(payload.phone);
+    const normalizedPhoneDigits = normalizePhoneSearchDigits(payload.phone);
     const normalizedEmail = payload.email?.trim().toLowerCase() ?? null;
-    const [phoneMatch, emailMatches] = await Promise.all([
-      app.prisma.customer.findUnique({
-        where: {
-          tenantId_phone: {
-            tenantId: claims.tenantId,
-            phone: normalizedPhone,
-          },
-        },
-      }),
+    const [phoneMatches, emailMatches] = await Promise.all([
+      normalizedPhoneDigits
+        ? loadPhoneMatchIds(app.prisma, claims.tenantId, normalizedPhoneDigits, {
+            limit: 5,
+          }).then((ids) =>
+            ids.length
+              ? app.prisma.customer.findMany({
+                  where: {
+                    ...tenantScope(claims.tenantId),
+                    id: { in: ids },
+                  },
+                  orderBy: { createdAt: "desc" },
+                  take: 5,
+                })
+              : [],
+          )
+        : app.prisma.customer.findMany({
+            where: {
+              ...tenantScope(claims.tenantId),
+              phone: normalizedPhone,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 5,
+          }),
       normalizedEmail
         ? app.prisma.customer.findMany({
             where: {
@@ -159,9 +243,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         : Promise.resolve([]),
     ]);
 
-    const matchMap = new Map<string, (typeof emailMatches)[number]>();
-    if (phoneMatch) {
-      matchMap.set(phoneMatch.id, phoneMatch);
+    const matchMap = new Map<string, (typeof phoneMatches)[number]>();
+    for (const candidate of phoneMatches) {
+      matchMap.set(candidate.id, candidate);
     }
     for (const candidate of emailMatches) {
       matchMap.set(candidate.id, candidate);
@@ -169,7 +253,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
     const duplicateMatches = [...matchMap.values()].map((candidate) => {
       const matchReasons: ("phone" | "email")[] = [];
-      if (candidate.phone === normalizedPhone) {
+      if (phoneNumbersEquivalent(candidate.phone, normalizedPhone)) {
         matchReasons.push("phone");
       }
       if (
@@ -183,7 +267,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return {
         id: candidate.id,
         fullName: candidate.fullName,
-        phone: candidate.phone,
+        phone: normalizeCustomerPhone(candidate.phone),
         email: candidate.email,
         archivedAtUtc: candidate.archivedAtUtc?.toISOString() ?? null,
         deletedAtUtc: candidate.deletedAtUtc?.toISOString() ?? null,
@@ -210,6 +294,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         matches: DuplicateMatchSummarySchema.array().parse(sortedDuplicateMatches),
       });
     }
+
+    const hasPhoneDuplicate = sortedDuplicateMatches.some((match) =>
+      match.matchReasons.includes("phone"),
+    );
 
     if (payload.duplicateAction === "merge") {
       const targetId = payload.duplicateCustomerId ?? sortedDuplicateMatches[0]?.id;
@@ -272,7 +360,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return reply.send({
-        customer,
+        customer: formatCustomerPhoneResponse(customer),
         merged: true,
         restored: retainedCustomerWasInactive(target),
       });
@@ -300,12 +388,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return reply.send({
-        customer: existingCustomer,
+        customer: formatCustomerPhoneResponse(existingCustomer),
         reusedExisting: true,
       });
     }
 
-    if (payload.duplicateAction === "create_new" && phoneMatch) {
+    if (payload.duplicateAction === "create_new" && hasPhoneDuplicate) {
       return reply.code(409).send({
         code: "PHONE_CONFLICT",
         error: "This phone number is already in use. Use merge for this customer.",
@@ -317,7 +405,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         const createdCustomer = await tx.customer.create({
           data: {
             tenantId: claims.tenantId,
-            fullName: payload.fullName,
+            fullName: payload.fullName.trim(),
             phone: normalizedPhone,
             email: normalizedEmail,
             notes: payload.notes,
@@ -360,7 +448,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         return createdCustomer;
       });
 
-      return reply.code(201).send({ customer });
+      return reply.code(201).send({ customer: formatCustomerPhoneResponse(customer) });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         return reply.code(409).send({
@@ -375,15 +463,22 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.get("/customers", { preHandler: [app.authenticate] }, async (request) => {
     const claims = getJwtClaims(request);
     const query = ListCustomersQuerySchema.parse(request.query);
+    const searchTerm = query.search?.trim();
+    const normalizedSearchDigits = normalizePhoneSearchDigits(searchTerm);
+    const phoneSearchMatchIds =
+      searchTerm && normalizedSearchDigits && normalizedSearchDigits.length >= 2
+        ? await loadPhoneSearchMatchIds(app.prisma, claims.tenantId, normalizedSearchDigits)
+        : [];
 
     const where: Prisma.CustomerWhereInput = {
       ...tenantActiveCustomerScope(claims.tenantId),
-      ...(query.search
+      ...(searchTerm
         ? {
             OR: [
-              { fullName: { contains: query.search, mode: "insensitive" } },
-              { email: { contains: query.search, mode: "insensitive" } },
-              { phone: { contains: query.search, mode: "insensitive" } },
+              { fullName: { contains: searchTerm, mode: "insensitive" } },
+              { email: { contains: searchTerm, mode: "insensitive" } },
+              { phone: { contains: searchTerm, mode: "insensitive" } },
+              ...(phoneSearchMatchIds.length ? [{ id: { in: phoneSearchMatchIds } }] : []),
             ],
           }
         : {}),
@@ -400,7 +495,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     return {
-      customers,
+      customers: customers.map((customer) => formatCustomerPhoneResponse(customer)),
       pagination: {
         limit: query.limit,
         offset: query.offset,
@@ -424,7 +519,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    return { customer };
+    return { customer: formatCustomerPhoneResponse(customer) };
   });
 
   app.get("/customers/:customerId/activity", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -595,7 +690,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const payload = UpdateCustomerSchema.parse(request.body);
     const actor = await resolveActivityActor(app.prisma, claims);
-    const normalizedPhone = payload.phone?.trim();
+    const normalizedPhone =
+      payload.phone === undefined ? undefined : normalizeCustomerPhone(payload.phone);
+    const normalizedPhoneDigits = normalizePhoneSearchDigits(normalizedPhone);
     const normalizedEmail =
       payload.email === undefined ? undefined : payload.email === null ? null : payload.email.trim().toLowerCase();
 
@@ -610,17 +707,29 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    if (normalizedPhone && normalizedPhone !== existing.phone) {
-      const phoneConflict = await app.prisma.customer.findFirst({
-        where: {
-          ...tenantScope(claims.tenantId),
-          phone: normalizedPhone,
-          id: { not: existing.id },
-        },
-      });
+    if (normalizedPhone !== undefined && !phoneNumbersEquivalent(normalizedPhone, existing.phone)) {
+      if (normalizedPhoneDigits) {
+        const phoneConflictIds = await loadPhoneMatchIds(
+          app.prisma,
+          claims.tenantId,
+          normalizedPhoneDigits,
+          { excludeCustomerId: existing.id, limit: 1 },
+        );
+        if (phoneConflictIds.length > 0) {
+          return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
+        }
+      } else {
+        const phoneConflict = await app.prisma.customer.findFirst({
+          where: {
+            ...tenantScope(claims.tenantId),
+            phone: normalizedPhone,
+            id: { not: existing.id },
+          },
+        });
 
-      if (phoneConflict) {
-        return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
+        if (phoneConflict) {
+          return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
+        }
       }
     }
 
@@ -658,7 +767,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       const changedIdentityFields: string[] = [];
       if (payload.fullName !== undefined && payload.fullName !== existing.fullName) changedIdentityFields.push("name");
-      if (normalizedPhone !== undefined && normalizedPhone !== existing.phone) changedIdentityFields.push("phone");
+      if (
+        normalizedPhone !== undefined &&
+        !phoneNumbersEquivalent(normalizedPhone, existing.phone)
+      ) changedIdentityFields.push("phone");
       if (normalizedEmail !== undefined && normalizedEmail !== existing.email) changedIdentityFields.push("email");
 
       if (changedIdentityFields.length > 0) {
@@ -697,7 +809,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return updatedCustomer;
     });
 
-    return { customer };
+    return { customer: formatCustomerPhoneResponse(customer) };
   });
 
   app.post("/customers/:customerId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {

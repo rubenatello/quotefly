@@ -3,6 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import twilio from "twilio";
 import { parseInboundJobText } from "../services/sms-parser";
 import { generateDraftFromSms } from "../services/quote-generator";
+import { normalizeCustomerPhone } from "../lib/phone";
 
 const SEND_REPLY = "1";
 const REVISE_REPLY = "2";
@@ -129,7 +130,7 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
     const parsed = parseInboundJobText(smsBody);
     const draft = generateDraftFromSms(smsBody);
 
-    const customerPhone = parsed.customerPhone ?? from;
+    const customerPhone = normalizeCustomerPhone(parsed.customerPhone ?? from);
     const customer = await app.prisma.customer.upsert({
       where: {
         tenantId_phone: {

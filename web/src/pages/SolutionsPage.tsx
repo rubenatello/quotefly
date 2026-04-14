@@ -9,11 +9,12 @@ interface SolutionsPageProps {
 export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
   useEffect(() => {
     setSEOMetadata({
-      title: "Solutions for HVAC, Plumbing, Flooring and More - QuoteFly",
+      title: "Contractor Estimating Software by Trade",
       description:
-        "Industry-specific quoting workflows for contractors in HVAC, plumbing, flooring, roofing, landscaping, and more.",
+        "Contractor estimating software and contractor quoting software workflows for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",
       keywords:
-        "HVAC quoting software, plumbing quotes, flooring estimates, roofing quotes, landscaping software",
+        "contractor estimating software, contractor quoting software, hvac estimating software, plumbing estimating software, roofing estimating software, flooring estimating software",
+      canonicalUrl: "https://quotefly.us/solutions",
     });
   }, []);
 
@@ -94,9 +95,9 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Built for every trade</h1>
+          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Contractor estimating software for every trade</h1>
           <p className="text-lg text-slate-600">
-            Whether you install HVAC systems or manage landscaping crews, QuoteFly adapts to the way contractors quote in the real world.
+            Whether you install HVAC systems or manage landscaping crews, QuoteFly adapts contractor quoting software workflows to real-world field operations.
           </p>
         </div>
       </section>

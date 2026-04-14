@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { isSuperuserEmail } from "./superuser";
 
 export type PlanCode = "starter" | "professional" | "enterprise";
 
@@ -100,13 +101,6 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
 
 const PLAN_CODES = new Set<PlanCode>(["starter", "professional", "enterprise"]);
 
-const SUPERUSER_EMAIL_SET = new Set(
-  (process.env.SUPERUSER_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean),
-);
-
 function parsePlanCode(value: string | null | undefined): PlanCode | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
@@ -120,9 +114,7 @@ function isActiveTrial(snapshot: TenantBillingSnapshot, now: Date): boolean {
 }
 
 function isSuperuser(context?: EntitlementContext): boolean {
-  const email = context?.userEmail?.trim().toLowerCase();
-  if (!email) return false;
-  return SUPERUSER_EMAIL_SET.has(email);
+  return isSuperuserEmail(context?.userEmail);
 }
 
 export function resolveEffectivePlanCode(

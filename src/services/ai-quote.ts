@@ -2,10 +2,11 @@ import OpenAI from "openai";
 import { env } from "../config/env";
 import type { ParsedChatToQuoteDraft } from "./chat-to-quote";
 import { parseChatToQuotePrompt } from "./chat-to-quote";
-import { inferServiceType } from "./quote-generator";
 
 const AI_ENABLED = !!env.OPENAI_API_KEY;
 const AI_MODEL = env.OPENAI_MODEL || "gpt-4o-mini";
+const MAX_AI_CONTEXT_CHARS = 10_000;
+const MAX_AI_CONTEXT_LINES = 220;
 
 let openaiClient: OpenAI | undefined;
 function getOpenAI(): OpenAI {
@@ -95,6 +96,7 @@ Rules:
 - You may receive extra context about the current customer, customer notes, current quote draft, and saved jobs. Use that context when it is relevant.
 - You may receive recent customer activity history. Use it to understand project context, urgency, objections, and previous follow-up.
 - You may also receive similar past quotes from the same tenant. Use those as pricing and scope anchors when they fit the requested job.
+- You may receive standard trade catalog matches (roofing, flooring, HVAC, gardening, plumbing, and construction). Treat them as valid baseline job templates when tenant-specific saved jobs are missing or incomplete.
 - If customer notes are provided, use them as internal context for scope, constraints, and follow-up relevance, but do not repeat them verbatim unless they clearly belong in the quote.
 - If recent customer activity is provided, use it as internal context and do not repeat irrelevant internal log phrasing in the customer-facing quote.
 - If current quote context is provided, preserve the same trade unless the user clearly asks to change it.
@@ -104,6 +106,7 @@ Rules:
 - Normal included work should use sectionType "INCLUDED".
 - Alternate or fallback choices should use sectionType "ALTERNATE" and include a short sectionLabel like "Repair Option", "Replacement Option", or "Alternate Scope".
 - If saved job names or pricing hints are provided, prefer those names when they fit the requested work.
+- If standard trade catalog matches are provided, prefer those line names and pricing patterns over generic placeholder wording.
 - If similar past quotes are provided, prefer their structure, naming, and pricing patterns over generic assumptions, especially when square footage or scope is similar.
 - Prefer the tenant's own saved jobs and similar past quotes over generic invented line items whenever they fit the request.
 - If the customer name, phone, or email are not mentioned, set them to null.
@@ -151,6 +154,7 @@ Rules:
 - Use sectionLabel to group alternate lines when helpful, such as "Repair Option" or "Replacement Option".
 - If title or scope do not need changes, return null for them.
 - Prefer the tenant's saved jobs, pricing hints, similar accepted/sent quotes, customer notes, and recent activity when they fit the request.
+- When standard trade catalog matches are provided, use them to ground line descriptions and unit economics by trade instead of inventing vague line names.
 - Keep customer-facing wording professional and concise.
 - reasons should contain 1-3 short operator-facing explanations.
 - sourceHints should contain 1-3 short source references such as saved jobs, customer notes, or similar accepted quotes.
@@ -161,17 +165,23 @@ export async function aiParseChatToQuotePrompt(
   options?: {
     context?: string;
     telemetry?: AiTelemetryAccumulator;
+    strictAi?: boolean;
   },
 ): Promise<ParsedChatToQuoteDraft> {
   // If OpenAI is not configured, fall back to regex parser
   if (!AI_ENABLED) {
+    if (options?.strictAi) {
+      throw new Error("OPENAI_API_KEY is missing; strict AI parsing cannot run.");
+    }
     return parseChatToQuotePrompt(rawPrompt);
   }
 
   try {
     const client = getOpenAI();
-    const userMessage = options?.context?.trim()
-      ? `Context:\n${options.context.trim()}\n\nUser request:\n${rawPrompt}`
+    const deterministicFallback = parseChatToQuotePrompt(rawPrompt);
+    const compactContext = compactAiContext(options?.context);
+    const userMessage = compactContext
+      ? `Context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
     const completion = await client.chat.completions.create({
       model: AI_MODEL,
@@ -186,6 +196,9 @@ export async function aiParseChatToQuotePrompt(
 
     const content = completion.choices[0]?.message?.content?.trim();
     if (!content) {
+      if (options?.strictAi) {
+        throw new Error("AI returned an empty response for chat-to-quote parsing.");
+      }
       console.warn("[ai-quote] Empty AI response, falling back to regex parser");
       return parseChatToQuotePrompt(rawPrompt);
     }
@@ -195,22 +208,34 @@ export async function aiParseChatToQuotePrompt(
     const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
 
     // Validate and normalize the response
-    const serviceType = validateServiceType(parsed.serviceType) ?? inferServiceType(rawPrompt);
+    const aiLineItems = normalizeLineItems(parsed.lineItems);
+    const serviceType = validateServiceType(parsed.serviceType) ?? deterministicFallback.serviceType;
+    const resolvedLineItems = shouldUseDeterministicLineItems(aiLineItems, deterministicFallback.lineItems)
+      ? deterministicFallback.lineItems
+      : aiLineItems;
 
     return {
-      customerName: typeof parsed.customerName === "string" ? parsed.customerName : undefined,
-      customerPhone: typeof parsed.customerPhone === "string" ? parsed.customerPhone : undefined,
-      customerEmail: typeof parsed.customerEmail === "string" ? parsed.customerEmail?.toLowerCase() : undefined,
+      customerName: normalizeOptionalString(parsed.customerName) ?? deterministicFallback.customerName,
+      customerPhone: normalizeOptionalString(parsed.customerPhone) ?? deterministicFallback.customerPhone,
+      customerEmail: normalizeOptionalEmail(parsed.customerEmail) ?? deterministicFallback.customerEmail,
       serviceType,
-      title: typeof parsed.title === "string" ? parsed.title : `${serviceType} Service Quote`,
-      scopeText: typeof parsed.scopeText === "string" ? parsed.scopeText : rawPrompt,
-      squareFeetEstimate: typeof parsed.squareFeetEstimate === "number" ? parsed.squareFeetEstimate : null,
-      estimatedTotalAmount: typeof parsed.estimatedTotalAmount === "number" ? parsed.estimatedTotalAmount : null,
-      estimatedTaxAmount: typeof parsed.estimatedTaxAmount === "number" ? parsed.estimatedTaxAmount : null,
-      estimatedInternalCostAmount: typeof parsed.estimatedInternalCostAmount === "number" ? parsed.estimatedInternalCostAmount : null,
-      lineItems: normalizeLineItems(parsed.lineItems),
+      title: normalizeOptionalString(parsed.title) ?? deterministicFallback.title,
+      scopeText: normalizeOptionalString(parsed.scopeText) ?? deterministicFallback.scopeText,
+      squareFeetEstimate:
+        normalizeOptionalNumber(parsed.squareFeetEstimate, { min: 0.01 }) ?? deterministicFallback.squareFeetEstimate,
+      estimatedTotalAmount:
+        normalizeOptionalNumber(parsed.estimatedTotalAmount, { min: 0 }) ?? deterministicFallback.estimatedTotalAmount,
+      estimatedTaxAmount:
+        normalizeOptionalNumber(parsed.estimatedTaxAmount, { min: 0 }) ?? deterministicFallback.estimatedTaxAmount,
+      estimatedInternalCostAmount:
+        normalizeOptionalNumber(parsed.estimatedInternalCostAmount, { min: 0 }) ??
+        deterministicFallback.estimatedInternalCostAmount,
+      lineItems: resolvedLineItems,
     };
   } catch (err) {
+    if (options?.strictAi) {
+      throw err;
+    }
     console.error("[ai-quote] AI parsing failed, falling back to regex parser:", err);
     return parseChatToQuotePrompt(rawPrompt);
   }
@@ -229,8 +254,9 @@ export async function aiBuildQuoteRevisionPlan(
 
   try {
     const client = getOpenAI();
-    const userMessage = options.context?.trim()
-      ? `Revision context:\n${options.context.trim()}\n\nUser request:\n${rawPrompt}`
+    const compactContext = compactAiContext(options?.context);
+    const userMessage = compactContext
+      ? `Revision context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
     const completion = await client.chat.completions.create({
       model: AI_MODEL,
@@ -371,6 +397,23 @@ function emptyRevisionPlan(): AiQuoteRevisionPlan {
   };
 }
 
+function compactAiContext(context?: string): string {
+  const raw = context?.trim();
+  if (!raw) return "";
+
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trimEnd());
+
+  const limitedLines = lines.slice(0, MAX_AI_CONTEXT_LINES);
+  const joined = limitedLines.join("\n").trim();
+  if (joined.length <= MAX_AI_CONTEXT_CHARS) {
+    return joined;
+  }
+
+  return `${joined.slice(0, MAX_AI_CONTEXT_CHARS).trimEnd()}\n\n[Context trimmed for token budget safety.]`;
+}
+
 function accumulateOpenAiTelemetry(
   target: AiTelemetryAccumulator | undefined,
   completion: {
@@ -424,7 +467,10 @@ function normalizeLineItems(items: unknown): ParsedChatToQuoteDraft["lineItems"]
     if (!description) continue;
     normalized.push({
       description,
-      quantity: typeof rec.quantity === "number" && rec.quantity > 0 ? rec.quantity : 1,
+      quantity:
+        typeof rec.quantity === "number" && rec.quantity > 0
+          ? Number(rec.quantity.toFixed(2))
+          : 1,
       sectionType: validateSectionType(rec.sectionType) ?? "INCLUDED",
       sectionLabel:
         typeof rec.sectionLabel === "string" && rec.sectionLabel.trim()
@@ -438,4 +484,45 @@ function normalizeLineItems(items: unknown): ParsedChatToQuoteDraft["lineItems"]
 
 function validateSectionType(value: unknown): "INCLUDED" | "ALTERNATE" | null {
   return value === "ALTERNATE" || value === "INCLUDED" ? value : null;
+}
+
+const GENERIC_FALLBACK_LINE_LABELS = new Set([
+  "labor and installation",
+  "materials and supplies",
+]);
+
+function normalizeComparableText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isGenericFallbackLineItems(lineItems: ParsedChatToQuoteDraft["lineItems"]): boolean {
+  if (lineItems.length !== 2) return false;
+  return lineItems.every((line) => GENERIC_FALLBACK_LINE_LABELS.has(normalizeComparableText(line.description)));
+}
+
+function shouldUseDeterministicLineItems(
+  aiLineItems: ParsedChatToQuoteDraft["lineItems"],
+  deterministicLineItems: ParsedChatToQuoteDraft["lineItems"],
+): boolean {
+  if (!aiLineItems.length) return true;
+  if (!deterministicLineItems.length) return false;
+  if (!isGenericFallbackLineItems(aiLineItems)) return false;
+  return !isGenericFallbackLineItems(deterministicLineItems);
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeOptionalEmail(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? normalized.toLowerCase() : undefined;
+}
+
+function normalizeOptionalNumber(value: unknown, options?: { min?: number }): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (typeof options?.min === "number" && value < options.min) return null;
+  return Number(value.toFixed(2));
 }

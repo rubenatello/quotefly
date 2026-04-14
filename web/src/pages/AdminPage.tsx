@@ -30,6 +30,7 @@ interface AdminPageProps {
     isTrial?: boolean;
     entitlements?: TenantEntitlements;
     usage?: TenantUsageSnapshot;
+    isSuperuser?: boolean;
   } | null;
 }
 
@@ -217,6 +218,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
   const sessionRole = normalizeRole(session?.role ?? "member");
+  const superuserView = Boolean(session?.isSuperuser);
   const ownerView = sessionRole === "owner";
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
@@ -546,6 +548,16 @@ export function AdminPage({ session }: AdminPageProps) {
                   fullWidth
                 >
                   Manage Billing
+                </Button>
+              ) : null}
+              {settingsMode === "org" && superuserView ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate("/app/internal/admin/ai-quality")}
+                  fullWidth
+                >
+                  Open AI Quality Console
                 </Button>
               ) : null}
               {settingsMode === "org" && ownerView ? (

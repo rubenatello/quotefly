@@ -25,9 +25,16 @@ const DEFAULT_QUOTE_MESSAGE_TEMPLATE = [
   "Reply to confirm or ask for any revisions.",
 ].join("\n");
 
+const USD_FORMATTER = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 function formatMoney(value: number | string) {
   const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+  return Number.isFinite(amount) ? USD_FORMATTER.format(amount) : "$0.00";
 }
 
 function normalizeTemplateOutput(text: string) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Mail, Phone, Search, UserRoundPlus } from "lucide-react";
 import { api, ApiError, type Customer } from "../../lib/api";
+import { formatUsPhoneDisplay } from "../../lib/phone";
 
 interface InlineCustomerLookupProps {
   selectedCustomer: Customer | null;
@@ -108,7 +109,7 @@ export function InlineCustomerLookup({
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                         <span className="inline-flex items-center gap-1">
                           <Phone size={12} />
-                          {customer.phone}
+                          {formatUsPhoneDisplay(customer.phone)}
                         </span>
                         {customer.email ? (
                           <span className="inline-flex min-w-0 items-center gap-1">

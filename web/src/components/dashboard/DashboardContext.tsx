@@ -26,6 +26,7 @@ import {
 } from "../../lib/quote-pdf-actions";
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
 import { formatAiUsageNotice } from "../../lib/ai-credits";
+import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
 
 /* ─────────────── Types ─────────────── */
 
@@ -143,9 +144,16 @@ export const CHAT_PROMPT_EXAMPLE =
 
 /* ─────────────── Helpers ─────────────── */
 
+const USD_FORMATTER = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export function money(value: string | number): string {
   const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+  return Number.isFinite(amount) ? USD_FORMATTER.format(amount) : "$0.00";
 }
 
 export function safeAmount(value: string | number | null | undefined): number {
@@ -185,7 +193,7 @@ function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadF
 function normalizeCustomerPayload(form: CustomerForm): CreateCustomerPayload {
   return {
     fullName: form.fullName.trim(),
-    phone: form.phone.trim(),
+    phone: formatUsPhoneDisplay(form.phone) || form.phone.trim(),
     email: form.email.trim() ? form.email.trim().toLowerCase() : null,
   };
 }
@@ -861,7 +869,7 @@ export function DashboardProvider({
         window.location.assign(mailto);
         setNotice("Quote marked as quoted and email app opened. This browser cannot attach the PDF automatically.");
       } else if (sendComposer.channel === "sms") {
-        window.location.assign(`sms:${sendComposer.customerPhone}?&body=${encodeURIComponent(sendComposer.body)}`);
+        window.location.assign(`sms:${toPhoneHrefValue(sendComposer.customerPhone)}?&body=${encodeURIComponent(sendComposer.body)}`);
         setNotice("Quote marked as quoted and text app opened. This browser cannot attach the PDF automatically.");
       } else {
         if (!navigator.clipboard) throw new Error("Clipboard API is not available in this browser.");

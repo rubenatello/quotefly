@@ -31,6 +31,7 @@ const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((mod
 const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
+const SuperuserAiPage = lazy(() => import("./pages/SuperuserAiPage").then((module) => ({ default: module.SuperuserAiPage })));
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
 const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
@@ -54,6 +55,7 @@ type Session = {
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
   usage?: TenantUsageSnapshot;
+  isSuperuser?: boolean;
 };
 
 function clearStoredSession() {
@@ -80,6 +82,7 @@ function toSession(payload: AuthSessionPayload): Session {
     isTrial: payload.tenant.isTrial,
     entitlements: payload.tenant.entitlements,
     usage: payload.tenant.usage,
+    isSuperuser: payload.isSuperuser ?? false,
   };
 }
 
@@ -129,6 +132,7 @@ function CrmLayout({
     if (location.pathname.startsWith("/app/settings")) return "settings";
     if (location.pathname.startsWith("/app/setup")) return "settings";
     if (location.pathname.startsWith("/app/branding")) return "branding";
+    if (location.pathname.startsWith("/app/internal/admin")) return "settings";
     if (location.pathname.startsWith("/app/admin")) return "settings";
     return "customers";
   })();
@@ -185,10 +189,25 @@ function CrmLayout({
                 <Route path="settings" element={<AdminPage session={session} />} />
                 <Route path="settings/users" element={<AdminPage session={session} />} />
                 <Route
+                  path="internal/admin/ai-quality"
+                  element={session.isSuperuser ? <SuperuserAiPage /> : <Navigate to="/app/settings" replace />}
+                />
+                <Route
+                  path="internal/ai-quality"
+                  element={<Navigate to="/app/internal/admin/ai-quality" replace />}
+                />
+                <Route
                   path="branding"
                   element={<BrandingPage tenantId={session.tenantId} effectivePlanCode={session.effectivePlanCode ?? "starter"} />}
                 />
-                <Route path="admin" element={<Navigate to="/app/settings" replace />} />
+                <Route
+                  path="admin"
+                  element={
+                    session.isSuperuser
+                      ? <Navigate to="/app/internal/admin/ai-quality" replace />
+                      : <Navigate to="/app/settings" replace />
+                  }
+                />
                 <Route path="*" element={<Navigate to="/app/customers" replace />} />
               </Routes>
             </div>

@@ -116,6 +116,13 @@ function buildDeskAiPromptStarters(
 
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
+const QUOTE_DESK_HEADER_GRID_COLUMNS =
+  "lg:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
+const QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS =
+  "lg:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_128px]";
+const QUOTE_DESK_NEW_LINE_GRID_COLUMNS =
+  "lg:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px]";
+const QUOTE_DESK_LINE_GRID_MIN_WIDTH = "lg:min-w-[980px]";
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
@@ -1074,8 +1081,10 @@ export function QuoteDeskView() {
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="hidden grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_72px_96px_96px_110px_140px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                <div
+                  className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+                >
                   <span>Line</span>
                   <span>Description</span>
                   <span>Qty</span>
@@ -1944,7 +1953,9 @@ function ExistingLineEditorRow({
         </div>
       </div>
 
-      <div className="hidden lg:grid lg:grid-cols-[36px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_108px_128px] lg:items-start lg:gap-2.5">
+      <div
+        className={`hidden lg:grid lg:items-start lg:gap-2.5 ${QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+      >
         <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           {index + 1}
         </div>
@@ -2008,7 +2019,9 @@ function NewLineEditorRow({
 
   return (
     <div className="space-y-3">
-      <div className="grid gap-3 lg:grid-cols-[36px_minmax(0,1.05fr)_minmax(0,1.15fr)_72px_96px_96px_108px]">
+      <div
+        className={`grid gap-3 ${QUOTE_DESK_NEW_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+      >
         <div className="hidden lg:flex h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           New
         </div>

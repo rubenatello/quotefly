@@ -4,6 +4,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { getJwtClaims } from "../lib/auth";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
+import { isSuperuserEmail } from "../lib/superuser";
 import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
 
@@ -296,6 +297,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         },
       },
       role: membership.role,
+      isSuperuser: isSuperuserEmail(membership.user.email),
     };
   });
 };
