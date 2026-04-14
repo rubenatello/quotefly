@@ -16,6 +16,8 @@ const EnvSchema = z.object({
   JWT_SECRET: z.string().min(32).default("change-me-in-production-must-be-32-chars-min"),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
+  OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_PRICE_ID_STARTER: z.string().default(""),

@@ -3,6 +3,7 @@ import { FileText, UserRound } from "lucide-react";
 import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
 import { money } from "../dashboard/DashboardContext";
 import { Badge } from "../ui";
+import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
 
 export type QuotePreviewLine = {
@@ -33,6 +34,8 @@ export function QuoteLivePreview({
   templateId = "modern",
   accentColor = "#4F7FD2",
   componentColors,
+  footerText,
+  showQuoteFlyAttribution,
 }: {
   businessName: string;
   businessHint?: string;
@@ -52,6 +55,8 @@ export function QuoteLivePreview({
   templateId?: BrandingTemplateId;
   accentColor?: string;
   componentColors?: BrandingComponentColors | null;
+  footerText?: string;
+  showQuoteFlyAttribution?: boolean;
 }) {
   const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
   const template = getQuoteTemplateOption(templateId);
@@ -166,12 +171,13 @@ export function QuoteLivePreview({
             </div>
           </div>
 
-            <div className="ml-auto max-w-[280px] space-y-2">
+          <div className="ml-auto max-w-[280px] space-y-2">
             <PreviewTotalRow label="Subtotal" value={money(customerSubtotal)} />
             <PreviewTotalRow label="Tax" value={money(taxAmount)} />
             <PreviewTotalRow label="Total" value={money(totalAmount)} strong accentColor={totalsColor} />
           </div>
         </div>
+        <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} />
       </div>
     </div>
   );

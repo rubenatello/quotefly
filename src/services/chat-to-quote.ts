@@ -2,7 +2,6 @@ import { ServiceCategory, inferServiceType } from "./quote-generator";
 import { findBestStandardWorkPresetMatch } from "./work-preset-catalog";
 
 export interface ChatQuoteLineItemSuggestion {
-  kind: "LABOR" | "MATERIAL";
   description: string;
   quantity: number;
 }
@@ -179,12 +178,10 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
     estimatedInternalCostAmount,
     lineItems: [
       {
-        kind: "LABOR",
         description: laborDescription(serviceType, squareFeetEstimate),
         quantity: inferLaborQuantity(serviceType, squareFeetEstimate),
       },
       {
-        kind: "MATERIAL",
         description: inferMaterialDescription(serviceType, prompt),
         quantity: 1,
       },

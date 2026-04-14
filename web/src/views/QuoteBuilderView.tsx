@@ -972,6 +972,12 @@ export function QuoteBuilderView() {
         onPromptChange={setChatPrompt}
         starterPrompts={aiPromptStarters}
         onUseStarterPrompt={setChatPrompt}
+        customerContextName={activeCustomer?.fullName ?? null}
+        customerContextDetails={
+          activeCustomer
+            ? [activeCustomer.phone, activeCustomer.email].filter(Boolean).join(" • ")
+            : null
+        }
         customerContextText={
           activeCustomer
             ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`

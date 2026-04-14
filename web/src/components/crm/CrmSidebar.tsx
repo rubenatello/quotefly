@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, FilePlus2, Search, UserPlus2, X } from "luci
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { CloseIcon } from "../Icons";
 import { cn } from "../../lib/utils";
+import { formatAiRenewalDate } from "../../lib/ai-credits";
 import { AppTooltip, AppTooltipProvider } from "../ui/tooltip";
 import { ProgressBar } from "../ui";
 
@@ -65,6 +66,7 @@ export function CrmSidebar({
   const aiQuoteUsed = usage?.monthlyAiQuoteCount ?? 0;
   const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
   const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const aiRenewalLabel = formatAiRenewalDate(usage?.periodEndUtc ?? null);
   const normalizedNavQuery = navQuery.trim().toLowerCase();
 
   const filteredOperationsLinks = useMemo(
@@ -305,7 +307,15 @@ export function CrmSidebar({
               <ProgressBar
                 value={aiUsagePercent}
                 label="Monthly AI credit usage"
-                hint={aiQuoteRemaining === 0 ? "Limit reached" : `${aiQuoteRemaining} left this month`}
+                hint={
+                  aiQuoteRemaining === 0
+                    ? aiRenewalLabel
+                      ? `Limit reached · renews ${aiRenewalLabel}`
+                      : "Limit reached"
+                    : aiRenewalLabel
+                      ? `${aiQuoteRemaining} left · renews ${aiRenewalLabel}`
+                      : `${aiQuoteRemaining} left this month`
+                }
                 className="mt-3"
               />
             </div>

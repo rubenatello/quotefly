@@ -3,7 +3,13 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activity";
-import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
+import {
+  PaginationQuerySchema,
+  tenantActiveCustomerScope,
+  tenantActiveQuoteScope,
+  tenantActiveScope,
+  tenantScope,
+} from "../lib/query-scope";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -109,6 +115,13 @@ function buildOutboundTitle(channel: "EMAIL_APP" | "SMS_APP" | "COPY"): string {
   return "Quote message copied";
 }
 
+function retainedCustomerWasInactive(customer: {
+  archivedAtUtc?: Date | null;
+  deletedAtUtc?: Date | null;
+}) {
+  return Boolean(customer.archivedAtUtc || customer.deletedAtUtc);
+}
+
 export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
@@ -128,7 +141,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const emailMatches = normalizedEmail
       ? await app.prisma.customer.findMany({
           where: {
-            ...tenantActiveScope(claims.tenantId),
+            ...tenantScope(claims.tenantId),
             email: { equals: normalizedEmail, mode: "insensitive" },
           },
           orderBy: { createdAt: "desc" },
@@ -183,7 +196,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const target = await app.prisma.customer.findFirst({
-        where: { id: targetId, tenantId: claims.tenantId },
+        where: { id: targetId, ...tenantScope(claims.tenantId) },
       });
 
       if (!target) {
@@ -200,6 +213,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             notes: payload.notes,
             followUpStatus: payload.followUpStatus,
             followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+            archivedAtUtc: null,
             deletedAtUtc: null,
           },
         });
@@ -208,9 +222,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           customerId: mergedCustomer.id,
           actor,
-          eventType: target.deletedAtUtc ? "RESTORED" : "MERGED",
-          title: target.deletedAtUtc ? "Customer restored" : "Customer merged",
-          detail: target.deletedAtUtc
+          eventType: retainedCustomerWasInactive(target) ? "RESTORED" : "MERGED",
+          title: retainedCustomerWasInactive(target) ? "Customer restored" : "Customer merged",
+          detail: retainedCustomerWasInactive(target)
             ? `${mergedCustomer.fullName} was restored and updated.`
             : `${mergedCustomer.fullName} was merged into the existing customer record.`,
         });
@@ -232,7 +246,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({
         customer,
         merged: true,
-        restored: target.deletedAtUtc !== null,
+        restored: retainedCustomerWasInactive(target),
       });
     }
 
@@ -308,7 +322,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const query = ListCustomersQuerySchema.parse(request.query);
 
     const where: Prisma.CustomerWhereInput = {
-      ...tenantActiveScope(claims.tenantId),
+      ...tenantActiveCustomerScope(claims.tenantId),
       ...(query.search
         ? {
             OR: [
@@ -347,7 +361,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveCustomerScope(claims.tenantId),
       },
     });
 
@@ -366,7 +380,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveCustomerScope(claims.tenantId),
       },
       select: { id: true, fullName: true },
     });
@@ -530,7 +544,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const existing = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveCustomerScope(claims.tenantId),
       },
     });
 
@@ -541,7 +555,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     if (payload.phone && payload.phone !== existing.phone) {
       const phoneConflict = await app.prisma.customer.findFirst({
         where: {
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
           phone: payload.phone,
           id: { not: existing.id },
         },
@@ -609,38 +623,156 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     return { customer };
   });
 
-  app.delete("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/customers/:customerId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const actor = await resolveActivityActor(app.prisma, claims);
+    const now = new Date();
 
-    const existing = await app.prisma.customer.findFirst({
-      where: {
-        id: customerId,
-        ...tenantActiveScope(claims.tenantId),
-      },
-      select: { id: true },
-    });
+    const archived = await app.prisma.$transaction(async (tx) => {
+      const existing = await tx.customer.findFirst({
+        where: {
+          id: customerId,
+          ...tenantActiveCustomerScope(claims.tenantId),
+        },
+        select: { id: true, fullName: true },
+      });
 
-    if (!existing) {
-      return reply.code(404).send({ error: "Customer not found for tenant." });
-    }
+      if (!existing) {
+        return false;
+      }
 
-    await app.prisma.$transaction(async (tx) => {
+      const relatedQuotes = await tx.quote.findMany({
+        where: {
+          customerId: existing.id,
+          ...tenantActiveQuoteScope(claims.tenantId),
+        },
+        select: { id: true },
+      });
+
       await createCustomerActivityEvent(tx, {
         tenantId: claims.tenantId,
         customerId: existing.id,
         actor,
         eventType: "ARCHIVED",
         title: "Customer archived",
-        detail: "Customer was archived from the workspace.",
+        detail: relatedQuotes.length
+          ? `Customer was archived from the workspace. ${relatedQuotes.length} related quote(s) were archived as well.`
+          : "Customer was archived from the workspace.",
+      });
+
+      await tx.quote.updateMany({
+        where: {
+          id: { in: relatedQuotes.map((quote) => quote.id) },
+          ...tenantActiveQuoteScope(claims.tenantId),
+        },
+        data: {
+          archivedAtUtc: now,
+          deletedAtUtc: null,
+        },
       });
 
       await tx.customer.update({
         where: { id: existing.id },
-        data: { deletedAtUtc: new Date() },
+        data: {
+          archivedAtUtc: now,
+          deletedAtUtc: null,
+        },
       });
+
+      return true;
     });
+
+    if (!archived) {
+      return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
+
+    return reply.code(204).send();
+  });
+
+  app.delete("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { customerId } = CustomerParamsSchema.parse(request.params);
+    const actor = await resolveActivityActor(app.prisma, claims);
+    const now = new Date();
+
+    const deleted = await app.prisma.$transaction(async (tx) => {
+      const existing = await tx.customer.findFirst({
+        where: {
+          id: customerId,
+          ...tenantActiveCustomerScope(claims.tenantId),
+        },
+        select: { id: true, fullName: true },
+      });
+
+      if (!existing) {
+        return false;
+      }
+
+      const relatedQuotes = await tx.quote.findMany({
+        where: {
+          customerId: existing.id,
+          ...tenantActiveQuoteScope(claims.tenantId),
+        },
+        select: { id: true },
+      });
+
+      await createCustomerActivityEvent(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        actor,
+        eventType: "DELETED",
+        title: "Customer deleted",
+        detail: relatedQuotes.length
+          ? `Customer was removed from the active workspace. ${relatedQuotes.length} related quote(s) were deleted as well.`
+          : "Customer was removed from the active workspace.",
+      });
+
+      if (relatedQuotes.length) {
+        const relatedQuoteIds = relatedQuotes.map((quote) => quote.id);
+
+        await tx.quote.updateMany({
+          where: {
+            id: { in: relatedQuoteIds },
+            ...tenantActiveQuoteScope(claims.tenantId),
+          },
+          data: {
+            archivedAtUtc: null,
+            deletedAtUtc: now,
+          },
+        });
+
+        await tx.quoteLineItem.updateMany({
+          where: {
+            quoteId: { in: relatedQuoteIds },
+            ...tenantActiveScope(claims.tenantId),
+          },
+          data: { deletedAtUtc: now },
+        });
+
+        await tx.quoteDecisionSession.updateMany({
+          where: {
+            quoteId: { in: relatedQuoteIds },
+            ...tenantActiveScope(claims.tenantId),
+          },
+          data: { deletedAtUtc: now },
+        });
+      }
+
+      await tx.customer.update({
+        where: { id: existing.id },
+        data: {
+          archivedAtUtc: null,
+          deletedAtUtc: now,
+        },
+      });
+
+      return true;
+    });
+
+    if (!deleted) {
+      return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
 
     return reply.code(204).send();
   });

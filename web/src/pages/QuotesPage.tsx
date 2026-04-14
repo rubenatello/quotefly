@@ -1,10 +1,11 @@
 ﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BadgeCheck, Calculator, CircleDot, Eye, FileText, ReceiptText, Send, Share2, XCircle } from "lucide-react";
+import { Archive, BadgeCheck, Calculator, CircleDot, Eye, FileText, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
   Alert,
   Badge,
   Button,
   Card,
+  ConfirmModal,
   EmptyState,
   Input,
   Modal,
@@ -28,6 +29,7 @@ import {
 
 type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
+type QuoteRetentionAction = { type: "archive" | "delete"; quote: Quote } | null;
 
 const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
 
@@ -268,13 +270,15 @@ function QuoteDesktopRow({
   quote,
   onOpenQuote,
   onOpenPdfActions,
+  onRetentionAction,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
+  onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
-    <div className="hidden grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_184px] gap-4 px-4 py-3 lg:grid lg:items-center">
+    <div className="hidden grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px] gap-4 px-4 py-3 lg:grid lg:items-center">
       <div className="space-y-1">
         <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
         <p className="text-xs text-slate-500">Updated {formatDateTime(quote.updatedAt)}</p>
@@ -303,6 +307,12 @@ function QuoteDesktopRow({
         <Button size="sm" variant="outline" icon={<FileText size={14} />} onClick={() => onOpenPdfActions(quote)}>
           PDF
         </Button>
+        <Button size="sm" variant="outline" icon={<Archive size={14} />} onClick={() => onRetentionAction({ type: "archive", quote })}>
+          Archive
+        </Button>
+        <Button size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => onRetentionAction({ type: "delete", quote })}>
+          Delete
+        </Button>
         <Button size="sm" variant="outline" onClick={() => onOpenQuote(quote.id)}>
           Open
         </Button>
@@ -315,10 +325,12 @@ function QuoteMobileCard({
   quote,
   onOpenQuote,
   onOpenPdfActions,
+  onRetentionAction,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
+  onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
     <div className="space-y-3 px-4 py-4 lg:hidden">
@@ -356,6 +368,14 @@ function QuoteMobileCard({
           Open
         </Button>
       </div>
+      <div className="flex gap-2">
+        <Button fullWidth size="sm" variant="outline" icon={<Archive size={14} />} onClick={() => onRetentionAction({ type: "archive", quote })}>
+          Archive
+        </Button>
+        <Button fullWidth size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => onRetentionAction({ type: "delete", quote })}>
+          Delete
+        </Button>
+      </div>
     </div>
   );
 }
@@ -380,6 +400,8 @@ export function QuotesPage() {
   const [pdfActionQuote, setPdfActionQuote] = useState<Quote | null>(null);
   const [pdfActionLoading, setPdfActionLoading] = useState<PdfActionType | null>(null);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [quoteRetentionAction, setQuoteRetentionAction] = useState<QuoteRetentionAction>(null);
+  const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
 
   useEffect(() => {
     void loadAll();
@@ -581,6 +603,28 @@ export function QuotesPage() {
     return canNativePdfShareOnDevice();
   }, []);
 
+  async function confirmQuoteRetentionAction() {
+    if (!quoteRetentionAction || quoteRetentionSaving) return;
+
+    setQuoteRetentionSaving(true);
+    try {
+      if (quoteRetentionAction.type === "archive") {
+        await api.quotes.archive(quoteRetentionAction.quote.id);
+        setNotice("Quote archived.");
+      } else {
+        await api.quotes.delete(quoteRetentionAction.quote.id);
+        setNotice("Quote deleted from the active workspace.");
+      }
+      setPdfActionQuote((current) => (current?.id === quoteRetentionAction.quote.id ? null : current));
+      await loadAll();
+      setQuoteRetentionAction(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction.type} quote.`);
+    } finally {
+      setQuoteRetentionSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -678,8 +722,18 @@ export function QuotesPage() {
               <div className="divide-y divide-slate-200">
                 {filteredQuotes.map((quote) => (
                   <div key={quote.id} className="transition-colors hover:bg-slate-50/80">
-                    <QuoteDesktopRow quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
-                    <QuoteMobileCard quote={quote} onOpenQuote={navigateToQuote} onOpenPdfActions={setPdfActionQuote} />
+                    <QuoteDesktopRow
+                      quote={quote}
+                      onOpenQuote={navigateToQuote}
+                      onOpenPdfActions={setPdfActionQuote}
+                      onRetentionAction={setQuoteRetentionAction}
+                    />
+                    <QuoteMobileCard
+                      quote={quote}
+                      onOpenQuote={navigateToQuote}
+                      onOpenPdfActions={setPdfActionQuote}
+                      onRetentionAction={setQuoteRetentionAction}
+                    />
                   </div>
                 ))}
               </div>
@@ -736,6 +790,23 @@ export function QuotesPage() {
           </ModalFooter>
         </Modal>
       ) : null}
+
+      <ConfirmModal
+        open={Boolean(quoteRetentionAction)}
+        onClose={() => {
+          if (!quoteRetentionSaving) setQuoteRetentionAction(null);
+        }}
+        onConfirm={() => void confirmQuoteRetentionAction()}
+        title={quoteRetentionAction?.type === "archive" ? "Archive quote?" : "Delete quote?"}
+        description={
+          quoteRetentionAction?.type === "archive"
+            ? "This quote will leave the active workspace but remain retained in the database and audit history."
+            : "This quote will leave the active workspace but remain retained in the database and audit history."
+        }
+        confirmLabel={quoteRetentionAction?.type === "archive" ? "Archive quote" : "Delete quote"}
+        loading={quoteRetentionSaving}
+        confirmVariant={quoteRetentionAction?.type === "archive" ? "primary" : "danger"}
+      />
 
       <QuickCustomerModal
         open={quickCustomerOpen}

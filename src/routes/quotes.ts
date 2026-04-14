@@ -91,6 +91,11 @@ const QuoteParamsSchema = z.object({
   quoteId: z.string().min(1),
 });
 
+const QuoteRevisionParamsSchema = z.object({
+  quoteId: z.string().min(1),
+  revisionId: z.string().min(1),
+});
+
 const QuoteDecisionSchema = z.object({
   decision: z.enum(["send", "revise"]),
 });
@@ -348,6 +353,7 @@ interface RevisionSnapshot {
     customerPriceSubtotal: number;
     taxAmount: number;
     totalAmount: number;
+    sentAtUtc?: string | null;
     closedAtUtc: string | null;
     jobCompletedAtUtc: string | null;
     afterSaleFollowUpDueAtUtc: string | null;
@@ -361,6 +367,43 @@ interface RevisionSnapshot {
   };
   lineItems: RevisionSnapshotLineItem[];
 }
+
+const RevisionSnapshotLineItemSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  quantity: z.number().finite(),
+  unitCost: z.number().finite(),
+  unitPrice: z.number().finite(),
+  lineTotal: z.number().finite(),
+});
+
+const RevisionSnapshotSchema = z.object({
+  quote: z.object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    serviceType: ServiceTypeSchema,
+    status: QuoteStatusSchema,
+    jobStatus: QuoteJobStatusSchema,
+    afterSaleFollowUpStatus: AfterSaleFollowUpStatusSchema,
+    scopeText: z.string(),
+    internalCostSubtotal: z.number().finite(),
+    customerPriceSubtotal: z.number().finite(),
+    taxAmount: z.number().finite(),
+    totalAmount: z.number().finite(),
+    sentAtUtc: z.string().datetime().nullable().optional(),
+    closedAtUtc: z.string().datetime().nullable(),
+    jobCompletedAtUtc: z.string().datetime().nullable(),
+    afterSaleFollowUpDueAtUtc: z.string().datetime().nullable(),
+    afterSaleFollowUpCompletedAtUtc: z.string().datetime().nullable(),
+  }),
+  customer: z.object({
+    id: z.string().min(1),
+    fullName: z.string().min(1),
+    email: z.string().email().nullable(),
+    phone: z.string().min(1),
+  }),
+  lineItems: z.array(RevisionSnapshotLineItemSchema),
+});
 
 async function getQuoteRevisionContext(
   tx: Prisma.TransactionClient,
@@ -412,6 +455,7 @@ function buildQuoteRevisionSnapshot(
       customerPriceSubtotal: Number(context.customerPriceSubtotal),
       taxAmount: Number(context.taxAmount),
       totalAmount: Number(context.totalAmount),
+      sentAtUtc: context.sentAt?.toISOString() ?? null,
       closedAtUtc: context.closedAtUtc?.toISOString() ?? null,
       jobCompletedAtUtc: context.jobCompletedAtUtc?.toISOString() ?? null,
       afterSaleFollowUpDueAtUtc: context.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
@@ -481,6 +525,151 @@ async function createQuoteRevision(
       snapshot: snapshot as unknown as Prisma.InputJsonValue,
     },
   });
+}
+
+async function restoreQuoteRevision(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    quoteId: string;
+    revisionId: string;
+    actor?: ActivityActor;
+  },
+) {
+  const quote = await getActiveQuoteForTenant(tx, params.quoteId, params.tenantId);
+  if (!quote) return { status: "quote_missing" as const };
+
+  const revision = await tx.quoteRevision.findFirst({
+    where: {
+      id: params.revisionId,
+      quoteId: quote.id,
+      ...tenantActiveScope(params.tenantId),
+    },
+    select: {
+      id: true,
+      createdAt: true,
+      snapshot: true,
+    },
+  });
+
+  if (!revision) return { status: "revision_missing" as const };
+
+  const parsedSnapshot = RevisionSnapshotSchema.safeParse(revision.snapshot);
+  if (!parsedSnapshot.success) return { status: "snapshot_invalid" as const };
+  const snapshot = parsedSnapshot.data;
+
+  const customer = await tx.customer.findFirst({
+    where: {
+      id: snapshot.customer.id,
+      ...tenantActiveCustomerScope(params.tenantId),
+    },
+    select: { id: true },
+  });
+
+  if (!customer) return { status: "customer_missing" as const };
+
+  const now = new Date();
+  const sentAt =
+    snapshot.quote.sentAtUtc !== undefined
+      ? snapshot.quote.sentAtUtc
+        ? new Date(snapshot.quote.sentAtUtc)
+        : null
+      : snapshot.quote.status === "SENT_TO_CUSTOMER"
+        ? quote.sentAt ?? revision.createdAt
+        : null;
+
+  await tx.quote.update({
+    where: { id: quote.id },
+    data: {
+      customerId: snapshot.customer.id,
+      serviceType: snapshot.quote.serviceType,
+      status: snapshot.quote.status,
+      jobStatus: snapshot.quote.jobStatus,
+      afterSaleFollowUpStatus: snapshot.quote.afterSaleFollowUpStatus,
+      title: snapshot.quote.title,
+      scopeText: snapshot.quote.scopeText,
+      internalCostSubtotal: roundCurrency(snapshot.quote.internalCostSubtotal),
+      customerPriceSubtotal: roundCurrency(snapshot.quote.customerPriceSubtotal),
+      taxAmount: roundCurrency(snapshot.quote.taxAmount),
+      totalAmount: roundCurrency(snapshot.quote.totalAmount),
+      sentAt,
+      closedAtUtc: snapshot.quote.closedAtUtc ? new Date(snapshot.quote.closedAtUtc) : null,
+      jobCompletedAtUtc: snapshot.quote.jobCompletedAtUtc ? new Date(snapshot.quote.jobCompletedAtUtc) : null,
+      afterSaleFollowUpDueAtUtc: snapshot.quote.afterSaleFollowUpDueAtUtc
+        ? new Date(snapshot.quote.afterSaleFollowUpDueAtUtc)
+        : null,
+      afterSaleFollowUpCompletedAtUtc: snapshot.quote.afterSaleFollowUpCompletedAtUtc
+        ? new Date(snapshot.quote.afterSaleFollowUpCompletedAtUtc)
+        : null,
+      archivedAtUtc: null,
+      deletedAtUtc: null,
+      updatedAt: now,
+    },
+  });
+
+  await tx.quoteLineItem.updateMany({
+    where: {
+      quoteId: quote.id,
+      ...tenantActiveScope(params.tenantId),
+    },
+    data: {
+      deletedAtUtc: now,
+    },
+  });
+
+  for (const lineItem of snapshot.lineItems) {
+    await tx.quoteLineItem.create({
+      data: {
+        tenantId: params.tenantId,
+        quoteId: quote.id,
+        description: lineItem.description,
+        quantity: roundCurrency(lineItem.quantity),
+        unitCost: roundCurrency(lineItem.unitCost),
+        unitPrice: roundCurrency(lineItem.unitPrice),
+      },
+    });
+  }
+
+  const restoredQuote = await recalculateQuoteFromLineItems(tx, quote.id, params.tenantId);
+  if (!restoredQuote) return { status: "quote_missing" as const };
+
+  const restoredTaxAmount = roundCurrency(snapshot.quote.taxAmount);
+  const restoredTotalAmount = calculateQuoteTotal(
+    Number(restoredQuote.customerPriceSubtotal),
+    restoredTaxAmount,
+  );
+
+  const finalizedQuote = await tx.quote.update({
+    where: { id: restoredQuote.id },
+    data: {
+      taxAmount: restoredTaxAmount,
+      totalAmount: restoredTotalAmount,
+    },
+  });
+
+  await createQuoteRevision(tx, {
+    tenantId: params.tenantId,
+    quoteId: finalizedQuote.id,
+    eventType: "UPDATED",
+    actor: params.actor,
+    changedFields: [
+      "restoredFromRevision",
+      `restoredFromRevisionId:${revision.id}`,
+      "customerId",
+      "status",
+      "jobStatus",
+      "afterSaleFollowUpStatus",
+      "title",
+      "scopeText",
+      "lineItems",
+      "internalCostSubtotal",
+      "customerPriceSubtotal",
+      "taxAmount",
+      "totalAmount",
+    ],
+  });
+
+  return { status: "ok" as const };
 }
 
 function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[] {
@@ -904,6 +1093,15 @@ function formatAiSourceStatus(status: z.infer<typeof QuoteStatusSchema>) {
   return "Draft";
 }
 
+function hasCloseAmountMatch(similarQuotes: SimilarQuoteContext[], targetAmount?: number | null) {
+  if (!targetAmount || targetAmount <= 0) return false;
+  return similarQuotes.some((quote) => {
+    if (quote.totalAmount <= 0) return false;
+    const deltaRatio = Math.abs(quote.totalAmount - targetAmount) / targetAmount;
+    return deltaRatio <= 0.2;
+  });
+}
+
 function assessAiSuggestionConfidence(params: {
   currentQuoteUsed: boolean;
   customer?: {
@@ -912,6 +1110,7 @@ function assessAiSuggestionConfidence(params: {
   customerActivityCount: number;
   presetCount: number;
   similarQuotes: SimilarQuoteContext[];
+  targetAmount?: number | null;
 }) {
   let score = 0;
 
@@ -923,6 +1122,7 @@ function assessAiSuggestionConfidence(params: {
   if (params.similarQuotes.length > 0) score += 2;
   if (params.similarQuotes.some((quote) => quote.status === "ACCEPTED")) score += 2;
   else if (params.similarQuotes.some((quote) => quote.status === "SENT_TO_CUSTOMER")) score += 1;
+  if (hasCloseAmountMatch(params.similarQuotes, params.targetAmount)) score += 1;
 
   if (score >= 8) {
     return {
@@ -961,6 +1161,7 @@ function buildAiSuggestionInsight(params: {
   customerActivityCount: number;
   presetCount: number;
   similarQuotes: SimilarQuoteContext[];
+  targetAmount?: number | null;
   patch: AiQuotePatchResult;
 }): AiSuggestionInsight {
   const confidence = assessAiSuggestionConfidence({
@@ -969,6 +1170,7 @@ function buildAiSuggestionInsight(params: {
     customerActivityCount: params.customerActivityCount,
     presetCount: params.presetCount,
     similarQuotes: params.similarQuotes,
+    targetAmount: params.targetAmount,
   });
 
   const summary =
@@ -1067,6 +1269,7 @@ const AI_PROGRESS_STEPS: Record<
   loading_customer_context: { value: 34, label: "Loading customer context" },
   retrieving_workspace_context: { value: 56, label: "Matching saved jobs + similar quotes" },
   drafting_quote_patch: { value: 78, label: "Preparing line changes" },
+  reviewing_line_changes: { value: 88, label: "Reviewing patch impact" },
   finalizing_suggestion: { value: 94, label: "Applying the quote patch" },
 };
 
@@ -1107,7 +1310,18 @@ function startAiSuggestionStream(reply: FastifyReply) {
 
   return {
     write,
-    progress(step: AiProgressStep, detail: string, sourceHints?: string[]) {
+    progress(
+      step: AiProgressStep,
+      detail: string,
+      options?: {
+        sourceHints?: string[];
+        patchCounts?: {
+          added: number;
+          updated: number;
+          removed: number;
+        };
+      },
+    ) {
       const config = AI_PROGRESS_STEPS[step];
       write({
         type: "progress",
@@ -1115,7 +1329,8 @@ function startAiSuggestionStream(reply: FastifyReply) {
         value: config.value,
         label: config.label,
         detail,
-        ...(sourceHints?.length ? { sourceHints } : {}),
+        ...(options?.sourceHints?.length ? { sourceHints: options.sourceHints } : {}),
+        ...(options?.patchCounts ? { patchCounts: options.patchCounts } : {}),
       });
     },
     end() {
@@ -1207,6 +1422,7 @@ type AiProgressStep =
   | "loading_customer_context"
   | "retrieving_workspace_context"
   | "drafting_quote_patch"
+  | "reviewing_line_changes"
   | "finalizing_suggestion";
 
 type AiProgressEvent = {
@@ -1216,6 +1432,11 @@ type AiProgressEvent = {
   label: string;
   detail: string;
   sourceHints?: string[];
+  patchCounts?: {
+    added: number;
+    updated: number;
+    removed: number;
+  };
 };
 
 type AiSuggestionStreamEvent =
@@ -1393,6 +1614,24 @@ function buildAiQuoteContext(params: {
   return sections.join("\n\n");
 }
 
+function appendAiPromptStructureHints(context: string, prompt: string) {
+  if (!promptRequestsSeparateLineOptions(prompt)) {
+    return context;
+  }
+
+  return [
+    context,
+    [
+      "Prompt structure requirements:",
+      "- The user explicitly asked for separate lines or alternative options.",
+      "- Preserve that request in the line item structure.",
+      "- Do not collapse repair and replacement into one generic line.",
+    ].join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 const AI_CONTEXT_STOP_WORDS = new Set([
   "and",
   "the",
@@ -1433,15 +1672,78 @@ function aiContextTokens(...values: Array<string | null | undefined>) {
   );
 }
 
+function promptRequestsSeparateLineOptions(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\btwo line\b/,
+    /\btwo lines\b/,
+    /\bseparate line\b/,
+    /\banother line\b/,
+    /\boption 1\b/,
+    /\boption 2\b/,
+    /\boption a\b/,
+    /\boption b\b/,
+    /\brepair or replace\b/,
+    /\brepair and replace\b/,
+    /\bif repairs? are not possible\b/,
+    /\bif repair is not possible\b/,
+    /\bif not possible\b/,
+    /\bif replacement is better\b/,
+    /\bfallback\b/,
+    /\balternative\b/,
+    /\bcontingenc(?:y|ies)\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function isGenericAiDraftLineDescription(description: string, serviceType: z.infer<typeof ServiceTypeSchema>) {
+  const normalized = normalizeTextForComparison(description);
+  if (!normalized) return true;
+
+  const genericCandidates = new Set([
+    normalizeTextForComparison(`${serviceType} labor`),
+    normalizeTextForComparison(`${serviceType} labor and installation`),
+    normalizeTextForComparison(`${serviceType} service`),
+    normalizeTextForComparison("labor and installation"),
+    normalizeTextForComparison("materials and supplies"),
+    normalizeTextForComparison("materials and install supplies"),
+    normalizeTextForComparison("hvac equipment fittings and install materials"),
+    normalizeTextForComparison("plumbing fixtures piping and install materials"),
+    normalizeTextForComparison("roofing materials underlayment and accessories"),
+    normalizeTextForComparison("construction materials consumables and site supplies"),
+    normalizeTextForComparison("flooring materials trim and install supplies"),
+  ]);
+
+  return genericCandidates.has(normalized);
+}
+
+function shouldPreserveExplicitAiLineStructure(params: {
+  prompt: string;
+  parsedDraft: ParsedChatToQuoteDraft;
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+}) {
+  if (promptRequestsSeparateLineOptions(params.prompt)) return true;
+  if (params.parsedDraft.lineItems.length >= 3) return true;
+
+  const specificLineCount = params.parsedDraft.lineItems.filter(
+    (lineItem) => !isGenericAiDraftLineDescription(lineItem.description, params.serviceType),
+  ).length;
+
+  return specificLineCount >= 2;
+}
+
 function scoreSimilarQuote(
   queryTokens: string[],
   quote: {
     title: string;
     scopeText: string;
+    totalAmount: number;
     lineItems: Array<{ description: string }>;
     status: z.infer<typeof QuoteStatusSchema>;
     updatedAt: Date;
   },
+  targetAmount?: number | null,
 ) {
   const titleText = normalizeTextForComparison(quote.title);
   const scopeText = normalizeTextForComparison(quote.scopeText);
@@ -1467,6 +1769,14 @@ function scoreSimilarQuote(
   else if (ageInDays <= 45) score += 2;
   else if (ageInDays <= 90) score += 1;
 
+  if (targetAmount && targetAmount > 0 && quote.totalAmount > 0) {
+    const deltaRatio = Math.abs(quote.totalAmount - targetAmount) / targetAmount;
+    if (deltaRatio <= 0.1) score += 6;
+    else if (deltaRatio <= 0.2) score += 3;
+    else if (deltaRatio <= 0.35) score += 1;
+    else if (deltaRatio >= 0.75) score -= 2;
+  }
+
   return score;
 }
 
@@ -1478,6 +1788,7 @@ async function loadSimilarQuoteContext(
     prompt: string;
     title?: string | null;
     scopeText?: string | null;
+    targetAmount?: number | null;
     excludeQuoteId?: string | null;
   },
 ): Promise<SimilarQuoteContext[]> {
@@ -1530,10 +1841,11 @@ async function loadSimilarQuoteContext(
       score: scoreSimilarQuote(queryTokens, {
         title: quote.title,
         scopeText: quote.scopeText,
+        totalAmount: Number(quote.totalAmount),
         lineItems: quote.lineItems.map((lineItem) => ({ description: lineItem.description })),
         status: quote.status,
         updatedAt: quote.updatedAt,
-      }),
+      }, params.targetAmount),
     }))
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
@@ -1542,6 +1854,133 @@ async function loadSimilarQuoteContext(
     .filter((quote, index) => quote.score > 0 || index < 3)
     .slice(0, 4)
     .map(({ score: _score, ...quote }) => quote);
+}
+
+function buildExplicitAiLineItems(params: {
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+  prompt: string;
+  parsedDraft: ParsedChatToQuoteDraft;
+  tenantPresets: Array<{
+    catalogKey: string | null;
+    name: string;
+    description: string | null;
+    unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+    defaultQuantity: Prisma.Decimal | number;
+    unitCost: Prisma.Decimal | number;
+    unitPrice: Prisma.Decimal | number;
+  }>;
+  customerPriceSubtotal: number;
+  internalCostSubtotal: number;
+}) {
+  const suggestions =
+    params.parsedDraft.lineItems.length > 0
+      ? params.parsedDraft.lineItems
+      : [
+          { description: `${params.serviceType} service`, quantity: 1 },
+          { description: "Materials and install supplies", quantity: 1 },
+        ];
+
+  const seededLines = suggestions.map((lineItem) => {
+    const matchedStandardPreset = findBestStandardWorkPresetMatch(
+      params.serviceType,
+      `${lineItem.description} ${params.prompt}`,
+      { minimumScore: 3 },
+    );
+    const matchedTenantPreset = matchedStandardPreset
+      ? params.tenantPresets.find((preset) => preset.catalogKey === matchedStandardPreset.catalogKey) ?? null
+      : null;
+    const matchedPreset = matchedTenantPreset
+      ? {
+          unitType: matchedTenantPreset.unitType,
+          defaultQuantity: Number(matchedTenantPreset.defaultQuantity),
+          unitCost: Number(matchedTenantPreset.unitCost),
+          unitPrice: Number(matchedTenantPreset.unitPrice),
+          quantityMode: matchedStandardPreset?.quantityMode ?? "default",
+        }
+      : matchedStandardPreset
+        ? {
+            unitType: matchedStandardPreset.unitType,
+            defaultQuantity: matchedStandardPreset.defaultQuantity,
+            unitCost: matchedStandardPreset.unitCost,
+            unitPrice: matchedStandardPreset.unitPrice,
+            quantityMode: matchedStandardPreset.quantityMode ?? "default",
+          }
+        : null;
+
+    const quantity = matchedPreset
+      ? inferPresetQuantity(
+          matchedPreset.unitType,
+          matchedPreset.defaultQuantity,
+          params.parsedDraft.squareFeetEstimate,
+          matchedPreset.quantityMode,
+        )
+      : Number(Math.max(1, lineItem.quantity).toFixed(2));
+
+    return {
+      description: lineItem.description,
+      quantity,
+      matched: Boolean(matchedPreset),
+      baseUnitCost: matchedPreset ? roundCurrency(matchedPreset.unitCost) : 0,
+      baseUnitPrice: matchedPreset ? roundCurrency(matchedPreset.unitPrice) : 0,
+    };
+  });
+
+  const rawMatchedCustomerSubtotal = seededLines.reduce(
+    (sum, lineItem) => sum + lineItem.quantity * lineItem.baseUnitPrice,
+    0,
+  );
+  const rawMatchedInternalSubtotal = seededLines.reduce(
+    (sum, lineItem) => sum + lineItem.quantity * lineItem.baseUnitCost,
+    0,
+  );
+  const unmatchedLines = seededLines.filter((lineItem) => !lineItem.matched);
+  const unmatchedQuantityTotal = Math.max(
+    unmatchedLines.reduce((sum, lineItem) => sum + Math.max(lineItem.quantity, 1), 0),
+    1,
+  );
+
+  const remainingCustomerSubtotal =
+    unmatchedLines.length > 0
+      ? Math.max(params.customerPriceSubtotal - rawMatchedCustomerSubtotal, 0)
+      : params.customerPriceSubtotal;
+  const remainingInternalSubtotal =
+    unmatchedLines.length > 0
+      ? Math.max(params.internalCostSubtotal - rawMatchedInternalSubtotal, 0)
+      : params.internalCostSubtotal;
+
+  const rawLines = seededLines.map((lineItem) => {
+    if (lineItem.matched) {
+      return {
+        description: lineItem.description,
+        quantity: lineItem.quantity,
+        unitCost: lineItem.baseUnitCost,
+        unitPrice: lineItem.baseUnitPrice,
+      };
+    }
+
+    const quantityShare = Math.max(lineItem.quantity, 1) / unmatchedQuantityTotal;
+    return {
+      description: lineItem.description,
+      quantity: lineItem.quantity,
+      unitCost: roundCurrency(remainingInternalSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
+      unitPrice: roundCurrency(remainingCustomerSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
+    };
+  });
+
+  const rawCustomerSubtotal = rawLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice, 0);
+  const rawInternalSubtotal = rawLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitCost, 0);
+
+  return rawLines.map((lineItem) => ({
+    ...lineItem,
+    unitCost:
+      rawInternalSubtotal > 0
+        ? roundCurrency(lineItem.unitCost * (params.internalCostSubtotal / rawInternalSubtotal))
+        : lineItem.unitCost,
+    unitPrice:
+      rawCustomerSubtotal > 0
+        ? roundCurrency(lineItem.unitPrice * (params.customerPriceSubtotal / rawCustomerSubtotal))
+        : lineItem.unitPrice,
+  }));
 }
 
 async function buildAiSuggestedQuoteDraft(
@@ -1607,12 +2046,17 @@ async function buildAiSuggestedQuoteDraft(
           quantityMode: matchedStandardPreset.quantityMode ?? "default",
         }
       : null;
+  const preferExplicitAiLines = shouldPreserveExplicitAiLineStructure({
+    prompt: params.prompt,
+    parsedDraft: params.parsedDraft,
+    serviceType,
+  });
 
   const hasExplicitSubtotalTarget =
     (params.parsedDraft.estimatedTotalAmount ?? 0) > 0 || (params.parsedDraft.estimatedInternalCostAmount ?? 0) > 0;
 
   const supplementalPresetMatches =
-    matchedStandardPreset && !hasExplicitSubtotalTarget
+    matchedStandardPreset && !hasExplicitSubtotalTarget && !preferExplicitAiLines
       ? findStandardWorkPresetMatches(
           serviceType,
           `${params.prompt} ${params.parsedDraft.title} ${params.parsedDraft.scopeText}`,
@@ -1650,7 +2094,7 @@ async function buildAiSuggestedQuoteDraft(
   });
 
   let customerPriceSubtotal = roundCurrency(params.parsedDraft.estimatedTotalAmount ?? 0);
-  if (customerPriceSubtotal <= 0 && matchedPreset) {
+  if (customerPriceSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
     const matchedQuantity = inferPresetQuantity(
       matchedPreset.unitType,
       matchedPreset.defaultQuantity,
@@ -1659,7 +2103,7 @@ async function buildAiSuggestedQuoteDraft(
     );
     customerPriceSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitPrice);
   }
-  if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+  if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset && !preferExplicitAiLines) {
     const primaryQuantity = inferPresetQuantity(
       matchedPreset.unitType,
       matchedPreset.defaultQuantity,
@@ -1683,7 +2127,7 @@ async function buildAiSuggestedQuoteDraft(
   }
 
   let internalCostSubtotal = roundCurrency(params.parsedDraft.estimatedInternalCostAmount ?? 0);
-  if (internalCostSubtotal <= 0 && matchedPreset) {
+  if (internalCostSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
     const matchedQuantity = inferPresetQuantity(
       matchedPreset.unitType,
       matchedPreset.defaultQuantity,
@@ -1692,7 +2136,7 @@ async function buildAiSuggestedQuoteDraft(
     );
     internalCostSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitCost);
   }
-  if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+  if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset && !preferExplicitAiLines) {
     const primaryQuantity = inferPresetQuantity(
       matchedPreset.unitType,
       matchedPreset.defaultQuantity,
@@ -1723,7 +2167,7 @@ async function buildAiSuggestedQuoteDraft(
     matchedPreset?.description,
   );
 
-  const lineItems = matchedPreset
+  const lineItems = matchedPreset && !preferExplicitAiLines
     ? (() => {
         const primaryQuantity = inferPresetQuantity(
           matchedPreset.unitType,
@@ -1769,46 +2213,13 @@ async function buildAiSuggestedQuoteDraft(
         }));
       })()
     : (() => {
-        const laborPercent = laborSplit(serviceType);
-        const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
-        const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
-        const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
-        const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
-
-        const suggestions =
-          params.parsedDraft.lineItems.length > 0
-            ? params.parsedDraft.lineItems
-            : [
-                { kind: "LABOR" as const, description: `${serviceType} labor`, quantity: 1 },
-                { kind: "MATERIAL" as const, description: "Materials and install supplies", quantity: 1 },
-              ];
-
-        const laborQuantityTotal = Math.max(
-          suggestions.filter((lineItem) => lineItem.kind === "LABOR").reduce((sum, lineItem) => sum + Math.max(lineItem.quantity, 1), 0),
-          1,
-        );
-        const materialQuantityTotal = Math.max(
-          suggestions.filter((lineItem) => lineItem.kind === "MATERIAL").reduce((sum, lineItem) => sum + Math.max(lineItem.quantity, 1), 0),
-          1,
-        );
-
-        return suggestions.map((lineItem) => {
-          const quantity = Number(Math.max(1, lineItem.quantity).toFixed(2));
-          if (lineItem.kind === "LABOR") {
-            return {
-              description: lineItem.description || `${serviceType} labor`,
-              quantity,
-              unitCost: roundCurrency(laborInternalTotal / laborQuantityTotal),
-              unitPrice: roundCurrency(laborCustomerTotal / laborQuantityTotal),
-            };
-          }
-
-          return {
-            description: lineItem.description || "Materials and install supplies",
-            quantity,
-            unitCost: roundCurrency(materialInternalTotal / materialQuantityTotal),
-            unitPrice: roundCurrency(materialCustomerTotal / materialQuantityTotal),
-          };
+        return buildExplicitAiLineItems({
+          serviceType,
+          prompt: params.prompt,
+          parsedDraft: params.parsedDraft,
+          tenantPresets,
+          customerPriceSubtotal,
+          internalCostSubtotal,
         });
       })();
 
@@ -1941,6 +2352,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const preflightDraft = parseChatToQuotePrompt(payload.prompt);
     const preliminaryServiceType =
       existingQuote?.serviceType ?? payload.serviceType ?? preflightDraft.serviceType;
+    const currentQuoteEstimatedTotal = payload.currentLineItems?.length
+      ? roundCurrency(
+          payload.currentLineItems.reduce(
+            (sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice,
+            0,
+          ),
+        )
+      : existingQuote
+        ? Number(existingQuote.totalAmount)
+        : null;
 
     const contextPresets = await app.prisma.workPreset.findMany({
       where: {
@@ -1991,22 +2412,25 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       prompt: payload.prompt,
       title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
       scopeText: existingQuote?.scopeText ?? payload.currentScopeText ?? preflightDraft.scopeText,
+      targetAmount: preflightDraft.estimatedTotalAmount ?? currentQuoteEstimatedTotal,
       excludeQuoteId: existingQuote?.id ?? payload.quoteId ?? null,
     });
 
     stream.progress(
       "retrieving_workspace_context",
       `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"} and ${similarQuotes.length} similar quote${similarQuotes.length === 1 ? "" : "s"} for ${preliminaryServiceType.toLowerCase()}.`,
-      buildAiContextSourceHints({
-        customer: selectedCustomer
-          ? {
-              notes: selectedCustomer.notes,
-            }
-          : null,
-        customerActivityCount: customerActivityContext.length,
-        presetCount: contextPresets.length,
-        similarQuotes,
-      }),
+      {
+        sourceHints: buildAiContextSourceHints({
+          customer: selectedCustomer
+            ? {
+                notes: selectedCustomer.notes,
+              }
+            : null,
+          customerActivityCount: customerActivityContext.length,
+          presetCount: contextPresets.length,
+          similarQuotes,
+        }),
+      },
     );
 
     const currentQuoteContext =
@@ -2046,7 +2470,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
         : null;
 
-    let contextPrompt = buildAiQuoteContext({
+    let contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
       customer: selectedCustomer
           ? {
               fullName: selectedCustomer.fullName,
@@ -2081,23 +2505,25 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             laborRate: Number(contextPricingProfile.laborRate),
             materialMarkup: Number(contextPricingProfile.materialMarkup),
           }
-        : null,
+          : null,
       similarQuotes,
-    });
+    }), payload.prompt);
 
     stream.progress(
       "drafting_quote_patch",
       "Interpreting the request and preparing line-by-line quote changes.",
-      buildAiContextSourceHints({
-        customer: selectedCustomer
-          ? {
-              notes: selectedCustomer.notes,
-            }
-          : null,
-        customerActivityCount: customerActivityContext.length,
-        presetCount: contextPresets.length,
-        similarQuotes,
-      }),
+      {
+        sourceHints: buildAiContextSourceHints({
+          customer: selectedCustomer
+            ? {
+                notes: selectedCustomer.notes,
+              }
+            : null,
+          customerActivityCount: customerActivityContext.length,
+          presetCount: contextPresets.length,
+          similarQuotes,
+        }),
+      },
     );
 
     let parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
@@ -2148,7 +2574,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         })),
       );
 
-      contextPrompt = buildAiQuoteContext({
+      contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
         customer: {
           fullName: selectedCustomer.fullName,
           phone: selectedCustomer.phone,
@@ -2183,7 +2609,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         similarQuotes,
-      });
+      }), payload.prompt);
 
       parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
         context: contextPrompt,
@@ -2193,14 +2619,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       stream.progress(
         "drafting_quote_patch",
         `Matched customer context from the prompt: ${selectedCustomer.fullName}. Refining the suggestion with saved notes and recent activity.`,
-        buildAiContextSourceHints({
-          customer: {
-            notes: selectedCustomer.notes,
-          },
-          customerActivityCount: customerActivityContext.length,
-          presetCount: contextPresets.length,
-          similarQuotes,
-        }),
+        {
+          sourceHints: buildAiContextSourceHints({
+            customer: {
+              notes: selectedCustomer.notes,
+            },
+            customerActivityCount: customerActivityContext.length,
+            presetCount: contextPresets.length,
+            similarQuotes,
+          }),
+        },
       );
     }
 
@@ -2288,13 +2716,34 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       customerActivityCount: customerActivityContext.length,
       presetCount: contextPresets.length,
       similarQuotes,
+      targetAmount: suggestion.totalAmount,
       patch,
     });
 
     stream.progress(
+      "reviewing_line_changes",
+      `Line patch ready: ${patch.updated} updated, ${patch.added} added, ${patch.removed} removed.`,
+      {
+        sourceHints: insight.sources.map((source) => source.label).slice(0, 4),
+        patchCounts: {
+          added: patch.added,
+          updated: patch.updated,
+          removed: patch.removed,
+        },
+      },
+    );
+
+    stream.progress(
       "finalizing_suggestion",
       `Prepared ${patch.updated} update${patch.updated === 1 ? "" : "s"}, ${patch.added} add${patch.added === 1 ? "" : "s"}, and ${patch.removed} removal${patch.removed === 1 ? "" : "s"} for review.`,
-      insight.sources.map((source) => source.label).slice(0, 4),
+      {
+        sourceHints: insight.sources.map((source) => source.label).slice(0, 4),
+        patchCounts: {
+          added: patch.added,
+          updated: patch.updated,
+          removed: patch.removed,
+        },
+      },
     );
 
     const aiUsageEvent = await createAiUsageEvent(app.prisma, {
@@ -2503,10 +2952,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       prompt: payload.prompt,
       title: preflightDraft.title,
       scopeText: preflightDraft.scopeText,
+      targetAmount: preflightDraft.estimatedTotalAmount,
     });
 
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
-      context: buildAiQuoteContext({
+      context: appendAiPromptStructureHints(buildAiQuoteContext({
         customer: customer
           ? {
               fullName: customer.fullName,
@@ -2530,7 +2980,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         similarQuotes,
-      }),
+      }), payload.prompt),
       telemetry: aiTelemetry,
     });
 
@@ -2589,12 +3039,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             quantityMode: matchedStandardPreset.quantityMode ?? "default",
           }
         : null;
+    const preferExplicitAiLines = shouldPreserveExplicitAiLineStructure({
+      prompt: payload.prompt,
+      parsedDraft,
+      serviceType: parsedDraft.serviceType,
+    });
 
     const hasExplicitSubtotalTarget =
       (parsedDraft.estimatedTotalAmount ?? 0) > 0 || (parsedDraft.estimatedInternalCostAmount ?? 0) > 0;
 
     const supplementalPresetMatches =
-      matchedStandardPreset && !hasExplicitSubtotalTarget
+      matchedStandardPreset && !hasExplicitSubtotalTarget && !preferExplicitAiLines
         ? findStandardWorkPresetMatches(
             parsedDraft.serviceType,
             `${payload.prompt} ${parsedDraft.title} ${parsedDraft.scopeText}`,
@@ -2632,7 +3087,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     });
 
     let customerPriceSubtotal = roundCurrency(parsedDraft.estimatedTotalAmount ?? 0);
-    if (customerPriceSubtotal <= 0 && matchedPreset) {
+    if (customerPriceSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
       const matchedQuantity = inferPresetQuantity(
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
@@ -2641,7 +3096,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       );
       customerPriceSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitPrice);
     }
-    if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+    if (customerPriceSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset && !preferExplicitAiLines) {
       const primaryQuantity = inferPresetQuantity(
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
@@ -2665,7 +3120,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     }
 
     let internalCostSubtotal = roundCurrency(parsedDraft.estimatedInternalCostAmount ?? 0);
-    if (internalCostSubtotal <= 0 && matchedPreset) {
+    if (internalCostSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
       const matchedQuantity = inferPresetQuantity(
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
@@ -2674,7 +3129,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       );
       internalCostSubtotal = roundCurrency(matchedQuantity * matchedPreset.unitCost);
     }
-    if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset) {
+    if (internalCostSubtotal <= 0 && supplementalPresets.length > 0 && matchedPreset && !preferExplicitAiLines) {
       const primaryQuantity = inferPresetQuantity(
         matchedPreset.unitType,
         matchedPreset.defaultQuantity,
@@ -2705,7 +3160,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       matchedPreset?.description,
     );
 
-    const lineItemDrafts = matchedPreset
+    const lineItemDrafts = matchedPreset && !preferExplicitAiLines
       ? (() => {
           const primaryQuantity = inferPresetQuantity(
             matchedPreset.unitType,
@@ -2757,35 +3212,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           }));
         })()
       : (() => {
-          const laborPercent = laborSplit(parsedDraft.serviceType);
-          const laborCustomerTotal = roundCurrency(customerPriceSubtotal * laborPercent);
-          const materialCustomerTotal = roundCurrency(customerPriceSubtotal - laborCustomerTotal);
-          const laborInternalTotal = roundCurrency(internalCostSubtotal * laborPercent);
-          const materialInternalTotal = roundCurrency(internalCostSubtotal - laborInternalTotal);
-
-          const laborSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "LABOR");
-          const materialSuggestion = parsedDraft.lineItems.find((lineItem) => lineItem.kind === "MATERIAL");
-          const laborQuantity = Number(Math.max(1, laborSuggestion?.quantity ?? 1).toFixed(2));
-          const materialQuantity = Number(Math.max(1, materialSuggestion?.quantity ?? 1).toFixed(2));
-          const laborUnitCost = roundCurrency(laborInternalTotal / laborQuantity);
-          const laborUnitPrice = roundCurrency(laborCustomerTotal / laborQuantity);
-          const materialUnitCost = roundCurrency(materialInternalTotal / materialQuantity);
-          const materialUnitPrice = roundCurrency(materialCustomerTotal / materialQuantity);
-
-          return [
-            {
-              description: laborSuggestion?.description ?? `${parsedDraft.serviceType} labor`,
-              quantity: laborQuantity,
-              unitCost: laborUnitCost,
-              unitPrice: laborUnitPrice,
-            },
-            {
-              description: materialSuggestion?.description ?? "Materials and install supplies",
-              quantity: materialQuantity,
-              unitCost: materialUnitCost,
-              unitPrice: materialUnitPrice,
-            },
-          ];
+          return buildExplicitAiLineItems({
+            serviceType: parsedDraft.serviceType,
+            prompt: payload.prompt,
+            parsedDraft,
+            tenantPresets,
+            customerPriceSubtotal,
+            internalCostSubtotal,
+          });
         })();
 
     const draftInsight = buildAiSuggestionInsight({
@@ -2801,6 +3235,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       customerActivityCount: customerActivityContext.length,
       presetCount: contextPresets.length,
       similarQuotes,
+      targetAmount: totalAmount,
       patch: {
         lineChanges: [],
         added: lineItemDrafts.length,
@@ -3375,6 +3810,83 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     };
   });
+
+  app.post(
+    "/quotes/:quoteId/history/:revisionId/restore",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      const actor = await resolveActivityActor(app.prisma, claims);
+      const { quoteId, revisionId } = QuoteRevisionParamsSchema.parse(request.params);
+      const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
+      });
+
+      if (!entitlements) {
+        return reply.code(404).send({ error: "Tenant not found for account." });
+      }
+
+      if (!entitlements.features.quoteVersionHistory) {
+        return reply.code(403).send({
+          code: "PLAN_FEATURE_REQUIRED",
+          feature: "quoteVersionHistory",
+          currentPlan: entitlements.planCode,
+          requiredPlan: requiredPlanForFeature("quoteVersionHistory"),
+          error: "Restoring a quote revision is available on Professional and Enterprise plans.",
+        });
+      }
+
+      const result = await app.prisma.$transaction((tx) =>
+        restoreQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId,
+          revisionId,
+          actor,
+        }),
+      );
+
+      if (result.status === "quote_missing") {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+
+      if (result.status === "revision_missing") {
+        return reply.code(404).send({ error: "Revision not found for quote." });
+      }
+
+      if (result.status === "snapshot_invalid") {
+        return reply.code(409).send({ error: "The selected revision could not be restored." });
+      }
+
+      if (result.status === "customer_missing") {
+        return reply.code(409).send({
+          error: "The customer referenced by that revision is no longer active, so the revision cannot be restored.",
+        });
+      }
+
+      const restoredQuote = await app.prisma.quote.findFirst({
+        where: {
+          id: quoteId,
+          ...tenantActiveQuoteScope(claims.tenantId),
+        },
+        include: {
+          customer: true,
+          lineItems: {
+            where: tenantActiveScope(claims.tenantId),
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+
+      if (!restoredQuote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+
+      return reply.send({
+        message: "Quote restored from revision history.",
+        quote: restoredQuote,
+      });
+    },
+  );
 
   app.get("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);

@@ -24,10 +24,12 @@ import {
   type BrandingBusinessProfile,
   type BrandingComponentColors,
   type BrandingLogoPosition,
+  type PlanCode,
 } from "../lib/api";
 import { Badge, Button, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
 import {
   QUOTE_TEMPLATE_OPTIONS,
   getQuoteTemplateOption,
@@ -38,6 +40,7 @@ import {
 
 interface BrandingPageProps {
   tenantId?: string;
+  effectivePlanCode?: PlanCode;
 }
 
 type BrandingSectionId = "business" | "logo" | "colors" | "templates" | "preview";
@@ -410,7 +413,7 @@ function TemplateMiniPreview({
   );
 }
 
-export function BrandingPage({ tenantId }: BrandingPageProps) {
+export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: BrandingPageProps) {
   useEffect(() => {
     setSEOMetadata({
       title: "Quote Branding - Customize Your Quotes | QuoteFly",
@@ -427,6 +430,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   const [companyName, setCompanyName] = useState("QuoteFly Services");
   const [logo, setLogo] = useState<string | null>(null);
   const [logoPosition, setLogoPosition] = useState<BrandingLogoPosition>("left");
+  const [hideQuoteFlyAttribution, setHideQuoteFlyAttribution] = useState(false);
   const [brandColor, setBrandColor] = useState("#5B85AA");
   const [timezone, setTimezone] = useState(browserTimezone);
   const [businessProfile, setBusinessProfile] = useState<BrandingBusinessProfile>(EMPTY_BUSINESS_PROFILE);
@@ -459,6 +463,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
         setBrandColor(branding.primaryColor);
         setSelectedTemplate(normalizeQuoteTemplateId(branding.templateId));
         setLogoPosition(branding.logoPosition ?? "left");
+        setHideQuoteFlyAttribution(Boolean(branding.hideQuoteFlyAttribution));
         setComponentColors(branding.componentColors ?? {});
         setBusinessProfile(normalizeBusinessProfile(branding));
       })
@@ -532,6 +537,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       const result = await api.branding.save(effectiveTenantId, {
         logoUrl: logo ?? null,
         logoPosition,
+        hideQuoteFlyAttribution,
         primaryColor: brandColor,
         templateId: selectedTemplate,
         timezone,
@@ -545,6 +551,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
       setSelectedTemplate(normalizeQuoteTemplateId(result.branding.templateId));
       setLogo(result.branding.logoUrl ?? null);
       setLogoPosition(result.branding.logoPosition ?? "left");
+      setHideQuoteFlyAttribution(Boolean(result.branding.hideQuoteFlyAttribution));
       setComponentColors(result.branding.componentColors ?? {});
       setBusinessProfile(normalizeBusinessProfile(result.branding));
 
@@ -617,6 +624,15 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
   ]
     .filter(Boolean)
     .join(" / ");
+  const previewFooterText = buildQuoteFooterText({
+    businessName: companyName,
+    businessPhone: businessProfile.businessPhone,
+    businessEmail: businessProfile.businessEmail,
+  });
+  const showQuoteFlyAttribution = shouldShowQuoteFlyAttribution(
+    effectivePlanCode,
+    hideQuoteFlyAttribution,
+  );
   const previewComponentColors: BrandingComponentColors = {
     headerBgColor: previewHeaderColor,
     headerTextColor: getComponentColorValue("headerTextColor"),
@@ -672,6 +688,17 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Placement</p>
                   <p className="mt-2 text-sm font-semibold capitalize text-slate-900">{logoPosition}</p>
                 </div>
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuoteFly footer</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {showQuoteFlyAttribution ? "Visible on quotes" : "Hidden on quotes"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {effectivePlanCode === "starter"
+                      ? "Starter always shows QuoteFly attribution."
+                      : "Professional and Enterprise can hide it."}
+                  </p>
+                </div>
               </div>
               <ProgressBar
                 value={(completedSectionCount / 4) * 100}
@@ -724,7 +751,7 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
             <BrandingSectionCard
               id="business"
               title="Business Info"
-              description="Customer PDFs use this sender block and timezone."
+              description="Customer PDFs use this sender block and footer message."
               icon={Building2}
               isOpen={openSections.business}
               completionLabel={sectionCompletionLabel.business}
@@ -827,6 +854,31 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                     onChange={(event) => setTimezone(event.target.value)}
                     options={timezoneOptions.map((option) => ({ value: option, label: option }))}
                   />
+                </div>
+                <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">QuoteFly footer attribution</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Show a small “Created with QuoteFly” footer at the bottom of customer-facing quotes.
+                      </p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={showQuoteFlyAttribution}
+                        disabled={effectivePlanCode === "starter"}
+                        onChange={(event) => setHideQuoteFlyAttribution(!event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-quotefly-blue focus:ring-quotefly-blue"
+                      />
+                      Show footer
+                    </label>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {effectivePlanCode === "starter"
+                      ? "Starter always shows QuoteFly attribution for brand recognition."
+                      : "Turn this off if you do not want QuoteFly attribution on customer-facing quotes."}
+                  </p>
                 </div>
               </div>
             </BrandingSectionCard>
@@ -1119,6 +1171,8 @@ export function BrandingPage({ tenantId }: BrandingPageProps) {
                   templateId={selectedTemplate}
                   accentColor={previewHeaderColor}
                   componentColors={previewComponentColors}
+                  footerText={previewFooterText}
+                  showQuoteFlyAttribution={showQuoteFlyAttribution}
                 />
               </div>
             </BrandingSectionCard>

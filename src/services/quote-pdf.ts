@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import PDFDocument from "pdfkit";
 
 export type QuotePdfTemplateId = "modern" | "professional" | "minimal";
@@ -46,6 +48,7 @@ export interface QuotePdfData {
     primaryColor: string;
     logoUrl: string | null;
     logoPosition?: QuotePdfLogoPosition | null;
+    showQuoteFlyAttribution: boolean;
     businessEmail?: string | null;
     businessPhone?: string | null;
     addressLine1?: string | null;
@@ -250,6 +253,23 @@ async function loadLogoBuffer(logoUrl: string | null): Promise<Buffer | null> {
   } catch {
     return null;
   }
+}
+
+async function loadQuoteFlyMarkBuffer(): Promise<Buffer | null> {
+  const candidatePaths = [
+    path.resolve(process.cwd(), "web/public/favicon.png"),
+    path.resolve(process.cwd(), "src/assets/favicon.png"),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      return await readFile(candidatePath);
+    } catch {
+      // Try the next path.
+    }
+  }
+
+  return null;
 }
 
 function writeHeader(
@@ -477,6 +497,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
   const accentColor = safeHexColor(data.branding.primaryColor, theme.accentColor);
   const componentColors = resolveComponentColors(data.branding.componentColors, accentColor);
   const logoBuffer = await loadLogoBuffer(data.branding.logoUrl);
+  const quoteFlyMarkBuffer = data.branding.showQuoteFlyAttribution ? await loadQuoteFlyMarkBuffer() : null;
 
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
@@ -522,16 +543,31 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     y = drawLineItemsTable(doc, y, data.lineItems, componentColors.tableHeaderBgColor, componentColors.tableHeaderTextColor);
     y = drawTotals(doc, y, data, componentColors.totalsColor);
 
-    y = ensureSpace(doc, y, 60);
+    y = ensureSpace(doc, y, data.branding.showQuoteFlyAttribution ? 74 : 54);
     doc.moveTo(48, y).lineTo(564, y).stroke("#d8d8d8");
     y += 10;
     doc.font("Helvetica").fontSize(9).fillColor(componentColors.footerTextColor);
-    doc.text(
-      `${buildFooterText(data)} Dates shown in ${data.tenant.timezone}.`,
-      48,
-      y,
-      { width: 516, align: "center" },
-    );
+    doc.text(buildFooterText(data), 48, y, { width: 516, align: "center" });
+    y = doc.y + 6;
+
+    if (data.branding.showQuoteFlyAttribution) {
+      const attributionText = "Created with QuoteFly";
+      doc.font("Helvetica").fontSize(8).fillColor(componentColors.footerTextColor);
+      const textWidth = doc.widthOfString(attributionText);
+      const iconSize = quoteFlyMarkBuffer ? 10 : 0;
+      const gap = quoteFlyMarkBuffer ? 5 : 0;
+      const totalWidth = iconSize + gap + textWidth;
+      const startX = 306 - totalWidth / 2;
+
+      if (quoteFlyMarkBuffer) {
+        doc.image(quoteFlyMarkBuffer, startX, y - 1, { fit: [iconSize, iconSize] });
+      }
+
+      doc.text(attributionText, startX + iconSize + gap, y, {
+        width: textWidth,
+        align: "left",
+      });
+    }
 
     doc.end();
   });

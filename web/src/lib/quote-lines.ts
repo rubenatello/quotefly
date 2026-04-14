@@ -1,4 +1,5 @@
 import type {
+  AiQuoteLinePatch,
   QuoteLineItem,
   ServiceType,
   WorkPresetCategory,
@@ -164,4 +165,60 @@ export function makeEditableQuoteLine(seed?: Partial<EditableQuoteLine>): Editab
     sourcePresetId: seed?.sourcePresetId ?? null,
     presetPromptHandled: seed?.presetPromptHandled ?? false,
   };
+}
+
+export function applyAiQuoteLinePatch(
+  currentLines: EditableQuoteLine[],
+  patch: {
+    lineChanges: AiQuoteLinePatch[];
+  } | null | undefined,
+): EditableQuoteLine[] {
+  if (!patch?.lineChanges?.length) {
+    return currentLines.length ? currentLines : [makeEditableQuoteLine()];
+  }
+
+  let nextLines = [...currentLines];
+
+  for (const change of patch.lineChanges) {
+    if (change.action === "ADD") {
+      nextLines = [
+        ...nextLines,
+        toEditableQuoteLineFromDraft({
+          description: change.description,
+          quantity: change.quantity,
+          unitCost: change.unitCost,
+          unitPrice: change.unitPrice,
+        }),
+      ];
+      continue;
+    }
+
+    if (!change.targetLineId) {
+      continue;
+    }
+
+    const targetIndex = nextLines.findIndex((line) => line.id === change.targetLineId);
+    if (targetIndex === -1) {
+      continue;
+    }
+
+    if (change.action === "REMOVE") {
+      nextLines = nextLines.filter((line) => line.id !== change.targetLineId);
+      continue;
+    }
+
+    const current = nextLines[targetIndex];
+    const { title, details } = splitQuoteLineDescription(change.description);
+    const updatedLine: EditableQuoteLine = {
+      ...current,
+      title,
+      details,
+      quantity: String(Number(change.quantity)),
+      unitCost: Number(change.unitCost).toFixed(2),
+      unitPrice: Number(change.unitPrice).toFixed(2),
+    };
+    nextLines = nextLines.map((line, index) => (index === targetIndex ? updatedLine : line));
+  }
+
+  return nextLines.length ? nextLines : [makeEditableQuoteLine()];
 }

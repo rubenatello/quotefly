@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { Alert, Badge, Button, Card, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
+import { Alert, Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
@@ -14,6 +14,10 @@ type CustomerRow = {
   latestQuote: Quote | null;
   stage: CustomerStage;
 };
+
+type CustomerRetentionAction =
+  | { type: "archive" | "delete"; row: CustomerRow }
+  | null;
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
 const ACTIVITY_PAGE_SIZE = 5;
@@ -523,6 +527,8 @@ export function CustomersPage() {
   const [activityTotal, setActivityTotal] = useState(0);
   const [customerNotesDraft, setCustomerNotesDraft] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
+  const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
+  const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -662,6 +668,28 @@ export function CustomersPage() {
       setError(err instanceof Error ? err.message : "Failed saving customer notes.");
     } finally {
       setNotesSaving(false);
+    }
+  }
+
+  async function confirmCustomerRetentionAction() {
+    if (!customerRetentionAction || customerRetentionSaving) return;
+
+    setCustomerRetentionSaving(true);
+    try {
+      if (customerRetentionAction.type === "archive") {
+        await api.customers.archive(customerRetentionAction.row.customer.id);
+        setNotice("Customer archived.");
+      } else {
+        await api.customers.delete(customerRetentionAction.row.customer.id);
+        setNotice("Customer deleted from the active workspace.");
+      }
+      await loadAll();
+      setActivityCustomerId(null);
+      setCustomerRetentionAction(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${customerRetentionAction.type} customer.`);
+    } finally {
+      setCustomerRetentionSaving(false);
     }
   }
 
@@ -902,8 +930,13 @@ export function CustomersPage() {
         </ModalBody>
         {selectedActivityRow ? (
           <ModalFooter className="justify-between">
-            <div className="text-xs text-slate-500">
-              Open a quote from this customer when you need pricing, send actions, or PDF work.
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setCustomerRetentionAction({ type: "archive", row: selectedActivityRow })}>
+                Archive
+              </Button>
+              <Button variant="danger" onClick={() => setCustomerRetentionAction({ type: "delete", row: selectedActivityRow })}>
+                Delete
+              </Button>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setActivityCustomerId(null)}>
@@ -925,6 +958,27 @@ export function CustomersPage() {
           </ModalFooter>
         ) : null}
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(customerRetentionAction)}
+        onClose={() => {
+          if (!customerRetentionSaving) setCustomerRetentionAction(null);
+        }}
+        onConfirm={() => void confirmCustomerRetentionAction()}
+        title={
+          customerRetentionAction?.type === "archive"
+            ? "Archive customer?"
+            : "Delete customer?"
+        }
+        description={
+          customerRetentionAction?.type === "archive"
+            ? "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be archived too."
+            : "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be deleted too."
+        }
+        confirmLabel={customerRetentionAction?.type === "archive" ? "Archive customer" : "Delete customer"}
+        loading={customerRetentionSaving}
+        confirmVariant={customerRetentionAction?.type === "archive" ? "primary" : "danger"}
+      />
     </div>
   );
 }

@@ -15,3 +15,19 @@ export function tenantActiveScope(tenantId: string) {
     deletedAtUtc: null as null,
   };
 }
+
+export function tenantActiveCustomerScope(tenantId: string) {
+  return {
+    tenantId,
+    archivedAtUtc: null as null,
+    deletedAtUtc: null as null,
+  };
+}
+
+export function tenantActiveQuoteScope(tenantId: string) {
+  return {
+    tenantId,
+    archivedAtUtc: null as null,
+    deletedAtUtc: null as null,
+  };
+}

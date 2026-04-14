@@ -286,6 +286,7 @@ export interface DashboardContextValue {
   loadQuotes: () => Promise<void>;
   loadCustomers: () => Promise<void>;
   loadQuoteHistory: () => Promise<void>;
+  refreshSelectedQuote: () => Promise<void>;
   focusQuoteDesk: (quoteId: string | null) => void;
   selectQuoteCustomer: (customerId: string) => void;
   navigateToBuilder: (customerId?: string | null) => void;
@@ -537,6 +538,11 @@ export function DashboardProvider({
       setHistoryLoading(false);
     }
   }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
+
+  const refreshSelectedQuote = useCallback(async () => {
+    if (!selectedQuoteId) return;
+    await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuoteId)]);
+  }, [selectedQuoteId, loadQuotes]);
 
   function focusQuoteDesk(quoteId: string | null) {
     setSelectedQuoteId(quoteId);
@@ -1144,7 +1150,7 @@ export function DashboardProvider({
     setCustomerForm, setQuoteForm, setQuoteEditForm, setLineItemForm,
     setChatPrompt, setChatParsed, setSetupTrade, setSetupSqFtMode, setSetupSqFtUnitCost, setSetupSqFtUnitPrice,
     setDuplicateModal, setSendComposer,
-    loadAll, loadQuotes, loadCustomers, loadQuoteHistory,
+    loadAll, loadQuotes, loadCustomers, loadQuoteHistory, refreshSelectedQuote,
     focusQuoteDesk, selectQuoteCustomer, navigateToBuilder, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
     createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,

@@ -184,7 +184,10 @@ function CrmLayout({
                 <Route path="history" element={<Navigate to="/app/analytics" replace />} />
                 <Route path="settings" element={<AdminPage session={session} />} />
                 <Route path="settings/users" element={<AdminPage session={session} />} />
-                <Route path="branding" element={<BrandingPage tenantId={session.tenantId} />} />
+                <Route
+                  path="branding"
+                  element={<BrandingPage tenantId={session.tenantId} effectivePlanCode={session.effectivePlanCode ?? "starter"} />}
+                />
                 <Route path="admin" element={<Navigate to="/app/settings" replace />} />
                 <Route path="*" element={<Navigate to="/app/customers" replace />} />
               </Routes>

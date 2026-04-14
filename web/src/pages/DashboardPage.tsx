@@ -32,6 +32,7 @@ import {
   type ServiceType,
   type TenantEntitlements,
 } from "../lib/api";
+import { formatAiUsageNotice } from "../lib/ai-credits";
 import { setSEOMetadata } from "../lib/seo";
 
 interface DashboardPageProps {
@@ -528,10 +529,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
       }
 
       const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
-      const usageSummary =
-        usage.monthlyRemaining === null
-          ? `${usage.consumedCredits} AI credit used.`
-          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
+      const usageSummary = formatAiUsageNotice(usage);
       setNotice(
         `Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`,
       );

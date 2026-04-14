@@ -48,7 +48,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
@@ -142,6 +142,8 @@ export function QuoteDeskView() {
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<"archive" | "delete" | null>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
+  const [restoreRevisionTarget, setRestoreRevisionTarget] = useState<QuoteRevision | null>(null);
+  const [restoreRevisionSaving, setRestoreRevisionSaving] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
@@ -187,6 +189,7 @@ export function QuoteDeskView() {
     customers,
     loadAll,
     loadQuoteHistory,
+    refreshSelectedQuote,
     loadOutboundEvents,
     navigateToBuilder,
     navigateToQuote,
@@ -619,6 +622,25 @@ export function QuoteDeskView() {
     setIsEditUnlocked(true);
     setUnlockConfirmOpen(false);
     setNotice("Quote unlocked. Any saved edits will be tracked in history.");
+  }
+
+  async function confirmRestoreRevision() {
+    if (!selectedQuote || !restoreRevisionTarget) return;
+    setRestoreRevisionSaving(true);
+    setError(null);
+    try {
+      const result = await api.quotes.restoreRevision(selectedQuote.id, restoreRevisionTarget.id);
+      await Promise.all([refreshSelectedQuote(), loadQuoteHistory()]);
+      void loadAiRuns(selectedQuote.id);
+      setRestoreRevisionTarget(null);
+      setAiInsight(null);
+      setMobilePane("editor");
+      setNotice(`${result.quote.title} restored to revision v${restoreRevisionTarget.version}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed restoring the selected revision.");
+    } finally {
+      setRestoreRevisionSaving(false);
+    }
   }
 
   function revertQuoteSheetToLastSaved() {
@@ -1418,7 +1440,19 @@ export function QuoteDeskView() {
                               <QuoteStatusPill status={revision.status} compact />
                               <span className="text-sm font-semibold text-slate-900">{revision.title}</span>
                             </div>
-                            <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {selectedQuote && revision.quote.id === selectedQuote.id ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  icon={<RotateCcw size={13} />}
+                                  onClick={() => setRestoreRevisionTarget(revision)}
+                                >
+                                  Restore
+                                </Button>
+                              ) : null}
+                              <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
+                            </div>
                           </div>
                           <p className="mt-2 text-xs text-slate-600">
                             v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
@@ -1534,6 +1568,27 @@ export function QuoteDeskView() {
         </div>
       </ConfirmModal>
 
+      <ConfirmModal
+        open={restoreRevisionTarget !== null}
+        onClose={() => setRestoreRevisionTarget(null)}
+        onConfirm={() => void confirmRestoreRevision()}
+        title="Restore quote revision"
+        description="This will replace the current quote sheet with the selected saved revision and track the restore in history."
+        confirmLabel={restoreRevisionTarget ? `Restore v${restoreRevisionTarget.version}` : "Restore revision"}
+        confirmVariant="warning"
+        loading={restoreRevisionSaving}
+      >
+        {restoreRevisionTarget ? (
+          <div className="space-y-2 text-sm text-slate-600">
+            <p>
+              Restoring revision <strong>v{restoreRevisionTarget.version}</strong> will bring back the saved title,
+              totals, status, and line items from {formatDateTime(restoreRevisionTarget.createdAt)}.
+            </p>
+            <p>The current version remains in history, so you can track this restore action later.</p>
+          </div>
+        ) : null}
+      </ConfirmModal>
+
       <SaveLinePresetModal
         open={Boolean(presetPromptLine)}
         line={presetPromptLine}
@@ -1579,6 +1634,8 @@ export function QuoteDeskView() {
         onPromptChange={setChatPrompt}
         starterPrompts={aiPromptStarters}
         onUseStarterPrompt={setChatPrompt}
+        customerContextName={customerName}
+        customerContextDetails={[customerPhone, customerEmail].filter(Boolean).join(" • ")}
         customerContextText={`${customerName}${customerPhone ? ` • ${customerPhone}` : ""}${customerEmail ? ` • ${customerEmail}` : ""}`}
         customerContextBadge="Using current quote"
         usageHint={aiUsageHint}

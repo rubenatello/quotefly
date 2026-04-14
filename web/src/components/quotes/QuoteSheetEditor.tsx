@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, FileText, UserRound } from "lucide-react";
 import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
 import { Badge } from "../ui";
+import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
 
 export function QuoteSheetEditor({
@@ -25,6 +26,8 @@ export function QuoteSheetEditor({
   templateId = "modern",
   accentColor = "#4F7FD2",
   componentColors,
+  footerText,
+  showQuoteFlyAttribution,
   readOnly = false,
   children,
 }: {
@@ -48,6 +51,8 @@ export function QuoteSheetEditor({
   templateId?: BrandingTemplateId;
   accentColor?: string;
   componentColors?: BrandingComponentColors | null;
+  footerText?: string;
+  showQuoteFlyAttribution?: boolean;
   readOnly?: boolean;
   children: ReactNode;
 }) {
@@ -55,19 +60,25 @@ export function QuoteSheetEditor({
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const template = getQuoteTemplateOption(templateId);
   const sectionLabelColor = componentColors?.sectionTitleColor ?? "#64748b";
+  const usesFullBleedAccent = template.headerStyle === "bar";
 
   return (
     <div
-      className={`rounded-[20px] border border-[var(--qf-border)] p-2.5 shadow-[var(--qf-shadow-sm)] sm:p-3 ${
+      className={`overflow-hidden rounded-[20px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-sm)] ${
+        usesFullBleedAccent ? "bg-[var(--qf-panel)]" : "p-2.5 sm:p-3"
+      } ${
         template.id === "minimal" ? "bg-white" : "bg-[var(--qf-panel-muted)]"
       }`}
     >
+      {usesFullBleedAccent ? <div className="h-1.5 w-full" style={{ backgroundColor: accentColor }} /> : null}
       <div
-        className={`rounded-[16px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-md)] ${
+        className={`${
+          usesFullBleedAccent ? "rounded-none border-0 shadow-none" : "rounded-[16px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-md)]"
+        } ${
           template.id === "professional" ? "bg-slate-50/70" : "bg-[var(--qf-panel)]"
         }`}
       >
-        {template.headerStyle === "bar" ? <div className="h-1.5 rounded-t-[16px]" style={{ backgroundColor: accentColor }} /> : null}
+        {template.headerStyle === "bar" && !usesFullBleedAccent ? <div className="h-1.5 rounded-t-[16px]" style={{ backgroundColor: accentColor }} /> : null}
 
         <div className={`px-5 py-4 sm:px-6 sm:py-4.5 ${template.headerStyle === "card" ? "relative sm:pl-9" : ""}`}>
           {template.headerStyle === "card" ? (
@@ -180,6 +191,7 @@ export function QuoteSheetEditor({
 
           {children}
         </div>
+        <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} />
       </div>
     </div>
   );

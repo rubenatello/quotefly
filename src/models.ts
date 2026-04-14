@@ -95,6 +95,7 @@ export interface TenantBrandingRow {
   tenantId: string;
   logoUrl: string | null;
   logoPosition: "left" | "center" | "right";
+  hideQuoteFlyAttribution: boolean;
   primaryColor: string;
   templateId: string;
   businessEmail: string | null;
@@ -170,6 +171,7 @@ export interface CustomerRow {
   followUpUpdatedAtUtc: UtcDate | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
+  archivedAtUtc: UtcDate | null;
   deletedAtUtc: UtcDate | null;
 }
 
@@ -236,6 +238,7 @@ export interface QuoteRow {
   afterSaleFollowUpCompletedAtUtc: UtcDate | null;
   createdAt: UtcDate;
   updatedAt: UtcDate;
+  archivedAtUtc: UtcDate | null;
   deletedAtUtc: UtcDate | null;
 }
 

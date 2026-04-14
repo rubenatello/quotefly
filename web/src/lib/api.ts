@@ -281,11 +281,18 @@ export type QuoteRevisionSnapshot = {
     title: string;
     serviceType: ServiceType;
     status: QuoteStatus;
+    jobStatus?: QuoteJobStatus;
+    afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
     scopeText: string;
     internalCostSubtotal: number;
     customerPriceSubtotal: number;
     taxAmount: number;
     totalAmount: number;
+    sentAtUtc?: string | null;
+    closedAtUtc?: string | null;
+    jobCompletedAtUtc?: string | null;
+    afterSaleFollowUpDueAtUtc?: string | null;
+    afterSaleFollowUpCompletedAtUtc?: string | null;
   };
   customer: {
     id: string;
@@ -483,6 +490,7 @@ export type AiProgressStep =
   | "loading_customer_context"
   | "retrieving_workspace_context"
   | "drafting_quote_patch"
+  | "reviewing_line_changes"
   | "finalizing_suggestion";
 
 export type AiProgressEvent = {
@@ -492,6 +500,11 @@ export type AiProgressEvent = {
   label: string;
   detail: string;
   sourceHints?: string[];
+  patchCounts?: {
+    added: number;
+    updated: number;
+    removed: number;
+  };
 };
 
 type AiSuggestionStreamEvent =
@@ -994,6 +1007,11 @@ export const api = {
           offset: query?.offset,
         })}`,
       ),
+
+    restoreRevision: (quoteId: string, revisionId: string) =>
+      request<{ message: string; quote: Quote }>(`/v1/quotes/${quoteId}/history/${revisionId}/restore`, {
+        method: "POST",
+      }),
 
     create: (body: {
       customerId: string;
