@@ -21,6 +21,12 @@ Owner: Product + Engineering
 - Additional quote workflow controls now enforce 44px minimum in customer lookup, quote-sheet details toggle, and AI starter prompt chips.
 - Customer pipeline stage filters and quote history filter chips/select now enforce 44px mobile targets.
 - Saved-job picker cards and customer lookup result rows now enforce 44px mobile targets in quote workflows.
+- Quote creation latency reduced by batching initial line items into the `POST /quotes` request (instead of per-line sequential API calls).
+- Quick-customer create flows now refresh only customer datasets (not full dashboard `loadAll`) to reduce perceived submit delay.
+- Customer duplicate protection now checks both phone and email on create/update with normalized email matching and tenant-scoped conflict guards.
+- Quote mutation refresh path now skips unnecessary outbound-log fetches and runs history refresh as non-blocking follow-up work.
+- Duplicate full-page dashboard reloads were removed from Customers/Quotes/Analytics mounts; key quote/customer mutation flows now use targeted refreshes instead of `loadAll`.
+- Duplicate customer workflow now supports `Use Existing` (fast/no-write path), defaults phone matches to existing-record flow, and keeps merge updates to non-empty incoming profile fields while restoring archived matches.
 
 ## Purpose
 
@@ -90,6 +96,8 @@ Completed findings:
 8. Additional launch-critical quote workflow controls hardened to 44px (lookup input/button, sheet details toggle, AI starter prompt chips).
 9. Customer pipeline and quote-history filter controls hardened to 44px on mobile.
 10. Saved-job picker list cards and customer lookup result rows hardened to 44px on mobile.
+11. Transaction latency pass completed for customer/quote creation flows (batched quote line writes + lighter refresh strategy).
+12. Route-level duplicate `loadAll()` calls removed and additional quote/customer mutation refreshes switched to targeted datasets.
 
 ## Responsive QA Snapshot (2026-04-14)
 
@@ -136,6 +144,11 @@ Open follow-up:
 | Additional quote workflow mobile touch-target hardening | Engineering | Completed | 2026-04-14 | Customer lookup, sheet details toggle, and AI starter chips now enforce 44px minimum |
 | Customer pipeline + quote history filter mobile touch-target hardening | Engineering | Completed | 2026-04-14 | Stage chips and history mode filters now enforce 44px minimum |
 | Saved-job picker and lookup result list mobile touch-target hardening | Engineering | Completed | 2026-04-14 | Preset picker cards and customer search result rows now enforce 44px minimum |
+| Customer/quote creation latency pass | Engineering | Completed | 2026-04-14 | Batched quote line writes in `POST /quotes`; quick-customer callbacks now refresh customers only |
+| Customer duplicate-check hardening (phone + email) | Engineering | Completed | 2026-04-14 | Parallel duplicate lookup on create + email conflict guard on update; normalized tenant-scoped matching |
+| Duplicate workflow UX+logic pass (Use Existing / strong phone match) | Engineering | Completed | 2026-04-14 | Exact phone matches now default to existing-record path; Add as New disabled on phone match; merge updates apply non-empty fields and restore archived records |
+| Quote mutation refresh latency pass | Engineering | Completed | 2026-04-14 | Removed duplicate outbound-event reloads after mutations and made history refresh async/non-blocking |
+| Route/mutation refresh optimization pass | Engineering | Completed | 2026-04-14 | Removed duplicate `loadAll()` on major pages and replaced several mutation full-refreshes with targeted `loadQuotes`/`loadCustomers` calls |
 | Full responsive QA pass (customer -> quote -> send) | Product + Engineering | In progress | 2026-04-26 | Code-level sweep done; device-width run still required |
 | Final launch UX polish sweep | Product + Engineering | Not started | 2026-04-29 | Spacing, color contrast, wording cleanup |
 

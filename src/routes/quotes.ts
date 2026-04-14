@@ -59,6 +59,19 @@ const CreateQuoteSchema = z.object({
   customerPriceSubtotal: z.number().nonnegative(),
   taxAmount: z.number().nonnegative().default(0),
   aiUsageEventId: z.string().min(1).optional(),
+  lineItems: z
+    .array(
+      z.object({
+        description: z.string().min(1),
+        sectionType: QuoteLineSectionTypeSchema.default("INCLUDED"),
+        sectionLabel: z.string().trim().max(80).optional().nullable(),
+        quantity: z.number().positive(),
+        unitCost: z.number().nonnegative(),
+        unitPrice: z.number().nonnegative(),
+      }),
+    )
+    .max(300)
+    .optional(),
 });
 
 const UpdateQuoteSchema = z
@@ -3548,6 +3561,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      if (payload.lineItems?.length) {
+        await tx.quoteLineItem.createMany({
+          data: payload.lineItems.map((lineItem) => ({
+            tenantId: claims.tenantId,
+            quoteId: createdQuote.id,
+            description: lineItem.description,
+            sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+            sectionLabel: lineItem.sectionLabel?.trim() || null,
+            quantity: lineItem.quantity,
+            unitCost: lineItem.unitCost,
+            unitPrice: lineItem.unitPrice,
+          })),
+        });
+      }
+
       await createQuoteRevision(tx, {
         tenantId: claims.tenantId,
         quoteId: createdQuote.id,
@@ -3562,6 +3590,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           "customerPriceSubtotal",
           "taxAmount",
           "totalAmount",
+          ...(payload.lineItems?.length
+            ? [
+                "lineItems.description",
+                "lineItems.sectionType",
+                "lineItems.sectionLabel",
+                "lineItems.quantity",
+                "lineItems.unitCost",
+                "lineItems.unitPrice",
+              ]
+            : []),
         ],
       });
 

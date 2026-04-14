@@ -243,6 +243,7 @@ model Customer {
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
   @@index([tenantId])
+  @@index([tenantId, email])
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }

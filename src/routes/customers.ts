@@ -24,7 +24,7 @@ const CreateCustomerSchema = z.object({
   email: z.string().trim().email().nullable().optional(),
   notes: z.string().max(5_000).nullable().optional(),
   followUpStatus: LeadFollowUpStatusSchema.optional(),
-  duplicateAction: z.enum(["merge", "create_new"]).optional(),
+  duplicateAction: z.enum(["merge", "create_new", "use_existing"]).optional(),
   duplicateCustomerId: z.string().min(1).optional(),
 });
 
@@ -33,6 +33,7 @@ const DuplicateMatchSummarySchema = z.object({
   fullName: z.string(),
   phone: z.string(),
   email: z.string().nullable(),
+  archivedAtUtc: z.string().nullable(),
   deletedAtUtc: z.string().nullable(),
   createdAt: z.string(),
   matchReasons: z.array(z.enum(["phone", "email"])).min(1),
@@ -50,9 +51,9 @@ const CustomerActivityQuerySchema = PaginationQuerySchema;
 
 const UpdateCustomerSchema = z
   .object({
-    fullName: z.string().min(2).optional(),
-    phone: z.string().min(7).optional(),
-    email: z.string().email().nullable().optional(),
+    fullName: z.string().trim().min(2).optional(),
+    phone: z.string().trim().min(7).optional(),
+    email: z.string().trim().email().nullable().optional(),
     notes: z.string().max(5_000).nullable().optional(),
     followUpStatus: LeadFollowUpStatusSchema.optional(),
   })
@@ -122,32 +123,41 @@ function retainedCustomerWasInactive(customer: {
   return Boolean(customer.archivedAtUtc || customer.deletedAtUtc);
 }
 
+function isInactiveDuplicateMatch(match: {
+  archivedAtUtc: string | null;
+  deletedAtUtc: string | null;
+}) {
+  return Boolean(match.archivedAtUtc || match.deletedAtUtc);
+}
+
 export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
     const actor = await resolveActivityActor(app.prisma, claims);
 
-    const normalizedEmail = payload.email?.toLowerCase() ?? null;
-    const phoneMatch = await app.prisma.customer.findUnique({
-      where: {
-        tenantId_phone: {
-          tenantId: claims.tenantId,
-          phone: payload.phone,
-        },
-      },
-    });
-
-    const emailMatches = normalizedEmail
-      ? await app.prisma.customer.findMany({
-          where: {
-            ...tenantScope(claims.tenantId),
-            email: { equals: normalizedEmail, mode: "insensitive" },
+    const normalizedPhone = payload.phone.trim();
+    const normalizedEmail = payload.email?.trim().toLowerCase() ?? null;
+    const [phoneMatch, emailMatches] = await Promise.all([
+      app.prisma.customer.findUnique({
+        where: {
+          tenantId_phone: {
+            tenantId: claims.tenantId,
+            phone: normalizedPhone,
           },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-        })
-      : [];
+        },
+      }),
+      normalizedEmail
+        ? app.prisma.customer.findMany({
+            where: {
+              ...tenantScope(claims.tenantId),
+              email: normalizedEmail,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 5,
+          })
+        : Promise.resolve([]),
+    ]);
 
     const matchMap = new Map<string, (typeof emailMatches)[number]>();
     if (phoneMatch) {
@@ -159,13 +169,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
     const duplicateMatches = [...matchMap.values()].map((candidate) => {
       const matchReasons: ("phone" | "email")[] = [];
-      if (candidate.phone === payload.phone) {
+      if (candidate.phone === normalizedPhone) {
         matchReasons.push("phone");
       }
       if (
         normalizedEmail &&
         candidate.email &&
-        candidate.email.toLowerCase() === normalizedEmail.toLowerCase()
+        candidate.email === normalizedEmail
       ) {
         matchReasons.push("email");
       }
@@ -175,22 +185,34 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         fullName: candidate.fullName,
         phone: candidate.phone,
         email: candidate.email,
+        archivedAtUtc: candidate.archivedAtUtc?.toISOString() ?? null,
         deletedAtUtc: candidate.deletedAtUtc?.toISOString() ?? null,
         createdAt: candidate.createdAt.toISOString(),
         matchReasons,
       };
     });
+    const sortedDuplicateMatches = [...duplicateMatches].sort((left, right) => {
+      const leftHasPhone = left.matchReasons.includes("phone") ? 0 : 1;
+      const rightHasPhone = right.matchReasons.includes("phone") ? 0 : 1;
+      if (leftHasPhone !== rightHasPhone) return leftHasPhone - rightHasPhone;
 
-    if (duplicateMatches.length > 0 && !payload.duplicateAction) {
+      const leftInactive = isInactiveDuplicateMatch(left) ? 1 : 0;
+      const rightInactive = isInactiveDuplicateMatch(right) ? 1 : 0;
+      if (leftInactive !== rightInactive) return leftInactive - rightInactive;
+
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+
+    if (sortedDuplicateMatches.length > 0 && !payload.duplicateAction) {
       return reply.code(409).send({
         code: "DUPLICATE_CANDIDATE",
         error: "Potential duplicate customer found.",
-        matches: DuplicateMatchSummarySchema.array().parse(duplicateMatches),
+        matches: DuplicateMatchSummarySchema.array().parse(sortedDuplicateMatches),
       });
     }
 
     if (payload.duplicateAction === "merge") {
-      const targetId = payload.duplicateCustomerId ?? duplicateMatches[0]?.id;
+      const targetId = payload.duplicateCustomerId ?? sortedDuplicateMatches[0]?.id;
       if (!targetId) {
         return reply.code(400).send({ error: "Choose a customer record to merge into." });
       }
@@ -204,15 +226,21 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const customer = await app.prisma.$transaction(async (tx) => {
+        const mergedName = payload.fullName.trim() || target.fullName;
+        const mergedEmail = normalizedEmail || target.email;
+        const mergedNotes = payload.notes?.trim() ? payload.notes.trim() : target.notes;
         const mergedCustomer = await tx.customer.update({
           where: { id: target.id },
           data: {
-            fullName: payload.fullName,
-            phone: payload.phone,
-            email: normalizedEmail,
-            notes: payload.notes,
-            followUpStatus: payload.followUpStatus,
-            followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+            fullName: mergedName,
+            email: mergedEmail,
+            notes: mergedNotes,
+            ...(payload.followUpStatus
+              ? {
+                  followUpStatus: payload.followUpStatus,
+                  followUpUpdatedAtUtc: new Date(),
+                }
+              : {}),
             archivedAtUtc: null,
             deletedAtUtc: null,
           },
@@ -229,7 +257,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             : `${mergedCustomer.fullName} was merged into the existing customer record.`,
         });
 
-        if (payload.notes?.trim()) {
+        if (payload.notes?.trim() && payload.notes.trim() !== (target.notes ?? "")) {
           await createCustomerActivityEvent(tx, {
             tenantId: claims.tenantId,
             customerId: mergedCustomer.id,
@@ -250,6 +278,33 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    if (payload.duplicateAction === "use_existing") {
+      const targetId = payload.duplicateCustomerId ?? sortedDuplicateMatches[0]?.id;
+      if (!targetId) {
+        return reply.code(400).send({ error: "Choose a customer record to continue with." });
+      }
+
+      const existingCustomer = await app.prisma.customer.findFirst({
+        where: { id: targetId, ...tenantScope(claims.tenantId) },
+      });
+
+      if (!existingCustomer) {
+        return reply.code(404).send({ error: "Selected customer was not found." });
+      }
+
+      if (retainedCustomerWasInactive(existingCustomer)) {
+        return reply.code(409).send({
+          code: "USE_EXISTING_REQUIRES_RESTORE",
+          error: "Selected customer is archived. Use merge to restore and continue.",
+        });
+      }
+
+      return reply.send({
+        customer: existingCustomer,
+        reusedExisting: true,
+      });
+    }
+
     if (payload.duplicateAction === "create_new" && phoneMatch) {
       return reply.code(409).send({
         code: "PHONE_CONFLICT",
@@ -263,7 +318,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           data: {
             tenantId: claims.tenantId,
             fullName: payload.fullName,
-            phone: payload.phone,
+            phone: normalizedPhone,
             email: normalizedEmail,
             notes: payload.notes,
             followUpStatus: payload.followUpStatus,
@@ -540,6 +595,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const payload = UpdateCustomerSchema.parse(request.body);
     const actor = await resolveActivityActor(app.prisma, claims);
+    const normalizedPhone = payload.phone?.trim();
+    const normalizedEmail =
+      payload.email === undefined ? undefined : payload.email === null ? null : payload.email.trim().toLowerCase();
 
     const existing = await app.prisma.customer.findFirst({
       where: {
@@ -552,17 +610,36 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    if (payload.phone && payload.phone !== existing.phone) {
+    if (normalizedPhone && normalizedPhone !== existing.phone) {
       const phoneConflict = await app.prisma.customer.findFirst({
         where: {
-          ...tenantActiveCustomerScope(claims.tenantId),
-          phone: payload.phone,
+          ...tenantScope(claims.tenantId),
+          phone: normalizedPhone,
           id: { not: existing.id },
         },
       });
 
       if (phoneConflict) {
-        return reply.code(409).send({ error: "Phone already used by another active customer." });
+        return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
+      }
+    }
+
+    if (
+      normalizedEmail !== undefined &&
+      normalizedEmail !== (existing.email ? existing.email.toLowerCase() : existing.email)
+    ) {
+      if (normalizedEmail) {
+        const emailConflict = await app.prisma.customer.findFirst({
+          where: {
+            ...tenantScope(claims.tenantId),
+            email: normalizedEmail,
+            id: { not: existing.id },
+          },
+        });
+
+        if (emailConflict) {
+          return reply.code(409).send({ error: "Email already used by another customer in this workspace." });
+        }
       }
     }
 
@@ -571,8 +648,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: { id: existing.id },
         data: {
           fullName: payload.fullName,
-          phone: payload.phone,
-          email: payload.email,
+          phone: normalizedPhone,
+          email: normalizedEmail,
           notes: payload.notes,
           followUpStatus: payload.followUpStatus,
           followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
@@ -581,8 +658,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       const changedIdentityFields: string[] = [];
       if (payload.fullName !== undefined && payload.fullName !== existing.fullName) changedIdentityFields.push("name");
-      if (payload.phone !== undefined && payload.phone !== existing.phone) changedIdentityFields.push("phone");
-      if (payload.email !== undefined && payload.email !== existing.email) changedIdentityFields.push("email");
+      if (normalizedPhone !== undefined && normalizedPhone !== existing.phone) changedIdentityFields.push("phone");
+      if (normalizedEmail !== undefined && normalizedEmail !== existing.email) changedIdentityFields.push("email");
 
       if (changedIdentityFields.length > 0) {
         await createCustomerActivityEvent(tx, {

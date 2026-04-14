@@ -445,7 +445,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
 
   async function submitCustomerPayload(
     payload: CreateCustomerPayload,
-    options?: { duplicateAction?: "merge" | "create_new"; duplicateCustomerId?: string },
+    options?: { duplicateAction?: "merge" | "create_new" | "use_existing"; duplicateCustomerId?: string },
   ) {
     const result = await api.customers.create({
       ...payload,
@@ -456,7 +456,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
     setCustomerForm(EMPTY_CUSTOMER);
     setDuplicateModal(null);
     setNotice(
-      result.merged
+      result.reusedExisting
+        ? "Using existing customer record."
+        : result.merged
         ? result.restored
           ? "Duplicate merged and archived customer restored."
           : "Duplicate merged into existing customer."

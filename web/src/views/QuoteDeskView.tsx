@@ -188,7 +188,7 @@ export function QuoteDeskView() {
     historyCustomerId,
     setHistoryCustomerId,
     customers,
-    loadAll,
+    loadQuotes,
     loadQuoteHistory,
     refreshSelectedQuote,
     loadOutboundEvents,
@@ -767,7 +767,7 @@ export function QuoteDeskView() {
       }
 
       setQuoteRetentionAction(null);
-      await loadAll();
+      await loadQuotes();
       navigate("/app/quotes");
     } catch (err) {
       setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction} the quote.`);

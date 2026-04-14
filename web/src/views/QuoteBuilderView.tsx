@@ -955,10 +955,19 @@ export function QuoteBuilderView() {
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={() => setQuickCustomerOpen(false)}
-        onCreated={async ({ customer, intent }) => {
-          await loadCustomers();
+        onCreated={async ({ customer, intent, merged, restored, reusedExisting }) => {
+          void loadCustomers();
           selectQuoteCustomer(customer.id);
-          setNotice(intent === "quote" ? `${customer.fullName} is ready for a quote.` : "Customer created.");
+          const createNotice = reusedExisting
+            ? "Using existing customer record."
+            : merged
+              ? restored
+                ? "Customer merged and restored."
+                : "Customer merged into existing record."
+              : restored
+                ? "Customer restored."
+                : "Customer created.";
+          setNotice(intent === "quote" ? `${customer.fullName} is ready for a quote.` : createNotice);
         }}
       />
 

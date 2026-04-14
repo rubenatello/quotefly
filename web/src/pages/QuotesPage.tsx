@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+﻿import { useMemo, useState, type ReactNode } from "react";
 import { Archive, BadgeCheck, Calculator, CircleDot, Eye, FileText, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
   Alert,
@@ -390,7 +390,8 @@ export function QuotesPage() {
     notice,
     setError,
     setNotice,
-    loadAll,
+    loadQuotes,
+    loadCustomers,
     navigateToQuote,
     navigateToBuilder,
     selectedQuoteId,
@@ -403,10 +404,6 @@ export function QuotesPage() {
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<QuoteRetentionAction>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
-
-  useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
 
   const sortedQuotes = useMemo(() => {
     return [...quotes].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
@@ -499,7 +496,7 @@ export function QuotesPage() {
       subject: draft.subject,
       body: draft.body,
     });
-    await loadAll();
+    await loadQuotes();
   }
 
   async function openQuoteInApp(quote: Quote, channel: "email" | "sms") {
@@ -617,7 +614,7 @@ export function QuotesPage() {
         setNotice("Quote deleted from the active workspace.");
       }
       setPdfActionQuote((current) => (current?.id === quoteRetentionAction.quote.id ? null : current));
-      await loadAll();
+      await loadQuotes();
       setQuoteRetentionAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction.type} quote.`);
@@ -812,16 +809,18 @@ export function QuotesPage() {
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={() => setQuickCustomerOpen(false)}
-        onCreated={async ({ customer, merged, restored, intent }) => {
-          await loadAll();
+        onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
+          await loadCustomers();
           setNotice(
-            merged
-              ? restored
-                ? "Customer merged and restored."
-                : "Customer merged into existing record."
-              : restored
-                ? "Customer restored."
-                : "Customer created.",
+            reusedExisting
+              ? "Using existing customer record."
+              : merged
+                ? restored
+                  ? "Customer merged and restored."
+                  : "Customer merged into existing record."
+                : restored
+                  ? "Customer restored."
+                  : "Customer created.",
           );
           if (intent === "quote") {
             navigateToBuilder(customer.id);
@@ -831,4 +830,3 @@ export function QuotesPage() {
     </div>
   );
 }
-

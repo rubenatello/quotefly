@@ -481,13 +481,17 @@ export function DashboardProvider({
     }
   }, []);
 
-  async function loadQuoteDetail(quoteId: string) {
+  async function loadQuoteDetail(
+    quoteId: string,
+    options?: { includeOutboundEvents?: boolean },
+  ) {
     try {
       const { quote } = await api.quotes.get(quoteId);
       setSelectedQuote(quote);
-      if (canViewCommunicationLog) {
+      const includeOutboundEvents = options?.includeOutboundEvents ?? true;
+      if (canViewCommunicationLog && includeOutboundEvents) {
         await loadOutboundEvents(quoteId);
-      } else {
+      } else if (!canViewCommunicationLog) {
         setOutboundEvents([]);
       }
       setQuoteEditForm({
@@ -575,7 +579,7 @@ export function DashboardProvider({
 
   async function submitCustomerPayload(
     payload: CreateCustomerPayload,
-    options?: { duplicateAction?: "merge" | "create_new"; duplicateCustomerId?: string },
+    options?: { duplicateAction?: "merge" | "create_new" | "use_existing"; duplicateCustomerId?: string },
   ) {
     const result = await api.customers.create({
       ...payload,
@@ -585,11 +589,13 @@ export function DashboardProvider({
     setCustomerForm(EMPTY_CUSTOMER);
     setDuplicateModal(null);
     setNotice(
-      result.merged
+      result.reusedExisting
+        ? "Using existing customer record."
+        : result.merged
         ? result.restored ? "Duplicate merged and archived customer restored." : "Duplicate merged into existing customer."
         : result.restored ? "Customer restored." : "Customer created.",
     );
-    await loadCustomers();
+    void loadCustomers();
   }
 
   const createCustomer = useCallback(async (event: FormEvent) => {
@@ -641,21 +647,17 @@ export function DashboardProvider({
       setChatParsed(parsed);
       setChatPrompt("");
       setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
-      await Promise.all([loadCustomers(), loadQuotes()]);
       focusQuoteDesk(quote.id);
-      await loadQuoteDetail(quote.id);
-      if (canViewQuoteHistory) {
-        const { revisions } = await api.quotes.getHistory(quote.id, { limit: 30 });
-        setQuoteHistory(revisions);
-      }
+      navigateToQuote(quote.id);
+      void loadCustomers();
+      void loadQuotes();
       const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
       const usageSummary = formatAiUsageNotice(usage);
       setNotice(`Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`);
-      navigateToQuote(quote.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");
     } finally { setSaving(false); }
-  }, [canUseChatToQuote, chatPrompt, canViewQuoteHistory]);
+  }, [canUseChatToQuote, chatPrompt, loadCustomers, loadQuotes]);
 
   const applyTradeSetup = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -693,28 +695,26 @@ export function DashboardProvider({
         customerPriceSubtotal: Number(mergedQuoteForm.customerPriceSubtotal),
         taxAmount: Number(mergedQuoteForm.taxAmount),
         aiUsageEventId: options?.aiUsageEventId,
+        lineItems: options?.initialLineItems?.map((lineItem) => ({
+          description: lineItem.description,
+          sectionType: lineItem.sectionType ?? "INCLUDED",
+          sectionLabel: lineItem.sectionLabel ?? null,
+          quantity: lineItem.quantity,
+          unitCost: lineItem.unitCost,
+          unitPrice: lineItem.unitPrice,
+        })),
       });
-      if (options?.initialLineItems?.length) {
-        for (const lineItem of options.initialLineItems) {
-          await api.quotes.lineItems.create(quote.id, {
-            description: lineItem.description,
-            quantity: lineItem.quantity,
-            unitCost: lineItem.unitCost,
-            unitPrice: lineItem.unitPrice,
-          });
-        }
-      }
       setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId }));
-      await loadQuotes();
       focusQuoteDesk(quote.id);
       setNotice(options?.successNotice ?? "Quote created.");
       navigateToQuote(quote.id);
+      void loadQuotes();
       return quote;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed creating quote.");
       return null;
     } finally { setSaving(false); }
-  }, [quoteForm]);
+  }, [quoteForm, loadQuotes]);
 
   const createQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -734,8 +734,11 @@ export function DashboardProvider({
         scopeText: quoteEditForm.scopeText,
         taxAmount: Number(quoteEditForm.taxAmount),
       });
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Quote updated.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving quote."); } finally { setSaving(false); }
   }, [selectedQuote, quoteEditForm, canViewQuoteHistory]);
@@ -749,8 +752,11 @@ export function DashboardProvider({
     setError(null);
     try {
       await api.quotes.update(quoteId, patch);
-      await Promise.all([loadQuotes(), loadQuoteDetail(quoteId)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(quoteId, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Quote lifecycle updated.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed updating quote lifecycle.");
@@ -769,8 +775,11 @@ export function DashboardProvider({
     setSaving(true); setError(null);
     try {
       const result = await api.quotes.decision(selectedQuote.id, decision);
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(result.message);
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating decision."); } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory]);
@@ -825,9 +834,12 @@ export function DashboardProvider({
               body: sendComposer.body,
             });
           }
-          await Promise.all([loadQuotes(), loadQuoteDetail(sendComposer.quoteId)]);
-          if (canViewCommunicationLog) await loadOutboundEvents(sendComposer.quoteId);
-          if (canViewQuoteHistory) await loadQuoteHistory();
+          await Promise.all([
+            loadQuotes(),
+            loadQuoteDetail(sendComposer.quoteId, { includeOutboundEvents: false }),
+            canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
+          ]);
+          if (canViewQuoteHistory) void loadQuoteHistory();
           setNotice(
             `Share sheet opened with the quote PDF attached. Choose ${sendComposer.channel === "email" ? "Mail" : "Messages"} to send it.`,
           );
@@ -856,9 +868,12 @@ export function DashboardProvider({
         await navigator.clipboard.writeText(sendComposer.body);
         setNotice("Quote marked as quoted and message copied.");
       }
-      await Promise.all([loadQuotes(), loadQuoteDetail(sendComposer.quoteId)]);
-      if (canViewCommunicationLog) await loadOutboundEvents(sendComposer.quoteId);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(sendComposer.quoteId, { includeOutboundEvents: false }),
+        canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setSendComposer(null);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -884,7 +899,10 @@ export function DashboardProvider({
         document.body.appendChild(anchor); anchor.click(); anchor.remove();
         URL.revokeObjectURL(objectUrl);
       }
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
       setNotice(
         options?.afterSend
           ? options?.inline
@@ -952,8 +970,11 @@ export function DashboardProvider({
       if (options?.resetForm !== false) {
         setLineItemForm(EMPTY_LINE_ITEM);
       }
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(options?.notice ?? "Line item added.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed adding line item."); } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory]);
@@ -978,8 +999,11 @@ export function DashboardProvider({
     setError(null);
     try {
       await api.quotes.lineItems.update(selectedQuote.id, lineItemId, input);
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(options?.notice ?? "Line item updated.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed updating line item.");
@@ -993,8 +1017,11 @@ export function DashboardProvider({
     setSaving(true); setError(null);
     try {
       await api.quotes.lineItems.remove(selectedQuote.id, lineItemId);
-      await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuote.id)]);
-      if (canViewQuoteHistory) await loadQuoteHistory();
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Line item deleted.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed deleting line item."); } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory]);
@@ -1004,7 +1031,7 @@ export function DashboardProvider({
     try {
       await api.customers.update(customerId, { followUpStatus });
       await Promise.all([loadCustomers(), loadQuotes()]);
-      if (selectedQuote) await loadQuoteDetail(selectedQuote.id);
+      if (selectedQuote) await loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false });
       setNotice(`Follow-up status updated to ${followUpLabel(followUpStatus)}.`);
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating follow-up status."); } finally { setSaving(false); }
   }, [selectedQuote]);

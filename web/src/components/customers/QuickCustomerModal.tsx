@@ -11,6 +11,7 @@ type QuickCustomerModalProps = {
     customer: Customer;
     merged?: boolean;
     restored?: boolean;
+    reusedExisting?: boolean;
     intent: QuickCustomerIntent;
   }) => Promise<void> | void;
 };
@@ -38,6 +39,27 @@ function normalizePayload(form: QuickCustomerForm) {
   };
 }
 
+function hasPhoneDuplicateReason(match: CustomerDuplicateMatch) {
+  return match.matchReasons.includes("phone");
+}
+
+function isInactiveDuplicateMatch(match: CustomerDuplicateMatch) {
+  return Boolean(match.archivedAtUtc || match.deletedAtUtc);
+}
+
+function preferredDuplicateMatchId(matches: CustomerDuplicateMatch[]) {
+  const activePhone = matches.find((match) => hasPhoneDuplicateReason(match) && !isInactiveDuplicateMatch(match));
+  if (activePhone) return activePhone.id;
+
+  const phoneMatch = matches.find(hasPhoneDuplicateReason);
+  if (phoneMatch) return phoneMatch.id;
+
+  const activeMatch = matches.find((match) => !isInactiveDuplicateMatch(match));
+  if (activeMatch) return activeMatch.id;
+
+  return matches[0]?.id ?? null;
+}
+
 export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerModalProps) {
   const [form, setForm] = useState<QuickCustomerForm>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
@@ -47,9 +69,14 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
 
   const phoneConflictExists = useMemo(
-    () => matches.some((match) => match.matchReasons.includes("phone")),
+    () => matches.some((match) => hasPhoneDuplicateReason(match)),
     [matches],
   );
+  const selectedMatch = useMemo(
+    () => matches.find((match) => match.id === selectedMatchId) ?? null,
+    [matches, selectedMatchId],
+  );
+  const selectedMatchInactive = Boolean(selectedMatch && isInactiveDuplicateMatch(selectedMatch));
 
   function resetState() {
     setForm(EMPTY_FORM);
@@ -65,7 +92,10 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
     onClose();
   }
 
-  async function createCustomer(mode: QuickCustomerIntent, duplicateAction?: "merge" | "create_new") {
+  async function createCustomer(
+    mode: QuickCustomerIntent,
+    duplicateAction?: "merge" | "create_new" | "use_existing",
+  ) {
     const payload = normalizePayload(form);
     if (!payload.fullName || !payload.phone) {
       setError("Full name and phone are required.");
@@ -80,13 +110,17 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
       const result = await api.customers.create({
         ...payload,
         duplicateAction,
-        duplicateCustomerId: duplicateAction === "merge" ? selectedMatchId ?? undefined : undefined,
+        duplicateCustomerId:
+          duplicateAction === "merge" || duplicateAction === "use_existing"
+            ? selectedMatchId ?? undefined
+            : undefined,
       });
 
       await onCreated({
         customer: result.customer,
         merged: result.merged,
         restored: result.restored,
+        reusedExisting: result.reusedExisting,
         intent: mode,
       });
       closeModal();
@@ -95,7 +129,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
         const details = err.details as { code?: string; matches?: CustomerDuplicateMatch[] } | undefined;
         if (details?.code === "DUPLICATE_CANDIDATE" && Array.isArray(details.matches) && details.matches.length > 0) {
           setMatches(details.matches);
-          setSelectedMatchId(details.matches[0].id);
+          setSelectedMatchId(preferredDuplicateMatchId(details.matches));
           setSaving(false);
           return;
         }
@@ -155,9 +189,13 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
         {matches.length > 0 ? (
           <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
             <div>
-              <p className="text-sm font-semibold text-amber-900">Potential duplicate customer</p>
+              <p className="text-sm font-semibold text-amber-900">
+                {phoneConflictExists ? "Exact phone match found" : "Possible email duplicate found"}
+              </p>
               <p className="mt-1 text-xs text-amber-800">
-                Choose an existing record to merge into, or save as new when only the email matches.
+                {phoneConflictExists
+                  ? "Use Existing is the fastest path and is the default recommendation. Add as New is disabled for exact phone matches."
+                  : "Email-only matches are a softer warning. You can use existing, merge updates, or add as new."}
               </p>
             </div>
             <div className="space-y-2">
@@ -188,11 +226,18 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
                           {reason === "phone" ? "Phone match" : "Email match"}
                         </Badge>
                       ))}
+                      {match.archivedAtUtc ? <Badge tone="slate">Archived</Badge> : null}
+                      {match.deletedAtUtc ? <Badge tone="slate">Deleted</Badge> : null}
                     </div>
                   </div>
                 </label>
               ))}
             </div>
+            {selectedMatchInactive ? (
+              <p className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700">
+                Selected record is inactive. Choose <span className="font-semibold">Merge Selected</span> to restore it.
+              </p>
+            ) : null}
           </div>
         ) : null}
       </ModalBody>
@@ -203,18 +248,25 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
         {matches.length > 0 ? (
           <>
             <Button
+              onClick={() => void createCustomer(intent, "use_existing")}
+              loading={saving}
+              disabled={saving || !selectedMatchId || selectedMatchInactive}
+            >
+              Use Existing
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void createCustomer(intent, "merge")}
+              disabled={saving || !selectedMatchId}
+            >
+              Merge Selected
+            </Button>
+            <Button
               variant="outline"
               onClick={() => void createCustomer(intent, "create_new")}
               disabled={saving || phoneConflictExists}
             >
               Save as New
-            </Button>
-            <Button
-              onClick={() => void createCustomer(intent, "merge")}
-              loading={saving}
-              disabled={saving || !selectedMatchId}
-            >
-              Merge Selected
             </Button>
           </>
         ) : (

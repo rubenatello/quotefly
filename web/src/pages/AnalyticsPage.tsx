@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   BadgeCheck,
@@ -516,10 +516,6 @@ export function AnalyticsPage() {
   const [rangePreset, setRangePreset] = useState<RangePreset>(DEFAULT_PRESET);
   const [customStart, setCustomStart] = useState(toDateInputValue(initialRange.start));
   const [customEnd, setCustomEnd] = useState(toDateInputValue(addDays(initialRange.endExclusive, -1)));
-
-  useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
 
   const activeRange = useMemo(() => {
     if (rangePreset !== "custom") {

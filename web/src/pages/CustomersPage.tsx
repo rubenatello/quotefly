@@ -513,7 +513,8 @@ export function CustomersPage() {
     notice,
     setError,
     setNotice,
-    loadAll,
+    loadCustomers,
+    loadQuotes,
     navigateToQuote,
     navigateToBuilder,
   } = useDashboard();
@@ -530,10 +531,6 @@ export function CustomersPage() {
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
   const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-
-  useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
 
   useEffect(() => {
     if (searchParams.get("compose") === "customer") {
@@ -661,7 +658,7 @@ export function CustomersPage() {
       await api.customers.update(selectedActivityRow.customer.id, {
         notes: nextNotes || null,
       });
-      await loadAll();
+      await loadCustomers();
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
       setNotice(nextNotes ? "Customer notes saved." : "Customer notes cleared.");
     } catch (err) {
@@ -683,7 +680,7 @@ export function CustomersPage() {
         await api.customers.delete(customerRetentionAction.row.customer.id);
         setNotice("Customer deleted from the active workspace.");
       }
-      await loadAll();
+      await Promise.all([loadCustomers(), loadQuotes()]);
       setActivityCustomerId(null);
       setCustomerRetentionAction(null);
     } catch (err) {
@@ -778,16 +775,18 @@ export function CustomersPage() {
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={closeQuickCustomerModal}
-        onCreated={async ({ customer, merged, restored, intent }) => {
-          await loadAll();
+        onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
+          await loadCustomers();
           setNotice(
-            merged
-              ? restored
-                ? "Customer merged and restored."
-                : "Customer merged into existing record."
-              : restored
-                ? "Customer restored."
-                : "Customer created.",
+            reusedExisting
+              ? "Using existing customer record."
+              : merged
+                ? restored
+                  ? "Customer merged and restored."
+                  : "Customer merged into existing record."
+                : restored
+                  ? "Customer restored."
+                  : "Customer created.",
           );
           if (intent === "quote") {
             navigateToBuilder(customer.id);

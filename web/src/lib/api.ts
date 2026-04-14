@@ -244,6 +244,7 @@ export type CustomerDuplicateMatch = {
   fullName: string;
   phone: string;
   email?: string | null;
+  archivedAtUtc?: string | null;
   deletedAtUtc?: string | null;
   createdAt: string;
   matchReasons: Array<"phone" | "email">;
@@ -951,12 +952,13 @@ export const api = {
       email?: string | null;
       notes?: string | null;
       followUpStatus?: LeadFollowUpStatus;
-      duplicateAction?: "merge" | "create_new";
+      duplicateAction?: "merge" | "create_new" | "use_existing";
       duplicateCustomerId?: string;
     }) => request<{
       customer: Customer;
       restored?: boolean;
       merged?: boolean;
+      reusedExisting?: boolean;
       matches?: CustomerDuplicateMatch[];
       code?: string;
     }>("/v1/customers", {
@@ -1063,6 +1065,14 @@ export const api = {
       customerPriceSubtotal: number;
       taxAmount: number;
       aiUsageEventId?: string;
+      lineItems?: Array<{
+        description: string;
+        sectionType?: "INCLUDED" | "ALTERNATE";
+        sectionLabel?: string | null;
+        quantity: number;
+        unitCost: number;
+        unitPrice: number;
+      }>;
     }) =>
       request<{ quote: Quote }>(`/v1/quotes`, {
         method: "POST",
