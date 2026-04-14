@@ -15,6 +15,28 @@ export type MonthlyAiUsageSnapshot = {
   monthlyRemaining: number | null;
 };
 
+export type AiUsageTelemetry = {
+  requestCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+};
+
+export type AiUsageTrace = {
+  insightSummary?: string | null;
+  insightReasons?: string[] | null;
+  insightSourceLabels?: string[] | null;
+  confidenceLevel?: string | null;
+  confidenceLabel?: string | null;
+  riskNote?: string | null;
+  patch?: {
+    added: number;
+    updated: number;
+    removed: number;
+  } | null;
+};
+
 export async function loadMonthlyAiUsageSnapshot(
   prisma: AiUsageClient,
   tenantId: string,
@@ -82,6 +104,8 @@ export async function createAiUsageEvent(
     promptText: string;
     model?: string | null;
     creditsConsumed?: number;
+    telemetry?: AiUsageTelemetry | null;
+    trace?: AiUsageTrace | null;
   },
 ) {
   return prisma.aiUsageEvent.create({
@@ -94,8 +118,22 @@ export async function createAiUsageEvent(
       actorName: params.actor?.actorName ?? null,
       eventType: params.eventType,
       creditsConsumed: params.creditsConsumed ?? 1,
+      requestCount: params.telemetry?.requestCount ?? 1,
+      promptTokens: params.telemetry?.promptTokens ?? null,
+      completionTokens: params.telemetry?.completionTokens ?? null,
+      totalTokens: params.telemetry?.totalTokens ?? null,
+      estimatedCostUsd: params.telemetry?.estimatedCostUsd ?? null,
       promptText: params.promptText,
       model: params.model ?? null,
+      insightSummary: params.trace?.insightSummary?.trim() || null,
+      insightReasons: params.trace?.insightReasons?.filter(Boolean) ?? [],
+      insightSourceLabels: params.trace?.insightSourceLabels?.filter(Boolean) ?? [],
+      confidenceLevel: params.trace?.confidenceLevel?.trim() || null,
+      confidenceLabel: params.trace?.confidenceLabel?.trim() || null,
+      riskNote: params.trace?.riskNote?.trim() || null,
+      patchAdded: params.trace?.patch?.added ?? null,
+      patchUpdated: params.trace?.patch?.updated ?? null,
+      patchRemoved: params.trace?.patch?.removed ?? null,
     },
   });
 }
@@ -111,5 +149,6 @@ export function buildAiUsageResponse(
     monthlyLimit: snapshot.monthlyLimit,
     monthlyRemaining:
       snapshot.monthlyLimit === null ? null : Math.max(snapshot.monthlyLimit - monthlyUsed, 0),
+    renewsAtUtc: snapshot.periodEndUtc,
   };
 }

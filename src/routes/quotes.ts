@@ -1,17 +1,27 @@
 import { LeadFollowUpStatus, Prisma, PrismaClient, QuoteOutboundChannel, QuoteRevisionEventType } from "@prisma/client";
-import { FastifyPluginAsync } from "fastify";
+import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
-import { resolveActivityActor, type ActivityActor } from "../lib/activity";
-import { PaginationQuerySchema, tenantActiveScope } from "../lib/query-scope";
+import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
+import {
+  PaginationQuerySchema,
+  tenantActiveCustomerScope,
+  tenantActiveQuoteScope,
+  tenantActiveScope,
+} from "../lib/query-scope";
 import {
   loadTenantEntitlements,
   startOfCurrentUtcMonth,
   startOfNextUtcMonth,
 } from "../lib/subscription";
 import { parseChatToQuotePrompt, type ParsedChatToQuoteDraft } from "../services/chat-to-quote";
-import { aiParseChatToQuotePrompt, getAiQuoteRuntimeInfo } from "../services/ai-quote";
+import {
+  aiBuildQuoteRevisionPlan,
+  aiParseChatToQuotePrompt,
+  createAiTelemetryAccumulator,
+  getAiQuoteRuntimeInfo,
+} from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
@@ -46,6 +56,7 @@ const CreateQuoteSchema = z.object({
   internalCostSubtotal: z.number().nonnegative(),
   customerPriceSubtotal: z.number().nonnegative(),
   taxAmount: z.number().nonnegative().default(0),
+  aiUsageEventId: z.string().min(1).optional(),
 });
 
 const UpdateQuoteSchema = z
@@ -127,6 +138,7 @@ const QuoteHistoryQuerySchema = PaginationQuerySchema.extend({
 });
 
 const QuoteHistoryByQuoteQuerySchema = PaginationQuerySchema;
+const QuoteAiRunsByQuoteQuerySchema = PaginationQuerySchema;
 
 const CreateQuoteOutboundEventSchema = z.object({
   channel: z.enum(["EMAIL_APP", "SMS_APP", "COPY"]),
@@ -154,6 +166,7 @@ const SuggestQuoteWithAiSchema = z.object({
   currentLineItems: z
     .array(
       z.object({
+        id: z.string().min(1).optional(),
         description: z.string().trim().min(1).max(5000),
         quantity: z.number().positive(),
         unitCost: z.number().nonnegative(),
@@ -195,12 +208,44 @@ const QuoteRevisionSelect = {
   },
 } as const satisfies Prisma.QuoteRevisionSelect;
 
+const AiUsageTraceSelect = {
+  id: true,
+  quoteId: true,
+  customerId: true,
+  actorUserId: true,
+  actorEmail: true,
+  actorName: true,
+  eventType: true,
+  creditsConsumed: true,
+  requestCount: true,
+  promptTokens: true,
+  completionTokens: true,
+  totalTokens: true,
+  estimatedCostUsd: true,
+  promptText: true,
+  model: true,
+  insightSummary: true,
+  insightReasons: true,
+  insightSourceLabels: true,
+  confidenceLevel: true,
+  confidenceLabel: true,
+  riskNote: true,
+  patchAdded: true,
+  patchUpdated: true,
+  patchRemoved: true,
+  createdAt: true,
+} as const satisfies Prisma.AiUsageEventSelect;
+
 function roundCurrency(value: number): number {
   return Number(value.toFixed(2));
 }
 
 function calculateQuoteTotal(customerPriceSubtotal: number, taxAmount: number): number {
   return roundCurrency(customerPriceSubtotal + taxAmount);
+}
+
+function formatAiRenewalDate(value: Date) {
+  return value.toISOString().slice(0, 10);
 }
 
 function addDays(value: Date, days: number): Date {
@@ -232,7 +277,7 @@ async function getActiveQuoteForTenant(
   return tx.quote.findFirst({
     where: {
       id: quoteId,
-      ...tenantActiveScope(tenantId),
+      ...tenantActiveQuoteScope(tenantId),
     },
   });
 }
@@ -325,7 +370,7 @@ async function getQuoteRevisionContext(
   return tx.quote.findFirst({
     where: {
       id: quoteId,
-      ...tenantActiveScope(tenantId),
+      ...tenantActiveQuoteScope(tenantId),
     },
     include: {
       customer: {
@@ -581,6 +626,504 @@ function normalizeTextForComparison(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function lineComparisonTokens(value: string) {
+  return normalizeTextForComparison(value)
+    .split(" ")
+    .filter((token) => token.length >= 3);
+}
+
+function isMeaningfulAiLine(line: AiCurrentLineItem | AiSuggestedLineItem) {
+  return Boolean(
+    normalizeTextForComparison(line.description).length ||
+      line.quantity > 0 ||
+      line.unitCost > 0 ||
+      line.unitPrice > 0,
+  );
+}
+
+function aiLineSimilarity(left: string, right: string) {
+  const leftText = normalizeTextForComparison(left);
+  const rightText = normalizeTextForComparison(right);
+  if (!leftText || !rightText) return 0;
+  if (leftText === rightText) return 10;
+
+  let score = 0;
+  const leftTokens = new Set(lineComparisonTokens(left));
+  const rightTokens = new Set(lineComparisonTokens(right));
+
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) score += 2;
+  }
+
+  if (leftText.includes(rightText) || rightText.includes(leftText)) {
+    score += 3;
+  }
+
+  return score;
+}
+
+function lineValuesDiffer(current: AiCurrentLineItem, next: AiSuggestedLineItem) {
+  return (
+    normalizeTextForComparison(current.description) !== normalizeTextForComparison(next.description) ||
+    roundCurrency(current.quantity) !== roundCurrency(next.quantity) ||
+    roundCurrency(current.unitCost) !== roundCurrency(next.unitCost) ||
+    roundCurrency(current.unitPrice) !== roundCurrency(next.unitPrice)
+  );
+}
+
+function buildDeterministicAiPatch(
+  currentLines: AiCurrentLineItem[],
+  suggestedLines: AiSuggestedLineItem[],
+): AiQuotePatchResult {
+  const workingLines = currentLines.map((line) => ({ ...line }));
+  const unmatchedIndexes = new Set<number>(
+    workingLines
+      .map((line, index) => (isMeaningfulAiLine(line) ? index : -1))
+      .filter((index) => index >= 0),
+  );
+  const lineChanges: AiSuggestedLinePatch[] = [];
+  let added = 0;
+  let updated = 0;
+
+  for (const suggestion of suggestedLines) {
+    let bestIndex = -1;
+    let bestScore = 0;
+
+    for (const index of unmatchedIndexes) {
+      const score = aiLineSimilarity(workingLines[index].description, suggestion.description);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex >= 0 && bestScore >= 4) {
+      const current = workingLines[bestIndex];
+      unmatchedIndexes.delete(bestIndex);
+      if (lineValuesDiffer(current, suggestion)) {
+        workingLines[bestIndex] = {
+          ...current,
+          description: suggestion.description,
+          quantity: suggestion.quantity,
+          unitCost: suggestion.unitCost,
+          unitPrice: suggestion.unitPrice,
+        };
+        updated += 1;
+        lineChanges.push({
+          action: "UPDATE",
+          targetLineId: current.id ?? null,
+          previousDescription: current.description,
+          description: suggestion.description,
+          quantity: suggestion.quantity,
+          unitCost: suggestion.unitCost,
+          unitPrice: suggestion.unitPrice,
+          reason: "Aligned to the AI quote draft.",
+        });
+      }
+      continue;
+    }
+
+    workingLines.push({
+      id: null,
+      description: suggestion.description,
+      quantity: suggestion.quantity,
+      unitCost: suggestion.unitCost,
+      unitPrice: suggestion.unitPrice,
+    });
+    added += 1;
+    lineChanges.push({
+      action: "ADD",
+      targetLineId: null,
+      previousDescription: null,
+      description: suggestion.description,
+      quantity: suggestion.quantity,
+      unitCost: suggestion.unitCost,
+      unitPrice: suggestion.unitPrice,
+      reason: "Added from the AI quote draft.",
+    });
+  }
+
+  return {
+    lineChanges,
+    added,
+    updated,
+    removed: 0,
+    resolvedLines: workingLines
+      .filter((line) => isMeaningfulAiLine(line))
+      .map((line) => ({
+        description: line.description,
+        quantity: roundCurrency(line.quantity),
+        unitCost: roundCurrency(line.unitCost),
+        unitPrice: roundCurrency(line.unitPrice),
+      })),
+  };
+}
+
+function applyAiRevisionPlan(
+  currentLines: AiCurrentLineItem[],
+  baselineSuggestion: AiSuggestedQuoteDraft,
+  plan: Awaited<ReturnType<typeof aiBuildQuoteRevisionPlan>>,
+): AiQuotePatchResult {
+  const workingLines = currentLines.map((line) => ({ ...line }));
+  const removedIndexes = new Set<number>();
+  const lineChanges: AiSuggestedLinePatch[] = [];
+  let added = 0;
+  let updated = 0;
+  let removed = 0;
+
+  for (const operation of plan.lineOperations) {
+    if (operation.action === "KEEP") continue;
+
+    if (operation.action === "ADD") {
+      const nextLine: AiSuggestedLineItem = {
+        description: operation.description ?? "Additional line item",
+        quantity: roundCurrency(operation.quantity ?? 1),
+        unitCost: roundCurrency(operation.unitCost ?? 0),
+        unitPrice: roundCurrency(operation.unitPrice ?? 0),
+      };
+      workingLines.push({
+        id: null,
+        ...nextLine,
+      });
+      added += 1;
+      lineChanges.push({
+        action: "ADD",
+        targetLineId: null,
+        previousDescription: null,
+        description: nextLine.description,
+        quantity: nextLine.quantity,
+        unitCost: nextLine.unitCost,
+        unitPrice: nextLine.unitPrice,
+        reason: operation.reason,
+      });
+      continue;
+    }
+
+    const targetIndex = (operation.targetLineNumber ?? 0) - 1;
+    if (targetIndex < 0 || targetIndex >= workingLines.length || removedIndexes.has(targetIndex)) {
+      continue;
+    }
+
+    const current = workingLines[targetIndex];
+
+    if (operation.action === "REMOVE") {
+      removedIndexes.add(targetIndex);
+      removed += 1;
+      lineChanges.push({
+        action: "REMOVE",
+        targetLineId: current.id ?? null,
+        previousDescription: current.description,
+        description: current.description,
+        quantity: roundCurrency(current.quantity),
+        unitCost: roundCurrency(current.unitCost),
+        unitPrice: roundCurrency(current.unitPrice),
+        reason: operation.reason,
+      });
+      continue;
+    }
+
+    const nextLine: AiSuggestedLineItem = {
+      description: operation.description ?? current.description,
+      quantity: roundCurrency(operation.quantity ?? current.quantity),
+      unitCost: roundCurrency(operation.unitCost ?? current.unitCost),
+      unitPrice: roundCurrency(operation.unitPrice ?? current.unitPrice),
+    };
+
+    if (!lineValuesDiffer(current, nextLine)) {
+      continue;
+    }
+
+    workingLines[targetIndex] = {
+      ...current,
+      ...nextLine,
+    };
+    updated += 1;
+    lineChanges.push({
+      action: "UPDATE",
+      targetLineId: current.id ?? null,
+      previousDescription: current.description,
+      description: nextLine.description,
+      quantity: nextLine.quantity,
+      unitCost: nextLine.unitCost,
+      unitPrice: nextLine.unitPrice,
+      reason: operation.reason,
+    });
+  }
+
+  if (!lineChanges.length) {
+    return {
+      lineChanges: [],
+      added: 0,
+      updated: 0,
+      removed: 0,
+      resolvedLines: workingLines
+        .filter((line) => isMeaningfulAiLine(line))
+        .map((line) => ({
+          description: line.description,
+          quantity: roundCurrency(line.quantity),
+          unitCost: roundCurrency(line.unitCost),
+          unitPrice: roundCurrency(line.unitPrice),
+        })),
+    };
+  }
+
+  return {
+    lineChanges,
+    added,
+    updated,
+    removed,
+    resolvedLines: workingLines
+      .filter((_line, index) => !removedIndexes.has(index))
+      .filter((line) => isMeaningfulAiLine(line))
+      .map((line) => ({
+        description: line.description,
+        quantity: roundCurrency(line.quantity),
+        unitCost: roundCurrency(line.unitCost),
+        unitPrice: roundCurrency(line.unitPrice),
+      })),
+  };
+}
+
+function hasMeaningfulCurrentQuoteContext(params: {
+  title?: string | null;
+  scopeText?: string | null;
+  lineItems?: AiCurrentLineItem[] | null;
+}) {
+  return Boolean(
+    normalizeTextForComparison(params.title ?? "").length ||
+      normalizeTextForComparison(params.scopeText ?? "").length ||
+      params.lineItems?.some((line) => isMeaningfulAiLine(line)),
+  );
+}
+
+function formatAiSourceStatus(status: z.infer<typeof QuoteStatusSchema>) {
+  if (status === "ACCEPTED") return "Accepted";
+  if (status === "SENT_TO_CUSTOMER") return "Sent";
+  if (status === "READY_FOR_REVIEW") return "Ready";
+  if (status === "REJECTED") return "Rejected";
+  return "Draft";
+}
+
+function assessAiSuggestionConfidence(params: {
+  currentQuoteUsed: boolean;
+  customer?: {
+    notes?: string | null;
+  } | null;
+  customerActivityCount: number;
+  presetCount: number;
+  similarQuotes: SimilarQuoteContext[];
+}) {
+  let score = 0;
+
+  if (params.currentQuoteUsed) score += 3;
+  if (params.customer) score += 1;
+  if (params.customer?.notes?.trim()) score += 1;
+  if (params.customerActivityCount > 0) score += 1;
+  if (params.presetCount > 0) score += 2;
+  if (params.similarQuotes.length > 0) score += 2;
+  if (params.similarQuotes.some((quote) => quote.status === "ACCEPTED")) score += 2;
+  else if (params.similarQuotes.some((quote) => quote.status === "SENT_TO_CUSTOMER")) score += 1;
+
+  if (score >= 8) {
+    return {
+      level: "high" as const,
+      label: "High confidence context",
+      riskNote:
+        "AI had strong tenant context from saved jobs, customer history, or similar successful quotes.",
+    };
+  }
+
+  if (score >= 4) {
+    return {
+      level: "medium" as const,
+      label: "Moderate confidence context",
+      riskNote:
+        "AI had partial tenant context, but some line items or pricing may still rely on inference. Review before sending.",
+    };
+  }
+
+  return {
+    level: "low" as const,
+    label: "Low confidence context",
+    riskNote:
+      "AI had limited saved context and relied more heavily on the prompt alone. Review scope, quantities, and pricing carefully.",
+  };
+}
+
+function buildAiSuggestionInsight(params: {
+  summary?: string | null;
+  reasons?: string[];
+  currentQuoteUsed: boolean;
+  customer?: {
+    fullName: string;
+    notes?: string | null;
+  } | null;
+  customerActivityCount: number;
+  presetCount: number;
+  similarQuotes: SimilarQuoteContext[];
+  patch: AiQuotePatchResult;
+}): AiSuggestionInsight {
+  const confidence = assessAiSuggestionConfidence({
+    currentQuoteUsed: params.currentQuoteUsed,
+    customer: params.customer,
+    customerActivityCount: params.customerActivityCount,
+    presetCount: params.presetCount,
+    similarQuotes: params.similarQuotes,
+  });
+
+  const summary =
+    params.summary?.trim() ||
+    [
+      params.patch.updated ? `updated ${params.patch.updated} line${params.patch.updated === 1 ? "" : "s"}` : null,
+      params.patch.added ? `added ${params.patch.added}` : null,
+      params.patch.removed ? `removed ${params.patch.removed}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ") ||
+    "AI reviewed the quote context and prepared an update.";
+
+  const sources: AiSuggestionInsight["sources"] = [];
+
+  if (params.currentQuoteUsed) {
+    sources.push({
+      type: "current_quote",
+      label: "Used the current quote sheet as the editing baseline",
+    });
+  }
+
+  if (params.customer) {
+    sources.push({
+      type: "customer",
+      label: `Customer: ${params.customer.fullName}`,
+    });
+  }
+
+  if (params.customer?.notes?.trim()) {
+    sources.push({
+      type: "customer_notes",
+      label: "Used saved customer notes as internal context",
+    });
+  }
+
+  if (params.customerActivityCount > 0) {
+    sources.push({
+      type: "customer_activity",
+      label: `${params.customerActivityCount} recent customer activity event${params.customerActivityCount === 1 ? "" : "s"}`,
+    });
+  }
+
+  if (params.presetCount > 0) {
+    sources.push({
+      type: "saved_jobs",
+      label: `${params.presetCount} saved job${params.presetCount === 1 ? "" : "s"} and pricing hints`,
+    });
+  }
+
+  for (const quote of params.similarQuotes.slice(0, 2)) {
+    sources.push({
+      type: "similar_quote",
+      label: `${formatAiSourceStatus(quote.status)} quote: ${quote.title}`,
+    });
+  }
+
+  return {
+    summary,
+    reasons: (params.reasons ?? []).filter(Boolean).slice(0, 3),
+    sources: sources.slice(0, 5),
+    confidence: {
+      level: confidence.level,
+      label: confidence.label,
+    },
+    riskNote: confidence.riskNote,
+    patch: {
+      added: params.patch.added,
+      updated: params.patch.updated,
+      removed: params.patch.removed,
+    },
+  };
+}
+
+function buildAiUsageTraceFromInsight(insight: AiSuggestionInsight) {
+  return {
+    insightSummary: insight.summary,
+    insightReasons: insight.reasons,
+    insightSourceLabels: insight.sources.map((source) => source.label),
+    confidenceLevel: insight.confidence.level,
+    confidenceLabel: insight.confidence.label,
+    riskNote: insight.riskNote,
+    patch: {
+      added: insight.patch.added,
+      updated: insight.patch.updated,
+      removed: insight.patch.removed,
+    },
+  };
+}
+
+const AI_PROGRESS_STEPS: Record<
+  AiProgressStep,
+  { value: number; label: string }
+> = {
+  analyzing_prompt: { value: 16, label: "Reading prompt" },
+  loading_customer_context: { value: 34, label: "Loading customer context" },
+  retrieving_workspace_context: { value: 56, label: "Matching saved jobs + similar quotes" },
+  drafting_quote_patch: { value: 78, label: "Preparing line changes" },
+  finalizing_suggestion: { value: 94, label: "Applying the quote patch" },
+};
+
+function buildAiContextSourceHints(params: {
+  customer?: {
+    notes?: string | null;
+  } | null;
+  customerActivityCount: number;
+  presetCount: number;
+  similarQuotes: SimilarQuoteContext[];
+}) {
+  const hints: string[] = [];
+  if (params.customer?.notes?.trim()) {
+    hints.push("customer notes");
+  }
+  if (params.customerActivityCount > 0) {
+    hints.push(`${params.customerActivityCount} recent activity`);
+  }
+  if (params.presetCount > 0) {
+    hints.push(`${params.presetCount} saved jobs`);
+  }
+  if (params.similarQuotes.length > 0) {
+    hints.push(`${params.similarQuotes.length} similar quotes`);
+  }
+  return hints.slice(0, 4);
+}
+
+function startAiSuggestionStream(reply: FastifyReply) {
+  reply.hijack();
+  reply.raw.statusCode = 200;
+  reply.raw.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  reply.raw.setHeader("Cache-Control", "no-store");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
+
+  const write = (event: AiSuggestionStreamEvent) => {
+    reply.raw.write(`${JSON.stringify(event)}\n`);
+  };
+
+  return {
+    write,
+    progress(step: AiProgressStep, detail: string, sourceHints?: string[]) {
+      const config = AI_PROGRESS_STEPS[step];
+      write({
+        type: "progress",
+        step,
+        value: config.value,
+        label: config.label,
+        detail,
+        ...(sourceHints?.length ? { sourceHints } : {}),
+      });
+    },
+    end() {
+      reply.raw.end();
+    },
+  };
+}
+
 function resolveChatQuoteScopeText(
   parsedScopeText: string,
   rawPrompt: string,
@@ -612,6 +1155,97 @@ type AiSuggestedQuoteDraft = {
   lineItems: AiSuggestedLineItem[];
   model: string;
 };
+
+type AiCurrentLineItem = {
+  id?: string | null;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+};
+
+type AiSuggestedLinePatch = {
+  action: "ADD" | "UPDATE" | "REMOVE";
+  targetLineId: string | null;
+  previousDescription: string | null;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+  reason: string;
+};
+
+type AiQuotePatchResult = {
+  lineChanges: AiSuggestedLinePatch[];
+  added: number;
+  updated: number;
+  removed: number;
+  resolvedLines: AiSuggestedLineItem[];
+};
+
+type AiSuggestionInsight = {
+  summary: string;
+  reasons: string[];
+  sources: Array<{
+    type: "current_quote" | "customer" | "customer_notes" | "customer_activity" | "saved_jobs" | "similar_quote";
+    label: string;
+  }>;
+  confidence: {
+    level: "high" | "medium" | "low";
+    label: string;
+  };
+  riskNote: string | null;
+  patch: {
+    added: number;
+    updated: number;
+    removed: number;
+  };
+};
+
+type AiProgressStep =
+  | "analyzing_prompt"
+  | "loading_customer_context"
+  | "retrieving_workspace_context"
+  | "drafting_quote_patch"
+  | "finalizing_suggestion";
+
+type AiProgressEvent = {
+  type: "progress";
+  step: AiProgressStep;
+  value: number;
+  label: string;
+  detail: string;
+  sourceHints?: string[];
+};
+
+type AiSuggestionStreamEvent =
+  | AiProgressEvent
+  | {
+      type: "complete";
+      result: {
+        customer: {
+          id: string;
+          fullName: string;
+          phone: string;
+          email: string | null;
+          notes?: string | null;
+        } | null;
+        parsed: {
+          customerName: string | undefined;
+          customerPhone: string | undefined;
+          customerEmail: string | undefined;
+          serviceType: z.infer<typeof ServiceTypeSchema>;
+          squareFeetEstimate: number | null;
+          estimatedTotalAmount: number | null;
+        };
+        suggestion: AiSuggestedQuoteDraft;
+        patch: AiQuotePatchResult;
+        insight: AiSuggestionInsight;
+        aiRunId: string;
+        usage: ReturnType<typeof buildAiUsageResponse>;
+      };
+    }
+  | { type: "error"; error: string };
 
 type SimilarQuoteContext = {
   id: string;
@@ -806,6 +1440,7 @@ function scoreSimilarQuote(
     scopeText: string;
     lineItems: Array<{ description: string }>;
     status: z.infer<typeof QuoteStatusSchema>;
+    updatedAt: Date;
   },
 ) {
   const titleText = normalizeTextForComparison(quote.title);
@@ -819,9 +1454,18 @@ function scoreSimilarQuote(
     if (linesText.includes(token)) score += 2;
   }
 
-  if (quote.status === "ACCEPTED") score += 5;
-  if (quote.status === "SENT_TO_CUSTOMER") score += 3;
-  if (quote.status === "READY_FOR_REVIEW") score += 2;
+  if (quote.status === "ACCEPTED") score += 18;
+  else if (quote.status === "SENT_TO_CUSTOMER") score += 12;
+  else if (quote.status === "READY_FOR_REVIEW") score += 4;
+  else if (quote.status === "DRAFT") score -= 2;
+
+  const ageInDays = Math.max(
+    0,
+    Math.floor((Date.now() - quote.updatedAt.getTime()) / (1000 * 60 * 60 * 24)),
+  );
+  if (ageInDays <= 14) score += 4;
+  else if (ageInDays <= 45) score += 2;
+  else if (ageInDays <= 90) score += 1;
 
   return score;
 }
@@ -888,6 +1532,7 @@ async function loadSimilarQuoteContext(
         scopeText: quote.scopeText,
         lineItems: quote.lineItems.map((lineItem) => ({ description: lineItem.description })),
         status: quote.status,
+        updatedAt: quote.updatedAt,
       }),
     }))
     .sort((left, right) => {
@@ -1217,57 +1862,81 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         entitlements.planCode === "starter" ? "professional" : "enterprise";
       return reply.code(403).send({
         code: "PLAN_LIMIT_EXCEEDED",
-        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit.`,
+        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit. Your AI credits renew on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
         feature: "aiQuotesPerMonth",
         currentPlan: entitlements.planCode,
         requiredPlan,
         limit: entitlements.limits.aiQuotesPerMonth,
         used: snapshot.monthlyUsed,
+        renewsAtUtc: snapshot.periodEndUtc,
       });
     }
 
-    const existingQuote = payload.quoteId
-      ? await app.prisma.quote.findFirst({
-          where: {
-            id: payload.quoteId,
-            ...tenantActiveScope(claims.tenantId),
-          },
-          include: {
-            customer: {
-              select: {
-                id: true,
-                fullName: true,
-                email: true,
-                phone: true,
-                notes: true,
+    const stream = startAiSuggestionStream(reply);
+
+    try {
+      const aiTelemetry = createAiTelemetryAccumulator();
+      stream.progress(
+        "analyzing_prompt",
+        "Parsing the request and checking whether this is a new draft or a revision.",
+      );
+
+      const existingQuote = payload.quoteId
+        ? await app.prisma.quote.findFirst({
+            where: {
+              id: payload.quoteId,
+              ...tenantActiveQuoteScope(claims.tenantId),
+            },
+            include: {
+              customer: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  email: true,
+                  phone: true,
+                  notes: true,
+                },
+              },
+              lineItems: {
+                where: tenantActiveScope(claims.tenantId),
+                orderBy: { createdAt: "asc" },
+                select: {
+                  id: true,
+                  description: true,
+                  quantity: true,
+                  unitCost: true,
+                  unitPrice: true,
+                },
               },
             },
-            lineItems: {
-              where: tenantActiveScope(claims.tenantId),
-              orderBy: { createdAt: "asc" },
-              select: {
-                description: true,
-                quantity: true,
-                unitCost: true,
-                unitPrice: true,
-              },
+          })
+        : null;
+
+      if (payload.quoteId && !existingQuote) {
+        stream.write({ type: "error", error: "Quote not found for tenant." });
+        stream.end();
+        return reply;
+      }
+
+      const hadExplicitCustomerContext = Boolean(payload.customerId || existingQuote?.customerId);
+
+      stream.progress(
+        "loading_customer_context",
+        existingQuote?.customer
+          ? "Using the quote's current customer and line items as context."
+          : payload.customerId
+            ? "Using the selected customer as context for drafting."
+            : "No customer is locked yet. AI will try to infer customer details from the prompt.",
+      );
+
+      let selectedCustomer = payload.customerId
+        ? await app.prisma.customer.findFirst({
+            where: {
+              id: payload.customerId,
+              ...tenantActiveCustomerScope(claims.tenantId),
             },
-          },
-        })
-      : null;
-
-    if (payload.quoteId && !existingQuote) {
-      return reply.code(404).send({ error: "Quote not found for tenant." });
-    }
-
-    let selectedCustomer = payload.customerId
-      ? await app.prisma.customer.findFirst({
-          where: {
-            id: payload.customerId,
-            ...tenantActiveScope(claims.tenantId),
-          },
-        })
-      : existingQuote?.customer ?? null;
+          })
+        : existingQuote?.customer ?? null;
 
     const preflightDraft = parseChatToQuotePrompt(payload.prompt);
     const preliminaryServiceType =
@@ -1293,7 +1962,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
-    const customerActivityContext = selectedCustomer
+    let customerActivityContext = selectedCustomer
       ? await app.prisma.customerActivityEvent.findMany({
           where: {
             tenantId: claims.tenantId,
@@ -1325,7 +1994,59 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       excludeQuoteId: existingQuote?.id ?? payload.quoteId ?? null,
     });
 
-    const contextPrompt = buildAiQuoteContext({
+    stream.progress(
+      "retrieving_workspace_context",
+      `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"} and ${similarQuotes.length} similar quote${similarQuotes.length === 1 ? "" : "s"} for ${preliminaryServiceType.toLowerCase()}.`,
+      buildAiContextSourceHints({
+        customer: selectedCustomer
+          ? {
+              notes: selectedCustomer.notes,
+            }
+          : null,
+        customerActivityCount: customerActivityContext.length,
+        presetCount: contextPresets.length,
+        similarQuotes,
+      }),
+    );
+
+    const currentQuoteContext =
+      payload.currentTitle || payload.currentScopeText || payload.currentLineItems?.length
+        ? {
+            serviceType: existingQuote?.serviceType ?? preliminaryServiceType,
+            title: payload.currentTitle ?? existingQuote?.title,
+            scopeText: payload.currentScopeText ?? existingQuote?.scopeText,
+            lineItems: payload.currentLineItems?.length
+              ? payload.currentLineItems.map((lineItem) => ({
+                  id: lineItem.id ?? null,
+                  description: lineItem.description,
+                  quantity: lineItem.quantity,
+                  unitCost: lineItem.unitCost,
+                  unitPrice: lineItem.unitPrice,
+                }))
+              : (existingQuote?.lineItems ?? []).map((lineItem) => ({
+                  id: lineItem.id,
+                  description: lineItem.description,
+                  quantity: Number(lineItem.quantity),
+                  unitCost: Number(lineItem.unitCost),
+                  unitPrice: Number(lineItem.unitPrice),
+                })),
+          }
+        : existingQuote
+          ? {
+              serviceType: existingQuote.serviceType,
+              title: existingQuote.title,
+              scopeText: existingQuote.scopeText,
+              lineItems: existingQuote.lineItems.map((lineItem) => ({
+                id: lineItem.id,
+                description: lineItem.description,
+                quantity: Number(lineItem.quantity),
+                unitCost: Number(lineItem.unitCost),
+                unitPrice: Number(lineItem.unitPrice),
+              })),
+            }
+        : null;
+
+    let contextPrompt = buildAiQuoteContext({
       customer: selectedCustomer
           ? {
               fullName: selectedCustomer.fullName,
@@ -1335,26 +2056,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
       customerActivity: customerActivityContext,
-      currentQuote: existingQuote
+      currentQuote: currentQuoteContext
         ? {
-            serviceType: existingQuote.serviceType,
-            title: existingQuote.title,
-            scopeText: existingQuote.scopeText,
-            lineItems: existingQuote.lineItems.map((lineItem) => ({
+            serviceType: currentQuoteContext.serviceType,
+            title: currentQuoteContext.title,
+            scopeText: currentQuoteContext.scopeText,
+            lineItems: currentQuoteContext.lineItems.map((lineItem) => ({
               description: lineItem.description,
-              quantity: Number(lineItem.quantity),
-              unitCost: Number(lineItem.unitCost),
-              unitPrice: Number(lineItem.unitPrice),
+              quantity: lineItem.quantity,
+              unitCost: lineItem.unitCost,
+              unitPrice: lineItem.unitPrice,
             })),
           }
-        : payload.currentTitle || payload.currentScopeText || payload.currentLineItems?.length
-          ? {
-              serviceType: preliminaryServiceType,
-              title: payload.currentTitle,
-              scopeText: payload.currentScopeText,
-              lineItems: payload.currentLineItems,
-            }
-          : null,
+        : null,
       presets: contextPresets.map((preset) => ({
         name: preset.name,
         description: preset.description,
@@ -1371,8 +2085,24 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       similarQuotes,
     });
 
-    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+    stream.progress(
+      "drafting_quote_patch",
+      "Interpreting the request and preparing line-by-line quote changes.",
+      buildAiContextSourceHints({
+        customer: selectedCustomer
+          ? {
+              notes: selectedCustomer.notes,
+            }
+          : null,
+        customerActivityCount: customerActivityContext.length,
+        presetCount: contextPresets.length,
+        similarQuotes,
+      }),
+    );
+
+    let parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
       context: contextPrompt,
+      telemetry: aiTelemetry,
     });
 
     const customerPhone = normalizeNullablePhone(parsedDraft.customerPhone);
@@ -1382,7 +2112,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       selectedCustomer = await app.prisma.customer.findFirst({
         where: {
           phone: customerPhone,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
       });
     }
@@ -1391,40 +2121,225 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       selectedCustomer = await app.prisma.customer.findFirst({
         where: {
           email: customerEmail,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
       });
     }
 
-    const suggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
+    if (selectedCustomer && !hadExplicitCustomerContext) {
+      customerActivityContext = await app.prisma.customerActivityEvent.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          customerId: selectedCustomer.id,
+          deletedAtUtc: null,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          title: true,
+          detail: true,
+          createdAt: true,
+        },
+      }).then((events) =>
+        events.map((event) => ({
+          title: event.title,
+          detail: event.detail,
+          occurredAt: event.createdAt,
+        })),
+      );
+
+      contextPrompt = buildAiQuoteContext({
+        customer: {
+          fullName: selectedCustomer.fullName,
+          phone: selectedCustomer.phone,
+          email: selectedCustomer.email,
+          notes: selectedCustomer.notes,
+        },
+        customerActivity: customerActivityContext,
+        currentQuote: currentQuoteContext
+          ? {
+              serviceType: currentQuoteContext.serviceType,
+              title: currentQuoteContext.title,
+              scopeText: currentQuoteContext.scopeText,
+              lineItems: currentQuoteContext.lineItems.map((lineItem) => ({
+                description: lineItem.description,
+                quantity: lineItem.quantity,
+                unitCost: lineItem.unitCost,
+                unitPrice: lineItem.unitPrice,
+              })),
+            }
+          : null,
+        presets: contextPresets.map((preset) => ({
+          name: preset.name,
+          description: preset.description,
+          unitType: preset.unitType,
+          unitCost: Number(preset.unitCost),
+          unitPrice: Number(preset.unitPrice),
+        })),
+        pricingProfile: contextPricingProfile
+          ? {
+              laborRate: Number(contextPricingProfile.laborRate),
+              materialMarkup: Number(contextPricingProfile.materialMarkup),
+            }
+          : null,
+        similarQuotes,
+      });
+
+      parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+        context: contextPrompt,
+        telemetry: aiTelemetry,
+      });
+
+      stream.progress(
+        "drafting_quote_patch",
+        `Matched customer context from the prompt: ${selectedCustomer.fullName}. Refining the suggestion with saved notes and recent activity.`,
+        buildAiContextSourceHints({
+          customer: {
+            notes: selectedCustomer.notes,
+          },
+          customerActivityCount: customerActivityContext.length,
+          presetCount: contextPresets.length,
+          similarQuotes,
+        }),
+      );
+    }
+
+    const baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
       prompt: payload.prompt,
       parsedDraft,
       serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
     });
 
-    await createAiUsageEvent(app.prisma, {
+    const hasCurrentSheetContext = currentQuoteContext
+      ? hasMeaningfulCurrentQuoteContext(currentQuoteContext)
+      : false;
+
+    const revisionPlan = hasCurrentSheetContext
+      ? await aiBuildQuoteRevisionPlan(payload.prompt, {
+          context: [
+            contextPrompt,
+            "Current quote lines:",
+            ...(currentQuoteContext?.lineItems.map(
+              (lineItem, index) =>
+                `${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+                  2,
+                )} | price ${lineItem.unitPrice.toFixed(2)}`,
+            ) ?? []),
+            "",
+            "Baseline AI draft:",
+            `- Trade: ${baselineSuggestion.serviceType}`,
+            `- Title: ${baselineSuggestion.title}`,
+            `- Scope: ${baselineSuggestion.scopeText}`,
+            ...baselineSuggestion.lineItems.map(
+              (lineItem, index) =>
+                `  ${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+                  2,
+                )} | price ${lineItem.unitPrice.toFixed(2)}`,
+            ),
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          telemetry: aiTelemetry,
+        })
+      : null;
+
+    const patch = revisionPlan
+      ? applyAiRevisionPlan(currentQuoteContext?.lineItems ?? [], baselineSuggestion, revisionPlan)
+      : buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems);
+
+    const resolvedServiceType = revisionPlan?.serviceType ?? baselineSuggestion.serviceType;
+    const resolvedTitle =
+      revisionPlan?.title?.trim() ||
+      (hasCurrentSheetContext && currentQuoteContext?.title?.trim()
+        ? currentQuoteContext.title.trim()
+        : baselineSuggestion.title);
+    const resolvedScopeText =
+      revisionPlan?.scopeText?.trim() ||
+      (hasCurrentSheetContext && currentQuoteContext?.scopeText?.trim()
+        ? currentQuoteContext.scopeText.trim()
+        : baselineSuggestion.scopeText);
+    const resolvedInternalSubtotal = roundCurrency(
+      patch.resolvedLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitCost, 0),
+    );
+    const resolvedCustomerSubtotal = roundCurrency(
+      patch.resolvedLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice, 0),
+    );
+    const suggestion: AiSuggestedQuoteDraft = {
+      ...baselineSuggestion,
+      serviceType: resolvedServiceType,
+      title: resolvedTitle,
+      scopeText: resolvedScopeText,
+      internalCostSubtotal: resolvedInternalSubtotal,
+      customerPriceSubtotal: resolvedCustomerSubtotal,
+      totalAmount: calculateQuoteTotal(resolvedCustomerSubtotal, baselineSuggestion.taxAmount),
+      lineItems: patch.resolvedLines.length ? patch.resolvedLines : baselineSuggestion.lineItems,
+    };
+
+    const insight = buildAiSuggestionInsight({
+      summary: revisionPlan?.summary,
+      reasons: revisionPlan?.reasons,
+      currentQuoteUsed: hasCurrentSheetContext,
+      customer: selectedCustomer
+        ? {
+            fullName: selectedCustomer.fullName,
+            notes: selectedCustomer.notes,
+          }
+        : null,
+      customerActivityCount: customerActivityContext.length,
+      presetCount: contextPresets.length,
+      similarQuotes,
+      patch,
+    });
+
+    stream.progress(
+      "finalizing_suggestion",
+      `Prepared ${patch.updated} update${patch.updated === 1 ? "" : "s"}, ${patch.added} add${patch.added === 1 ? "" : "s"}, and ${patch.removed} removal${patch.removed === 1 ? "" : "s"} for review.`,
+      insight.sources.map((source) => source.label).slice(0, 4),
+    );
+
+    const aiUsageEvent = await createAiUsageEvent(app.prisma, {
       tenantId: claims.tenantId,
       quoteId: existingQuote?.id ?? payload.quoteId ?? null,
       customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
       actor,
-      eventType: existingQuote ? "REVISE" : "DRAFT",
+      eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
       promptText: payload.prompt,
       model: suggestion.model,
+      telemetry: aiTelemetry,
+      trace: buildAiUsageTraceFromInsight(insight),
     });
 
-    return reply.send({
-      customer: selectedCustomer,
-      parsed: {
-        customerName: parsedDraft.customerName,
-        customerPhone: parsedDraft.customerPhone,
-        customerEmail: parsedDraft.customerEmail,
-        serviceType: suggestion.serviceType,
-        squareFeetEstimate: parsedDraft.squareFeetEstimate,
-        estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
-      },
-      suggestion,
-      usage: buildAiUsageResponse(snapshot),
-    });
+      stream.write({
+        type: "complete",
+        result: {
+          customer: selectedCustomer,
+          parsed: {
+            customerName: parsedDraft.customerName,
+            customerPhone: parsedDraft.customerPhone,
+            customerEmail: parsedDraft.customerEmail,
+            serviceType: suggestion.serviceType,
+            squareFeetEstimate: parsedDraft.squareFeetEstimate,
+            estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
+          },
+          suggestion,
+          patch,
+          insight,
+          aiRunId: aiUsageEvent.id,
+          usage: buildAiUsageResponse(snapshot),
+        },
+      });
+      stream.end();
+      return reply;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
+      try {
+        stream.write({ type: "error", error: message });
+      } finally {
+        stream.end();
+      }
+      request.log.error({ err }, "[quotes/ai-suggest] streamed AI suggestion failed");
+      return reply;
+    }
   });
 
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -1444,7 +2359,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const periodEnd = startOfNextUtcMonth();
       const monthlyQuoteCount = await app.prisma.quote.count({
         where: {
-          ...tenantActiveScope(claims.tenantId),
+          tenantId: claims.tenantId,
           createdAt: {
             gte: periodStart,
             lt: periodEnd,
@@ -1478,16 +2393,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         entitlements.planCode === "starter" ? "professional" : "enterprise";
       return reply.code(403).send({
         code: "PLAN_LIMIT_EXCEEDED",
-        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit.`,
+        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit. Your AI credits renew on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
         feature: "aiQuotesPerMonth",
         currentPlan: entitlements.planCode,
         requiredPlan,
         limit: entitlements.limits.aiQuotesPerMonth,
         used: snapshot.monthlyUsed,
+        renewsAtUtc: snapshot.periodEndUtc,
       });
     }
 
-    const preflightDraft = await aiParseChatToQuotePrompt(payload.prompt);
+    const preflightDraft = parseChatToQuotePrompt(payload.prompt);
+    const aiTelemetry = createAiTelemetryAccumulator();
     const aiRuntime = getAiQuoteRuntimeInfo();
     const detectedCustomerName = payload.customerName?.trim() || preflightDraft.customerName;
     const customerPhone = normalizeNullablePhone(payload.customerPhone) ?? normalizeNullablePhone(preflightDraft.customerPhone);
@@ -1497,7 +2414,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       ? await app.prisma.customer.findFirst({
           where: {
             phone: customerPhone,
-            ...tenantActiveScope(claims.tenantId),
+            ...tenantActiveCustomerScope(claims.tenantId),
           },
         })
       : null;
@@ -1506,7 +2423,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       customer = await app.prisma.customer.findFirst({
         where: {
           email: customerEmail,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
       });
     }
@@ -1614,6 +2531,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           : null,
         similarQuotes,
       }),
+      telemetry: aiTelemetry,
     });
 
     const pricingProfile = await app.prisma.pricingProfile.findFirst({
@@ -1870,6 +2788,28 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ];
         })();
 
+    const draftInsight = buildAiSuggestionInsight({
+      summary: `Prepared ${lineItemDrafts.length} starting line${lineItemDrafts.length === 1 ? "" : "s"} for the first draft.`,
+      reasons: matchedPreset ? [`Anchored to ${matchedPreset.name} pricing and naming.`] : [],
+      currentQuoteUsed: false,
+      customer: customer
+        ? {
+            fullName: customer.fullName,
+            notes: customer.notes,
+          }
+        : null,
+      customerActivityCount: customerActivityContext.length,
+      presetCount: contextPresets.length,
+      similarQuotes,
+      patch: {
+        lineChanges: [],
+        added: lineItemDrafts.length,
+        updated: 0,
+        removed: 0,
+        resolvedLines: lineItemDrafts,
+      },
+    });
+
     const quote = await app.prisma.$transaction(async (tx) => {
       const createdQuote = await tx.quote.create({
         data: {
@@ -1928,12 +2868,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         eventType: "DRAFT",
         promptText: payload.prompt,
         model: aiRuntime.model,
+        telemetry: aiTelemetry,
+        trace: buildAiUsageTraceFromInsight(draftInsight),
       });
 
       return tx.quote.findFirst({
         where: {
           id: createdQuote.id,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveQuoteScope(claims.tenantId),
         },
         include: {
           customer: true,
@@ -1981,7 +2923,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const periodEnd = startOfNextUtcMonth();
       const monthlyQuoteCount = await app.prisma.quote.count({
         where: {
-          ...tenantActiveScope(claims.tenantId),
+          tenantId: claims.tenantId,
           createdAt: {
             gte: periodStart,
             lt: periodEnd,
@@ -2007,7 +2949,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: payload.customerId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveCustomerScope(claims.tenantId),
       },
       select: { id: true },
     });
@@ -2030,6 +2972,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           totalAmount,
         },
       });
+
+      if (payload.aiUsageEventId) {
+        await tx.aiUsageEvent.updateMany({
+          where: {
+            id: payload.aiUsageEventId,
+            tenantId: claims.tenantId,
+            deletedAtUtc: null,
+            quoteId: null,
+          },
+          data: {
+            quoteId: createdQuote.id,
+            customerId: payload.customerId,
+          },
+        });
+      }
 
       await createQuoteRevision(tx, {
         tenantId: claims.tenantId,
@@ -2059,7 +3016,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const query = ListQuotesQuerySchema.parse(request.query);
 
     const where: Prisma.QuoteWhereInput = {
-      ...tenantActiveScope(claims.tenantId),
+      ...tenantActiveQuoteScope(claims.tenantId),
       ...(query.status ? { status: query.status } : {}),
       ...(query.customerId ? { customerId: query.customerId } : {}),
       ...(query.search
@@ -2135,7 +3092,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const quotes = await app.prisma.quote.findMany({
       where: {
         id: { in: quoteIds },
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveQuoteScope(claims.tenantId),
       },
       include: {
         customer: {
@@ -2245,7 +3202,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const customer = await app.prisma.customer.findFirst({
         where: {
           id: query.customerId,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
         select: { id: true },
       });
@@ -2259,7 +3216,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const quote = await app.prisma.quote.findFirst({
         where: {
           id: query.quoteId,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveQuoteScope(claims.tenantId),
         },
         select: { id: true },
       });
@@ -2330,7 +3287,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const quote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveQuoteScope(claims.tenantId),
       },
       select: { id: true },
     });
@@ -2369,6 +3326,56 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.get("/quotes/:quoteId/ai-runs", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { quoteId } = QuoteParamsSchema.parse(request.params);
+    const query = QuoteAiRunsByQuoteQuerySchema.parse(request.query);
+
+    const quote = await app.prisma.quote.findFirst({
+      where: {
+        id: quoteId,
+        ...tenantActiveQuoteScope(claims.tenantId),
+      },
+      select: { id: true },
+    });
+
+    if (!quote) {
+      return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+
+    const where: Prisma.AiUsageEventWhereInput = {
+      tenantId: claims.tenantId,
+      quoteId: quote.id,
+      deletedAtUtc: null,
+    };
+
+    const [runs, total] = await app.prisma.$transaction([
+      app.prisma.aiUsageEvent.findMany({
+        where,
+        select: AiUsageTraceSelect,
+        orderBy: { createdAt: "desc" },
+        take: query.limit,
+        skip: query.offset,
+      }),
+      app.prisma.aiUsageEvent.count({ where }),
+    ]);
+
+    return {
+      runs: runs.map((run) => ({
+        ...run,
+        estimatedCostUsd:
+          run.estimatedCostUsd === null || run.estimatedCostUsd === undefined
+            ? null
+            : Number(run.estimatedCostUsd),
+      })),
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total,
+      },
+    };
+  });
+
   app.get("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
@@ -2376,7 +3383,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const quote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveQuoteScope(claims.tenantId),
       },
       include: {
         customer: true,
@@ -2402,7 +3409,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const quote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveQuoteScope(claims.tenantId),
       },
       include: {
         customer: true,
@@ -2414,12 +3421,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           select: {
             name: true,
             timezone: true,
+            subscriptionPlanCode: true,
             branding: {
               select: {
                 templateId: true,
                 primaryColor: true,
                 logoUrl: true,
                 logoPosition: true,
+                hideQuoteFlyAttribution: true,
                 businessEmail: true,
                 businessPhone: true,
                 addressLine1: true,
@@ -2468,6 +3477,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quote.tenant.branding?.logoPosition === "center" || quote.tenant.branding?.logoPosition === "right"
             ? quote.tenant.branding.logoPosition
             : "left",
+        showQuoteFlyAttribution:
+          (quote.tenant.subscriptionPlanCode ?? "starter") === "starter"
+            ? true
+            : !Boolean(quote.tenant.branding?.hideQuoteFlyAttribution),
         businessEmail: quote.tenant.branding?.businessEmail ?? null,
         businessPhone: quote.tenant.branding?.businessPhone ?? null,
         addressLine1: quote.tenant.branding?.addressLine1 ?? null,
@@ -2517,7 +3530,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const existingQuote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
-        ...tenantActiveScope(claims.tenantId),
+        ...tenantActiveQuoteScope(claims.tenantId),
       },
     });
 
@@ -2529,7 +3542,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const customer = await app.prisma.customer.findFirst({
         where: {
           id: payload.customerId,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
         select: { id: true },
       });
@@ -2602,7 +3615,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         await tx.customer.updateMany({
           where: {
             id: updatedQuote.customerId,
-            ...tenantActiveScope(claims.tenantId),
+            ...tenantActiveCustomerScope(claims.tenantId),
           },
           data: {
             followUpStatus: followUpStatusUpdate,
@@ -2619,6 +3632,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const now = new Date();
 
@@ -2626,9 +3640,25 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
       if (!quote) return false;
 
+      await createCustomerActivityEvent(tx, {
+        tenantId: claims.tenantId,
+        customerId: quote.customerId,
+        actor,
+        eventType: "QUOTE_DELETED",
+        title: "Quote deleted",
+        detail: `${quote.title} was removed from the active workspace but retained in history.`,
+        metadata: {
+          quoteId: quote.id,
+          status: quote.status,
+        },
+      });
+
       await tx.quote.update({
         where: { id: quote.id },
-        data: { deletedAtUtc: now },
+        data: {
+          archivedAtUtc: null,
+          deletedAtUtc: now,
+        },
       });
 
       await tx.quoteLineItem.updateMany({
@@ -2651,6 +3681,47 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     });
 
     if (!deleted) {
+      return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+
+    return reply.code(204).send();
+  });
+
+  app.post("/quotes/:quoteId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
+    const { quoteId } = QuoteParamsSchema.parse(request.params);
+    const now = new Date();
+
+    const archived = await app.prisma.$transaction(async (tx) => {
+      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+      if (!quote) return false;
+
+      await createCustomerActivityEvent(tx, {
+        tenantId: claims.tenantId,
+        customerId: quote.customerId,
+        actor,
+        eventType: "QUOTE_ARCHIVED",
+        title: "Quote archived",
+        detail: `${quote.title} was archived and removed from the active workspace.`,
+        metadata: {
+          quoteId: quote.id,
+          status: quote.status,
+        },
+      });
+
+      await tx.quote.update({
+        where: { id: quote.id },
+        data: {
+          archivedAtUtc: now,
+          deletedAtUtc: null,
+        },
+      });
+
+      return true;
+    });
+
+    if (!archived) {
       return reply.code(404).send({ error: "Quote not found for tenant." });
     }
 
@@ -2702,7 +3773,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         await tx.customer.updateMany({
           where: {
             id: updatedQuote.customerId,
-            ...tenantActiveScope(claims.tenantId),
+            ...tenantActiveCustomerScope(claims.tenantId),
           },
           data: {
             followUpStatus: "NEEDS_FOLLOW_UP",
@@ -2755,7 +3826,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const quote = await app.prisma.quote.findFirst({
         where: {
           id: quoteId,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveQuoteScope(claims.tenantId),
         },
         select: { id: true },
       });
@@ -2819,7 +3890,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const quote = await app.prisma.quote.findFirst({
         where: {
           id: quoteId,
-          ...tenantActiveScope(claims.tenantId),
+          ...tenantActiveQuoteScope(claims.tenantId),
         },
         select: {
           id: true,

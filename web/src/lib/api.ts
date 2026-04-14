@@ -186,6 +186,7 @@ export type TenantBranding = {
   templateId: BrandingTemplateId;
   logoUrl?: string | null;
   logoPosition?: BrandingLogoPosition;
+  hideQuoteFlyAttribution?: boolean;
   businessEmail?: string | null;
   businessPhone?: string | null;
   quoteMessageTemplate?: string | null;
@@ -208,6 +209,8 @@ export type Customer = {
   notes?: string | null;
   followUpStatus: LeadFollowUpStatus;
   followUpUpdatedAtUtc?: string | null;
+  archivedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -255,6 +258,8 @@ export type Quote = {
   afterSaleFollowUpDueAtUtc?: string | null;
   afterSaleFollowUpCompletedAtUtc?: string | null;
   sentAt?: string | null;
+  archivedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
   customer?: Customer;
@@ -369,6 +374,7 @@ export type AiUsageSummary = {
   monthlyUsed: number;
   monthlyLimit: number | null;
   monthlyRemaining: number | null;
+  renewsAtUtc: string;
 };
 
 export type ChatToQuoteResult = {
@@ -394,6 +400,36 @@ export type AiQuoteSuggestion = {
   }>;
 };
 
+export type AiQuoteLinePatch = {
+  action: "ADD" | "UPDATE" | "REMOVE";
+  targetLineId: string | null;
+  previousDescription: string | null;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+  reason: string;
+};
+
+export type AiQuoteInsight = {
+  summary: string;
+  reasons: string[];
+  sources: Array<{
+    type: "current_quote" | "customer" | "customer_notes" | "customer_activity" | "saved_jobs" | "similar_quote";
+    label: string;
+  }>;
+  confidence: {
+    level: "high" | "medium" | "low";
+    label: string;
+  };
+  riskNote?: string | null;
+  patch: {
+    added: number;
+    updated: number;
+    removed: number;
+  };
+};
+
 export type AiQuoteSuggestionResult = {
   customer?: {
     id: string;
@@ -403,8 +439,65 @@ export type AiQuoteSuggestionResult = {
   } | null;
   parsed: ChatToQuoteParsed;
   suggestion: AiQuoteSuggestion;
+  patch: {
+    lineChanges: AiQuoteLinePatch[];
+    added: number;
+    updated: number;
+    removed: number;
+  };
+  insight: AiQuoteInsight;
+  aiRunId: string;
   usage: AiUsageSummary;
 };
+
+export type AiQuoteRun = {
+  id: string;
+  quoteId?: string | null;
+  customerId?: string | null;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
+  eventType: "DRAFT" | "REVISE";
+  creditsConsumed: number;
+  requestCount: number;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+  estimatedCostUsd?: number | null;
+  promptText: string;
+  model?: string | null;
+  insightSummary?: string | null;
+  insightReasons: string[];
+  insightSourceLabels: string[];
+  confidenceLevel?: "high" | "medium" | "low" | null;
+  confidenceLabel?: string | null;
+  riskNote?: string | null;
+  patchAdded?: number | null;
+  patchUpdated?: number | null;
+  patchRemoved?: number | null;
+  createdAt: string;
+};
+
+export type AiProgressStep =
+  | "analyzing_prompt"
+  | "loading_customer_context"
+  | "retrieving_workspace_context"
+  | "drafting_quote_patch"
+  | "finalizing_suggestion";
+
+export type AiProgressEvent = {
+  type: "progress";
+  step: AiProgressStep;
+  value: number;
+  label: string;
+  detail: string;
+  sourceHints?: string[];
+};
+
+type AiSuggestionStreamEvent =
+  | AiProgressEvent
+  | { type: "complete"; result: AiQuoteSuggestionResult }
+  | { type: "error"; error: string };
 
 export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
 export type WorkPresetUnitType = "FLAT" | "SQ_FT" | "HOUR" | "EACH";
@@ -646,6 +739,7 @@ export const api = {
       body: {
         logoUrl?: string | null;
         logoPosition: BrandingLogoPosition;
+        hideQuoteFlyAttribution?: boolean;
         primaryColor: string;
         templateId: BrandingTemplateId;
         timezone: string;
@@ -831,7 +925,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-    remove: (customerId: string) =>
+    archive: (customerId: string) =>
+      request<void>(`/v1/customers/${customerId}/archive`, {
+        method: "POST",
+      }),
+
+    delete: (customerId: string) =>
       request<void>(`/v1/customers/${customerId}`, {
         method: "DELETE",
       }),
@@ -888,6 +987,14 @@ export const api = {
         })}`,
       ),
 
+    getAiRuns: (quoteId: string, query?: { limit?: number; offset?: number }) =>
+      request<{ runs: AiQuoteRun[]; pagination: Pagination }>(
+        `/v1/quotes/${quoteId}/ai-runs${toQueryString({
+          limit: query?.limit,
+          offset: query?.offset,
+        })}`,
+      ),
+
     create: (body: {
       customerId: string;
       serviceType: ServiceType;
@@ -896,6 +1003,7 @@ export const api = {
       internalCostSubtotal: number;
       customerPriceSubtotal: number;
       taxAmount: number;
+      aiUsageEventId?: string;
     }) =>
       request<{ quote: Quote }>(`/v1/quotes`, {
         method: "POST",
@@ -921,16 +1029,81 @@ export const api = {
       currentTitle?: string;
       currentScopeText?: string;
       currentLineItems?: Array<{
+        id?: string;
         description: string;
         quantity: number;
         unitCost: number;
         unitPrice: number;
       }>;
+    }, options?: {
+      onProgress?: (event: AiProgressEvent) => void;
     }) =>
-      request<AiQuoteSuggestionResult>(`/v1/quotes/ai-suggest`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
+      (async () => {
+        const token = getToken();
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+
+        const res = await fetch(`${API_BASE}/v1/quotes/ai-suggest`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const errorBody = await res.json().catch(() => ({}));
+          const message = (errorBody as { error?: string }).error ?? `Request failed: ${res.status}`;
+          throw new ApiError(message, res.status, errorBody);
+        }
+
+        if (!res.body) {
+          throw new ApiError("AI response stream was empty.", res.status);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalResult: AiQuoteSuggestionResult | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          while (true) {
+            const newlineIndex = buffer.indexOf("\n");
+            if (newlineIndex === -1) break;
+
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (!line) continue;
+
+            const event = JSON.parse(line) as AiSuggestionStreamEvent;
+            if (event.type === "progress") {
+              options?.onProgress?.(event);
+              continue;
+            }
+
+            if (event.type === "error") {
+              throw new ApiError(event.error, res.status, event);
+            }
+
+            if (event.type === "complete") {
+              finalResult = event.result;
+            }
+          }
+        }
+
+        if (!finalResult) {
+          throw new ApiError("AI response ended before a result was returned.", res.status);
+        }
+
+        return finalResult;
+      })(),
 
     update: (
       quoteId: string,
@@ -952,7 +1125,12 @@ export const api = {
         body: JSON.stringify(body),
       }),
 
-    remove: (quoteId: string) =>
+    archive: (quoteId: string) =>
+      request<void>(`/v1/quotes/${quoteId}/archive`, {
+        method: "POST",
+      }),
+
+    delete: (quoteId: string) =>
       request<void>(`/v1/quotes/${quoteId}`, {
         method: "DELETE",
       }),

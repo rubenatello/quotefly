@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
+  Archive,
   ChevronDown,
   ChevronUp,
   Eye,
@@ -13,6 +14,7 @@ import {
   Save,
   Send,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
@@ -28,6 +30,7 @@ import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
+import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
 import {
   Alert,
   Badge,
@@ -45,15 +48,16 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type TenantBranding, type WorkPreset } from "../lib/api";
+import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
+  applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
   joinQuoteLineDescription,
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
-  toEditableQuoteLineFromDraft,
   toEditableQuoteLine,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
@@ -115,6 +119,7 @@ type DeskPane = "editor" | "preview";
 export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
+  const navigate = useNavigate();
   const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DeskTab>("quote");
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
@@ -130,7 +135,13 @@ export function QuoteDeskView() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiSubmitting, setAiSubmitting] = useState(false);
+  const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
+  const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
+  const [aiRuns, setAiRuns] = useState<AiQuoteRun[]>([]);
+  const [aiRunsLoading, setAiRunsLoading] = useState(false);
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
+  const [quoteRetentionAction, setQuoteRetentionAction] = useState<"archive" | "delete" | null>(null);
+  const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
@@ -174,6 +185,7 @@ export function QuoteDeskView() {
     historyCustomerId,
     setHistoryCustomerId,
     customers,
+    loadAll,
     loadQuoteHistory,
     loadOutboundEvents,
     navigateToBuilder,
@@ -236,12 +248,16 @@ export function QuoteDeskView() {
     if (!selectedQuote) {
       setEditableLines([]);
       setNewLine(makeEditableQuoteLine());
+      setAiInsight(null);
+      setAiRuns([]);
       return;
     }
 
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
     setMobilePane("editor");
+    setAiInsight(null);
+    setAiRuns([]);
   }, [selectedQuote?.id, selectedQuote?.updatedAt]);
 
   const requiresExplicitUnlock = useMemo(() => {
@@ -252,6 +268,29 @@ export function QuoteDeskView() {
   useEffect(() => {
     setIsEditUnlocked(!requiresExplicitUnlock);
   }, [selectedQuote?.id, requiresExplicitUnlock]);
+
+  useEffect(() => {
+    if (activeTab !== "history" || !selectedQuote?.id) return;
+    void loadAiRuns(selectedQuote.id);
+  }, [activeTab, selectedQuote?.id]);
+
+  async function loadAiRuns(targetQuoteId = selectedQuote?.id) {
+    if (!targetQuoteId) {
+      setAiRuns([]);
+      return;
+    }
+
+    setAiRunsLoading(true);
+    try {
+      const { runs } = await api.quotes.getAiRuns(targetQuoteId, { limit: 8 });
+      setAiRuns(runs);
+    } catch (err) {
+      setAiRuns([]);
+      setError(err instanceof Error ? err.message : "Failed loading AI runs.");
+    } finally {
+      setAiRunsLoading(false);
+    }
+  }
 
   const availablePresets = useMemo(
     () =>
@@ -354,7 +393,29 @@ export function QuoteDeskView() {
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
+  const quoteFooterText = useMemo(
+    () =>
+      buildQuoteFooterText({
+        businessName: session?.tenantName ?? "QuoteFly",
+        businessPhone: branding?.businessPhone ?? null,
+        businessEmail: branding?.businessEmail ?? null,
+      }),
+    [branding?.businessEmail, branding?.businessPhone, session?.tenantName],
+  );
+  const showQuoteFlyAttribution = useMemo(
+    () => shouldShowQuoteFlyAttribution(session?.effectivePlanCode, branding?.hideQuoteFlyAttribution),
+    [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
+  );
   const selectedQuoteTitle = selectedQuote?.title ?? "Current quote";
+  const aiUsageHint = useMemo(
+    () =>
+      formatAiUsageAvailability({
+        used: session?.usage?.monthlyAiQuoteCount,
+        limit: session?.entitlements?.limits.aiQuotesPerMonth,
+        renewsAtUtc: session?.usage?.periodEndUtc,
+      }),
+    [session?.entitlements?.limits.aiQuotesPerMonth, session?.usage?.monthlyAiQuoteCount, session?.usage?.periodEndUtc],
+  );
   const aiPromptStarters = useMemo(
     () =>
       buildDeskAiPromptStarters(
@@ -501,7 +562,8 @@ export function QuoteDeskView() {
     track("quote_desk_ai_modal_submit");
     try {
       setAiSubmitting(true);
-      const { customer, parsed, suggestion, usage } = await api.quotes.suggestWithAi({
+      setAiProgressEvent(null);
+      const { customer, parsed, suggestion, patch, insight, usage } = await api.quotes.suggestWithAi({
         prompt,
         quoteId: selectedQuote.id,
         customerId: selectedQuote.customerId,
@@ -509,11 +571,14 @@ export function QuoteDeskView() {
         currentTitle: quoteEditForm.title || undefined,
         currentScopeText: quoteEditForm.scopeText || undefined,
         currentLineItems: editableLines.map((line) => ({
+          id: line.id,
           description: joinQuoteLineDescription(line.title, line.details),
           quantity: Number(line.quantity) || 1,
           unitCost: Number(line.unitCost) || 0,
           unitPrice: Number(line.unitPrice) || 0,
         })),
+      }, {
+        onProgress: setAiProgressEvent,
       });
 
       setChatParsed(parsed);
@@ -525,23 +590,28 @@ export function QuoteDeskView() {
         scopeText: suggestion.scopeText,
         taxAmount: String(suggestion.taxAmount),
       }));
-      setEditableLines(
-        suggestion.lineItems.length
-          ? suggestion.lineItems.map((lineItem) => toEditableQuoteLineFromDraft(lineItem))
-          : [makeEditableQuoteLine()],
-      );
+      setEditableLines((current) => applyAiQuoteLinePatch(current, patch));
       setNewLine(makeEditableQuoteLine());
+      setAiInsight(insight);
+      void loadAiRuns(selectedQuote.id);
       setAiModalOpen(false);
       setMobilePane("editor");
-      const usageSummary =
-        usage.monthlyRemaining === null
-          ? `${usage.consumedCredits} AI credit used.`
-          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
-      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${usageSummary} Review the sheet, then save tracked edits.`);
+      const usageSummary = formatAiUsageNotice(usage);
+      const patchSummary = [
+        patch.updated ? `updated ${patch.updated}` : null,
+        patch.added ? `added ${patch.added}` : null,
+        patch.removed ? `removed ${patch.removed}` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      setNotice(
+        `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then save tracked edits.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
     } finally {
       setAiSubmitting(false);
+      setAiProgressEvent(null);
     }
   }
 
@@ -636,6 +706,31 @@ export function QuoteDeskView() {
     setLineItemPendingDeleteId(null);
   }
 
+  async function confirmQuoteRetentionAction() {
+    if (!selectedQuote || !quoteRetentionAction) return;
+
+    setQuoteRetentionSaving(true);
+    setError(null);
+
+    try {
+      if (quoteRetentionAction === "archive") {
+        await api.quotes.archive(selectedQuote.id);
+        setNotice(`Archived ${selectedQuote.title}. The quote and its history were retained.`);
+      } else {
+        await api.quotes.delete(selectedQuote.id);
+        setNotice(`Deleted ${selectedQuote.title}. The quote and its history were retained.`);
+      }
+
+      setQuoteRetentionAction(null);
+      await loadAll();
+      navigate("/app/quotes");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction} the quote.`);
+    } finally {
+      setQuoteRetentionSaving(false);
+    }
+  }
+
   if (!selectedQuote) {
     return (
       <div className="space-y-5">
@@ -680,6 +775,41 @@ export function QuoteDeskView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {aiInsight ? (
+        <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
+              <p className="mt-1 font-medium text-slate-900">{aiInsight.summary}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAiInsight(null)}
+              className="self-start text-xs font-medium text-slate-500 hover:text-slate-700"
+            >
+              Dismiss
+            </button>
+          </div>
+          {aiInsight.reasons.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {aiInsight.reasons.map((reason) => (
+                <Badge key={reason} tone="blue">{reason}</Badge>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge tone={aiInsight.confidence.level === "high" ? "emerald" : aiInsight.confidence.level === "medium" ? "amber" : "red"}>
+              {aiInsight.confidence.label}
+            </Badge>
+            {aiInsight.riskNote ? <span className="text-xs text-slate-600">{aiInsight.riskNote}</span> : null}
+          </div>
+          {aiInsight.sources.length ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Context used: {aiInsight.sources.map((source) => source.label).join(" • ")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {activeTab === "quote" ? (
         <div className="flex gap-2 lg:hidden">
@@ -745,6 +875,8 @@ export function QuoteDeskView() {
               templateId={branding?.templateId ?? "modern"}
               accentColor={quoteAccentColor}
               componentColors={branding?.componentColors ?? null}
+              footerText={quoteFooterText}
+              showQuoteFlyAttribution={showQuoteFlyAttribution}
               readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
@@ -950,6 +1082,8 @@ export function QuoteDeskView() {
                 templateId={branding?.templateId ?? "modern"}
                 accentColor={quoteAccentColor}
                 componentColors={branding?.componentColors ?? null}
+                footerText={quoteFooterText}
+                showQuoteFlyAttribution={showQuoteFlyAttribution}
               />
             </div>
 
@@ -1039,6 +1173,24 @@ export function QuoteDeskView() {
                 <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
                   Start Another Quote
                 </Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    fullWidth
+                    variant="warning"
+                    icon={<Archive size={14} />}
+                    onClick={() => setQuoteRetentionAction("archive")}
+                  >
+                    Archive
+                  </Button>
+                  <Button
+                    fullWidth
+                    variant="danger"
+                    icon={<Trash2 size={14} />}
+                    onClick={() => setQuoteRetentionAction("delete")}
+                  >
+                    Delete
+                  </Button>
+                </div>
                 <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
               </div>
             </Card>
@@ -1139,74 +1291,155 @@ export function QuoteDeskView() {
       ) : null}
 
       {activeTab === "history" ? (
-        canViewQuoteHistory ? (
-          <Card variant="default" padding="md">
-            <CardHeader
-              title="Revision history"
-              subtitle="Track title, status, and pricing changes for this quote."
-              actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh</Button>}
-            />
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              {(["quote", "customer", "all"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setHistoryMode(mode)}
-                  className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                    historyMode === mode
-                      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
-                </button>
-              ))}
-              {historyMode === "customer" ? (
-                <select
-                  value={historyCustomerId}
-                  onChange={(event) => setHistoryCustomerId(event.target.value)}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
-                >
-                  <option value="ALL">Select customer...</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>{customer.fullName}</option>
-                  ))}
-                </select>
-              ) : null}
-            </div>
-            {historyLoading ? (
-              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading history…</p>
-            ) : quoteHistory.length === 0 ? (
-              <EmptyState title="No history yet" description="History entries appear after the quote changes." />
-            ) : (
-              <div className="space-y-2">
-                {quoteHistory.map((revision) => (
-                  <div key={revision.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <HistoryEventPill eventType={revision.eventType} />
-                        <QuoteStatusPill status={revision.status} compact />
-                        <span className="text-sm font-semibold text-slate-900">{revision.title}</span>
-                      </div>
-                      <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">
-                      v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
-                    </p>
-                  </div>
-                ))}
+        <Card variant="default" padding="md">
+          <CardHeader
+            title="History"
+            subtitle="Review AI runs and quote revisions from one audit surface."
+            actions={
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => void loadAiRuns(selectedQuote.id)}>Refresh AI Runs</Button>
+                {canViewQuoteHistory ? (
+                  <Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh Revisions</Button>
+                ) : null}
               </div>
-            )}
-          </Card>
-        ) : (
-          <FeatureLockedCard
-            title="Revision history"
-            description="Revision history unlocks on Professional."
-            currentPlanLabel={currentPlanLabel}
-            requiredPlanLabel="Professional"
-            showUpgradeHint={canAutoUpgradeMessage}
+            }
           />
-        )
+
+          <div className="space-y-5">
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">AI runs</p>
+                  <p className="mt-1 text-sm text-slate-600">Inspect prompts, context quality, and AI cost for this quote.</p>
+                </div>
+              </div>
+
+              {aiRunsLoading ? (
+                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading AI runs…</p>
+              ) : aiRuns.length === 0 ? (
+                <EmptyState title="No AI runs yet" description="AI prompt history appears here after draft or revise actions." />
+              ) : (
+                <div className="space-y-2">
+                  {aiRuns.map((run) => (
+                    <div key={run.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone={run.eventType === "REVISE" ? "orange" : "blue"}>{run.eventType === "REVISE" ? "AI Revise" : "AI Draft"}</Badge>
+                          {run.confidenceLabel ? (
+                            <Badge tone={run.confidenceLevel === "high" ? "emerald" : run.confidenceLevel === "medium" ? "amber" : "red"}>
+                              {run.confidenceLabel}
+                            </Badge>
+                          ) : null}
+                          {typeof run.patchAdded === "number" || typeof run.patchUpdated === "number" || typeof run.patchRemoved === "number" ? (
+                            <span className="text-xs text-slate-500">
+                              {run.patchUpdated ?? 0} updated • {run.patchAdded ?? 0} added • {run.patchRemoved ?? 0} removed
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-xs text-slate-500">{formatDateTime(run.createdAt)}</span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">{run.insightSummary || "AI prepared a quote update."}</p>
+                      <p className="mt-1 text-sm text-slate-600">{run.promptText}</p>
+                      {run.riskNote ? <p className="mt-2 text-xs text-slate-600">{run.riskNote}</p> : null}
+                      {run.insightReasons.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {run.insightReasons.map((reason) => (
+                            <Badge key={`${run.id}-${reason}`} tone="blue">{reason}</Badge>
+                          ))}
+                        </div>
+                      ) : null}
+                      {run.insightSourceLabels.length ? (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Context used: {run.insightSourceLabels.join(" • ")}
+                        </p>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                        <span>By {run.actorName || run.actorEmail || "Unknown"}</span>
+                        <span>
+                          {run.totalTokens ? `${run.totalTokens.toLocaleString()} tokens` : "Tokens not captured"}
+                          {typeof run.estimatedCostUsd === "number" ? ` • ~$${run.estimatedCostUsd.toFixed(4)}` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="space-y-3 border-t border-slate-200 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Revision history</p>
+                  <p className="mt-1 text-sm text-slate-600">Track title, status, and pricing changes for this quote.</p>
+                </div>
+              </div>
+
+              {canViewQuoteHistory ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(["quote", "customer", "all"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setHistoryMode(mode)}
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                          historyMode === mode
+                            ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
+                      </button>
+                    ))}
+                    {historyMode === "customer" ? (
+                      <select
+                        value={historyCustomerId}
+                        onChange={(event) => setHistoryCustomerId(event.target.value)}
+                        className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
+                      >
+                        <option value="ALL">Select customer...</option>
+                        {customers.map((customer) => (
+                          <option key={customer.id} value={customer.id}>{customer.fullName}</option>
+                        ))}
+                      </select>
+                    ) : null}
+                  </div>
+                  {historyLoading ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading history…</p>
+                  ) : quoteHistory.length === 0 ? (
+                    <EmptyState title="No history yet" description="History entries appear after the quote changes." />
+                  ) : (
+                    <div className="space-y-2">
+                      {quoteHistory.map((revision) => (
+                        <div key={revision.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <HistoryEventPill eventType={revision.eventType} />
+                              <QuoteStatusPill status={revision.status} compact />
+                              <span className="text-sm font-semibold text-slate-900">{revision.title}</span>
+                            </div>
+                            <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
+                          </div>
+                          <p className="mt-2 text-xs text-slate-600">
+                            v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <FeatureLockedCard
+                  title="Revision history"
+                  description="Revision history unlocks on Professional."
+                  currentPlanLabel={currentPlanLabel}
+                  requiredPlanLabel="Professional"
+                  showUpgradeHint={canAutoUpgradeMessage}
+                />
+              )}
+            </section>
+          </div>
+        </Card>
       ) : null}
 
       {activeTab === "log" ? (
@@ -1277,6 +1510,30 @@ export function QuoteDeskView() {
         </div>
       </ConfirmModal>
 
+      <ConfirmModal
+        open={quoteRetentionAction !== null}
+        onClose={() => setQuoteRetentionAction(null)}
+        onConfirm={() => void confirmQuoteRetentionAction()}
+        title={quoteRetentionAction === "archive" ? "Archive quote" : "Delete quote"}
+        description={
+          quoteRetentionAction === "archive"
+            ? "This hides the quote from active views but retains it in the database and audit history."
+            : "This removes the quote from active views but retains it in the database and audit history."
+        }
+        confirmLabel={quoteRetentionAction === "archive" ? "Archive quote" : "Delete quote"}
+        confirmVariant={quoteRetentionAction === "archive" ? "warning" : "danger"}
+        loading={quoteRetentionSaving}
+      >
+        <div className="space-y-2 text-sm text-slate-600">
+          <p>
+            {quoteRetentionAction === "archive"
+              ? "Archived quotes stay retained for audit purposes and can be referenced later."
+              : "Deleted quotes stay retained for audit purposes, but they are removed from active workflow views."}
+          </p>
+          <p>All existing quote history remains stored.</p>
+        </div>
+      </ConfirmModal>
+
       <SaveLinePresetModal
         open={Boolean(presetPromptLine)}
         line={presetPromptLine}
@@ -1324,6 +1581,8 @@ export function QuoteDeskView() {
         onUseStarterPrompt={setChatPrompt}
         customerContextText={`${customerName}${customerPhone ? ` • ${customerPhone}` : ""}${customerEmail ? ` • ${customerEmail}` : ""}`}
         customerContextBadge="Using current quote"
+        usageHint={aiUsageHint}
+        progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiSuggestSubmit(event)}
@@ -1358,6 +1617,8 @@ export function QuoteDeskView() {
             templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
             componentColors={branding?.componentColors ?? null}
+            footerText={quoteFooterText}
+            showQuoteFlyAttribution={showQuoteFlyAttribution}
           />
         </ModalBody>
       </Modal>

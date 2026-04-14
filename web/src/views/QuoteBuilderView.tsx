@@ -8,6 +8,7 @@ import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { InlineCustomerLookup } from "../components/quotes/InlineCustomerLookup";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
+import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
 import {
   Alert,
   Badge,
@@ -22,14 +23,15 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
+import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import {
+  applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
   joinQuoteLineDescription,
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
-  toEditableQuoteLineFromDraft,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
@@ -123,6 +125,9 @@ export function QuoteBuilderView() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiSubmitting, setAiSubmitting] = useState(false);
+  const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
+  const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
+  const [lastAppliedAiRunId, setLastAppliedAiRunId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
@@ -149,6 +154,15 @@ export function QuoteBuilderView() {
   const activeCustomer = useMemo(
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
     [customers, quoteForm.customerId],
+  );
+  const aiUsageHint = useMemo(
+    () =>
+      formatAiUsageAvailability({
+        used: session?.usage?.monthlyAiQuoteCount,
+        limit: session?.entitlements?.limits.aiQuotesPerMonth,
+        renewsAtUtc: session?.usage?.periodEndUtc,
+      }),
+    [session?.entitlements?.limits.aiQuotesPerMonth, session?.usage?.monthlyAiQuoteCount, session?.usage?.periodEndUtc],
   );
   const preparedDateLabel = useMemo(() => new Date().toLocaleDateString(), []);
 
@@ -277,6 +291,19 @@ export function QuoteBuilderView() {
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
+  const quoteFooterText = useMemo(
+    () =>
+      buildQuoteFooterText({
+        businessName: session?.tenantName ?? "QuoteFly",
+        businessPhone: branding?.businessPhone ?? null,
+        businessEmail: branding?.businessEmail ?? null,
+      }),
+    [branding?.businessEmail, branding?.businessPhone, session?.tenantName],
+  );
+  const showQuoteFlyAttribution = useMemo(
+    () => shouldShowQuoteFlyAttribution(session?.effectivePlanCode, branding?.hideQuoteFlyAttribution),
+    [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
+  );
 
   async function handleAiDraftSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -295,18 +322,22 @@ export function QuoteBuilderView() {
     track("builder_ai_modal_submit");
     try {
       setAiSubmitting(true);
-      const { customer, parsed, suggestion, usage } = await api.quotes.suggestWithAi({
+      setAiProgressEvent(null);
+      const { customer, parsed, suggestion, patch, insight, aiRunId, usage } = await api.quotes.suggestWithAi({
         prompt,
         customerId: activeCustomer?.id ?? undefined,
         serviceType: quoteForm.serviceType,
         currentTitle: quoteForm.title || undefined,
         currentScopeText: quoteForm.scopeText || undefined,
         currentLineItems: filteredDraftLines.map((line) => ({
+          id: line.id,
           description: joinQuoteLineDescription(line.title, line.details),
           quantity: Number(line.quantity) || 1,
           unitCost: Number(line.unitCost) || 0,
           unitPrice: Number(line.unitPrice) || 0,
         })),
+      }, {
+        onProgress: setAiProgressEvent,
       });
 
       setChatParsed(parsed);
@@ -324,23 +355,28 @@ export function QuoteBuilderView() {
         customerPriceSubtotal: String(suggestion.customerPriceSubtotal),
         taxAmount: String(suggestion.taxAmount),
       }));
-      setDraftLines(
-        suggestion.lineItems.length
-          ? suggestion.lineItems.map((lineItem) => toEditableQuoteLineFromDraft(lineItem))
-          : [makeEditableQuoteLine()],
-      );
+      setDraftLines((current) => applyAiQuoteLinePatch(current, patch));
+      setAiInsight(insight);
+      setLastAppliedAiRunId(aiRunId);
       await loadCustomers();
       setAiModalOpen(false);
       setMobilePane("editor");
-      const usageSummary =
-        usage.monthlyRemaining === null
-          ? `${usage.consumedCredits} AI credit used.`
-          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
-      setNotice(`AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${usageSummary} Review the sheet, then create the quote.`);
+      const usageSummary = formatAiUsageNotice(usage);
+      const patchSummary = [
+        patch.updated ? `updated ${patch.updated}` : null,
+        patch.added ? `added ${patch.added}` : null,
+        patch.removed ? `removed ${patch.removed}` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      setNotice(
+        `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then create the quote.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
     } finally {
       setAiSubmitting(false);
+      setAiProgressEvent(null);
     }
   }
 
@@ -497,6 +533,7 @@ export function QuoteBuilderView() {
         internalCostSubtotal: internalSubtotal.toFixed(2),
         customerPriceSubtotal: customerSubtotal.toFixed(2),
       },
+      aiUsageEventId: lastAppliedAiRunId ?? undefined,
       initialLineItems: linesToCreate.map((line) => ({
         description: joinQuoteLineDescription(line.title, line.details),
         quantity: Number(line.quantity) || 1,
@@ -508,6 +545,8 @@ export function QuoteBuilderView() {
 
     if (createdQuote) {
       setDraftLines([makeEditableQuoteLine()]);
+      setAiInsight(null);
+      setLastAppliedAiRunId(null);
       if (!presetPromptLine && promptCandidate) {
         setPresetPromptLine(promptCandidate);
       }
@@ -528,6 +567,41 @@ export function QuoteBuilderView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {aiInsight ? (
+        <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
+              <p className="mt-1 font-medium text-slate-900">{aiInsight.summary}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAiInsight(null)}
+              className="self-start text-xs font-medium text-slate-500 hover:text-slate-700"
+            >
+              Dismiss
+            </button>
+          </div>
+          {aiInsight.reasons.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {aiInsight.reasons.map((reason) => (
+                <Badge key={reason} tone="blue">{reason}</Badge>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge tone={aiInsight.confidence.level === "high" ? "emerald" : aiInsight.confidence.level === "medium" ? "amber" : "red"}>
+              {aiInsight.confidence.label}
+            </Badge>
+            {aiInsight.riskNote ? <span className="text-xs text-slate-600">{aiInsight.riskNote}</span> : null}
+          </div>
+          {aiInsight.sources.length ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Context used: {aiInsight.sources.map((source) => source.label).join(" • ")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex gap-2 lg:hidden">
         {([
@@ -661,6 +735,8 @@ export function QuoteBuilderView() {
             templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
             componentColors={branding?.componentColors ?? null}
+            footerText={quoteFooterText}
+            showQuoteFlyAttribution={showQuoteFlyAttribution}
             actions={
               <div className="flex items-center gap-2">
                 <Button
@@ -819,6 +895,8 @@ export function QuoteBuilderView() {
             templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
             componentColors={branding?.componentColors ?? null}
+            footerText={quoteFooterText}
+            showQuoteFlyAttribution={showQuoteFlyAttribution}
           />
         </div>
       ) : null}
@@ -900,6 +978,8 @@ export function QuoteBuilderView() {
             : "No customer is locked yet. Select one in the quote sheet or include the name, phone, or email directly in the prompt."
         }
         customerContextBadge={activeCustomer ? "Using selected customer" : null}
+        usageHint={aiUsageHint}
+        progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
@@ -932,6 +1012,8 @@ export function QuoteBuilderView() {
             templateId={branding?.templateId ?? "modern"}
             accentColor={quoteAccentColor}
             componentColors={branding?.componentColors ?? null}
+            footerText={quoteFooterText}
+            showQuoteFlyAttribution={showQuoteFlyAttribution}
           />
         </ModalBody>
       </Modal>

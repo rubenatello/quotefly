@@ -110,6 +110,7 @@ model TenantBranding {
   tenantId        String    @unique
   logoUrl         String?
   logoPosition    String    @default("left")
+  hideQuoteFlyAttribution Boolean @default(false)
   primaryColor    String    @default("#5B85AA")
   templateId      String    @default("modern")
   businessEmail   String?
@@ -224,6 +225,7 @@ model Customer {
   followUpUpdatedAtUtc   DateTime?               @db.Timestamptz(3)
   createdAt              DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime                @updatedAt @db.Timestamptz(3)
+  archivedAtUtc          DateTime?               @db.Timestamptz(3)
   deletedAtUtc           DateTime?               @db.Timestamptz(3)
   tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quotes                 Quote[]
@@ -236,6 +238,7 @@ model Customer {
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
   @@index([tenantId])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }
 
@@ -295,6 +298,7 @@ model Quote {
   afterSaleFollowUpCompletedAtUtc DateTime?               @db.Timestamptz(3)
   createdAt                       DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt                       DateTime                @updatedAt @db.Timestamptz(3)
+  archivedAtUtc                   DateTime?               @db.Timestamptz(3)
   deletedAtUtc                    DateTime?               @db.Timestamptz(3)
   tenant                          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer                        Customer                @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
@@ -311,6 +315,7 @@ model Quote {
   @@index([tenantId, jobStatus])
   @@index([tenantId, afterSaleFollowUpStatus])
   @@index([tenantId, aiGeneratedAtUtc])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }
 
@@ -324,8 +329,22 @@ model AiUsageEvent {
   actorName      String?
   eventType      AiUsageEventType
   creditsConsumed Int             @default(1)
+  requestCount   Int              @default(1)
+  promptTokens   Int?
+  completionTokens Int?
+  totalTokens    Int?
+  estimatedCostUsd Decimal?       @db.Decimal(10, 6)
   promptText     String           @db.Text
   model          String?
+  insightSummary String?          @db.Text
+  insightReasons String[]         @default([])
+  insightSourceLabels String[]    @default([])
+  confidenceLevel String?
+  confidenceLabel String?
+  riskNote       String?          @db.Text
+  patchAdded     Int?
+  patchUpdated   Int?
+  patchRemoved   Int?
   createdAt      DateTime         @default(now()) @db.Timestamptz(3)
   deletedAtUtc   DateTime?        @db.Timestamptz(3)
   tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)

@@ -25,6 +25,7 @@ import {
   sharePdfBlobNatively,
 } from "../../lib/quote-pdf-actions";
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
+import { formatAiUsageNotice } from "../../lib/ai-credits";
 
 /* ─────────────── Types ─────────────── */
 
@@ -297,6 +298,7 @@ export interface DashboardContextValue {
     initialLineItems?: CreateLineItemInput[];
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
+    aiUsageEventId?: string;
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<void>;
@@ -416,8 +418,18 @@ export function DashboardProvider({
       setCustomers(customerRes.customers);
       setQuotes(quoteRes.quotes);
       setBranding(brandingRes?.branding ?? null);
-      setQuoteForm((prev) => ({ ...prev, customerId: prev.customerId || customerRes.customers[0]?.id || "" }));
-      setSelectedQuoteId((prev) => prev || quoteRes.quotes[0]?.id || null);
+      setQuoteForm((prev) => {
+        const nextCustomerId =
+          prev.customerId && customerRes.customers.some((customer) => customer.id === prev.customerId)
+            ? prev.customerId
+            : customerRes.customers[0]?.id || "";
+        return { ...prev, customerId: nextCustomerId };
+      });
+      setSelectedQuoteId((current) => {
+        if (!quoteRes.quotes.length) return null;
+        if (!current) return quoteRes.quotes[0].id;
+        return quoteRes.quotes.some((quote) => quote.id === current) ? current : quoteRes.quotes[0].id;
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading dashboard data.");
     } finally {
@@ -449,7 +461,13 @@ export function DashboardProvider({
     try {
       const res = await api.customers.list({ limit: 100 });
       setCustomers(res.customers);
-      setQuoteForm((prev) => ({ ...prev, customerId: prev.customerId || res.customers[0]?.id || "" }));
+      setQuoteForm((prev) => {
+        const nextCustomerId =
+          prev.customerId && res.customers.some((customer) => customer.id === prev.customerId)
+            ? prev.customerId
+            : res.customers[0]?.id || "";
+        return { ...prev, customerId: nextCustomerId };
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading customers.");
     }
@@ -618,10 +636,7 @@ export function DashboardProvider({
         setQuoteHistory(revisions);
       }
       const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
-      const usageSummary =
-        usage.monthlyRemaining === null
-          ? `${usage.consumedCredits} AI credit used.`
-          : `${usage.consumedCredits} AI credit used. ${usage.monthlyRemaining} left this month.`;
+      const usageSummary = formatAiUsageNotice(usage);
       setNotice(`Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`);
       navigateToQuote(quote.id);
     } catch (err) {
@@ -648,6 +663,7 @@ export function DashboardProvider({
     initialLineItems?: CreateLineItemInput[];
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
+    aiUsageEventId?: string;
   }) => {
     setSaving(true); setError(null);
     try {
@@ -663,6 +679,7 @@ export function DashboardProvider({
         internalCostSubtotal: Number(mergedQuoteForm.internalCostSubtotal),
         customerPriceSubtotal: Number(mergedQuoteForm.customerPriceSubtotal),
         taxAmount: Number(mergedQuoteForm.taxAmount),
+        aiUsageEventId: options?.aiUsageEventId,
       });
       if (options?.initialLineItems?.length) {
         for (const lineItem of options.initialLineItems) {
