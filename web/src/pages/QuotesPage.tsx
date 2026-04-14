@@ -32,6 +32,7 @@ type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
 type QuoteRetentionAction = { type: "archive" | "delete"; quote: Quote } | null;
 
 const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
+const QUOTE_BOARD_GRID_COLUMNS = "grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px]";
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
@@ -203,7 +204,7 @@ function StageCountCard({
       onClick={onClick}
       className={`min-w-fit rounded-full border px-3 py-2 text-left transition ${
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
-      }`}
+      } min-h-[44px]`}
     >
       <div className="flex items-center gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
@@ -278,7 +279,7 @@ function QuoteDesktopRow({
   onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
-    <div className="hidden grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px] gap-4 px-4 py-3 lg:grid lg:items-center">
+    <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 px-4 py-3 lg:grid lg:items-center`}>
       <div className="space-y-1">
         <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
         <p className="text-xs text-slate-500">Updated {formatDateTime(quote.updatedAt)}</p>
@@ -711,13 +712,13 @@ export function QuotesPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_184px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid`}>
                 <span>Quote No.</span>
                 <span>Customer</span>
                 <span>Cost</span>
                 <span>Price</span>
                 <span>Status</span>
-                <span>Action</span>
+                <span className="text-right">Action</span>
               </div>
               <div className="divide-y divide-slate-200">
                 {filteredQuotes.map((quote) => (

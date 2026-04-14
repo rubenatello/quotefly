@@ -75,7 +75,7 @@ export function WorkPresetPickerModal({
                   key={preset.id}
                   type="button"
                   onClick={() => onSelectPreset(preset.id)}
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  className={`min-h-[44px] rounded-2xl border px-4 py-3 text-left transition sm:min-h-[40px] ${
                     active
                       ? "border-quotefly-blue/20 bg-white shadow-[0_8px_18px_rgba(15,23,42,0.06)]"
                       : "border-slate-200 bg-white hover:border-slate-300"

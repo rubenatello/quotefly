@@ -9,6 +9,7 @@
     "dev:api": "tsx watch src/server.ts",
     "dev:web": "npm --prefix web run dev",
     "dev:web:host": "npm --prefix web run dev -- --host",
+    "dev:all": "concurrently -k -n API,WEB,DB \"npm run dev:api\" \"npm run dev:web\" \"npm run prisma:studio\"",
     "build": "tsc -p tsconfig.json",
     "build:web": "npm --prefix web run build",
     "start": "node dist/server.js",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.5.2",
+    "concurrently": "^9.2.1",
     "prisma": "^6.19.3",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"

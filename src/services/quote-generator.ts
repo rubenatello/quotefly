@@ -1,12 +1,89 @@
 export type ServiceCategory = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
 
 const serviceKeywords: Record<ServiceCategory, string[]> = {
-  HVAC: ["hvac", "furnace", "ac", "air conditioner", "cooling", "heating"],
-  PLUMBING: ["plumbing", "pipe", "leak", "toilet", "water heater", "drain"],
-  FLOORING: ["floor", "flooring", "tile", "linoleum", "vinyl", "hardwood"],
-  ROOFING: ["roof", "roofing", "shingle", "gutter"],
-  GARDENING: ["garden", "gardening", "lawn", "yard", "landscape"],
-  CONSTRUCTION: ["construction", "remodel", "renovation", "framing", "build-out"],
+  HVAC: [
+    "hvac",
+    "furnace",
+    "ac",
+    "a/c",
+    "air conditioner",
+    "condenser",
+    "heat pump",
+    "mini split",
+    "ductwork",
+    "cooling",
+    "heating",
+    "thermostat",
+  ],
+  PLUMBING: [
+    "plumbing",
+    "pipe",
+    "piping",
+    "leak",
+    "toilet",
+    "water heater",
+    "drain",
+    "sewer",
+    "faucet",
+    "sink",
+    "garbage disposal",
+    "shower valve",
+  ],
+  FLOORING: [
+    "floor",
+    "flooring",
+    "tile",
+    "linoleum",
+    "vinyl",
+    "lvp",
+    "laminate",
+    "hardwood",
+    "carpet",
+    "subfloor",
+  ],
+  ROOFING: [
+    "roof",
+    "roofing",
+    "shingle",
+    "gutter",
+    "flashing",
+    "underlayment",
+    "soffit",
+    "fascia",
+    "leak repair",
+    "roof replacement",
+  ],
+  GARDENING: [
+    "garden",
+    "gardening",
+    "lawn",
+    "yard",
+    "landscape",
+    "landscaping",
+    "mulch",
+    "sod",
+    "sprinkler",
+    "irrigation",
+    "hedge",
+    "tree trim",
+    "cleanup",
+  ],
+  CONSTRUCTION: [
+    "construction",
+    "remodel",
+    "renovation",
+    "framing",
+    "build-out",
+    "drywall",
+    "paint",
+    "painting",
+    "deck",
+    "fence",
+    "concrete",
+    "addition",
+    "demo",
+    "demolition",
+  ],
 };
 
 export interface GeneratedQuoteDraft {
@@ -28,7 +105,7 @@ export function inferServiceType(message: string): ServiceCategory {
 }
 
 function FLOORINGFallback(_text: string): ServiceCategory {
-  return "FLOORING";
+  return "CONSTRUCTION";
 }
 
 export function extractSquareFeet(message: string): number {

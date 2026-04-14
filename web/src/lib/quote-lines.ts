@@ -10,6 +10,8 @@ export type EditableQuoteLine = {
   id: string;
   title: string;
   details: string;
+  sectionType: "INCLUDED" | "ALTERNATE";
+  sectionLabel: string;
   quantity: string;
   unitCost: string;
   unitPrice: string;
@@ -59,6 +61,10 @@ export function quoteLineAmount(quantity: string, unitPrice: string): number {
 
 export function quoteLineCostTotal(quantity: string, unitCost: string): number {
   return quoteLineNumber(quantity) * quoteLineNumber(unitCost);
+}
+
+export function isIncludedEditableQuoteLine(line: Pick<EditableQuoteLine, "sectionType">) {
+  return line.sectionType !== "ALTERNATE";
 }
 
 function inferPresetUnitType(line: Pick<EditableQuoteLine, "title" | "details" | "quantity">): WorkPresetUnitType {
@@ -124,6 +130,8 @@ export function toEditableQuoteLine(lineItem: QuoteLineItem): EditableQuoteLine 
     id: lineItem.id,
     title,
     details,
+    sectionType: lineItem.sectionType ?? "INCLUDED",
+    sectionLabel: lineItem.sectionLabel ?? "",
     quantity: String(Number(lineItem.quantity)),
     unitCost: Number(lineItem.unitCost).toFixed(2),
     unitPrice: Number(lineItem.unitPrice).toFixed(2),
@@ -134,6 +142,8 @@ export function toEditableQuoteLine(lineItem: QuoteLineItem): EditableQuoteLine 
 
 export function toEditableQuoteLineFromDraft(lineItem: {
   description: string;
+  sectionType?: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -143,6 +153,8 @@ export function toEditableQuoteLineFromDraft(lineItem: {
   return makeEditableQuoteLine({
     title,
     details,
+    sectionType: lineItem.sectionType ?? "INCLUDED",
+    sectionLabel: lineItem.sectionLabel ?? "",
     quantity: String(Number(lineItem.quantity)),
     unitCost: Number(lineItem.unitCost).toFixed(2),
     unitPrice: Number(lineItem.unitPrice).toFixed(2),
@@ -159,6 +171,8 @@ export function makeEditableQuoteLine(seed?: Partial<EditableQuoteLine>): Editab
     id: localId,
     title: seed?.title ?? "",
     details: seed?.details ?? "",
+    sectionType: seed?.sectionType ?? "INCLUDED",
+    sectionLabel: seed?.sectionLabel ?? "",
     quantity: seed?.quantity ?? "1",
     unitCost: seed?.unitCost ?? "0.00",
     unitPrice: seed?.unitPrice ?? "0.00",
@@ -185,6 +199,8 @@ export function applyAiQuoteLinePatch(
         ...nextLines,
         toEditableQuoteLineFromDraft({
           description: change.description,
+          sectionType: change.sectionType,
+          sectionLabel: change.sectionLabel ?? "",
           quantity: change.quantity,
           unitCost: change.unitCost,
           unitPrice: change.unitPrice,
@@ -213,6 +229,8 @@ export function applyAiQuoteLinePatch(
       ...current,
       title,
       details,
+      sectionType: change.sectionType,
+      sectionLabel: change.sectionLabel ?? "",
       quantity: String(Number(change.quantity)),
       unitCost: Number(change.unitCost).toFixed(2),
       unitPrice: Number(change.unitPrice).toFixed(2),

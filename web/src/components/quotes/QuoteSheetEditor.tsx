@@ -134,7 +134,7 @@ export function QuoteSheetEditor({
                 <button
                   type="button"
                   onClick={() => setMobileDetailsOpen((current) => !current)}
-                  className="inline-flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg border border-[var(--qf-border)] bg-white px-3 text-xs font-medium text-slate-700"
+                  className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 rounded-lg border border-[var(--qf-border)] bg-white px-3 text-xs font-medium text-slate-700 sm:min-h-[36px]"
                 >
                   {mobileDetailsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   {mobileDetailsOpen ? "Hide details" : "Show details"}

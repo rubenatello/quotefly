@@ -16,15 +16,33 @@ function toQueryString(params: Record<string, string | number | boolean | undefi
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string>),
-  };
+  const headers = new Headers(options.headers);
+  const body = options.body;
+  const hasBody = body !== undefined && body !== null;
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  const isBlob = typeof Blob !== "undefined" && body instanceof Blob;
+  const isUrlSearchParams =
+    typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams;
+
   if (token) {
-    headers.Authorization = `Bearer ${token}`;
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (
+    hasBody &&
+    !headers.has("Content-Type") &&
+    !isFormData &&
+    !isBlob &&
+    !isUrlSearchParams
+  ) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (!hasBody && headers.has("Content-Type")) {
+    headers.delete("Content-Type");
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, body, headers });
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -90,6 +108,7 @@ export type TenantEntitlements = {
   limits: {
     quotesPerMonth: number | null;
     aiQuotesPerMonth: number | null;
+    aiSpendUsdPerMonth: number | null;
     teamMembers: number | null;
     quoteHistoryDays: number | null;
   };
@@ -109,6 +128,11 @@ export type TenantUsageSnapshot = {
   periodEndUtc: string;
   monthlyQuoteCount: number;
   monthlyAiQuoteCount: number;
+  monthlyAiSpendUsd?: number;
+  monthlyAiSpendLimitUsd?: number | null;
+  monthlyAiSpendRemainingUsd?: number | null;
+  monthlyAiSpendUsagePercent?: number | null;
+  monthlyAiEstimatedPromptsRemaining?: number | null;
 };
 
 export type AuthSessionPayload = {
@@ -230,6 +254,8 @@ export type QuoteLineItem = {
   tenantId: string;
   quoteId: string;
   description: string;
+  sectionType: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
   quantity: DecimalLike;
   unitCost: DecimalLike;
   unitPrice: DecimalLike;
@@ -303,6 +329,8 @@ export type QuoteRevisionSnapshot = {
   lineItems: Array<{
     id: string;
     description: string;
+    sectionType: "INCLUDED" | "ALTERNATE";
+    sectionLabel?: string | null;
     quantity: number;
     unitCost: number;
     unitPrice: number;
@@ -378,9 +406,16 @@ export type ChatToQuoteParsed = {
 
 export type AiUsageSummary = {
   consumedCredits: number;
-  monthlyUsed: number;
-  monthlyLimit: number | null;
-  monthlyRemaining: number | null;
+  consumedSpendUsd: number;
+  monthlyCreditsUsed: number;
+  monthlyCreditsLimit: number | null;
+  monthlyCreditsRemaining: number | null;
+  monthlySpendUsedUsd: number;
+  monthlySpendLimitUsd: number | null;
+  monthlySpendRemainingUsd: number | null;
+  monthlySpendUsagePercent: number | null;
+  estimatedPromptCostUsd: number;
+  estimatedPromptsRemaining: number | null;
   renewsAtUtc: string;
 };
 
@@ -401,6 +436,8 @@ export type AiQuoteSuggestion = {
   model: string;
   lineItems: Array<{
     description: string;
+    sectionType: "INCLUDED" | "ALTERNATE";
+    sectionLabel?: string | null;
     quantity: number;
     unitCost: number;
     unitPrice: number;
@@ -412,6 +449,8 @@ export type AiQuoteLinePatch = {
   targetLineId: string | null;
   previousDescription: string | null;
   description: string;
+  sectionType: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -891,6 +930,7 @@ export const api = {
       remove: (tenantUserId: string) =>
         request<void>(`/v1/org/users/${tenantUserId}`, {
           method: "DELETE",
+          body: "{}",
         }),
     },
   },
@@ -946,6 +986,7 @@ export const api = {
     delete: (customerId: string) =>
       request<void>(`/v1/customers/${customerId}`, {
         method: "DELETE",
+        body: "{}",
       }),
 
     activity: (customerId: string, query?: { limit?: number; offset?: number }) =>
@@ -1049,6 +1090,8 @@ export const api = {
       currentLineItems?: Array<{
         id?: string;
         description: string;
+        sectionType?: "INCLUDED" | "ALTERNATE";
+        sectionLabel?: string | null;
         quantity: number;
         unitCost: number;
         unitPrice: number;
@@ -1151,6 +1194,7 @@ export const api = {
     delete: (quoteId: string) =>
       request<void>(`/v1/quotes/${quoteId}`, {
         method: "DELETE",
+        body: "{}",
       }),
 
     decision: (quoteId: string, decision: "send" | "revise") =>
@@ -1176,7 +1220,7 @@ export const api = {
     lineItems: {
       create: (
         quoteId: string,
-        body: { description: string; quantity: number; unitCost: number; unitPrice: number },
+        body: { description: string; sectionType?: "INCLUDED" | "ALTERNATE"; sectionLabel?: string | null; quantity: number; unitCost: number; unitPrice: number },
       ) =>
         request<{ lineItem: QuoteLineItem; quote: Quote }>(`/v1/quotes/${quoteId}/line-items`, {
           method: "POST",
@@ -1186,7 +1230,7 @@ export const api = {
       update: (
         quoteId: string,
         lineItemId: string,
-        body: Partial<{ description: string; quantity: number; unitCost: number; unitPrice: number }>,
+        body: Partial<{ description: string; sectionType: "INCLUDED" | "ALTERNATE"; sectionLabel?: string | null; quantity: number; unitCost: number; unitPrice: number }>,
       ) =>
         request<{ lineItem: QuoteLineItem; quote: Quote }>(
           `/v1/quotes/${quoteId}/line-items/${lineItemId}`,
@@ -1199,6 +1243,7 @@ export const api = {
       remove: (quoteId: string, lineItemId: string) =>
         request<void>(`/v1/quotes/${quoteId}/line-items/${lineItemId}`, {
           method: "DELETE",
+          body: "{}",
         }),
     },
 

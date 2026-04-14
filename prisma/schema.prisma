@@ -78,6 +78,11 @@ enum AiUsageEventType {
   REVISE
 }
 
+enum QuoteLineSectionType {
+  INCLUDED
+  ALTERNATE
+}
+
 enum PresetCategory {
   LABOR
   MATERIAL
@@ -364,6 +369,8 @@ model QuoteLineItem {
   tenantId     String
   quoteId      String
   description  String
+  sectionType  QuoteLineSectionType @default(INCLUDED)
+  sectionLabel String?
   quantity     Decimal   @db.Decimal(10, 2)
   unitCost     Decimal   @db.Decimal(10, 2)
   unitPrice    Decimal   @db.Decimal(10, 2)

@@ -70,7 +70,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
     seatText: "Up to 7 users",
-    aiQuoteText: "30 AI credits / month",
+    aiQuoteText: "Est. AI prompts: ~370 / month",
     historyText: "30-day quote history",
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
@@ -87,7 +87,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after launch for stronger visibility, revisions, and accounting workflows.",
     seatText: "Up to 15 users",
-    aiQuoteText: "300 AI credits / month",
+    aiQuoteText: "Est. AI prompts: ~6,800 / month",
     historyText: "180-day quote history",
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
@@ -104,7 +104,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after Professional for larger operations that need governance and automation.",
     seatText: "Unlimited users",
-    aiQuoteText: "800 AI credits / month",
+    aiQuoteText: "Est. AI prompts: ~34,600 / month",
     historyText: "Unlimited quote history",
     accentClassName: "border-slate-300 bg-slate-100",
     features: [
@@ -370,10 +370,12 @@ export function AdminPage({ session }: AdminPageProps) {
     if (teamMembersLimit === null) return `${teamMembersUsed} seats in use`;
     return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
-  const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
-  const aiQuoteUsed = session?.usage?.monthlyAiQuoteCount ?? 0;
-  const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
-  const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const aiBudgetLimit = session?.entitlements?.limits.aiSpendUsdPerMonth ?? null;
+  const aiBudgetUsed = session?.usage?.monthlyAiSpendUsd ?? 0;
+  const aiUsagePercent = aiBudgetLimit && aiBudgetLimit > 0 ? Math.min((aiBudgetUsed / aiBudgetLimit) * 100, 100) : 0;
+  const aiUsagePercentLabel = `${Math.round(aiUsagePercent)}% used`;
+  const aiPromptsRemaining = session?.usage?.monthlyAiEstimatedPromptsRemaining ?? null;
+  const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc) : null;
   const adminLinks = [
     { id: "admin-overview", label: "Overview", hint: "Plan + status" },
     { id: "admin-billing", label: "Billing", hint: "Plans + Stripe" },
@@ -487,18 +489,24 @@ export function AdminPage({ session }: AdminPageProps) {
                 hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
               />
             </div>
-            {aiQuoteLimit !== null ? (
+            {aiBudgetLimit !== null ? (
               <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Credit Usage</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Usage</p>
                   <span className="text-xs font-semibold text-slate-900">
-                    {aiQuoteUsed}/{aiQuoteLimit}
+                    {aiUsagePercentLabel}
                   </span>
                 </div>
                 <ProgressBar
                   value={aiUsagePercent}
                   label="Monthly AI usage"
-                  hint={aiQuoteRemaining === 0 ? "Limit reached for this month" : `${aiQuoteRemaining} AI credits remaining`}
+                  hint={
+                    aiUsagePercent >= 100
+                      ? aiRenewalText
+                        ? `Usage limit reached · renews ${aiRenewalText}`
+                        : "Usage limit reached"
+                      : `${aiUsagePercentLabel}${aiPromptsRemaining !== null ? ` · ~${aiPromptsRemaining} est. prompts remaining` : ""}${aiRenewalText ? ` · renews ${aiRenewalText}` : ""}`
+                  }
                   className="mt-3"
                 />
               </div>
@@ -593,9 +601,13 @@ export function AdminPage({ session }: AdminPageProps) {
             />
             <AdminMetricCard
               icon={<ClockIcon size={16} />}
-              label="AI credits"
-              value={aiQuoteLimit === null ? "Unlimited" : `${aiQuoteUsed}/${aiQuoteLimit}`}
-              hint={aiQuoteLimit === null ? "No monthly cap" : `${aiQuoteRemaining} remaining this month`}
+              label="AI usage"
+              value={aiBudgetLimit === null ? "No cap" : aiUsagePercentLabel}
+              hint={
+                aiBudgetLimit === null
+                  ? "No monthly cap"
+                  : `${aiPromptsRemaining !== null ? `~${aiPromptsRemaining} est. prompts remaining` : "Prompt estimate unavailable"}${aiRenewalText ? ` · renews ${aiRenewalText}` : ""}`
+              }
             />
           </div>
         </div>

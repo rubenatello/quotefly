@@ -71,13 +71,13 @@ export function InlineCustomerLookup({
                   ? "Find another customer by name, phone, or email"
                   : "Find customer by name, phone, or email"
               }
-              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-4 focus:ring-quotefly-blue/10"
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-4 focus:ring-quotefly-blue/10 sm:min-h-[40px]"
             />
           </div>
           <button
             type="button"
             onClick={onAddCustomer}
-            className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-quotefly-blue"
+            className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-quotefly-blue sm:min-h-[40px]"
           >
             <UserRoundPlus size={15} />
             <span>Add customer</span>
@@ -101,7 +101,7 @@ export function InlineCustomerLookup({
                       setQuery(customer.fullName);
                       setResults([]);
                     }}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-50"
+                    className="flex min-h-[44px] w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-50 sm:min-h-[40px]"
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>

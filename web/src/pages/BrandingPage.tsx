@@ -1173,6 +1173,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   componentColors={previewComponentColors}
                   footerText={previewFooterText}
                   showQuoteFlyAttribution={showQuoteFlyAttribution}
+                  quoteReferenceLabel="Quote #12345"
+                  subtitle="Customer quote"
                 />
               </div>
             </BrandingSectionCard>

@@ -48,6 +48,8 @@ const AfterSaleFollowUpStatusSchema = z.enum([
   "COMPLETED",
 ]);
 
+const QuoteLineSectionTypeSchema = z.enum(["INCLUDED", "ALTERNATE"]);
+
 const CreateQuoteSchema = z.object({
   customerId: z.string().min(1),
   serviceType: ServiceTypeSchema,
@@ -102,6 +104,8 @@ const QuoteDecisionSchema = z.object({
 
 const CreateLineItemSchema = z.object({
   description: z.string().min(1),
+  sectionType: QuoteLineSectionTypeSchema.default("INCLUDED"),
+  sectionLabel: z.string().trim().max(80).optional().nullable(),
   quantity: z.number().positive(),
   unitCost: z.number().nonnegative(),
   unitPrice: z.number().nonnegative(),
@@ -110,6 +114,8 @@ const CreateLineItemSchema = z.object({
 const UpdateLineItemSchema = z
   .object({
     description: z.string().min(1).optional(),
+    sectionType: QuoteLineSectionTypeSchema.optional(),
+    sectionLabel: z.string().trim().max(80).optional().nullable(),
     quantity: z.number().positive().optional(),
     unitCost: z.number().nonnegative().optional(),
     unitPrice: z.number().nonnegative().optional(),
@@ -173,6 +179,8 @@ const SuggestQuoteWithAiSchema = z.object({
       z.object({
         id: z.string().min(1).optional(),
         description: z.string().trim().min(1).max(5000),
+        sectionType: QuoteLineSectionTypeSchema.optional(),
+        sectionLabel: z.string().trim().max(80).optional().nullable(),
         quantity: z.number().positive(),
         unitCost: z.number().nonnegative(),
         unitPrice: z.number().nonnegative(),
@@ -249,8 +257,20 @@ function calculateQuoteTotal(customerPriceSubtotal: number, taxAmount: number): 
   return roundCurrency(customerPriceSubtotal + taxAmount);
 }
 
+function normalizeQuoteLineSectionType(value?: string | null): z.infer<typeof QuoteLineSectionTypeSchema> {
+  return value === "ALTERNATE" ? "ALTERNATE" : "INCLUDED";
+}
+
+function isIncludedQuoteLineSection(value?: string | null) {
+  return normalizeQuoteLineSectionType(value) === "INCLUDED";
+}
+
 function formatAiRenewalDate(value: Date) {
   return value.toISOString().slice(0, 10);
+}
+
+function formatUsdValue(value: number) {
+  return Number(value.toFixed(2)).toFixed(2);
 }
 
 function addDays(value: Date, days: number): Date {
@@ -301,6 +321,7 @@ async function recalculateQuoteFromLineItems(
       ...tenantActiveScope(tenantId),
     },
     select: {
+      sectionType: true,
       quantity: true,
       unitCost: true,
       unitPrice: true,
@@ -311,6 +332,9 @@ async function recalculateQuoteFromLineItems(
   let customerPriceSubtotal = 0;
 
   for (const lineItem of lineItems) {
+    if (!isIncludedQuoteLineSection(lineItem.sectionType)) {
+      continue;
+    }
     const qty = Number(lineItem.quantity);
     internalCostSubtotal += qty * Number(lineItem.unitCost);
     customerPriceSubtotal += qty * Number(lineItem.unitPrice);
@@ -334,6 +358,8 @@ async function recalculateQuoteFromLineItems(
 interface RevisionSnapshotLineItem {
   id: string;
   description: string;
+  sectionType: z.infer<typeof QuoteLineSectionTypeSchema>;
+  sectionLabel: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -371,6 +397,8 @@ interface RevisionSnapshot {
 const RevisionSnapshotLineItemSchema = z.object({
   id: z.string().min(1),
   description: z.string().min(1),
+  sectionType: QuoteLineSectionTypeSchema.default("INCLUDED"),
+  sectionLabel: z.string().nullable().optional(),
   quantity: z.number().finite(),
   unitCost: z.number().finite(),
   unitPrice: z.number().finite(),
@@ -430,6 +458,8 @@ async function getQuoteRevisionContext(
         select: {
           id: true,
           description: true,
+          sectionType: true,
+          sectionLabel: true,
           quantity: true,
           unitCost: true,
           unitPrice: true,
@@ -473,6 +503,8 @@ function buildQuoteRevisionSnapshot(
       return {
         id: lineItem.id,
         description: lineItem.description,
+        sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+        sectionLabel: lineItem.sectionLabel,
         quantity,
         unitCost: Number(lineItem.unitCost),
         unitPrice,
@@ -623,6 +655,8 @@ async function restoreQuoteRevision(
         tenantId: params.tenantId,
         quoteId: quote.id,
         description: lineItem.description,
+        sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+        sectionLabel: lineItem.sectionLabel,
         quantity: roundCurrency(lineItem.quantity),
         unitCost: roundCurrency(lineItem.unitCost),
         unitPrice: roundCurrency(lineItem.unitPrice),
@@ -854,6 +888,8 @@ function aiLineSimilarity(left: string, right: string) {
 function lineValuesDiffer(current: AiCurrentLineItem, next: AiSuggestedLineItem) {
   return (
     normalizeTextForComparison(current.description) !== normalizeTextForComparison(next.description) ||
+    normalizeQuoteLineSectionType(current.sectionType) !== normalizeQuoteLineSectionType(next.sectionType) ||
+    (current.sectionLabel ?? "").trim() !== (next.sectionLabel ?? "").trim() ||
     roundCurrency(current.quantity) !== roundCurrency(next.quantity) ||
     roundCurrency(current.unitCost) !== roundCurrency(next.unitCost) ||
     roundCurrency(current.unitPrice) !== roundCurrency(next.unitPrice)
@@ -893,6 +929,8 @@ function buildDeterministicAiPatch(
         workingLines[bestIndex] = {
           ...current,
           description: suggestion.description,
+          sectionType: suggestion.sectionType,
+          sectionLabel: suggestion.sectionLabel,
           quantity: suggestion.quantity,
           unitCost: suggestion.unitCost,
           unitPrice: suggestion.unitPrice,
@@ -903,6 +941,8 @@ function buildDeterministicAiPatch(
           targetLineId: current.id ?? null,
           previousDescription: current.description,
           description: suggestion.description,
+          sectionType: suggestion.sectionType,
+          sectionLabel: suggestion.sectionLabel,
           quantity: suggestion.quantity,
           unitCost: suggestion.unitCost,
           unitPrice: suggestion.unitPrice,
@@ -915,6 +955,8 @@ function buildDeterministicAiPatch(
     workingLines.push({
       id: null,
       description: suggestion.description,
+      sectionType: suggestion.sectionType,
+      sectionLabel: suggestion.sectionLabel,
       quantity: suggestion.quantity,
       unitCost: suggestion.unitCost,
       unitPrice: suggestion.unitPrice,
@@ -925,6 +967,8 @@ function buildDeterministicAiPatch(
       targetLineId: null,
       previousDescription: null,
       description: suggestion.description,
+      sectionType: suggestion.sectionType,
+      sectionLabel: suggestion.sectionLabel,
       quantity: suggestion.quantity,
       unitCost: suggestion.unitCost,
       unitPrice: suggestion.unitPrice,
@@ -941,6 +985,8 @@ function buildDeterministicAiPatch(
       .filter((line) => isMeaningfulAiLine(line))
       .map((line) => ({
         description: line.description,
+        sectionType: normalizeQuoteLineSectionType(line.sectionType),
+        sectionLabel: line.sectionLabel ?? null,
         quantity: roundCurrency(line.quantity),
         unitCost: roundCurrency(line.unitCost),
         unitPrice: roundCurrency(line.unitPrice),
@@ -966,6 +1012,8 @@ function applyAiRevisionPlan(
     if (operation.action === "ADD") {
       const nextLine: AiSuggestedLineItem = {
         description: operation.description ?? "Additional line item",
+        sectionType: normalizeQuoteLineSectionType(operation.sectionType),
+        sectionLabel: operation.sectionLabel ?? null,
         quantity: roundCurrency(operation.quantity ?? 1),
         unitCost: roundCurrency(operation.unitCost ?? 0),
         unitPrice: roundCurrency(operation.unitPrice ?? 0),
@@ -980,6 +1028,8 @@ function applyAiRevisionPlan(
         targetLineId: null,
         previousDescription: null,
         description: nextLine.description,
+        sectionType: nextLine.sectionType,
+        sectionLabel: nextLine.sectionLabel,
         quantity: nextLine.quantity,
         unitCost: nextLine.unitCost,
         unitPrice: nextLine.unitPrice,
@@ -1003,6 +1053,8 @@ function applyAiRevisionPlan(
         targetLineId: current.id ?? null,
         previousDescription: current.description,
         description: current.description,
+        sectionType: normalizeQuoteLineSectionType(current.sectionType),
+        sectionLabel: current.sectionLabel ?? null,
         quantity: roundCurrency(current.quantity),
         unitCost: roundCurrency(current.unitCost),
         unitPrice: roundCurrency(current.unitPrice),
@@ -1013,6 +1065,11 @@ function applyAiRevisionPlan(
 
     const nextLine: AiSuggestedLineItem = {
       description: operation.description ?? current.description,
+      sectionType: operation.sectionType ? normalizeQuoteLineSectionType(operation.sectionType) : normalizeQuoteLineSectionType(current.sectionType),
+      sectionLabel:
+        operation.sectionLabel !== null && operation.sectionLabel !== undefined
+          ? operation.sectionLabel
+          : current.sectionLabel ?? null,
       quantity: roundCurrency(operation.quantity ?? current.quantity),
       unitCost: roundCurrency(operation.unitCost ?? current.unitCost),
       unitPrice: roundCurrency(operation.unitPrice ?? current.unitPrice),
@@ -1032,6 +1089,8 @@ function applyAiRevisionPlan(
       targetLineId: current.id ?? null,
       previousDescription: current.description,
       description: nextLine.description,
+      sectionType: nextLine.sectionType,
+      sectionLabel: nextLine.sectionLabel,
       quantity: nextLine.quantity,
       unitCost: nextLine.unitCost,
       unitPrice: nextLine.unitPrice,
@@ -1049,6 +1108,8 @@ function applyAiRevisionPlan(
         .filter((line) => isMeaningfulAiLine(line))
         .map((line) => ({
           description: line.description,
+          sectionType: normalizeQuoteLineSectionType(line.sectionType),
+          sectionLabel: line.sectionLabel ?? null,
           quantity: roundCurrency(line.quantity),
           unitCost: roundCurrency(line.unitCost),
           unitPrice: roundCurrency(line.unitPrice),
@@ -1066,6 +1127,8 @@ function applyAiRevisionPlan(
       .filter((line) => isMeaningfulAiLine(line))
       .map((line) => ({
         description: line.description,
+        sectionType: normalizeQuoteLineSectionType(line.sectionType),
+        sectionLabel: line.sectionLabel ?? null,
         quantity: roundCurrency(line.quantity),
         unitCost: roundCurrency(line.unitCost),
         unitPrice: roundCurrency(line.unitPrice),
@@ -1354,6 +1417,8 @@ function resolveChatQuoteScopeText(
 
 type AiSuggestedLineItem = {
   description: string;
+  sectionType: z.infer<typeof QuoteLineSectionTypeSchema>;
+  sectionLabel: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -1374,6 +1439,8 @@ type AiSuggestedQuoteDraft = {
 type AiCurrentLineItem = {
   id?: string | null;
   description: string;
+  sectionType: z.infer<typeof QuoteLineSectionTypeSchema>;
+  sectionLabel: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -1384,6 +1451,8 @@ type AiSuggestedLinePatch = {
   targetLineId: string | null;
   previousDescription: string | null;
   description: string;
+  sectionType: z.infer<typeof QuoteLineSectionTypeSchema>;
+  sectionLabel: string | null;
   quantity: number;
   unitCost: number;
   unitPrice: number;
@@ -1477,6 +1546,8 @@ type SimilarQuoteContext = {
   updatedAt: Date;
   lineItems: Array<{
     description: string;
+    sectionType: z.infer<typeof QuoteLineSectionTypeSchema>;
+    sectionLabel: string | null;
     quantity: number;
     unitPrice: number;
   }>;
@@ -1552,7 +1623,7 @@ function buildAiQuoteContext(params: {
           ? `- Current lines:\n${params.currentQuote.lineItems
               .map(
                 (line, index) =>
-                  `  ${index + 1}. ${line.description} | qty ${line.quantity} | cost ${line.unitCost} | price ${line.unitPrice}`,
+                  `  ${index + 1}. ${line.sectionType === "ALTERNATE" ? `${line.sectionLabel?.trim() || "Alternate option"} | ` : ""}${line.description} | qty ${line.quantity} | cost ${line.unitCost} | price ${line.unitPrice}`,
               )
               .join("\n")}`
           : null,
@@ -1596,7 +1667,7 @@ function buildAiQuoteContext(params: {
             .slice(0, 3)
             .map(
               (lineItem, lineIndex) =>
-                `    ${lineIndex + 1}. ${lineItem.description} | qty ${lineItem.quantity} | price ${lineItem.unitPrice.toFixed(2)}`,
+                `    ${lineIndex + 1}. ${lineItem.sectionType === "ALTERNATE" ? `${lineItem.sectionLabel?.trim() || "Alternate option"} | ` : ""}${lineItem.description} | qty ${lineItem.quantity} | price ${lineItem.unitPrice.toFixed(2)}`,
             )
             .join("\n");
           return [
@@ -1816,6 +1887,8 @@ async function loadSimilarQuoteContext(
         orderBy: { createdAt: "asc" },
         select: {
           description: true,
+          sectionType: true,
+          sectionLabel: true,
           quantity: true,
           unitPrice: true,
         },
@@ -1835,6 +1908,8 @@ async function loadSimilarQuoteContext(
       updatedAt: quote.updatedAt,
       lineItems: quote.lineItems.map((lineItem) => ({
         description: lineItem.description,
+        sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+        sectionLabel: lineItem.sectionLabel ?? null,
         quantity: Number(lineItem.quantity),
         unitPrice: Number(lineItem.unitPrice),
       })),
@@ -1918,6 +1993,8 @@ function buildExplicitAiLineItems(params: {
 
     return {
       description: lineItem.description,
+      sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+      sectionLabel: lineItem.sectionLabel ?? null,
       quantity,
       matched: Boolean(matchedPreset),
       baseUnitCost: matchedPreset ? roundCurrency(matchedPreset.unitCost) : 0,
@@ -1952,6 +2029,8 @@ function buildExplicitAiLineItems(params: {
     if (lineItem.matched) {
       return {
         description: lineItem.description,
+        sectionType: lineItem.sectionType,
+        sectionLabel: lineItem.sectionLabel,
         quantity: lineItem.quantity,
         unitCost: lineItem.baseUnitCost,
         unitPrice: lineItem.baseUnitPrice,
@@ -1961,6 +2040,8 @@ function buildExplicitAiLineItems(params: {
     const quantityShare = Math.max(lineItem.quantity, 1) / unmatchedQuantityTotal;
     return {
       description: lineItem.description,
+      sectionType: lineItem.sectionType,
+      sectionLabel: lineItem.sectionLabel,
       quantity: lineItem.quantity,
       unitCost: roundCurrency(remainingInternalSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
       unitPrice: roundCurrency(remainingCustomerSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
@@ -2202,6 +2283,8 @@ async function buildAiSuggestedQuoteDraft(
 
         return allLineItems.map((lineItem) => ({
           ...lineItem,
+          sectionType: "INCLUDED" as const,
+          sectionLabel: null,
           unitCost:
             rawInternalSubtotal > 0
               ? roundCurrency(lineItem.unitCost * (internalCostSubtotal / rawInternalSubtotal))
@@ -2262,7 +2345,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const { blocked, snapshot } = await assertAiUsageAvailable(
+    const { blocked, blockedBy, snapshot } = await assertAiUsageAvailable(
       app.prisma,
       claims.tenantId,
       entitlements,
@@ -2271,14 +2354,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     if (blocked) {
       const requiredPlan =
         entitlements.planCode === "starter" ? "professional" : "enterprise";
+      const blockedBySpend = blockedBy === "aiSpendUsdPerMonth";
       return reply.code(403).send({
         code: "PLAN_LIMIT_EXCEEDED",
-        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit. Your AI credits renew on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
-        feature: "aiQuotesPerMonth",
+        error: blockedBySpend
+          ? `${entitlements.planName} includes up to $${formatUsdValue(snapshot.monthlySpendLimitUsd ?? 0)} AI usage per month. This workspace has used $${formatUsdValue(snapshot.monthlySpendUsedUsd)} this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`
+          : `${entitlements.planName} includes up to ${snapshot.monthlyCreditsLimit ?? entitlements.limits.aiQuotesPerMonth ?? 0} AI requests per month. This workspace has used ${snapshot.monthlyCreditsUsed} AI requests this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
+        feature: blockedBySpend ? "aiSpendUsdPerMonth" : "aiQuotesPerMonth",
         currentPlan: entitlements.planCode,
         requiredPlan,
-        limit: entitlements.limits.aiQuotesPerMonth,
-        used: snapshot.monthlyUsed,
+        limit: blockedBySpend ? snapshot.monthlySpendLimitUsd : entitlements.limits.aiQuotesPerMonth,
+        used: blockedBySpend ? snapshot.monthlySpendUsedUsd : snapshot.monthlyCreditsUsed,
         renewsAtUtc: snapshot.periodEndUtc,
       });
     }
@@ -2314,6 +2400,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 select: {
                   id: true,
                   description: true,
+                  sectionType: true,
+                  sectionLabel: true,
                   quantity: true,
                   unitCost: true,
                   unitPrice: true,
@@ -2443,6 +2531,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               ? payload.currentLineItems.map((lineItem) => ({
                   id: lineItem.id ?? null,
                   description: lineItem.description,
+                  sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+                  sectionLabel: lineItem.sectionLabel ?? null,
                   quantity: lineItem.quantity,
                   unitCost: lineItem.unitCost,
                   unitPrice: lineItem.unitPrice,
@@ -2450,6 +2540,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               : (existingQuote?.lineItems ?? []).map((lineItem) => ({
                   id: lineItem.id,
                   description: lineItem.description,
+                  sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+                  sectionLabel: lineItem.sectionLabel,
                   quantity: Number(lineItem.quantity),
                   unitCost: Number(lineItem.unitCost),
                   unitPrice: Number(lineItem.unitPrice),
@@ -2463,6 +2555,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               lineItems: existingQuote.lineItems.map((lineItem) => ({
                 id: lineItem.id,
                 description: lineItem.description,
+                sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+                sectionLabel: lineItem.sectionLabel,
                 quantity: Number(lineItem.quantity),
                 unitCost: Number(lineItem.unitCost),
                 unitPrice: Number(lineItem.unitPrice),
@@ -2487,6 +2581,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             scopeText: currentQuoteContext.scopeText,
             lineItems: currentQuoteContext.lineItems.map((lineItem) => ({
               description: lineItem.description,
+              sectionType: lineItem.sectionType,
+              sectionLabel: lineItem.sectionLabel,
               quantity: lineItem.quantity,
               unitCost: lineItem.unitCost,
               unitPrice: lineItem.unitPrice,
@@ -2589,6 +2685,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               scopeText: currentQuoteContext.scopeText,
               lineItems: currentQuoteContext.lineItems.map((lineItem) => ({
                 description: lineItem.description,
+                sectionType: lineItem.sectionType,
+                sectionLabel: lineItem.sectionLabel,
                 quantity: lineItem.quantity,
                 unitCost: lineItem.unitCost,
                 unitPrice: lineItem.unitPrice,
@@ -2687,10 +2785,22 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         ? currentQuoteContext.scopeText.trim()
         : baselineSuggestion.scopeText);
     const resolvedInternalSubtotal = roundCurrency(
-      patch.resolvedLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitCost, 0),
+      patch.resolvedLines.reduce(
+        (sum, lineItem) =>
+          isIncludedQuoteLineSection(lineItem.sectionType)
+            ? sum + lineItem.quantity * lineItem.unitCost
+            : sum,
+        0,
+      ),
     );
     const resolvedCustomerSubtotal = roundCurrency(
-      patch.resolvedLines.reduce((sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice, 0),
+      patch.resolvedLines.reduce(
+        (sum, lineItem) =>
+          isIncludedQuoteLineSection(lineItem.sectionType)
+            ? sum + lineItem.quantity * lineItem.unitPrice
+            : sum,
+        0,
+      ),
     );
     const suggestion: AiSuggestedQuoteDraft = {
       ...baselineSuggestion,
@@ -2774,7 +2884,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           patch,
           insight,
           aiRunId: aiUsageEvent.id,
-          usage: buildAiUsageResponse(snapshot),
+          usage: buildAiUsageResponse(snapshot, {
+            consumedCredits: 1,
+            consumedSpendUsd: aiTelemetry.estimatedCostUsd,
+          }),
         },
       });
       stream.end();
@@ -2831,7 +2944,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const { blocked, snapshot } = await assertAiUsageAvailable(
+    const { blocked, blockedBy, snapshot } = await assertAiUsageAvailable(
       app.prisma,
       claims.tenantId,
       entitlements,
@@ -2840,14 +2953,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     if (blocked) {
       const requiredPlan =
         entitlements.planCode === "starter" ? "professional" : "enterprise";
+      const blockedBySpend = blockedBy === "aiSpendUsdPerMonth";
       return reply.code(403).send({
         code: "PLAN_LIMIT_EXCEEDED",
-        error: `${entitlements.planName} includes up to ${entitlements.limits.aiQuotesPerMonth} AI credits per month. Each AI draft or AI revision uses one credit. Your AI credits renew on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
-        feature: "aiQuotesPerMonth",
+        error: blockedBySpend
+          ? `${entitlements.planName} includes up to $${formatUsdValue(snapshot.monthlySpendLimitUsd ?? 0)} AI usage per month. This workspace has used $${formatUsdValue(snapshot.monthlySpendUsedUsd)} this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`
+          : `${entitlements.planName} includes up to ${snapshot.monthlyCreditsLimit ?? entitlements.limits.aiQuotesPerMonth ?? 0} AI requests per month. This workspace has used ${snapshot.monthlyCreditsUsed} AI requests this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
+        feature: blockedBySpend ? "aiSpendUsdPerMonth" : "aiQuotesPerMonth",
         currentPlan: entitlements.planCode,
         requiredPlan,
-        limit: entitlements.limits.aiQuotesPerMonth,
-        used: snapshot.monthlyUsed,
+        limit: blockedBySpend ? snapshot.monthlySpendLimitUsd : entitlements.limits.aiQuotesPerMonth,
+        used: blockedBySpend ? snapshot.monthlySpendUsedUsd : snapshot.monthlyCreditsUsed,
         renewsAtUtc: snapshot.periodEndUtc,
       });
     }
@@ -3171,6 +3287,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           const primaryLineItems = [
             {
               description: matchedPreset.name,
+              sectionType: "INCLUDED" as const,
+              sectionLabel: null,
               quantity: primaryQuantity,
               unitCost: roundCurrency(matchedPreset.unitCost),
               unitPrice: roundCurrency(matchedPreset.unitPrice),
@@ -3179,6 +3297,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
           const supplementalLineItems = supplementalPresets.map((preset) => ({
             description: preset.name,
+            sectionType: "INCLUDED" as const,
+            sectionLabel: null,
             quantity: inferPresetQuantity(
               preset.unitType,
               preset.defaultQuantity,
@@ -3269,6 +3389,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           quoteId: createdQuote.id,
           description: lineItem.description,
+          sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+          sectionLabel: lineItem.sectionLabel,
           quantity: lineItem.quantity,
           unitCost: lineItem.unitCost,
           unitPrice: lineItem.unitPrice,
@@ -3336,7 +3458,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         squareFeetEstimate: parsedDraft.squareFeetEstimate,
         estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
       },
-      usage: buildAiUsageResponse(snapshot),
+      usage: buildAiUsageResponse(snapshot, {
+        consumedCredits: 1,
+        consumedSpendUsd: aiTelemetry.estimatedCostUsd,
+      }),
     });
   });
 
@@ -3902,6 +4027,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         lineItems: {
           where: tenantActiveScope(claims.tenantId),
           orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            tenantId: true,
+            quoteId: true,
+            description: true,
+            sectionType: true,
+            sectionLabel: true,
+            quantity: true,
+            unitCost: true,
+            unitPrice: true,
+            createdAt: true,
+            deletedAtUtc: true,
+          },
         },
       },
     });
@@ -4016,6 +4154,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
       lineItems: quote.lineItems.map((lineItem) => ({
         description: lineItem.description,
+        sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+        sectionLabel: lineItem.sectionLabel,
         quantity: Number(lineItem.quantity),
         unitCost: Number(lineItem.unitCost),
         unitPrice: Number(lineItem.unitPrice),
@@ -4462,6 +4602,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           quoteId: quote.id,
           description: payload.description,
+          sectionType: normalizeQuoteLineSectionType(payload.sectionType),
+          sectionLabel: payload.sectionLabel?.trim() || null,
           quantity: payload.quantity,
           unitCost: payload.unitCost,
           unitPrice: payload.unitPrice,
@@ -4526,6 +4668,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           where: { id: lineItem.id },
           data: {
             description: payload.description,
+            sectionType: payload.sectionType ? normalizeQuoteLineSectionType(payload.sectionType) : undefined,
+            sectionLabel: payload.sectionLabel !== undefined ? payload.sectionLabel?.trim() || null : undefined,
             quantity: payload.quantity,
             unitCost: payload.unitCost,
             unitPrice: payload.unitPrice,

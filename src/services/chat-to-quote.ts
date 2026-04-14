@@ -4,6 +4,8 @@ import { findBestStandardWorkPresetMatch } from "./work-preset-catalog";
 export interface ChatQuoteLineItemSuggestion {
   description: string;
   quantity: number;
+  sectionType?: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
 }
 
 export interface ParsedChatToQuoteDraft {

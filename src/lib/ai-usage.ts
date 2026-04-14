@@ -10,9 +10,15 @@ type AiUsageClient =
 export type MonthlyAiUsageSnapshot = {
   periodStartUtc: Date;
   periodEndUtc: Date;
-  monthlyUsed: number;
-  monthlyLimit: number | null;
-  monthlyRemaining: number | null;
+  monthlyCreditsUsed: number;
+  monthlyCreditsLimit: number | null;
+  monthlyCreditsRemaining: number | null;
+  monthlySpendUsedUsd: number;
+  monthlySpendLimitUsd: number | null;
+  monthlySpendRemainingUsd: number | null;
+  monthlySpendUsagePercent: number | null;
+  estimatedPromptCostUsd: number;
+  estimatedPromptsRemaining: number | null;
 };
 
 export type AiUsageTelemetry = {
@@ -37,10 +43,19 @@ export type AiUsageTrace = {
   } | null;
 };
 
+export const DEFAULT_ESTIMATED_PROMPT_COST_USD = 0.001615;
+
+function roundUsd(value: number) {
+  return Number(value.toFixed(6));
+}
+
 export async function loadMonthlyAiUsageSnapshot(
   prisma: AiUsageClient,
   tenantId: string,
-  monthlyLimit: number | null,
+  limits: {
+    credits?: number | null;
+    spendUsd?: number | null;
+  },
   now = new Date(),
 ): Promise<MonthlyAiUsageSnapshot> {
   const periodStartUtc = startOfCurrentUtcMonth(now);
@@ -57,17 +72,40 @@ export async function loadMonthlyAiUsageSnapshot(
     },
     _sum: {
       creditsConsumed: true,
+      estimatedCostUsd: true,
     },
   });
 
-  const monthlyUsed = aggregate._sum.creditsConsumed ?? 0;
+  const monthlyCreditsUsed = aggregate._sum.creditsConsumed ?? 0;
+  const monthlyCreditsLimit = limits.credits ?? null;
+  const monthlyCreditsRemaining =
+    monthlyCreditsLimit === null ? null : Math.max(monthlyCreditsLimit - monthlyCreditsUsed, 0);
+
+  const monthlySpendUsedUsd = roundUsd(Number(aggregate._sum.estimatedCostUsd ?? 0));
+  const monthlySpendLimitUsd = limits.spendUsd ?? null;
+  const monthlySpendRemainingUsd =
+    monthlySpendLimitUsd === null ? null : roundUsd(Math.max(monthlySpendLimitUsd - monthlySpendUsedUsd, 0));
+  const monthlySpendUsagePercent =
+    monthlySpendLimitUsd !== null && monthlySpendLimitUsd > 0
+      ? Number(Math.min((monthlySpendUsedUsd / monthlySpendLimitUsd) * 100, 100).toFixed(2))
+      : null;
+  const estimatedPromptsRemaining =
+    monthlySpendRemainingUsd === null
+      ? null
+      : Math.max(Math.floor(monthlySpendRemainingUsd / DEFAULT_ESTIMATED_PROMPT_COST_USD), 0);
 
   return {
     periodStartUtc,
     periodEndUtc,
-    monthlyUsed,
-    monthlyLimit,
-    monthlyRemaining: monthlyLimit === null ? null : Math.max(monthlyLimit - monthlyUsed, 0),
+    monthlyCreditsUsed,
+    monthlyCreditsLimit,
+    monthlyCreditsRemaining,
+    monthlySpendUsedUsd,
+    monthlySpendLimitUsd,
+    monthlySpendRemainingUsd,
+    monthlySpendUsagePercent,
+    estimatedPromptCostUsd: DEFAULT_ESTIMATED_PROMPT_COST_USD,
+    estimatedPromptsRemaining,
   };
 }
 
@@ -80,15 +118,27 @@ export async function assertAiUsageAvailable(
   const snapshot = await loadMonthlyAiUsageSnapshot(
     prisma,
     tenantId,
-    entitlements.limits.aiQuotesPerMonth,
+    {
+      credits: entitlements.limits.aiQuotesPerMonth,
+      spendUsd: entitlements.limits.aiSpendUsdPerMonth,
+    },
     now,
   );
-
-  const blocked =
-    snapshot.monthlyLimit !== null && snapshot.monthlyUsed >= snapshot.monthlyLimit;
+  const spendBlocked =
+    snapshot.monthlySpendLimitUsd !== null &&
+    snapshot.monthlySpendUsedUsd >= snapshot.monthlySpendLimitUsd;
+  const creditsBlocked =
+    snapshot.monthlySpendLimitUsd === null &&
+    snapshot.monthlyCreditsLimit !== null &&
+    snapshot.monthlyCreditsUsed >= snapshot.monthlyCreditsLimit;
 
   return {
-    blocked,
+    blocked: spendBlocked || creditsBlocked,
+    blockedBy: spendBlocked
+      ? "aiSpendUsdPerMonth"
+      : creditsBlocked
+        ? "aiQuotesPerMonth"
+        : null,
     snapshot,
   };
 }
@@ -140,15 +190,44 @@ export async function createAiUsageEvent(
 
 export function buildAiUsageResponse(
   snapshot: MonthlyAiUsageSnapshot,
-  consumedCredits = 1,
+  consumed?: {
+    consumedCredits?: number;
+    consumedSpendUsd?: number;
+  },
 ) {
-  const monthlyUsed = snapshot.monthlyUsed + consumedCredits;
+  const consumedCredits = consumed?.consumedCredits ?? 1;
+  const consumedSpendUsd = roundUsd(consumed?.consumedSpendUsd ?? 0);
+  const monthlyCreditsUsed = snapshot.monthlyCreditsUsed + consumedCredits;
+  const monthlySpendUsedUsd = roundUsd(snapshot.monthlySpendUsedUsd + consumedSpendUsd);
+  const monthlyCreditsRemaining =
+    snapshot.monthlyCreditsLimit === null
+      ? null
+      : Math.max(snapshot.monthlyCreditsLimit - monthlyCreditsUsed, 0);
+  const monthlySpendRemainingUsd =
+    snapshot.monthlySpendLimitUsd === null
+      ? null
+      : roundUsd(Math.max(snapshot.monthlySpendLimitUsd - monthlySpendUsedUsd, 0));
+  const monthlySpendUsagePercent =
+    snapshot.monthlySpendLimitUsd !== null && snapshot.monthlySpendLimitUsd > 0
+      ? Number(Math.min((monthlySpendUsedUsd / snapshot.monthlySpendLimitUsd) * 100, 100).toFixed(2))
+      : null;
+  const estimatedPromptsRemaining =
+    monthlySpendRemainingUsd === null
+      ? null
+      : Math.max(Math.floor(monthlySpendRemainingUsd / snapshot.estimatedPromptCostUsd), 0);
+
   return {
     consumedCredits,
-    monthlyUsed,
-    monthlyLimit: snapshot.monthlyLimit,
-    monthlyRemaining:
-      snapshot.monthlyLimit === null ? null : Math.max(snapshot.monthlyLimit - monthlyUsed, 0),
+    consumedSpendUsd,
+    monthlyCreditsUsed,
+    monthlyCreditsLimit: snapshot.monthlyCreditsLimit,
+    monthlyCreditsRemaining,
+    monthlySpendUsedUsd,
+    monthlySpendLimitUsd: snapshot.monthlySpendLimitUsd,
+    monthlySpendRemainingUsd,
+    monthlySpendUsagePercent,
+    estimatedPromptCostUsd: snapshot.estimatedPromptCostUsd,
+    estimatedPromptsRemaining,
     renewsAtUtc: snapshot.periodEndUtc,
   };
 }

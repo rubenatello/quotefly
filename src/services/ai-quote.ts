@@ -46,6 +46,8 @@ export type AiQuoteRevisionLineOperation = {
   action: "KEEP" | "UPDATE" | "ADD" | "REMOVE";
   targetLineNumber: number | null;
   description: string | null;
+  sectionType: "INCLUDED" | "ALTERNATE" | null;
+  sectionLabel: string | null;
   quantity: number | null;
   unitCost: number | null;
   unitPrice: number | null;
@@ -77,7 +79,12 @@ Return a JSON object (no markdown, no code fences) with exactly these fields:
   "estimatedTaxAmount": number | null,
   "estimatedInternalCostAmount": number | null,
   "lineItems": [
-    { "description": string, "quantity": number }
+    {
+      "description": string,
+      "quantity": number,
+      "sectionType": "INCLUDED" | "ALTERNATE",
+      "sectionLabel": string | null
+    }
   ]
 }
 
@@ -94,6 +101,8 @@ Rules:
 - If current quote context is provided, treat the task as a revision. Preserve good existing structure, line intent, and scope unless the user clearly asks to replace or remove them.
 - If the user asks for multiple lines, multiple phases, alternatives, contingencies, options, or fallback work, return separate lineItems for each requested option instead of collapsing them into one generic line.
 - If the user asks for repair plus replacement, inspection plus allowance, or option A vs option B, return distinct lineItems for each major billable path.
+- Normal included work should use sectionType "INCLUDED".
+- Alternate or fallback choices should use sectionType "ALTERNATE" and include a short sectionLabel like "Repair Option", "Replacement Option", or "Alternate Scope".
 - If saved job names or pricing hints are provided, prefer those names when they fit the requested work.
 - If similar past quotes are provided, prefer their structure, naming, and pricing patterns over generic assumptions, especially when square footage or scope is similar.
 - Prefer the tenant's own saved jobs and similar past quotes over generic invented line items whenever they fit the request.
@@ -120,6 +129,8 @@ Return a JSON object (no markdown, no code fences) with exactly these fields:
       "action": "KEEP" | "UPDATE" | "ADD" | "REMOVE",
       "targetLineNumber": number | null,
       "description": string | null,
+      "sectionType": "INCLUDED" | "ALTERNATE" | null,
+      "sectionLabel": string | null,
       "quantity": number | null,
       "unitCost": number | null,
       "unitPrice": number | null,
@@ -136,6 +147,8 @@ Rules:
 - UPDATE actions should target an existing line and only change what is necessary.
 - If the user asks for alternative options, contingencies, fallback work, or "another line", prefer separate ADD actions rather than collapsing everything into one updated line.
 - If the user asks for repair and replacement options together, preserve them as distinct line items.
+- Use sectionType "ALTERNATE" for optional/fallback/add-on pricing that should not count toward the primary total.
+- Use sectionLabel to group alternate lines when helpful, such as "Repair Option" or "Replacement Option".
 - If title or scope do not need changes, return null for them.
 - Prefer the tenant's saved jobs, pricing hints, similar accepted/sent quotes, customer notes, and recent activity when they fit the request.
 - Keep customer-facing wording professional and concise.
@@ -304,6 +317,11 @@ function normalizeRevisionLineOperations(value: unknown): AiQuoteRevisionLineOpe
       typeof operation.quantity === "number" && Number.isFinite(operation.quantity) && operation.quantity > 0
         ? Number(operation.quantity.toFixed(2))
         : null;
+    const sectionType = validateSectionType(operation.sectionType);
+    const sectionLabel =
+      typeof operation.sectionLabel === "string" && operation.sectionLabel.trim()
+        ? operation.sectionLabel.trim().slice(0, 80)
+        : null;
     const unitCost =
       typeof operation.unitCost === "number" && Number.isFinite(operation.unitCost) && operation.unitCost >= 0
         ? Number(operation.unitCost.toFixed(2))
@@ -329,6 +347,8 @@ function normalizeRevisionLineOperations(value: unknown): AiQuoteRevisionLineOpe
       action,
       targetLineNumber,
       description,
+      sectionType,
+      sectionLabel,
       quantity,
       unitCost,
       unitPrice,
@@ -389,8 +409,8 @@ function roundTelemetryCost(value: number) {
 
 function normalizeLineItems(items: unknown): ParsedChatToQuoteDraft["lineItems"] {
   const defaultItems: ParsedChatToQuoteDraft["lineItems"] = [
-    { description: "Labor and installation", quantity: 1 },
-    { description: "Materials and supplies", quantity: 1 },
+    { description: "Labor and installation", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
+    { description: "Materials and supplies", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
   ];
 
   if (!Array.isArray(items) || items.length === 0) return defaultItems;
@@ -405,8 +425,17 @@ function normalizeLineItems(items: unknown): ParsedChatToQuoteDraft["lineItems"]
     normalized.push({
       description,
       quantity: typeof rec.quantity === "number" && rec.quantity > 0 ? rec.quantity : 1,
+      sectionType: validateSectionType(rec.sectionType) ?? "INCLUDED",
+      sectionLabel:
+        typeof rec.sectionLabel === "string" && rec.sectionLabel.trim()
+          ? rec.sectionLabel.trim().slice(0, 80)
+          : null,
     });
   }
 
   return normalized.length ? normalized : defaultItems;
+}
+
+function validateSectionType(value: unknown): "INCLUDED" | "ALTERNATE" | null {
+  return value === "ALTERNATE" || value === "INCLUDED" ? value : null;
 }

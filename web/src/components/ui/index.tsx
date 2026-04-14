@@ -29,8 +29,8 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: "min-h-[31px] px-3 py-1.5 text-xs gap-1.5",
-  md: "min-h-[38px] px-4 py-2 text-sm gap-2",
+  sm: "min-h-[44px] px-3 py-2 text-xs gap-1.5 sm:min-h-[31px] sm:py-1.5",
+  md: "min-h-[44px] px-4 py-2 text-sm gap-2 sm:min-h-[38px]",
   lg: "min-h-[44px] px-5 py-2.5 text-base gap-2.5",
 };
 
@@ -83,7 +83,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[38px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+              "min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-[var(--qf-border)]",
               className,
@@ -121,7 +121,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[38px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+            "min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
             error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
@@ -308,7 +308,14 @@ export function Alert({ tone, children, onDismiss }: AlertProps) {
     <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
       <span>{children}</span>
       {onDismiss && (
-        <button type="button" onClick={onDismiss} className="text-current opacity-60 hover:opacity-100 text-lg leading-none">&times;</button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="inline-flex h-11 w-11 items-center justify-center text-current text-lg leading-none opacity-60 hover:opacity-100 sm:h-9 sm:w-9"
+          aria-label="Dismiss alert"
+        >
+          &times;
+        </button>
       )}
     </div>
   );
@@ -414,7 +421,7 @@ export function ModalHeader({
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 sm:h-9 sm:w-9"
           aria-label="Close modal"
         >
           <span className="text-xl leading-none">&times;</span>

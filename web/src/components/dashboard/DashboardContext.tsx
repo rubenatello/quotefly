@@ -49,7 +49,14 @@ export type QuoteEditForm = {
   taxAmount: string;
 };
 export type LineItemForm = { description: string; quantity: string; unitCost: string; unitPrice: string };
-export type CreateLineItemInput = { description: string; quantity: number; unitCost: number; unitPrice: number };
+export type CreateLineItemInput = {
+  description: string;
+  sectionType?: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+};
 export type HistoryMode = "quote" | "customer" | "all";
 export type SendChannel = "email" | "sms" | "copy";
 export type CreateCustomerPayload = { fullName: string; phone: string; email: string | null };

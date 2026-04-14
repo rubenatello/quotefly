@@ -4,6 +4,7 @@ import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
+import { QuoteLineSectionField } from "../components/quotes/QuoteLineSectionField";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { InlineCustomerLookup } from "../components/quotes/InlineCustomerLookup";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
@@ -28,6 +29,7 @@ import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credit
 import {
   applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
+  isIncludedEditableQuoteLine,
   joinQuoteLineDescription,
   makeEditableQuoteLine,
   quoteLineAmount,
@@ -158,11 +160,17 @@ export function QuoteBuilderView() {
   const aiUsageHint = useMemo(
     () =>
       formatAiUsageAvailability({
-        used: session?.usage?.monthlyAiQuoteCount,
-        limit: session?.entitlements?.limits.aiQuotesPerMonth,
+        usedUsd: session?.usage?.monthlyAiSpendUsd,
+        limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
+        estimatedPromptsRemaining: session?.usage?.monthlyAiEstimatedPromptsRemaining,
         renewsAtUtc: session?.usage?.periodEndUtc,
       }),
-    [session?.entitlements?.limits.aiQuotesPerMonth, session?.usage?.monthlyAiQuoteCount, session?.usage?.periodEndUtc],
+    [
+      session?.entitlements?.limits.aiSpendUsdPerMonth,
+      session?.usage?.monthlyAiSpendUsd,
+      session?.usage?.monthlyAiEstimatedPromptsRemaining,
+      session?.usage?.periodEndUtc,
+    ],
   );
   const preparedDateLabel = useMemo(() => new Date().toLocaleDateString(), []);
 
@@ -249,6 +257,10 @@ export function QuoteBuilderView() {
     () => draftLines.filter((line) => line.title.trim() || line.details.trim()),
     [draftLines],
   );
+  const includedDraftLines = useMemo(
+    () => filteredDraftLines.filter((line) => isIncludedEditableQuoteLine(line)),
+    [filteredDraftLines],
+  );
 
   const savedPresetKeys = useMemo(
     () =>
@@ -259,12 +271,12 @@ export function QuoteBuilderView() {
   );
 
   const internalSubtotal = useMemo(
-    () => filteredDraftLines.reduce((total, line) => total + quoteLineCostTotal(line.quantity, line.unitCost), 0),
-    [filteredDraftLines],
+    () => includedDraftLines.reduce((total, line) => total + quoteLineCostTotal(line.quantity, line.unitCost), 0),
+    [includedDraftLines],
   );
   const customerSubtotal = useMemo(
-    () => filteredDraftLines.reduce((total, line) => total + quoteLineAmount(line.quantity, line.unitPrice), 0),
-    [filteredDraftLines],
+    () => includedDraftLines.reduce((total, line) => total + quoteLineAmount(line.quantity, line.unitPrice), 0),
+    [includedDraftLines],
   );
   const taxAmount = useMemo(() => {
     const parsed = Number(quoteForm.taxAmount);
@@ -279,6 +291,8 @@ export function QuoteBuilderView() {
         id: line.id,
         title: line.title,
         details: line.details,
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
         lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
@@ -332,6 +346,8 @@ export function QuoteBuilderView() {
         currentLineItems: filteredDraftLines.map((line) => ({
           id: line.id,
           description: joinQuoteLineDescription(line.title, line.details),
+          sectionType: line.sectionType,
+          sectionLabel: line.sectionLabel || null,
           quantity: Number(line.quantity) || 1,
           unitCost: Number(line.unitCost) || 0,
           unitPrice: Number(line.unitPrice) || 0,
@@ -536,6 +552,8 @@ export function QuoteBuilderView() {
       aiUsageEventId: lastAppliedAiRunId ?? undefined,
       initialLineItems: linesToCreate.map((line) => ({
         description: joinQuoteLineDescription(line.title, line.details),
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel || null,
         quantity: Number(line.quantity) || 1,
         unitCost: Number(line.unitCost) || 0,
         unitPrice: Number(line.unitPrice) || 0,
@@ -577,7 +595,7 @@ export function QuoteBuilderView() {
             <button
               type="button"
               onClick={() => setAiInsight(null)}
-              className="self-start text-xs font-medium text-slate-500 hover:text-slate-700"
+              className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-slate-500 hover:text-slate-700 sm:min-h-[36px]"
             >
               Dismiss
             </button>
@@ -612,7 +630,7 @@ export function QuoteBuilderView() {
             key={pane.id}
             type="button"
             onClick={() => setMobilePane(pane.id)}
-            className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition ${
+            className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
               mobilePane === pane.id
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
                 : "border-slate-200 bg-white text-slate-700"
@@ -643,18 +661,18 @@ export function QuoteBuilderView() {
               { value: "CONSTRUCTION", label: "Construction" },
             ]}
           />
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" icon={<Sparkles size={14} />} onClick={() => setAiModalOpen(true)} disabled={!canUseChatToQuote}>
-              AI Prompt
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setPresetPickerOpen(true)}>
-              Browse Jobs
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setQuickCustomerOpen(true)}>
-              Add Customer
-            </Button>
-            <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900">
-              Total {money(totalAmount)}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Quick actions</p>
+              <p className="text-sm font-semibold text-slate-900">Total {money(totalAmount)}</p>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Button variant="outline" size="sm" onClick={() => setQuickCustomerOpen(true)}>
+                Add Customer
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setPresetPickerOpen(true)}>
+                Browse Jobs
+              </Button>
             </div>
           </div>
         </div>
@@ -740,8 +758,19 @@ export function QuoteBuilderView() {
             actions={
               <div className="flex items-center gap-2">
                 <Button
+                  variant="ghost"
+                  size="md"
+                  className="h-11 w-11 min-h-[44px] rounded-full border-0 p-0 text-quotefly-blue hover:bg-transparent active:bg-transparent lg:hidden"
+                  icon={<Sparkles size={18} />}
+                  onClick={() => setAiModalOpen(true)}
+                  disabled={!canUseChatToQuote}
+                  aria-label="AI Prompt"
+                  title="AI Prompt"
+                />
+                <Button
                   variant="secondary"
                   size="sm"
+                  className="hidden lg:inline-flex"
                   icon={<Sparkles size={14} />}
                   onClick={() => setAiModalOpen(true)}
                   disabled={!canUseChatToQuote}
@@ -1088,10 +1117,29 @@ function DraftLineEditorRow({
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
+  const sectionPillLabel =
+    line.sectionType === "ALTERNATE"
+      ? line.sectionLabel?.trim() || "Alternate option"
+      : "Included in total";
+  const sectionPillClassName =
+    line.sectionType === "ALTERNATE"
+      ? "border-orange-200 bg-orange-50 text-orange-700"
+      : "border-slate-200 bg-slate-100 text-slate-600";
 
   useEffect(() => {
     setExpanded(startExpanded ?? false);
   }, [line.id, startExpanded]);
+
+  function updateSectionType(nextSectionType: "INCLUDED" | "ALTERNATE") {
+    onChange(line.id, "sectionType", nextSectionType);
+    if (nextSectionType === "INCLUDED") {
+      onChange(line.id, "sectionLabel", "");
+      return;
+    }
+    if (!line.sectionLabel.trim()) {
+      onChange(line.id, "sectionLabel", "Alternate Option");
+    }
+  }
 
   return (
     <div className="px-3 py-2.5 lg:hover:bg-[var(--qf-panel-muted)]/60">
@@ -1103,7 +1151,12 @@ function DraftLineEditorRow({
             className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
           >
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
+                  {sectionPillLabel}
+                </span>
+              </div>
               <p className="truncate text-sm font-semibold text-slate-900">{line.title.trim() || "Untitled line"}</p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span>Qty {line.quantity}</span>
@@ -1118,7 +1171,7 @@ function DraftLineEditorRow({
                   event.stopPropagation();
                   onInsertBelow(line.id);
                 }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-[var(--qf-border-strong)] hover:text-quotefly-blue"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-[var(--qf-border-strong)] hover:text-quotefly-blue"
                 aria-label="Add line below"
               >
                 <Plus size={14} />
@@ -1129,7 +1182,7 @@ function DraftLineEditorRow({
                   event.stopPropagation();
                   onRemove(line.id);
                 }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
                 aria-label="Remove line"
               >
                 <X size={14} />
@@ -1154,6 +1207,12 @@ function DraftLineEditorRow({
                 placeholder="Optional scope details for this line"
                 value={line.details}
                 onChange={(event) => onChange(line.id, "details", event.target.value)}
+              />
+              <QuoteLineSectionField
+                sectionType={line.sectionType}
+                sectionLabel={line.sectionLabel}
+                onSectionTypeChange={updateSectionType}
+                onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
               />
               <div className="grid grid-cols-3 gap-2">
                 <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
@@ -1180,12 +1239,21 @@ function DraftLineEditorRow({
         <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           {index + 1}
         </div>
-        <Input
-          className="min-h-[38px] rounded-lg"
-          placeholder="Line"
-          value={line.title}
-          onChange={(event) => onChange(line.id, "title", event.target.value)}
-        />
+        <div className="space-y-1.5">
+          <QuoteLineSectionField
+            sectionType={line.sectionType}
+            sectionLabel={line.sectionLabel}
+            onSectionTypeChange={updateSectionType}
+            onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
+            optionNameLabel="Option"
+          />
+          <Input
+            className="min-h-[38px] rounded-lg"
+            placeholder="Line"
+            value={line.title}
+            onChange={(event) => onChange(line.id, "title", event.target.value)}
+          />
+        </div>
         <Textarea
           rows={2}
           className="min-h-[64px] rounded-lg"

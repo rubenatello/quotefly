@@ -193,7 +193,7 @@ function StageCountCard({
     <button
       type="button"
       onClick={onClick}
-      className={`min-w-fit rounded-full border px-3 py-2 text-left transition ${
+      className={`min-h-[44px] min-w-fit rounded-full border px-3 py-2 text-left transition sm:min-h-[36px] sm:py-1.5 ${
         active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
       }`}
     >
@@ -231,7 +231,7 @@ function StageFlowButton({
     <button
       type="button"
       onClick={onClick}
-      className={`group min-w-fit rounded-2xl border px-3 py-2.5 text-left transition sm:px-4 ${
+      className={`group min-h-[44px] min-w-fit rounded-2xl border px-3 py-2.5 text-left transition sm:min-h-[36px] sm:px-4 sm:py-2 ${
         active
           ? "border-slate-900 bg-slate-900 text-white shadow-sm"
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"

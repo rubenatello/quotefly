@@ -62,11 +62,16 @@ export function CrmSidebar({
   const showTrialBadge = Boolean(isTrial);
 
   const sidebarWidthClass = collapsed ? "lg:w-[74px]" : "lg:w-[228px]";
-  const aiQuoteLimit = entitlements?.limits.aiQuotesPerMonth ?? null;
-  const aiQuoteUsed = usage?.monthlyAiQuoteCount ?? 0;
-  const aiQuoteRemaining = aiQuoteLimit === null ? null : Math.max(aiQuoteLimit - aiQuoteUsed, 0);
-  const aiUsagePercent = aiQuoteLimit && aiQuoteLimit > 0 ? Math.min((aiQuoteUsed / aiQuoteLimit) * 100, 100) : 0;
+  const aiSpendLimitUsd = entitlements?.limits.aiSpendUsdPerMonth ?? null;
+  const aiSpendUsedUsd = usage?.monthlyAiSpendUsd ?? 0;
+  const aiUsagePercent =
+    usage?.monthlyAiSpendUsagePercent ??
+    (aiSpendLimitUsd && aiSpendLimitUsd > 0
+      ? Math.min((aiSpendUsedUsd / aiSpendLimitUsd) * 100, 100)
+      : 0);
+  const usagePercentLabel = `${Math.round(aiUsagePercent)}% used`;
   const aiRenewalLabel = formatAiRenewalDate(usage?.periodEndUtc ?? null);
+  const aiPromptsRemaining = usage?.monthlyAiEstimatedPromptsRemaining ?? null;
   const normalizedNavQuery = navQuery.trim().toLowerCase();
 
   const filteredOperationsLinks = useMemo(
@@ -122,14 +127,14 @@ export function CrmSidebar({
                   value={navQuery}
                   onChange={(event) => setNavQuery(event.target.value)}
                   placeholder="Search navigation"
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-10 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-quotefly-blue focus:bg-white focus:ring-2 focus:ring-quotefly-blue/10"
+                  className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-10 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-quotefly-blue focus:bg-white focus:ring-2 focus:ring-quotefly-blue/10 sm:min-h-[36px]"
                 />
                 {navQuery ? (
                   <button
                     type="button"
                     onClick={() => setNavQuery("")}
                     aria-label="Clear navigation search"
-                    className="absolute right-3 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    className="absolute right-1.5 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 sm:right-3 sm:h-6 sm:w-6"
                   >
                     <X size={13} />
                   </button>
@@ -141,7 +146,7 @@ export function CrmSidebar({
                 <button
                   type="button"
                   onClick={() => onQuickAction("new-quote")}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-quotefly-blue bg-quotefly-blue px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-[#256fbf]"
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-quotefly-blue bg-quotefly-blue px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-[#256fbf] sm:min-h-[40px]"
                 >
                   <FilePlus2 size={15} />
                   New quote
@@ -149,7 +154,7 @@ export function CrmSidebar({
                 <button
                   type="button"
                   onClick={() => onQuickAction("new-customer")}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white sm:min-h-[40px]"
                 >
                   <UserPlus2 size={15} className="text-quotefly-blue" />
                   New customer
@@ -163,7 +168,7 @@ export function CrmSidebar({
                   type="button"
                   onClick={() => onQuickAction("new-customer")}
                   aria-label="New customer"
-                  className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:text-slate-900 sm:min-h-[40px]"
                 >
                   <UserPlus2 size={16} className="text-quotefly-blue" />
                 </button>
@@ -173,7 +178,7 @@ export function CrmSidebar({
                   type="button"
                   onClick={() => onQuickAction("new-quote")}
                   aria-label="New quote"
-                  className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-quotefly-blue bg-quotefly-blue text-white transition hover:bg-[#256fbf]"
+                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-quotefly-blue bg-quotefly-blue text-white transition hover:bg-[#256fbf] sm:min-h-[40px]"
                 >
                   <FilePlus2 size={16} />
                 </button>
@@ -199,7 +204,7 @@ export function CrmSidebar({
                   title={link.label}
                   aria-label={link.label}
                   className={cn(
-                    "group relative flex w-full items-center rounded-lg border text-sm font-medium transition-colors",
+                    "group relative flex w-full min-h-[44px] items-center rounded-lg border text-sm font-medium transition-colors sm:min-h-[40px]",
                     active
                       ? "border-quotefly-blue/10 bg-quotefly-blue/[0.08] text-slate-900"
                       : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900",
@@ -249,7 +254,7 @@ export function CrmSidebar({
                   aria-label={link.label}
                   onClick={() => onNavigate(link.path)}
                   className={cn(
-                    "group relative flex w-full items-center rounded-lg border transition-colors",
+                    "group relative flex w-full min-h-[44px] items-center rounded-lg border transition-colors sm:min-h-[40px]",
                     active
                       ? "border-quotefly-blue/10 bg-quotefly-blue/[0.08] text-slate-900"
                       : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900",
@@ -294,27 +299,27 @@ export function CrmSidebar({
         </div>
 
         <div className={cn("mt-6 space-y-3", collapsed ? "px-2.5" : "px-3")}>
-          {!collapsed && aiQuoteLimit !== null && usage ? (
+          {!collapsed && aiSpendLimitUsd !== null && usage ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                   {showTrialBadge ? `Trial · ${displayPlanName}` : displayPlanName}
                 </p>
                 <span className="text-xs font-semibold text-slate-900">
-                  {aiQuoteUsed}/{aiQuoteLimit} AI
+                  {usagePercentLabel}
                 </span>
               </div>
               <ProgressBar
                 value={aiUsagePercent}
-                label="Monthly AI credit usage"
+                label="Monthly AI usage"
                 hint={
-                  aiQuoteRemaining === 0
+                  aiUsagePercent >= 100
                     ? aiRenewalLabel
-                      ? `Limit reached · renews ${aiRenewalLabel}`
+                      ? `Usage limit reached · renews ${aiRenewalLabel}`
                       : "Limit reached"
                     : aiRenewalLabel
-                      ? `${aiQuoteRemaining} left · renews ${aiRenewalLabel}`
-                      : `${aiQuoteRemaining} left this month`
+                      ? `${usagePercentLabel} · renews ${aiRenewalLabel}${aiPromptsRemaining !== null ? ` · ~${aiPromptsRemaining} est. prompts` : ""}`
+                      : `${usagePercentLabel}${aiPromptsRemaining !== null ? ` · ~${aiPromptsRemaining} est. prompts` : ""}`
                 }
                 className="mt-3"
               />
@@ -328,7 +333,7 @@ export function CrmSidebar({
               title="Sign Out"
               aria-label="Sign out"
               className={cn(
-                "rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50",
+                "min-h-[44px] rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 sm:min-h-[40px]",
                 collapsed ? "w-full px-0 text-center" : "w-full px-4",
               )}
             >

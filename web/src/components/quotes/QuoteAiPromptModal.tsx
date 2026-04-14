@@ -204,7 +204,7 @@ export function QuoteAiPromptModal({
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 sm:justify-end">
-                <Badge tone="orange">1 AI credit per prompt</Badge>
+                <Badge tone="orange">Token-based AI meter</Badge>
                 {usageHint ? <Badge tone="blue">{usageHint}</Badge> : null}
               </div>
             </div>
@@ -268,7 +268,7 @@ export function QuoteAiPromptModal({
                       type="button"
                       onClick={() => onUseStarterPrompt?.(starter)}
                       disabled={loading}
-                      className="rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.08] px-3 py-2 text-left text-xs font-semibold text-quotefly-blue transition hover:border-quotefly-blue/30 hover:bg-quotefly-blue/[0.14] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="min-h-[44px] rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.08] px-3 py-2 text-left text-xs font-semibold text-quotefly-blue transition hover:border-quotefly-blue/30 hover:bg-quotefly-blue/[0.14] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[36px]"
                     >
                       {index === 0 ? "Starter prompt" : `Alt ${index}`}
                     </button>
@@ -381,7 +381,7 @@ export function QuoteAiPromptModal({
               AI builds the first draft only. You still review every line title, description, cost, and price before saving.
             </p>
             <p className="text-xs text-slate-500">
-              Each AI prompt uses 1 AI credit, whether you are drafting a new quote or revising an existing one.
+              AI usage is metered by token usage. Prompt usage varies based on context size and response length.
             </p>
             <p className="text-xs font-medium text-amber-700">
               AI can make mistakes. Please revise the quote before sending.

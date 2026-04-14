@@ -20,6 +20,7 @@ interface PlanDefinition {
   limits: {
     quotesPerMonth: number | null;
     aiQuotesPerMonth: number | null;
+    aiSpendUsdPerMonth: number | null;
     teamMembers: number | null;
     quoteHistoryDays: number | null;
   };
@@ -41,6 +42,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     limits: {
       quotesPerMonth: 600,
       aiQuotesPerMonth: 30,
+      aiSpendUsdPerMonth: 0.6,
       teamMembers: 7,
       quoteHistoryDays: 30,
     },
@@ -60,6 +62,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     limits: {
       quotesPerMonth: 5_000,
       aiQuotesPerMonth: 300,
+      aiSpendUsdPerMonth: 11,
       teamMembers: 15,
       quoteHistoryDays: 180,
     },
@@ -79,6 +82,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     limits: {
       quotesPerMonth: null,
       aiQuotesPerMonth: 800,
+      aiSpendUsdPerMonth: 56,
       teamMembers: null,
       quoteHistoryDays: null,
     },

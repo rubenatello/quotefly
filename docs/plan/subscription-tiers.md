@@ -14,7 +14,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Up to 7 team members
   - 30-day quote history
 - Included capabilities:
-  - AI-assisted quote credits (30 per month)
+  - AI-assisted quote drafting with monthly AI budget up to `$0.60`
   - Fast customer intake and lead pipeline
   - Branded PDF quote generation
   - QuickBooks-friendly invoice CSV export
@@ -31,7 +31,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - 180-day quote history
 - Included capabilities:
   - Everything in Starter
-  - AI-assisted quote credits (300 per month)
+  - AI-assisted quote drafting with monthly AI budget up to `$11.00`
   - Advanced analytics and reporting
   - Customer communication log
   - Quote versioning and history
@@ -49,7 +49,7 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Full historical access
 - Included capabilities:
   - Everything in Professional
-  - AI-assisted quote credits (800 per month)
+  - AI-assisted quote drafting with monthly AI budget up to `$56.00`
   - QuickBooks-friendly export workflow with direct sync roadmap
   - API access
   - Custom branding and integration support
@@ -59,9 +59,11 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 
 ## AI Usage Notes
 
-- AI is metered by prompt usage, not by quotes sent.
-- Each AI draft or AI revision consumes `1` AI credit.
-- Manual quote edits do not consume AI credits.
+- AI is metered by token spend and prompt usage, not by quotes sent.
+- Each AI draft or AI revision consumes monthly AI budget.
+- Manual quote edits do not consume AI budget.
+- Operationally, enforce a per-tenant monthly AI spend cap as the primary margin guardrail.
+- Recalculate spend caps using `scripts/tier-unit-economics.mjs` before changing tier prices or AI budget allocations.
 
 ## Stripe Product Setup
 

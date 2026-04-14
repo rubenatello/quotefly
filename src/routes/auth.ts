@@ -268,7 +268,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       loadMonthlyAiUsageSnapshot(
         app.prisma,
         claims.tenantId,
-        entitlements.limits.aiQuotesPerMonth,
+        {
+          credits: entitlements.limits.aiQuotesPerMonth,
+          spendUsd: entitlements.limits.aiSpendUsdPerMonth,
+        },
       ),
     ]);
 
@@ -284,7 +287,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           periodStartUtc: aiUsageSnapshot.periodStartUtc,
           periodEndUtc: aiUsageSnapshot.periodEndUtc,
           monthlyQuoteCount,
-          monthlyAiQuoteCount: aiUsageSnapshot.monthlyUsed,
+          monthlyAiQuoteCount: aiUsageSnapshot.monthlyCreditsUsed,
+          monthlyAiSpendUsd: aiUsageSnapshot.monthlySpendUsedUsd,
+          monthlyAiSpendLimitUsd: aiUsageSnapshot.monthlySpendLimitUsd,
+          monthlyAiSpendRemainingUsd: aiUsageSnapshot.monthlySpendRemainingUsd,
+          monthlyAiSpendUsagePercent: aiUsageSnapshot.monthlySpendUsagePercent,
+          monthlyAiEstimatedPromptsRemaining: aiUsageSnapshot.estimatedPromptsRemaining,
         },
       },
       role: membership.role,

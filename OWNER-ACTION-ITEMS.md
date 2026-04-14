@@ -18,6 +18,8 @@ These are the owner-side items that still matter most before launch:
 4. Confirm Railway and Vercel env vars match production values
 5. Run one real QuickBooks Online sync test and one CSV fallback import test if you have access
 6. Review final legal/support copy before public launch
+7. Verify quote board desktop column headers align with row values after latest UI fix
+8. Run `node scripts/tier-unit-economics.mjs` and confirm AI budget caps before launch pricing is finalized
 
 ## 1. Environment Variables
 

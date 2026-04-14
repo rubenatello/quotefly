@@ -9,30 +9,46 @@ export function formatAiRenewalDate(value?: string | null) {
   });
 }
 
+function normalizeUsagePercent(usedUsd: number, limitUsd: number) {
+  if (limitUsd <= 0) return 0;
+  return Math.min((usedUsd / limitUsd) * 100, 100);
+}
+
 export function formatAiUsageNotice(usage: AiUsageSummary) {
   const renewalLabel = formatAiRenewalDate(usage.renewsAtUtc);
-
-  if (usage.monthlyRemaining === null) {
-    return usage.consumedCredits === 1
-      ? "1 AI credit used."
-      : `${usage.consumedCredits} AI credits used.`;
-  }
-
-  const creditLabel = usage.consumedCredits === 1 ? "1 AI credit used." : `${usage.consumedCredits} AI credits used.`;
-  const renewalText = renewalLabel ? ` Credits renew ${renewalLabel}.` : "";
-  return `${creditLabel} ${usage.monthlyRemaining} left this month.${renewalText}`.trim();
+  const usagePercent =
+    usage.monthlySpendUsagePercent ??
+    (usage.monthlySpendLimitUsd !== null
+      ? normalizeUsagePercent(usage.monthlySpendUsedUsd, usage.monthlySpendLimitUsd)
+      : null);
+  const usagePercentText =
+    usagePercent === null || usagePercent === undefined
+      ? "AI usage updated."
+      : `${Math.round(usagePercent)}% used this month.`;
+  const promptsLeftText =
+    usage.estimatedPromptsRemaining !== null
+      ? ` ~${usage.estimatedPromptsRemaining} est. prompts remaining.`
+      : "";
+  const renewalText = renewalLabel ? ` Renews ${renewalLabel}.` : "";
+  return `${usagePercentText}${promptsLeftText}${renewalText}`.trim();
 }
 
 export function formatAiUsageAvailability(params: {
-  used?: number | null;
-  limit?: number | null;
+  usedUsd?: number | null;
+  limitUsd?: number | null;
+  estimatedPromptsRemaining?: number | null;
   renewsAtUtc?: string | null;
 }) {
-  if (params.limit === null || params.limit === undefined) return null;
-  const used = params.used ?? 0;
-  const remaining = Math.max(params.limit - used, 0);
+  if (params.limitUsd === null || params.limitUsd === undefined) return null;
+  const usedUsd = params.usedUsd ?? 0;
+  const percent = normalizeUsagePercent(usedUsd, params.limitUsd);
   const renewalLabel = formatAiRenewalDate(params.renewsAtUtc);
+  const usageText = `AI usage ${Math.round(percent)}% used`;
+  const promptsText =
+    params.estimatedPromptsRemaining !== null && params.estimatedPromptsRemaining !== undefined
+      ? ` | ~${params.estimatedPromptsRemaining} est. prompts left`
+      : "";
   return renewalLabel
-    ? `${remaining} AI credits left · renews ${renewalLabel}`
-    : `${remaining} AI credits left`;
+    ? `${usageText} | renews ${renewalLabel}${promptsText}`
+    : `${usageText}${promptsText}`;
 }
