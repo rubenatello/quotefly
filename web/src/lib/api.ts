@@ -448,6 +448,9 @@ export type ChatToQuoteParsed = {
   customerEmail?: string;
   serviceType: ServiceType;
   squareFeetEstimate?: number | null;
+  squareFeetVariancePercent?: number | null;
+  squareFeetEstimateLow?: number | null;
+  squareFeetEstimateHigh?: number | null;
   estimatedTotalAmount?: number | null;
 };
 
@@ -1176,7 +1179,7 @@ export const api = {
       }>;
     }, options?: {
       onProgress?: (event: AiProgressEvent) => void;
-    }) =>
+    }): Promise<AiQuoteSuggestionResult> =>
       (async () => {
         const token = getToken();
         const headers: Record<string, string> = {
@@ -1206,35 +1209,43 @@ export const api = {
         const decoder = new TextDecoder();
         let buffer = "";
         let finalResult: AiQuoteSuggestionResult | null = null;
+        const handleStreamLine = (rawLine: string) => {
+          const line = rawLine.trim();
+          if (!line) return;
+
+          const event = JSON.parse(line) as AiSuggestionStreamEvent;
+          if (event.type === "progress") {
+            options?.onProgress?.(event);
+            return;
+          }
+
+          if (event.type === "error") {
+            throw new ApiError(event.error, res.status, event);
+          }
+
+          if (event.type === "complete") {
+            finalResult = event.result;
+          }
+        };
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
+          buffer += decoder.decode(value, { stream: !done });
 
           while (true) {
             const newlineIndex = buffer.indexOf("\n");
             if (newlineIndex === -1) break;
 
-            const line = buffer.slice(0, newlineIndex).trim();
+            const line = buffer.slice(0, newlineIndex);
             buffer = buffer.slice(newlineIndex + 1);
-            if (!line) continue;
-
-            const event = JSON.parse(line) as AiSuggestionStreamEvent;
-            if (event.type === "progress") {
-              options?.onProgress?.(event);
-              continue;
-            }
-
-            if (event.type === "error") {
-              throw new ApiError(event.error, res.status, event);
-            }
-
-            if (event.type === "complete") {
-              finalResult = event.result;
-            }
+            handleStreamLine(line);
           }
+
+          if (done) break;
+        }
+
+        if (buffer.trim()) {
+          handleStreamLine(buffer);
         }
 
         if (!finalResult) {

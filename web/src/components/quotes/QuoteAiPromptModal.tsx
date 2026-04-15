@@ -50,7 +50,7 @@ function buildPromptPlaceholder(serviceType: ServiceType, customerName?: string 
     return [
       `Example: Quote for ${lead}. Add a priority work fee $75, major AC repair $1,500, and AC unit replacement $4,500 as separate lines.`,
       "",
-      `Example: Revise this quote for ${lead}. Keep the repair line, then add a second replacement option if the condenser cannot be repaired.`,
+      `Example: Revise this quote for ${lead}. Keep the repair line, then add a second high-efficiency heat pump replacement option (SEER2/HSPF2) with evaporator coil and thermostat setup.`,
     ].join("\n");
   }
 
@@ -58,7 +58,7 @@ function buildPromptPlaceholder(serviceType: ServiceType, customerName?: string 
     return [
       `Example: New quote for ${lead}. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation as separate lines.`,
       "",
-      "Example: Add one line for roof deck repair allowance and another for flashing package if needed.",
+      "Example: Draft a Spanish tile roof quote at 20 roofing squares and include underlayment, flashing, and one optional deck repair allowance line.",
     ].join("\n");
   }
 
@@ -66,7 +66,23 @@ function buildPromptPlaceholder(serviceType: ServiceType, customerName?: string 
     return [
       `Example: Quote for ${lead}. Add one line for burst pipe repair and another line for drywall patch after access.`,
       "",
-      "Example: Add a second option line for full pipe replacement if repair is not possible.",
+      "Example: Add separate lines for sewer camera + hydro-jet, plus an alternate trenchless repair line if the blockage persists.",
+    ].join("\n");
+  }
+
+  if (serviceType === "FLOORING") {
+    return [
+      `Example: New quote for ${lead}. Install linoleum/LVT in two bathrooms and hallway with separate lines per area.`,
+      "",
+      "Example: Add separate prep lines for moisture barrier, subfloor leveling allowance, uncoupling membrane, and trim/transition finish.",
+    ].join("\n");
+  }
+
+  if (serviceType === "GARDENING") {
+    return [
+      `Example: New quote for ${lead}. Add sod replacement, aeration + overseed, and irrigation controller setup by hydrozone as separate lines.`,
+      "",
+      "Example: Add pre-emergent + mulch refresh and optional drainage correction allowance if pooling persists.",
     ].join("\n");
   }
 
@@ -91,6 +107,7 @@ export function QuoteAiPromptModal({
   customerContextDetails,
   customerContextBadge,
   usageHint,
+  errorMessage,
   progressEvent,
   loading,
   disabled,
@@ -112,6 +129,7 @@ export function QuoteAiPromptModal({
   customerContextDetails?: string | null;
   customerContextBadge?: string | null;
   usageHint?: string | null;
+  errorMessage?: string | null;
   progressEvent?: AiProgressEvent | null;
   loading?: boolean;
   disabled?: boolean;
@@ -371,6 +389,12 @@ export function QuoteAiPromptModal({
                   </div>
                 </div>
               </div>
+            </div>
+          ) : null}
+
+          {errorMessage ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {errorMessage}
             </div>
           ) : null}
         </ModalBody>

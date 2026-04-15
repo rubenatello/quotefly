@@ -45,6 +45,20 @@ function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   return "Qty";
 }
 
+function buildStructuredAiPromptStarter(
+  serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
+  customerLead: string,
+) {
+  const tradeLabel = serviceType.toLowerCase();
+  return [
+    `New quote for ${customerLead}. Trade: ${tradeLabel}.`,
+    "Line 1: Primary scope here | Qty: 1",
+    "Line 2: Secondary scope here | Qty: 1",
+    "Line 3: Optional/alternate scope here (optional) | Qty: 1",
+    "Notes: Keep each line separate and preserve quantities.",
+  ].join("\n");
+}
+
 function buildAiPromptStarters(
   serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
   customer?: { fullName: string; phone: string } | null,
@@ -56,41 +70,47 @@ function buildAiPromptStarters(
   if (serviceType === "ROOFING") {
     return [
       `New quote for ${customerLead}. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation.`,
-      `Draft a roofing quote for ${customerLead}. Add roof deck inspection, flashing, and new architectural shingles.`,
+      `Draft a roofing quote for ${customerLead}. Replace a Spanish tile roof at 22 roofing squares, include underlayment and flashing, and keep deck repair as an optional allowance line.`,
+      buildStructuredAiPromptStarter(serviceType, customerLead),
     ];
   }
 
   if (serviceType === "HVAC") {
     return [
       `New quote for ${customerLead}. Install a new AC condenser and reconnect refrigerant lines with startup testing.`,
-      `Draft an HVAC quote for ${customerLead}. Replace a furnace and include haul-away, install materials, and testing.`,
+      `Draft an HVAC quote for ${customerLead}. Replace a 4-ton high-efficiency heat pump (SEER2/HSPF2), include evaporator coil, thermostat setup, duct sealing, startup/commissioning, and one optional electrical upgrade line if needed.`,
+      buildStructuredAiPromptStarter(serviceType, customerLead),
     ];
   }
 
   if (serviceType === "PLUMBING") {
     return [
       `New quote for ${customerLead}. Replace a burst pipe section, patch wall access, and test the line after repair.`,
-      `Draft a plumbing quote for ${customerLead}. Install a new water heater with fittings, labor, and disposal.`,
+      `Draft a plumbing quote for ${customerLead}. Combine partial PEX repipe, tankless water heater upgrade with venting, sewer camera + hydro-jet line service, and optional trenchless sewer repair allowance as separate lines.`,
+      buildStructuredAiPromptStarter(serviceType, customerLead),
     ];
   }
 
   if (serviceType === "FLOORING") {
     return [
       `New quote for ${customerLead}. Install 650 square feet of LVP flooring with underlayment and trim.`,
-      `Draft a flooring quote for ${customerLead}. Remove old carpet and install new laminate flooring in the living room and hallway.`,
+      `Draft a flooring quote for ${customerLead}. Install linoleum tile in two bathrooms and one hallway, include moisture barrier, subfloor leveling allowance, uncoupling membrane + thinset/grout prep, and transition/baseboard finish lines.`,
+      buildStructuredAiPromptStarter(serviceType, customerLead),
     ];
   }
 
   if (serviceType === "GARDENING") {
     return [
       `New quote for ${customerLead}. Monthly landscaping maintenance with mowing, edging, cleanup, and shrub trimming.`,
-      `Draft a gardening quote for ${customerLead}. Refresh front-yard mulch beds, trim hedges, and haul debris.`,
+      `Draft a gardening quote for ${customerLead}. Add sod replacement, lawn aeration + overseed, irrigation controller setup by hydrozone, pre-emergent treatment, mulch refresh, and debris haul-away with an optional drainage correction allowance.`,
+      buildStructuredAiPromptStarter(serviceType, customerLead),
     ];
   }
 
   return [
     `New quote for ${customerLead}. Remodel a small bathroom and include demolition, framing touchups, finish work, and cleanup.`,
     `Draft a construction quote for ${customerLead}. Build a backyard patio cover and include labor, materials, and site cleanup.`,
+    buildStructuredAiPromptStarter(serviceType, customerLead),
   ];
 }
 
@@ -131,6 +151,7 @@ export function QuoteBuilderView() {
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
+  const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
   const [lastAppliedAiRunId, setLastAppliedAiRunId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
@@ -340,6 +361,7 @@ export function QuoteBuilderView() {
     try {
       setAiSubmitting(true);
       setAiProgressEvent(null);
+      setAiErrorMessage(null);
       const { customer, parsed, suggestion, patch, insight, aiRunId, usage } = await api.quotes.suggestWithAi({
         prompt,
         customerId: activeCustomer?.id ?? undefined,
@@ -392,7 +414,9 @@ export function QuoteBuilderView() {
         `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then create the quote.`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
+      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
+      setAiErrorMessage(message);
+      setError(message);
     } finally {
       setAiSubmitting(false);
       setAiProgressEvent(null);
@@ -1003,7 +1027,10 @@ export function QuoteBuilderView() {
 
       <QuoteAiPromptModal
         open={aiModalOpen}
-        onClose={() => setAiModalOpen(false)}
+        onClose={() => {
+          setAiModalOpen(false);
+          setAiErrorMessage(null);
+        }}
         serviceType={quoteForm.serviceType}
         onServiceTypeChange={(value) =>
           setQuoteForm((prev) => ({
@@ -1028,6 +1055,7 @@ export function QuoteBuilderView() {
         }
         customerContextBadge={activeCustomer ? "Using selected customer" : null}
         usageHint={aiUsageHint}
+        errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}

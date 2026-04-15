@@ -1094,6 +1094,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     <p>
                       Last parse: {chatParsed.serviceType}
                       {chatParsed.squareFeetEstimate ? ` · ${chatParsed.squareFeetEstimate.toLocaleString()} sq ft` : ""}
+                      {chatParsed.squareFeetEstimateLow && chatParsed.squareFeetEstimateHigh
+                        ? ` · Range ${chatParsed.squareFeetEstimateLow.toLocaleString()}-${chatParsed.squareFeetEstimateHigh.toLocaleString()} sq ft${chatParsed.squareFeetVariancePercent ? ` (±${Math.round(chatParsed.squareFeetVariancePercent * 100)}%)` : ""}`
+                        : ""}
                       {chatParsed.estimatedTotalAmount ? ` · Est. ${money(chatParsed.estimatedTotalAmount)}` : ""}
                     </p>
                   </div>

@@ -144,6 +144,7 @@ export function QuoteDeskView() {
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
+  const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
   const [aiRuns, setAiRuns] = useState<AiQuoteRun[]>([]);
   const [aiRunsLoading, setAiRunsLoading] = useState(false);
@@ -592,6 +593,7 @@ export function QuoteDeskView() {
     try {
       setAiSubmitting(true);
       setAiProgressEvent(null);
+      setAiErrorMessage(null);
       const { customer, parsed, suggestion, patch, insight, usage } = await api.quotes.suggestWithAi({
         prompt,
         quoteId: selectedQuote.id,
@@ -639,7 +641,9 @@ export function QuoteDeskView() {
         `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then save tracked edits.`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed applying AI suggestion.");
+      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
+      setAiErrorMessage(message);
+      setError(message);
     } finally {
       setAiSubmitting(false);
       setAiProgressEvent(null);
@@ -1711,7 +1715,10 @@ export function QuoteDeskView() {
 
       <QuoteAiPromptModal
         open={aiModalOpen}
-        onClose={() => setAiModalOpen(false)}
+        onClose={() => {
+          setAiModalOpen(false);
+          setAiErrorMessage(null);
+        }}
         serviceType={quoteEditForm.serviceType}
         onServiceTypeChange={(value) =>
           setQuoteEditForm((prev) => ({
@@ -1728,6 +1735,7 @@ export function QuoteDeskView() {
         customerContextText={`${customerName}${customerPhone ? ` • ${customerPhone}` : ""}${customerEmail ? ` • ${customerEmail}` : ""}`}
         customerContextBadge="Using current quote"
         usageHint={aiUsageHint}
+        errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}

@@ -1626,6 +1626,9 @@ type AiSuggestionStreamEvent =
           customerEmail: string | undefined;
           serviceType: z.infer<typeof ServiceTypeSchema>;
           squareFeetEstimate: number | null;
+          squareFeetVariancePercent: number | null;
+          squareFeetEstimateLow: number | null;
+          squareFeetEstimateHigh: number | null;
           estimatedTotalAmount: number | null;
         };
         suggestion: AiSuggestedQuoteDraft;
@@ -1808,21 +1811,69 @@ function buildAiQuoteContext(params: {
 }
 
 function appendAiPromptStructureHints(context: string, prompt: string) {
-  if (!promptRequestsSeparateLineOptions(prompt)) {
-    return context;
+  const sections = [context];
+
+  if (promptRequestsSeparateLineOptions(prompt)) {
+    sections.push(
+      [
+        "Prompt structure requirements:",
+        "- The user explicitly asked for separate lines or alternative options.",
+        "- Preserve that request in the line item structure.",
+        "- Do not collapse repair and replacement into one generic line.",
+      ].join("\n"),
+    );
   }
 
-  return [
-    context,
-    [
-      "Prompt structure requirements:",
-      "- The user explicitly asked for separate lines or alternative options.",
-      "- Preserve that request in the line item structure.",
-      "- Do not collapse repair and replacement into one generic line.",
-    ].join("\n"),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  if (promptIncludesRoofingDetailCues(prompt)) {
+    sections.push(
+      [
+        "Roofing interpretation hints:",
+        "- Material/system wording matters (asphalt, architectural shingles, Spanish/clay/concrete tile, metal, TPO, EPDM, modified bitumen/torch-down).",
+        "- If roofing squares are present, treat 1 square as 100 sq ft.",
+      ].join("\n"),
+    );
+  }
+
+  if (promptIncludesFlooringDetailCues(prompt)) {
+    sections.push(
+      [
+        "Flooring interpretation hints:",
+        "- Preserve material/system wording (LVP/LVT, linoleum or sheet vinyl, laminate, hardwood, tile, carpet).",
+        "- Keep prep/finish terms explicit when present (underlayment, moisture barrier, subfloor leveling, trim/transition).",
+      ].join("\n"),
+    );
+  }
+
+  if (promptIncludesHvacDetailCues(prompt)) {
+    sections.push(
+      [
+        "HVAC interpretation hints:",
+        "- Preserve equipment/system wording (condenser, evaporator coil, furnace, heat pump, mini-split, refrigerant repair/recharge, duct sealing).",
+        "- Keep diagnostics/controls terms explicit when present (thermostat, airflow, static pressure).",
+      ].join("\n"),
+    );
+  }
+
+  if (promptIncludesPlumbingDetailCues(prompt)) {
+    sections.push(
+      [
+        "Plumbing interpretation hints:",
+        "- Preserve system wording (repipe PEX/copper, water heater/tankless, sewer camera, hydro-jetting, trenchless sewer repair, slab leak, fixture reset/replacement, PRV/backflow, sump pump).",
+        "- Keep phase/option lines separate when repair vs replacement or optional allowances are requested.",
+      ].join("\n"),
+    );
+  }
+
+  if (promptIncludesGardeningDetailCues(prompt)) {
+    sections.push(
+      [
+        "Gardening interpretation hints:",
+        "- Preserve job mode and terminology (maintenance vs install; sod, aeration/overseed, fertilization/pre-emergent, irrigation/drip/sprinkler, mulch, pruning, cleanup, drainage).",
+      ].join("\n"),
+    );
+  }
+
+  return sections.filter(Boolean).join("\n\n");
 }
 
 const AI_CONTEXT_STOP_WORDS = new Set([
@@ -1887,6 +1938,142 @@ function promptRequestsSeparateLineOptions(prompt: string) {
     /\bfallback\b/,
     /\balternative\b/,
     /\bcontingenc(?:y|ies)\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function promptIncludesRoofingDetailCues(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\broof\b/,
+    /\broofing\b/,
+    /\bshingle\b/,
+    /\basphalt\b/,
+    /\barchitectural\b/,
+    /\bspanish tile\b/,
+    /\bclay tile\b/,
+    /\bconcrete tile\b/,
+    /\bmetal roof\b/,
+    /\bstanding seam\b/,
+    /\btpo\b/,
+    /\bepdm\b/,
+    /\bmodified bitumen\b/,
+    /\btorch down\b/,
+    /\bsquares?\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function promptIncludesFlooringDetailCues(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\bfloor\b/,
+    /\bflooring\b/,
+    /\blvp\b/,
+    /\blvt\b/,
+    /\blinoleum\b/,
+    /\bsheet vinyl\b/,
+    /\blaminate\b/,
+    /\bhardwood\b/,
+    /\bcarpet\b/,
+    /\btile\b/,
+    /\buncoupling membrane\b/,
+    /\bditra\b/,
+    /\bthinset\b/,
+    /\bgrout\b/,
+    /\bunderlayment\b/,
+    /\bmoisture barrier\b/,
+    /\bsubfloor\b/,
+    /\bnail down\b/,
+    /\bglue down\b/,
+    /\bfloating floor\b/,
+    /\btransition\b/,
+    /\bbaseboard\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function promptIncludesHvacDetailCues(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\bhvac\b/,
+    /\bcondenser\b/,
+    /\bevaporator coil\b/,
+    /\ba[-\s]?coil\b/,
+    /\bfurnace\b/,
+    /\bheat pump\b/,
+    /\bmini[-\s]?split\b/,
+    /\bductless\b/,
+    /\bair handler\b/,
+    /\brefrigerant\b/,
+    /\bseer2\b/,
+    /\bhspf2\b/,
+    /\bcompressor\b/,
+    /\bcapacitor\b/,
+    /\bcontactor\b/,
+    /\bthermostat\b/,
+    /\bstatic pressure\b/,
+    /\bairflow\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function promptIncludesPlumbingDetailCues(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\bplumbing\b/,
+    /\brepipe\b/,
+    /\bpex\b/,
+    /\bcopper\b/,
+    /\bwater heater\b/,
+    /\btankless\b/,
+    /\bsewer\b/,
+    /\bdrain\b/,
+    /\bhydro[-\s]?jet\b/,
+    /\bcamera\b/,
+    /\btrenchless\b/,
+    /\bpipe bursting\b/,
+    /\bcipp\b/,
+    /\bslab leak\b/,
+    /\btoilet\b/,
+    /\bfaucet\b/,
+    /\bgarbage disposal\b/,
+    /\bprv\b/,
+    /\bpressure regulator\b/,
+    /\bbackflow\b/,
+    /\bsump pump\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function promptIncludesGardeningDetailCues(prompt: string) {
+  const normalized = normalizeTextForComparison(prompt);
+  if (!normalized) return false;
+
+  return [
+    /\bgarden\b/,
+    /\bgardening\b/,
+    /\blawn\b/,
+    /\byard\b/,
+    /\bsod\b/,
+    /\baeration\b/,
+    /\boverseed\b/,
+    /\bfertili[sz]ation\b/,
+    /\bpre[-\s]?emergent\b/,
+    /\bpreemergence\b/,
+    /\birrigation\b/,
+    /\bsprinkler\b/,
+    /\bdrip\b/,
+    /\bcontroller\b/,
+    /\bhydrozone\b/,
+    /\bmulch\b/,
+    /\bhedge\b/,
+    /\bprun\w*\b/,
+    /\bcleanup\b/,
+    /\bdrainage\b/,
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -3017,17 +3204,26 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     );
 
-    const aiUsageEvent = await createAiUsageEvent(app.prisma, {
-      tenantId: claims.tenantId,
-      quoteId: existingQuote?.id ?? payload.quoteId ?? null,
-      customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
-      actor,
-      eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
-      promptText: payload.prompt,
-      model: suggestion.model,
-      telemetry: aiTelemetry,
-      trace: buildAiUsageTraceFromInsight(insight),
-    });
+    let aiRunId = "untracked";
+    try {
+      const aiUsageEvent = await createAiUsageEvent(app.prisma, {
+        tenantId: claims.tenantId,
+        quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+        customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
+        actor,
+        eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
+        promptText: payload.prompt,
+        model: suggestion.model,
+        telemetry: aiTelemetry,
+        trace: buildAiUsageTraceFromInsight(insight),
+      });
+      aiRunId = aiUsageEvent.id;
+    } catch (eventErr) {
+      request.log.error(
+        { err: eventErr },
+        "[quotes/ai-suggest] failed to persist AI usage event; returning suggestion anyway",
+      );
+    }
 
       stream.write({
         type: "complete",
@@ -3039,12 +3235,15 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             customerEmail: parsedDraft.customerEmail,
             serviceType: suggestion.serviceType,
             squareFeetEstimate: parsedDraft.squareFeetEstimate,
+            squareFeetVariancePercent: parsedDraft.squareFeetVariancePercent,
+            squareFeetEstimateLow: parsedDraft.squareFeetEstimateLow,
+            squareFeetEstimateHigh: parsedDraft.squareFeetEstimateHigh,
             estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
           },
           suggestion,
           patch,
           insight,
-          aiRunId: aiUsageEvent.id,
+          aiRunId,
           usage: buildAiUsageResponse(snapshot, {
             consumedCredits: 1,
             consumedSpendUsd: aiTelemetry.estimatedCostUsd,
@@ -3636,6 +3835,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         customerEmail: parsedDraft.customerEmail,
         serviceType: parsedDraft.serviceType,
         squareFeetEstimate: parsedDraft.squareFeetEstimate,
+        squareFeetVariancePercent: parsedDraft.squareFeetVariancePercent,
+        squareFeetEstimateLow: parsedDraft.squareFeetEstimateLow,
+        squareFeetEstimateHigh: parsedDraft.squareFeetEstimateHigh,
         estimatedTotalAmount: parsedDraft.estimatedTotalAmount,
       },
       usage: buildAiUsageResponse(snapshot, {
