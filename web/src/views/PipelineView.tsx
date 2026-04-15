@@ -185,7 +185,7 @@ function QueueRow({
 
   return (
     <article className={`px-4 py-3 transition hover:bg-slate-50/80 ${lead.quoteId && lead.quoteId === activeQuoteId ? "bg-quotefly-blue/[0.04]" : ""}`}>
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] lg:items-center">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] xl:items-center 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{index + 1}</span>
@@ -230,7 +230,7 @@ function QueueRow({
           <p className="font-medium text-slate-700">{nextActionLabel(lead, actionKind)}</p>
         </div>
 
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center lg:mt-0 lg:flex-col lg:items-end">
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end">
           {lead.quoteId ? (
             <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => onNavigateToQuote(lead.quoteId!)}>Open Quote</Button>
           ) : (
@@ -411,7 +411,7 @@ export function PipelineView() {
                 </div>
               ) : (
                 <>
-                  <div className="hidden grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                  <div className="hidden grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
                     <span>Lead</span>
                     <span>Quote</span>
                     <span>Status</span>

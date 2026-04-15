@@ -281,9 +281,9 @@ function PreviewHeaderCard({
 
         {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
 
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="flex items-start gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
               {logoPosition === "left" ? logo : null}
               <div className="min-w-0 flex-1">
                 <h3 className="text-[1.3rem] font-semibold tracking-tight text-slate-950 sm:text-[1.45rem]">
@@ -296,7 +296,7 @@ function PreviewHeaderCard({
           {logoPosition === "right" ? logo : null}
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-4 border-t border-[var(--qf-border)] pt-4 text-xs text-slate-500">
+        <div className="mt-4 flex flex-col items-start gap-1 border-t border-[var(--qf-border)] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <span>Prepared {preparedDateLabel}</span>
           <span className="font-medium text-slate-500">{quoteReferenceLabel}</span>
         </div>
@@ -307,7 +307,7 @@ function PreviewHeaderCard({
 
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
-    <div className="flex h-14 max-w-[220px] items-center">
+    <div className="flex h-14 max-w-[160px] items-center sm:max-w-[220px]">
       <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
@@ -329,8 +329,8 @@ function PreviewInfoCard({
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: labelColor ?? "#64748b" }}>
         {label}
       </p>
-      <p className="mt-3 text-[15px] font-semibold text-slate-900">{value}</p>
-      {hint ? <p className="mt-2 text-sm leading-6 text-slate-500">{hint}</p> : null}
+      <p className="mt-3 break-words text-[15px] font-semibold text-slate-900">{value}</p>
+      {hint ? <p className="mt-2 break-words text-sm leading-6 text-slate-500">{hint}</p> : null}
     </div>
   );
 }

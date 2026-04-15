@@ -117,12 +117,12 @@ function buildDeskAiPromptStarters(
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
 const QUOTE_DESK_HEADER_GRID_COLUMNS =
-  "lg:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
+  "xl:grid-cols-[minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_106px_130px] 2xl:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
 const QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS =
-  "lg:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_128px]";
+  "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_104px_120px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_128px]";
 const QUOTE_DESK_NEW_LINE_GRID_COLUMNS =
-  "lg:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px]";
-const QUOTE_DESK_LINE_GRID_MIN_WIDTH = "lg:min-w-[980px]";
+  "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_104px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px]";
+const QUOTE_DESK_LINE_GRID_MIN_WIDTH = "xl:min-w-[900px] 2xl:min-w-[980px]";
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
@@ -868,7 +868,7 @@ export function QuoteDeskView() {
       ) : null}
 
       {activeTab === "quote" ? (
-        <div className="flex gap-2 lg:hidden">
+        <div className="flex gap-2 xl:hidden">
           {([
             { id: "editor", label: "Edit quote" },
             { id: "preview", label: "Preview" },
@@ -912,8 +912,8 @@ export function QuoteDeskView() {
       </div>
 
       {activeTab === "quote" ? (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className={mobilePane === "preview" ? "hidden lg:block" : ""}>
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_288px] 2xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className={mobilePane === "preview" ? "hidden xl:block" : ""}>
             <QuoteSheetEditor
               title={quoteEditForm.title}
               onTitleChange={(value) => setQuoteEditForm((prev) => ({ ...prev, title: value }))}
@@ -939,7 +939,7 @@ export function QuoteDeskView() {
                   <Button
                     variant="ghost"
                     size="md"
-                    className="h-11 w-11 min-h-[44px] rounded-full border-0 p-0 text-quotefly-blue hover:bg-transparent active:bg-transparent lg:hidden"
+                    className="h-11 w-11 min-h-[44px] rounded-full border-0 p-0 text-quotefly-blue hover:bg-transparent active:bg-transparent xl:hidden"
                     icon={<Sparkles size={18} />}
                     onClick={() => {
                       if (isQuoteLocked) {
@@ -955,7 +955,7 @@ export function QuoteDeskView() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    className="hidden lg:inline-flex"
+                    className="hidden xl:inline-flex"
                     icon={<Sparkles size={14} />}
                     onClick={() => {
                       if (isQuoteLocked) {
@@ -995,13 +995,13 @@ export function QuoteDeskView() {
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Common work names</p>
                     <p className="mt-1 text-sm text-slate-600">Load prior jobs into the new line row or insert them directly into the quote.</p>
                   </div>
-                  <div className="lg:hidden">
+                  <div className="xl:hidden">
                     <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
                       Browse jobs
                     </Button>
                   </div>
                   {selectedPreset ? (
-                    <div className="hidden flex-col gap-2 sm:flex-row sm:items-end lg:flex">
+                    <div className="hidden flex-col gap-2 sm:flex-row sm:items-end xl:flex">
                       <div className="sm:w-24">
                         <Input
                           label={formatPresetUnitLabel(selectedPreset.unitType)}
@@ -1026,7 +1026,7 @@ export function QuoteDeskView() {
                 {presetLoadError ? <p className="mt-3 text-xs text-red-600">{presetLoadError}</p> : null}
 
                 {selectedPreset ? (
-                  <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 lg:hidden">
+                  <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:hidden">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
@@ -1058,7 +1058,7 @@ export function QuoteDeskView() {
                   </div>
                 ) : null}
 
-                <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 lg:flex">
+                <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 xl:flex">
                   {presetsLoading ? (
                     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work…</div>
                   ) : availablePresets.length ? (
@@ -1087,7 +1087,7 @@ export function QuoteDeskView() {
 
               <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
                 <div
-                  className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+                  className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
                 >
                   <span>Line</span>
                   <span>Description</span>
@@ -1137,7 +1137,7 @@ export function QuoteDeskView() {
           </div>
 
           <div className="space-y-5">
-            <div className={mobilePane === "preview" ? "block lg:hidden" : "hidden"}>
+            <div className={mobilePane === "preview" ? "block xl:hidden" : "hidden"}>
               <QuoteLivePreview
                 businessName={session?.tenantName ?? "QuoteFly"}
                 businessHint={businessHint}
@@ -1162,7 +1162,7 @@ export function QuoteDeskView() {
               />
             </div>
 
-            <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden lg:block" : ""}>
+            <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden xl:block" : ""}>
               <CardHeader
                 title="Quote actions"
                 subtitle="Use the same control rail whether you are opening, reviewing, or editing a quote."
@@ -1239,7 +1239,7 @@ export function QuoteDeskView() {
                     Save Quote Sheet
                   </Button>
                 )}
-                <div className="grid gap-2 lg:hidden">
+                <div className="grid gap-2 xl:hidden">
                   <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
                     Start Another Quote
                   </Button>
@@ -1311,7 +1311,7 @@ export function QuoteDeskView() {
               </div>
             </Card>
 
-            <div className={`space-y-5 ${mobilePane === "preview" ? "hidden lg:block" : ""}`}>
+            <div className={`space-y-5 ${mobilePane === "preview" ? "hidden xl:block" : ""}`}>
               <QuickLookupCard
                 title="Switch Customer or Quote"
                 subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the quote desk."
@@ -1346,7 +1346,7 @@ export function QuoteDeskView() {
       ) : null}
 
       {activeTab === "quote" ? (
-        <div className="lg:hidden">
+        <div className="xl:hidden">
           <div className="h-24" />
           <div className="fixed inset-x-4 bottom-20 z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
             <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
@@ -1376,7 +1376,7 @@ export function QuoteDeskView() {
       ) : null}
 
       {activeTab === "send" ? (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <Card variant="default" padding="md">
             <CardHeader title="Send the quote" subtitle="When the sheet is ready, open the customer’s app or export the PDF." />
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -1909,8 +1909,8 @@ function ExistingLineEditorRow({
   }, [line.id, startExpanded]);
 
   return (
-    <div className="px-3 py-2.5 lg:hover:bg-[var(--qf-panel-muted)]/60">
-      <div className="lg:hidden">
+    <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60">
+      <div className="xl:hidden">
         <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
           <button
             type="button"
@@ -1962,7 +1962,7 @@ function ExistingLineEditorRow({
       </div>
 
       <div
-        className={`hidden lg:grid lg:items-start lg:gap-2.5 ${QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+        className={`hidden xl:grid xl:items-start xl:gap-2.5 ${QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
         <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           {index + 1}
@@ -2030,7 +2030,7 @@ function NewLineEditorRow({
       <div
         className={`grid gap-3 ${QUOTE_DESK_NEW_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
-        <div className="hidden lg:flex h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
+        <div className="hidden xl:flex h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
           New
         </div>
         <Input

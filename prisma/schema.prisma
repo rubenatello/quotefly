@@ -225,6 +225,7 @@ model Customer {
   fullName               String
   email                  String?
   phone                  String
+  phoneDigits            String?
   notes                  String?
   followUpStatus         LeadFollowUpStatus      @default(NEEDS_FOLLOW_UP)
   followUpUpdatedAtUtc   DateTime?               @db.Timestamptz(3)
@@ -244,7 +245,9 @@ model Customer {
   @@unique([id, tenantId])
   @@index([tenantId])
   @@index([tenantId, email])
+  @@index([tenantId, phoneDigits])
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
+  @@index([tenantId, phoneDigits, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
 }
 

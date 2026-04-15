@@ -8,6 +8,7 @@ export function QuoteLineSectionField({
   onSectionLabelChange,
   disabled,
   optionNameLabel = "Option name",
+  compact = false,
 }: {
   sectionType: "INCLUDED" | "ALTERNATE";
   sectionLabel: string;
@@ -15,37 +16,40 @@ export function QuoteLineSectionField({
   onSectionLabelChange: (next: string) => void;
   disabled?: boolean;
   optionNameLabel?: string;
+  compact?: boolean;
 }) {
   const isAlternate = sectionType === "ALTERNATE";
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => onSectionTypeChange("INCLUDED")}
           disabled={disabled}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition ${
+          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition ${
             !isAlternate
               ? "border-quotefly-blue bg-quotefly-blue text-white shadow-[var(--qf-shadow-sm)]"
               : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
           <Layers3 size={12} />
-          Included
+          {compact ? <span className="2xl:hidden">Incl</span> : null}
+          <span className={compact ? "hidden 2xl:inline" : ""}>Included</span>
         </button>
         <button
           type="button"
           onClick={() => onSectionTypeChange("ALTERNATE")}
           disabled={disabled}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition ${
+          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition ${
             isAlternate
               ? "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)]"
               : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
           <Sparkles size={12} />
-          Alternate
+          {compact ? <span className="2xl:hidden">Alt</span> : null}
+          <span className={compact ? "hidden 2xl:inline" : ""}>Alternate</span>
         </button>
       </div>
 

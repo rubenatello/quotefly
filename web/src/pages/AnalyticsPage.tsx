@@ -794,7 +794,7 @@ export function AnalyticsPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[140px_minmax(0,1.4fr)_150px_120px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[130px_minmax(0,1.25fr)_132px_108px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[140px_minmax(0,1.4fr)_150px_120px]">
                 <span>Quote</span>
                 <span>Customer</span>
                 <span>Status</span>
@@ -806,7 +806,7 @@ export function AnalyticsPage() {
                     key={quote.id}
                     type="button"
                     onClick={() => navigateToQuote(quote.id)}
-                    className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-slate-50 lg:grid-cols-[140px_minmax(0,1.4fr)_150px_120px] lg:items-center"
+                    className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-slate-50 xl:grid-cols-[130px_minmax(0,1.25fr)_132px_108px] xl:items-center 2xl:grid-cols-[140px_minmax(0,1.4fr)_150px_120px]"
                   >
                     <div className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</div>
                     <div className="min-w-0">

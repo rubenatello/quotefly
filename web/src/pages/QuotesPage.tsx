@@ -33,7 +33,8 @@ type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
 type QuoteRetentionAction = { type: "archive" | "delete"; quote: Quote } | null;
 
 const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
-const QUOTE_BOARD_GRID_COLUMNS = "grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px]";
+const QUOTE_BOARD_GRID_COLUMNS =
+  "xl:grid-cols-[128px_minmax(0,1.2fr)_100px_100px_240px_292px] 2xl:grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px]";
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
@@ -280,7 +281,7 @@ function QuoteDesktopRow({
   onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
-    <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 px-4 py-3 lg:grid lg:items-center`}>
+    <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 px-4 py-3 xl:grid xl:items-center`}>
       <div className="space-y-1">
         <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
         <p className="text-xs text-slate-500">Updated {formatDateTime(quote.updatedAt)}</p>
@@ -335,7 +336,7 @@ function QuoteMobileCard({
   onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
-    <div className="space-y-3 px-4 py-4 lg:hidden">
+    <div className="space-y-3 px-4 py-4 xl:hidden">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
@@ -710,7 +711,7 @@ export function QuotesPage() {
             </div>
           ) : (
             <>
-              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid`}>
+              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid`}>
                 <span>Quote No.</span>
                 <span>Customer</span>
                 <span>Cost</span>
@@ -811,7 +812,7 @@ export function QuotesPage() {
         open={quickCustomerOpen}
         onClose={() => setQuickCustomerOpen(false)}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
-          await loadCustomers();
+          void loadCustomers();
           setNotice(
             reusedExisting
               ? "Using existing customer record."

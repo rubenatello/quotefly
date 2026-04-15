@@ -320,7 +320,7 @@ function CustomerDesktopRow({
           onOpenActivity(customer.id);
         }
       }}
-      className="hidden cursor-pointer grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 px-4 py-3 lg:grid lg:items-center"
+      className="hidden cursor-pointer grid-cols-[minmax(0,1.2fr)_150px_200px_240px_178px] gap-4 px-4 py-3 xl:grid xl:items-center 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px]"
     >
       <div className="min-w-0">
         <div className="flex items-center gap-3">
@@ -404,7 +404,7 @@ function CustomerMobileCard({
           onOpenActivity(customer.id);
         }
       }}
-      className="space-y-3 px-4 py-4 lg:hidden"
+      className="space-y-3 px-4 py-4 xl:hidden"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex items-center gap-3">
@@ -720,7 +720,7 @@ export function CustomersPage() {
             <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent customers first</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">Use this as the operating table. Open quotes when they exist, or start a new one when they do not.</p>
           </div>
-          <div className="w-full lg:w-[320px]">
+          <div className="w-full xl:w-[320px]">
             <Input
               placeholder="Search customer name, phone, email, or quote"
               value={searchTerm}
@@ -738,7 +738,7 @@ export function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+              <div className="hidden grid-cols-[minmax(0,1.2fr)_150px_200px_240px_178px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px]">
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
@@ -776,7 +776,7 @@ export function CustomersPage() {
         open={quickCustomerOpen}
         onClose={closeQuickCustomerModal}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
-          await loadCustomers();
+          void loadCustomers();
           setNotice(
             reusedExisting
               ? "Using existing customer record."

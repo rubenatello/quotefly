@@ -1,6 +1,6 @@
 # Launch Improvement Tracker (Target: 2026-05-01)
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
 Owner: Product + Engineering
 
 ## Current Implementation Status
@@ -27,12 +27,25 @@ Owner: Product + Engineering
 - Quote mutation refresh path now skips unnecessary outbound-log fetches and runs history refresh as non-blocking follow-up work.
 - Duplicate full-page dashboard reloads were removed from Customers/Quotes/Analytics mounts; key quote/customer mutation flows now use targeted refreshes instead of `loadAll`.
 - Duplicate customer workflow now supports `Use Existing` (fast/no-write path), defaults phone matches to existing-record flow, and keeps merge updates to non-empty incoming profile fields while restoring archived matches.
+- Customer create/update duplicate checks now persist `phoneDigits` and use indexed tenant-scoped phone-digit lookups (no runtime regex fallback path).
+- Customer create/merge activity logging now batches events with `createMany` to reduce transaction round-trips.
+- Quote create preflight now runs monthly-limit count, customer validation, and actor resolution in parallel to reduce request latency.
+- Quick customer modal now closes immediately after successful API create and runs `onCreated` follow-up work asynchronously (non-blocking UX).
 - Marketing SEO pass updated core metadata, keyword targeting, canonical handling, and landing-page FAQ schema for contractor quoting/estimating search terms.
 - AI quote parser now uses typo-tolerant trade/preset matching and weighted trade scoring to reduce misclassification on misspelled prompts.
 - AI quality gate script added for repeatable scoring before deploy (`npm run eval:ai`, optional live-model mode `npm run eval:ai:model`).
 - AI prompt-remaining estimate now adapts to each tenant's observed per-run AI spend (with conservative safety buffer) so larger prompts reduce remaining estimate sooner.
 - Internal superuser AI quality console added (`/app/internal/admin/ai-quality`) with server-side superuser gating via `SUPERUSER_EMAILS`.
 - AI model context is now compacted/truncated to a safe budget before calls to protect latency and token spend.
+- Quote Builder and Quote Desk line-sheet grids now switch to desktop mode at `xl+` with tighter columns and wider safety margins to prevent field overlap on small desktop/tablet widths.
+- Quote line section chips now support compact labels (`Incl` / `Alt`) at constrained widths to prevent control collision.
+- Quote board now keeps card layout until `xl` and only uses dense desktop table columns at larger widths.
+- Workspace topbar search CTA minimum width is now responsive to reduce header squeeze on smaller desktop widths.
+- Customers, Pipeline, and Analytics dense row/table layouts now switch at `xl+` with adjusted column widths to reduce small-desktop/tablet crowding.
+- Branding page mobile rendering pass shipped: timezone controls now wrap safely, template browsing has dedicated mobile nav buttons, and preview header/meta blocks stack cleanly on narrow screens.
+- AI suggest flow now has a strict guardrail retry and hard no-op rejection so the modal does not report success without concrete quote mutations.
+- Internal superuser AI quality dashboard now includes trade-level quality breakdown plus no-patch/low-confidence/fallback runtime signal rates.
+- Quote Builder AI apply flow now performs customer-list refresh asynchronously so modal close and sheet updates are not blocked by a full customer reload.
 
 ## Purpose
 
@@ -160,9 +173,17 @@ Open follow-up:
 | Dynamic AI prompt-cost estimator by tenant | Engineering | Completed | 2026-04-14 | Remaining-prompt estimate now uses observed monthly spend/run with safety multiplier instead of fixed constant only |
 | Internal superuser AI quality console + protected APIs | Engineering | Completed | 2026-04-14 | Added `/v1/internal/ai-quality/*` and `/app/internal/admin/ai-quality`; access restricted by superuser email allowlist |
 | AI context token-budget safety guard | Engineering | Completed | 2026-04-14 | AI context now compacts and trims to fixed safety limits before model calls |
+| Quote Builder/Desk responsive line-grid hardening (`xl+` desktop tables) | Engineering | Completed | 2026-04-15 | Prevents line/description/qty collision on smaller desktop and tablet widths; adds compact section chip labels |
+| Quote board responsive breakpoint tuning (`xl+` desktop table) | Engineering | Completed | 2026-04-15 | Uses card layout on narrower desktop/tablet widths for readability and touch ergonomics |
+| Cross-page responsive breakpoint harmonization (Customers/Pipeline/Analytics) | Engineering | Completed | 2026-04-15 | Dense grid rows now activate at `xl+` with smaller `xl` columns and full `2xl` columns for readability |
+| Branding page mobile rendering QC pass | Engineering | Completed | 2026-04-15 | Fixed mobile overflow/compression in timezone controls, template navigation row, and customer-preview header/meta layout |
+| AI deterministic fallback retry/guardrail pass | Engineering | Completed | 2026-04-15 | `POST /quotes/ai-suggest` now retries once with stricter context and returns explicit error when no concrete patch/scope mutation is produced |
+| AI prompt telemetry dashboard pass (per-trade parse quality + failure reasons) | Engineering | Completed | 2026-04-15 | Internal AI summary now returns trade breakdown + quality signal rates (no patch, low confidence, regex fallback) and tenant-level quality rates |
+| Quote Builder AI-apply latency micro-optimization | Engineering | Completed | 2026-04-15 | Customer refresh after AI apply is now async (`void loadCustomers()`), reducing perceived apply latency |
 | AI run feedback data model + endpoints (thumbs up/down + reason) | Engineering | Not started | 2026-04-20 | Needed to measure real satisfaction and close loop to 95+ |
 | Quote mutation refresh latency pass | Engineering | Completed | 2026-04-14 | Removed duplicate outbound-event reloads after mutations and made history refresh async/non-blocking |
 | Route/mutation refresh optimization pass | Engineering | Completed | 2026-04-14 | Removed duplicate `loadAll()` on major pages and replaced several mutation full-refreshes with targeted `loadQuotes`/`loadCustomers` calls |
+| Customer/quote create latency pass v2 (backend + modal UX) | Engineering | Completed | 2026-04-15 | Indexed-first duplicate checks with persisted `phoneDigits`, batched activity writes, quote-create parallel preflight, and non-blocking quick-customer post-create callbacks |
 | Full responsive QA pass (customer -> quote -> send) | Product + Engineering | In progress | 2026-04-26 | Code-level sweep done; device-width run still required |
 | Final launch UX polish sweep | Product + Engineering | Not started | 2026-04-29 | Spacing, color contrast, wording cleanup |
 

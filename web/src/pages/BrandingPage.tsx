@@ -642,9 +642,25 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     totalsColor: getComponentColorValue("totalsColor"),
     footerTextColor: getComponentColorValue("footerTextColor"),
   };
+  const activeTemplateSummaryCard = (
+    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
+          <p className="mt-1 text-sm text-slate-600">{activeTemplate.description}</p>
+          <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Best for: {activeTemplate.bestFor}
+          </p>
+        </div>
+        <div className="hidden sm:block">
+          <TemplateMiniPreview template={activeTemplate} active onSelect={() => undefined} />
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-slate-50 p-3 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
         <PageHeader
           title="Quote Branding"
@@ -652,14 +668,14 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           actions={<Badge tone="blue">{completedSectionCount}/4 ready</Badge>}
         />
 
-        <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="grid gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
           <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
             <WorkspaceRailCard
               eyebrow="Brand Setup"
               title={companyName}
               description="Manage sender identity, visual styling, and quote layout from one operator surface."
             >
-              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-1">
                 <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Timezone</p>
                   <p className="mt-2 text-sm font-semibold text-slate-900">{timezone}</p>
@@ -837,15 +853,17 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   />
                 </div>
                 <div>
-                  <div className="mb-1 flex items-center justify-between gap-3">
+                  <div className="mb-1 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <label className="block text-xs font-medium text-slate-600">Timezone</label>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
+                      className="w-full sm:w-auto"
                       onClick={() => setTimezone(browserTimezone)}
                     >
-                      Use local timezone ({browserTimezone})
+                      <span className="sm:hidden">Use local timezone</span>
+                      <span className="hidden sm:inline">Use local timezone ({browserTimezone})</span>
                     </Button>
                   </div>
                   <Select
@@ -860,7 +878,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-900">QuoteFly footer attribution</p>
                       <p className="mt-1 text-sm text-slate-500">
-                        Show a small “Created with QuoteFly” footer at the bottom of customer-facing quotes.
+                        Show a small "Created with QuoteFly" footer at the bottom of customer-facing quotes.
                       </p>
                     </div>
                     <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -1029,12 +1047,12 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
                       return (
                         <div key={component.key} className="rounded-lg border border-slate-200 p-3">
-                          <div className="flex items-start justify-between gap-3">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                               <p className="text-sm font-semibold text-slate-800">{component.label}</p>
                               <p className="text-xs text-slate-500">{component.description}</p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 self-start sm:self-auto">
                               <input
                                 type="color"
                                 value={value}
@@ -1045,13 +1063,13 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                             </div>
                           </div>
 
-                          <div className="mt-3 flex items-center justify-between gap-3">
+                          <div className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="h-2 flex-1 rounded" style={{ backgroundColor: value }} />
                             <button
                               type="button"
                               onClick={() => clearComponentColorOverride(component.key)}
                               disabled={!hasOverride}
-                              className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="w-full rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                             >
                               {resetLabel}
                             </button>
@@ -1074,7 +1092,31 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               onToggle={() => toggleSection("templates")}
             >
               <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center gap-3">
+                <div className="sm:hidden">
+                  {activeTemplateSummaryCard}
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => moveTemplate(-1)}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                      aria-label="Previous template"
+                    >
+                      <ChevronLeft size={16} />
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveTemplate(1)}
+                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                      aria-label="Next template"
+                    >
+                      Next
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="hidden items-center gap-3 sm:flex">
                   <button
                     type="button"
                     onClick={() => moveTemplate(-1)}
@@ -1084,20 +1126,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     <ChevronLeft size={18} />
                   </button>
 
-                  <div className="flex-1 rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
-                        <p className="mt-1 text-sm text-slate-600">{activeTemplate.description}</p>
-                        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Best for: {activeTemplate.bestFor}
-                        </p>
-                      </div>
-                      <div className="hidden sm:block">
-                        <TemplateMiniPreview template={activeTemplate} active onSelect={() => undefined} />
-                      </div>
-                    </div>
-                  </div>
+                  <div className="min-w-0 flex-1">{activeTemplateSummaryCard}</div>
 
                   <button
                     type="button"

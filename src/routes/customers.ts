@@ -135,15 +135,6 @@ function isInactiveDuplicateMatch(match: {
   return Boolean(match.archivedAtUtc || match.deletedAtUtc);
 }
 
-const PHONE_DIGITS_SQL = Prisma.sql`
-  CASE
-    WHEN LENGTH(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g')) = 11
-      AND LEFT(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g'), 1) = '1'
-    THEN RIGHT(REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g'), 10)
-    ELSE REGEXP_REPLACE(COALESCE("phone", ''), '[^0-9]', '', 'g')
-  END
-`;
-
 function formatCustomerPhoneResponse<T extends { phone: string }>(customer: T): T {
   return {
     ...customer,
@@ -151,32 +142,47 @@ function formatCustomerPhoneResponse<T extends { phone: string }>(customer: T): 
   };
 }
 
-async function loadPhoneMatchIds(
+type DuplicateCustomerCandidate = {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string | null;
+  createdAt: Date;
+  archivedAtUtc: Date | null;
+  deletedAtUtc: Date | null;
+};
+
+async function loadPhoneMatchCandidates(
   prisma: PrismaClient | Prisma.TransactionClient,
   tenantId: string,
   normalizedPhoneDigits: string,
   options?: { excludeCustomerId?: string; limit?: number; activeOnly?: boolean },
-) {
+): Promise<DuplicateCustomerCandidate[]> {
   const limit = options?.limit ?? 5;
-  const excludeClause = options?.excludeCustomerId
-    ? Prisma.sql`AND "id" <> ${options.excludeCustomerId}`
-    : Prisma.empty;
-  const activeScopeClause = options?.activeOnly
-    ? Prisma.sql`AND "archivedAtUtc" IS NULL AND "deletedAtUtc" IS NULL`
-    : Prisma.empty;
-
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT "id"
-    FROM "Customer"
-    WHERE "tenantId" = ${tenantId}
-      ${excludeClause}
-      ${activeScopeClause}
-      AND ${PHONE_DIGITS_SQL} = ${normalizedPhoneDigits}
-    ORDER BY "createdAt" DESC
-    LIMIT ${limit}
-  `);
-
-  return rows.map((row) => row.id);
+  return prisma.customer.findMany({
+    where: {
+      ...tenantScope(tenantId),
+      phoneDigits: normalizedPhoneDigits,
+      ...(options?.excludeCustomerId ? { id: { not: options.excludeCustomerId } } : {}),
+      ...(options?.activeOnly
+        ? {
+            archivedAtUtc: null,
+            deletedAtUtc: null,
+          }
+        : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+      createdAt: true,
+      archivedAtUtc: true,
+      deletedAtUtc: true,
+    },
+  });
 }
 
 async function loadPhoneSearchMatchIds(
@@ -184,17 +190,19 @@ async function loadPhoneSearchMatchIds(
   tenantId: string,
   normalizedSearchDigits: string,
 ) {
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT "id"
-    FROM "Customer"
-    WHERE "tenantId" = ${tenantId}
-      AND "archivedAtUtc" IS NULL
-      AND "deletedAtUtc" IS NULL
-      AND ${PHONE_DIGITS_SQL} LIKE ${`%${normalizedSearchDigits}%`}
-    ORDER BY "createdAt" DESC
-    LIMIT 200
-  `);
-
+  const searchFilter =
+    normalizedSearchDigits.length >= 7
+      ? { startsWith: normalizedSearchDigits }
+      : { contains: normalizedSearchDigits };
+  const rows = await prisma.customer.findMany({
+    where: {
+      ...tenantActiveCustomerScope(tenantId),
+      phoneDigits: searchFilter,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    select: { id: true },
+  });
   return rows.map((row) => row.id);
 }
 
@@ -202,35 +210,28 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
-    const actor = await resolveActivityActor(app.prisma, claims);
 
     const normalizedPhone = normalizeCustomerPhone(payload.phone);
     const normalizedPhoneDigits = normalizePhoneSearchDigits(payload.phone);
     const normalizedEmail = payload.email?.trim().toLowerCase() ?? null;
-    const [phoneMatches, emailMatches] = await Promise.all([
-      normalizedPhoneDigits
-        ? loadPhoneMatchIds(app.prisma, claims.tenantId, normalizedPhoneDigits, {
-            limit: 5,
-          }).then((ids) =>
-            ids.length
-              ? app.prisma.customer.findMany({
-                  where: {
-                    ...tenantScope(claims.tenantId),
-                    id: { in: ids },
-                  },
-                  orderBy: { createdAt: "desc" },
-                  take: 5,
-                })
-              : [],
-          )
-        : app.prisma.customer.findMany({
-            where: {
-              ...tenantScope(claims.tenantId),
-              phone: normalizedPhone,
-            },
-            orderBy: { createdAt: "desc" },
-            take: 5,
-          }),
+    const [exactPhoneMatches, emailMatches] = await Promise.all([
+      app.prisma.customer.findMany({
+        where: {
+          ...tenantScope(claims.tenantId),
+          phone: normalizedPhone,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          fullName: true,
+          phone: true,
+          email: true,
+          archivedAtUtc: true,
+          deletedAtUtc: true,
+          createdAt: true,
+        },
+      }),
       normalizedEmail
         ? app.prisma.customer.findMany({
             where: {
@@ -239,9 +240,26 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             },
             orderBy: { createdAt: "desc" },
             take: 5,
+            select: {
+              id: true,
+              fullName: true,
+              phone: true,
+              email: true,
+              archivedAtUtc: true,
+              deletedAtUtc: true,
+              createdAt: true,
+            },
           })
         : Promise.resolve([]),
     ]);
+    const phoneMatches =
+      exactPhoneMatches.length > 0
+        ? exactPhoneMatches
+        : normalizedPhoneDigits
+          ? await loadPhoneMatchCandidates(app.prisma, claims.tenantId, normalizedPhoneDigits, {
+              limit: 5,
+            })
+          : [];
 
     const matchMap = new Map<string, (typeof phoneMatches)[number]>();
     for (const candidate of phoneMatches) {
@@ -312,6 +330,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       if (!target) {
         return reply.code(404).send({ error: "Customer selected for merge was not found." });
       }
+      const actor = await resolveActivityActor(app.prisma, claims);
 
       const customer = await app.prisma.$transaction(async (tx) => {
         const mergedName = payload.fullName.trim() || target.fullName;
@@ -333,28 +352,33 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             deletedAtUtc: null,
           },
         });
-
-        await createCustomerActivityEvent(tx, {
-          tenantId: claims.tenantId,
-          customerId: mergedCustomer.id,
-          actor,
-          eventType: retainedCustomerWasInactive(target) ? "RESTORED" : "MERGED",
-          title: retainedCustomerWasInactive(target) ? "Customer restored" : "Customer merged",
-          detail: retainedCustomerWasInactive(target)
-            ? `${mergedCustomer.fullName} was restored and updated.`
-            : `${mergedCustomer.fullName} was merged into the existing customer record.`,
-        });
-
-        if (payload.notes?.trim() && payload.notes.trim() !== (target.notes ?? "")) {
-          await createCustomerActivityEvent(tx, {
+        const activityEvents: Prisma.CustomerActivityEventCreateManyInput[] = [
+          {
             tenantId: claims.tenantId,
             customerId: mergedCustomer.id,
-            actor,
+            actorUserId: actor.actorUserId,
+            actorEmail: actor.actorEmail,
+            actorName: actor.actorName,
+            eventType: retainedCustomerWasInactive(target) ? "RESTORED" : "MERGED",
+            title: retainedCustomerWasInactive(target) ? "Customer restored" : "Customer merged",
+            detail: retainedCustomerWasInactive(target)
+              ? `${mergedCustomer.fullName} was restored and updated.`
+              : `${mergedCustomer.fullName} was merged into the existing customer record.`,
+          },
+        ];
+        if (payload.notes?.trim() && payload.notes.trim() !== (target.notes ?? "")) {
+          activityEvents.push({
+            tenantId: claims.tenantId,
+            customerId: mergedCustomer.id,
+            actorUserId: actor.actorUserId,
+            actorEmail: actor.actorEmail,
+            actorName: actor.actorName,
             eventType: "NOTES_UPDATED",
             title: "Customer notes updated",
             detail: payload.notes.trim().slice(0, 500),
           });
         }
+        await tx.customerActivityEvent.createMany({ data: activityEvents });
 
         return mergedCustomer;
       });
@@ -401,49 +425,57 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
+      const actor = await resolveActivityActor(app.prisma, claims);
       const customer = await app.prisma.$transaction(async (tx) => {
         const createdCustomer = await tx.customer.create({
           data: {
             tenantId: claims.tenantId,
             fullName: payload.fullName.trim(),
             phone: normalizedPhone,
+            phoneDigits: normalizedPhoneDigits,
             email: normalizedEmail,
             notes: payload.notes,
             followUpStatus: payload.followUpStatus,
             followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
           },
         });
-
-        await createCustomerActivityEvent(tx, {
-          tenantId: claims.tenantId,
-          customerId: createdCustomer.id,
-          actor,
-          eventType: "CREATED",
-          title: "Customer added",
-          detail: `${createdCustomer.fullName} was added to the workspace.`,
-        });
-
-        if (payload.followUpStatus) {
-          await createCustomerActivityEvent(tx, {
+        const activityEvents: Prisma.CustomerActivityEventCreateManyInput[] = [
+          {
             tenantId: claims.tenantId,
             customerId: createdCustomer.id,
-            actor,
+            actorUserId: actor.actorUserId,
+            actorEmail: actor.actorEmail,
+            actorName: actor.actorName,
+            eventType: "CREATED",
+            title: "Customer added",
+            detail: `${createdCustomer.fullName} was added to the workspace.`,
+          },
+        ];
+        if (payload.followUpStatus) {
+          activityEvents.push({
+            tenantId: claims.tenantId,
+            customerId: createdCustomer.id,
+            actorUserId: actor.actorUserId,
+            actorEmail: actor.actorEmail,
+            actorName: actor.actorName,
             eventType: "STATUS_CHANGED",
             title: "Customer status updated",
             detail: `Marked as ${formatFollowUpStatus(payload.followUpStatus)}.`,
           });
         }
-
         if (payload.notes?.trim()) {
-          await createCustomerActivityEvent(tx, {
+          activityEvents.push({
             tenantId: claims.tenantId,
             customerId: createdCustomer.id,
-            actor,
+            actorUserId: actor.actorUserId,
+            actorEmail: actor.actorEmail,
+            actorName: actor.actorName,
             eventType: "NOTES_ADDED",
             title: "Customer notes added",
             detail: payload.notes.trim().slice(0, 500),
           });
         }
+        await tx.customerActivityEvent.createMany({ data: activityEvents });
 
         return createdCustomer;
       });
@@ -692,7 +724,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     const normalizedPhone =
       payload.phone === undefined ? undefined : normalizeCustomerPhone(payload.phone);
-    const normalizedPhoneDigits = normalizePhoneSearchDigits(normalizedPhone);
+    const normalizedPhoneDigits =
+      normalizedPhone === undefined ? undefined : normalizePhoneSearchDigits(normalizedPhone);
     const normalizedEmail =
       payload.email === undefined ? undefined : payload.email === null ? null : payload.email.trim().toLowerCase();
 
@@ -708,26 +741,28 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (normalizedPhone !== undefined && !phoneNumbersEquivalent(normalizedPhone, existing.phone)) {
+      const exactPhoneConflict = await app.prisma.customer.findFirst({
+        where: {
+          ...tenantScope(claims.tenantId),
+          phone: normalizedPhone,
+          id: { not: existing.id },
+        },
+        select: { id: true },
+      });
+      if (exactPhoneConflict) {
+        return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
+      }
+
       if (normalizedPhoneDigits) {
-        const phoneConflictIds = await loadPhoneMatchIds(
-          app.prisma,
-          claims.tenantId,
-          normalizedPhoneDigits,
-          { excludeCustomerId: existing.id, limit: 1 },
-        );
-        if (phoneConflictIds.length > 0) {
-          return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
-        }
-      } else {
-        const phoneConflict = await app.prisma.customer.findFirst({
+        const digitPhoneConflict = await app.prisma.customer.findFirst({
           where: {
             ...tenantScope(claims.tenantId),
-            phone: normalizedPhone,
+            phoneDigits: normalizedPhoneDigits,
             id: { not: existing.id },
           },
+          select: { id: true },
         });
-
-        if (phoneConflict) {
+        if (digitPhoneConflict) {
           return reply.code(409).send({ error: "Phone already used by another customer in this workspace." });
         }
       }
@@ -758,6 +793,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         data: {
           fullName: payload.fullName,
           phone: normalizedPhone,
+          phoneDigits: normalizedPhoneDigits,
           email: normalizedEmail,
           notes: payload.notes,
           followUpStatus: payload.followUpStatus,

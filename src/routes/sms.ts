@@ -3,7 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import twilio from "twilio";
 import { parseInboundJobText } from "../services/sms-parser";
 import { generateDraftFromSms } from "../services/quote-generator";
-import { normalizeCustomerPhone } from "../lib/phone";
+import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
 
 const SEND_REPLY = "1";
 const REVISE_REPLY = "2";
@@ -131,24 +131,43 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
     const draft = generateDraftFromSms(smsBody);
 
     const customerPhone = normalizeCustomerPhone(parsed.customerPhone ?? from);
-    const customer = await app.prisma.customer.upsert({
+    const customerPhoneDigits = normalizePhoneSearchDigits(customerPhone);
+    const existingCustomer = await app.prisma.customer.findFirst({
       where: {
-        tenantId_phone: {
-          tenantId: tenantPhone.tenantId,
-          phone: customerPhone,
-        },
-      },
-      create: {
         tenantId: tenantPhone.tenantId,
-        fullName: parsed.customerName ?? "New Customer",
-        phone: customerPhone,
-        email: parsed.customerEmail,
+        OR: [
+          { phone: customerPhone },
+          ...(customerPhoneDigits ? [{ phoneDigits: customerPhoneDigits }] : []),
+        ],
       },
-      update: {
-        fullName: parsed.customerName,
-        email: parsed.customerEmail,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
       },
     });
+    const customer = existingCustomer
+      ? await app.prisma.customer.update({
+          where: { id: existingCustomer.id },
+          data: {
+            fullName: parsed.customerName ?? existingCustomer.fullName,
+            phone: customerPhone,
+            phoneDigits: customerPhoneDigits,
+            email: parsed.customerEmail ?? existingCustomer.email ?? undefined,
+            archivedAtUtc: null,
+            deletedAtUtc: null,
+          },
+        })
+      : await app.prisma.customer.create({
+          data: {
+            tenantId: tenantPhone.tenantId,
+            fullName: parsed.customerName ?? "New Customer",
+            phone: customerPhone,
+            phoneDigits: customerPhoneDigits,
+            email: parsed.customerEmail,
+          },
+        });
 
     const pricingProfile = await app.prisma.pricingProfile.findFirst({
       where: {

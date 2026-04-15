@@ -186,11 +186,39 @@ export type InternalAiQualitySummary = {
     medium: number;
     low: number;
   };
+  quality: {
+    noPatchRuns: number;
+    noPatchRatePct: number;
+    lowConfidenceRuns: number;
+    lowConfidenceRatePct: number;
+    regexFallbackRuns: number;
+    regexFallbackRatePct: number;
+  };
+  qualitySignals: Array<{
+    key: string;
+    label: string;
+    count: number;
+    ratePct: number;
+  }>;
   models: Array<{
     model: string;
     runCount: number;
     spendUsd: number;
     averageTokensPerRun: number;
+  }>;
+  tradeBreakdown: Array<{
+    trade: ServiceType;
+    runCount: number;
+    draftRuns: number;
+    reviseRuns: number;
+    spendUsd: number;
+    averageTokensPerRun: number;
+    noPatchRuns: number;
+    noPatchRatePct: number;
+    lowConfidenceRuns: number;
+    lowConfidenceRatePct: number;
+    regexFallbackRuns: number;
+    regexFallbackRatePct: number;
   }>;
 };
 
@@ -205,6 +233,12 @@ export type InternalAiQualityTenantRow = {
   totalTokens: number;
   averageSpendUsdPerRun: number;
   averageTokensPerRun: number;
+  noPatchRuns: number;
+  noPatchRatePct: number;
+  lowConfidenceRuns: number;
+  lowConfidenceRatePct: number;
+  regexFallbackRuns: number;
+  regexFallbackRatePct: number;
 };
 
 export type QuoteStatus =

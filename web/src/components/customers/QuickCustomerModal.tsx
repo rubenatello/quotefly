@@ -116,15 +116,17 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
             ? selectedMatchId ?? undefined
             : undefined,
       });
-
-      await onCreated({
+      const createdResult = {
         customer: result.customer,
         merged: result.merged,
         restored: result.restored,
         reusedExisting: result.reusedExisting,
         intent: mode,
-      });
+      };
       closeModal();
+      void Promise.resolve(onCreated(createdResult)).catch((callbackError) => {
+        console.error("[quick-customer-modal] onCreated callback failed", callbackError);
+      });
     } catch (err) {
       if (err instanceof ApiError) {
         const details = err.details as { code?: string; matches?: CustomerDuplicateMatch[] } | undefined;

@@ -166,6 +166,7 @@ export interface CustomerRow {
   fullName: string;
   email: string | null;
   phone: string;
+  phoneDigits: string | null;
   notes: string | null;
   followUpStatus: LeadFollowUpStatus;
   followUpUpdatedAtUtc: UtcDate | null;

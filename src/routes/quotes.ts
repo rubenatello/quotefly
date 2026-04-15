@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
-import { normalizeCustomerPhone } from "../lib/phone";
+import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
 import {
   PaginationQuerySchema,
   tenantActiveCustomerScope,
@@ -859,6 +859,24 @@ function normalizeNullablePhone(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+async function findActiveCustomerByPhone(
+  prisma: PrismaClient,
+  tenantId: string,
+  normalizedPhone: string,
+) {
+  const normalizedPhoneDigits = normalizePhoneSearchDigits(normalizedPhone);
+  return prisma.customer.findFirst({
+    where: {
+      ...tenantActiveCustomerScope(tenantId),
+      OR: [
+        { phone: normalizedPhone },
+        ...(normalizedPhoneDigits ? [{ phoneDigits: normalizedPhoneDigits }] : []),
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 function normalizeTextForComparison(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -1333,11 +1351,30 @@ function buildAiSuggestionInsight(params: {
   };
 }
 
-function buildAiUsageTraceFromInsight(insight: AiSuggestionInsight) {
+function buildAiUsageTraceFromInsight(
+  insight: AiSuggestionInsight,
+  options?: {
+    serviceType?: z.infer<typeof ServiceTypeSchema> | null;
+    retryApplied?: boolean;
+  },
+) {
+  const insightReasons = [...insight.reasons];
+  if (options?.retryApplied) {
+    insightReasons.unshift("Guardrail retry applied after initial no-op draft.");
+  }
+  if (insightReasons.length > 3) {
+    insightReasons.length = 3;
+  }
+
+  const sourceLabels = insight.sources.map((source) => source.label);
+  if (options?.serviceType) {
+    sourceLabels.unshift(`Trade: ${options.serviceType}`);
+  }
+
   return {
     insightSummary: insight.summary,
-    insightReasons: insight.reasons,
-    insightSourceLabels: insight.sources.map((source) => source.label),
+    insightReasons,
+    insightSourceLabels: sourceLabels,
     confidenceLevel: insight.confidence.level,
     confidenceLabel: insight.confidence.label,
     riskNote: insight.riskNote,
@@ -1347,6 +1384,36 @@ function buildAiUsageTraceFromInsight(insight: AiSuggestionInsight) {
       removed: insight.patch.removed,
     },
   };
+}
+
+function buildAiRevisionContextPrompt(
+  contextPrompt: string,
+  currentQuoteContext: AiCurrentQuoteContextForDiff,
+  baselineSuggestion: AiSuggestedQuoteDraft,
+) {
+  return [
+    contextPrompt,
+    "Current quote lines:",
+    ...(currentQuoteContext?.lineItems.map(
+      (lineItem, index) =>
+        `${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+          2,
+        )} | price ${lineItem.unitPrice.toFixed(2)}`,
+    ) ?? []),
+    "",
+    "Baseline AI draft:",
+    `- Trade: ${baselineSuggestion.serviceType}`,
+    `- Title: ${baselineSuggestion.title}`,
+    `- Scope: ${baselineSuggestion.scopeText}`,
+    ...baselineSuggestion.lineItems.map(
+      (lineItem, index) =>
+        `  ${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+          2,
+        )} | price ${lineItem.unitPrice.toFixed(2)}`,
+    ),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 const AI_PROGRESS_STEPS: Record<
@@ -1585,6 +1652,108 @@ type AiSuggestionInsight = {
     removed: number;
   };
 };
+
+const AI_GUARDRAIL_RETRY_HINT = [
+  "AI guardrail retry requirements:",
+  "- Produce concrete quote edits that can be applied immediately.",
+  "- Return at least one meaningful line item with non-empty description and positive quantity.",
+  "- If the user request includes multiple areas, phases, or options, keep them as separate lines.",
+  "- Do not return a no-op response.",
+].join("\n");
+
+type AiCurrentQuoteContextForDiff = {
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+  title?: string;
+  scopeText?: string;
+  lineItems: AiCurrentLineItem[];
+} | null;
+
+function hasAiPatchMutations(patch: AiQuotePatchResult) {
+  return patch.added + patch.updated + patch.removed > 0;
+}
+
+function hasAiSuggestionMetadataMutation(params: {
+  hasCurrentSheetContext: boolean;
+  currentQuoteContext: AiCurrentQuoteContextForDiff;
+  suggestion: Pick<AiSuggestedQuoteDraft, "serviceType" | "title" | "scopeText">;
+}) {
+  if (!params.hasCurrentSheetContext || !params.currentQuoteContext) {
+    return false;
+  }
+
+  const currentTitle = normalizeTextForComparison(params.currentQuoteContext.title ?? "");
+  const nextTitle = normalizeTextForComparison(params.suggestion.title ?? "");
+  const currentScope = normalizeTextForComparison(params.currentQuoteContext.scopeText ?? "");
+  const nextScope = normalizeTextForComparison(params.suggestion.scopeText ?? "");
+
+  return (
+    params.currentQuoteContext.serviceType !== params.suggestion.serviceType ||
+    currentTitle !== nextTitle ||
+    currentScope !== nextScope
+  );
+}
+
+function resolveAiSuggestionFromPatch(params: {
+  baselineSuggestion: AiSuggestedQuoteDraft;
+  revisionPlan: Awaited<ReturnType<typeof aiBuildQuoteRevisionPlan>> | null;
+  hasCurrentSheetContext: boolean;
+  currentQuoteContext: AiCurrentQuoteContextForDiff;
+  patch: AiQuotePatchResult;
+}): {
+  serviceType: z.infer<typeof ServiceTypeSchema>;
+  title: string;
+  scopeText: string;
+  suggestion: AiSuggestedQuoteDraft;
+} {
+  const serviceType = params.revisionPlan?.serviceType ?? params.baselineSuggestion.serviceType;
+  const title =
+    params.revisionPlan?.title?.trim() ||
+    (params.hasCurrentSheetContext && params.currentQuoteContext?.title?.trim()
+      ? params.currentQuoteContext.title.trim()
+      : params.baselineSuggestion.title);
+  const scopeText =
+    params.revisionPlan?.scopeText?.trim() ||
+    (params.hasCurrentSheetContext && params.currentQuoteContext?.scopeText?.trim()
+      ? params.currentQuoteContext.scopeText.trim()
+      : params.baselineSuggestion.scopeText);
+
+  const internalCostSubtotal = roundCurrency(
+    params.patch.resolvedLines.reduce(
+      (sum, lineItem) =>
+        isIncludedQuoteLineSection(lineItem.sectionType)
+          ? sum + lineItem.quantity * lineItem.unitCost
+          : sum,
+      0,
+    ),
+  );
+  const customerPriceSubtotal = roundCurrency(
+    params.patch.resolvedLines.reduce(
+      (sum, lineItem) =>
+        isIncludedQuoteLineSection(lineItem.sectionType)
+          ? sum + lineItem.quantity * lineItem.unitPrice
+          : sum,
+      0,
+    ),
+  );
+
+  return {
+    serviceType,
+    title,
+    scopeText,
+    suggestion: {
+      ...params.baselineSuggestion,
+      serviceType,
+      title,
+      scopeText,
+      internalCostSubtotal,
+      customerPriceSubtotal,
+      totalAmount: calculateQuoteTotal(customerPriceSubtotal, params.baselineSuggestion.taxAmount),
+      lineItems: params.patch.resolvedLines.length
+        ? params.patch.resolvedLines
+        : params.baselineSuggestion.lineItems,
+    },
+  };
+}
 
 type AiProgressStep =
   | "analyzing_prompt"
@@ -2964,12 +3133,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const customerEmail = normalizeNullableEmail(parsedDraft.customerEmail);
 
     if (!selectedCustomer && customerPhone) {
-      selectedCustomer = await app.prisma.customer.findFirst({
-        where: {
-          phone: customerPhone,
-          ...tenantActiveCustomerScope(claims.tenantId),
-        },
-      });
+      selectedCustomer = await findActiveCustomerByPhone(app.prisma, claims.tenantId, customerPhone);
     }
 
     if (!selectedCustomer && customerEmail) {
@@ -3065,7 +3229,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    const baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
+    let baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
       prompt: payload.prompt,
       parsedDraft,
       serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
@@ -3074,41 +3238,20 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const hasCurrentSheetContext = currentQuoteContext
       ? hasMeaningfulCurrentQuoteContext(currentQuoteContext)
       : false;
+    const currentLinesForPatch = currentQuoteContext?.lineItems ?? [];
 
-    const revisionPlan = hasCurrentSheetContext
+    let revisionPlan = hasCurrentSheetContext
       ? await aiBuildQuoteRevisionPlan(payload.prompt, {
-          context: [
-            contextPrompt,
-            "Current quote lines:",
-            ...(currentQuoteContext?.lineItems.map(
-              (lineItem, index) =>
-                `${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
-                  2,
-                )} | price ${lineItem.unitPrice.toFixed(2)}`,
-            ) ?? []),
-            "",
-            "Baseline AI draft:",
-            `- Trade: ${baselineSuggestion.serviceType}`,
-            `- Title: ${baselineSuggestion.title}`,
-            `- Scope: ${baselineSuggestion.scopeText}`,
-            ...baselineSuggestion.lineItems.map(
-              (lineItem, index) =>
-                `  ${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
-                  2,
-                )} | price ${lineItem.unitPrice.toFixed(2)}`,
-            ),
-          ]
-            .filter(Boolean)
-            .join("\n"),
+          context: buildAiRevisionContextPrompt(contextPrompt, currentQuoteContext, baselineSuggestion),
           telemetry: aiTelemetry,
         })
       : null;
 
     const hasMeaningfulCurrentLines = Boolean(
-      currentQuoteContext?.lineItems?.some((lineItem) => isMeaningfulAiLine(lineItem)),
+      currentLinesForPatch.some((lineItem) => isMeaningfulAiLine(lineItem)),
     );
     const revisionPatch = revisionPlan
-      ? applyAiRevisionPlan(currentQuoteContext?.lineItems ?? [], baselineSuggestion, revisionPlan)
+      ? applyAiRevisionPlan(currentLinesForPatch, baselineSuggestion, revisionPlan)
       : null;
     const shouldFallbackToDeterministicPatch = Boolean(
       revisionPlan &&
@@ -3116,49 +3259,116 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         revisionPatch &&
         revisionPatch.lineChanges.length === 0,
     );
-    const patch = shouldFallbackToDeterministicPatch
-      ? buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems)
-      : (revisionPatch ?? buildDeterministicAiPatch(currentQuoteContext?.lineItems ?? [], baselineSuggestion.lineItems));
+    let patch = shouldFallbackToDeterministicPatch
+      ? buildDeterministicAiPatch(currentLinesForPatch, baselineSuggestion.lineItems)
+      : (revisionPatch ?? buildDeterministicAiPatch(currentLinesForPatch, baselineSuggestion.lineItems));
+    let suggestion = resolveAiSuggestionFromPatch({
+      baselineSuggestion,
+      revisionPlan,
+      hasCurrentSheetContext,
+      currentQuoteContext,
+      patch,
+    }).suggestion;
+    let guardrailRetryApplied = false;
 
-    const resolvedServiceType = revisionPlan?.serviceType ?? baselineSuggestion.serviceType;
-    const resolvedTitle =
-      revisionPlan?.title?.trim() ||
-      (hasCurrentSheetContext && currentQuoteContext?.title?.trim()
-        ? currentQuoteContext.title.trim()
-        : baselineSuggestion.title);
-    const resolvedScopeText =
-      revisionPlan?.scopeText?.trim() ||
-      (hasCurrentSheetContext && currentQuoteContext?.scopeText?.trim()
-        ? currentQuoteContext.scopeText.trim()
-        : baselineSuggestion.scopeText);
-    const resolvedInternalSubtotal = roundCurrency(
-      patch.resolvedLines.reduce(
-        (sum, lineItem) =>
-          isIncludedQuoteLineSection(lineItem.sectionType)
-            ? sum + lineItem.quantity * lineItem.unitCost
-            : sum,
-        0,
-      ),
-    );
-    const resolvedCustomerSubtotal = roundCurrency(
-      patch.resolvedLines.reduce(
-        (sum, lineItem) =>
-          isIncludedQuoteLineSection(lineItem.sectionType)
-            ? sum + lineItem.quantity * lineItem.unitPrice
-            : sum,
-        0,
-      ),
-    );
-    const suggestion: AiSuggestedQuoteDraft = {
-      ...baselineSuggestion,
-      serviceType: resolvedServiceType,
-      title: resolvedTitle,
-      scopeText: resolvedScopeText,
-      internalCostSubtotal: resolvedInternalSubtotal,
-      customerPriceSubtotal: resolvedCustomerSubtotal,
-      totalAmount: calculateQuoteTotal(resolvedCustomerSubtotal, baselineSuggestion.taxAmount),
-      lineItems: patch.resolvedLines.length ? patch.resolvedLines : baselineSuggestion.lineItems,
-    };
+    if (
+      !hasAiPatchMutations(patch) &&
+      !hasAiSuggestionMetadataMutation({
+        hasCurrentSheetContext,
+        currentQuoteContext,
+        suggestion,
+      })
+    ) {
+      stream.progress(
+        "reviewing_line_changes",
+        "No concrete quote edits detected from the first pass. Retrying once with stricter line-level constraints.",
+      );
+
+      try {
+        const retryContextPrompt = appendAiPromptStructureHints(
+          `${contextPrompt}\n\n${AI_GUARDRAIL_RETRY_HINT}`,
+          payload.prompt,
+        );
+        const retryParsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+          context: retryContextPrompt,
+          telemetry: aiTelemetry,
+          strictAi: true,
+        });
+        const retryBaselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
+          prompt: payload.prompt,
+          parsedDraft: retryParsedDraft,
+          serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
+        });
+        const retryRevisionPlan = hasCurrentSheetContext
+          ? await aiBuildQuoteRevisionPlan(payload.prompt, {
+              context: buildAiRevisionContextPrompt(
+                retryContextPrompt,
+                currentQuoteContext,
+                retryBaselineSuggestion,
+              ),
+              telemetry: aiTelemetry,
+            })
+          : null;
+        const retryRevisionPatch = retryRevisionPlan
+          ? applyAiRevisionPlan(currentLinesForPatch, retryBaselineSuggestion, retryRevisionPlan)
+          : null;
+        const retryPatch = retryRevisionPatch ?? buildDeterministicAiPatch(currentLinesForPatch, retryBaselineSuggestion.lineItems);
+        const retrySuggestionResolution = resolveAiSuggestionFromPatch({
+          baselineSuggestion: retryBaselineSuggestion,
+          revisionPlan: retryRevisionPlan,
+          hasCurrentSheetContext,
+          currentQuoteContext,
+          patch: retryPatch,
+        });
+        const retrySuggestion = retrySuggestionResolution.suggestion;
+        const retryProducedMutation =
+          hasAiPatchMutations(retryPatch) ||
+          hasAiSuggestionMetadataMutation({
+            hasCurrentSheetContext,
+            currentQuoteContext,
+            suggestion: retrySuggestion,
+          });
+
+        if (retryProducedMutation) {
+          parsedDraft = retryParsedDraft;
+          baselineSuggestion = retryBaselineSuggestion;
+          revisionPlan = retryRevisionPlan;
+          patch = retryPatch;
+          suggestion = retrySuggestion;
+          guardrailRetryApplied = true;
+          stream.progress(
+            "reviewing_line_changes",
+            `Guardrail retry recovered actionable edits: ${patch.updated} updated, ${patch.added} added, ${patch.removed} removed.`,
+            {
+              patchCounts: {
+                added: patch.added,
+                updated: patch.updated,
+                removed: patch.removed,
+              },
+            },
+          );
+        }
+      } catch (retryErr) {
+        request.log.warn({ err: retryErr }, "[quotes/ai-suggest] guardrail retry failed");
+      }
+    }
+
+    if (
+      !hasAiPatchMutations(patch) &&
+      !hasAiSuggestionMetadataMutation({
+        hasCurrentSheetContext,
+        currentQuoteContext,
+        suggestion,
+      })
+    ) {
+      stream.write({
+        type: "error",
+        error:
+          "AI could not produce a concrete quote update from that prompt. Add explicit scope, quantities, or requested line edits and try again.",
+      });
+      stream.end();
+      return reply;
+    }
 
     const insight = buildAiSuggestionInsight({
       summary: revisionPlan?.summary,
@@ -3215,7 +3425,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         promptText: payload.prompt,
         model: suggestion.model,
         telemetry: aiTelemetry,
-        trace: buildAiUsageTraceFromInsight(insight),
+        trace: buildAiUsageTraceFromInsight(insight, {
+          serviceType: suggestion.serviceType,
+          retryApplied: guardrailRetryApplied,
+        }),
       });
       aiRunId = aiUsageEvent.id;
     } catch (eventErr) {
@@ -3336,12 +3549,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const customerEmail = normalizeNullableEmail(payload.customerEmail) ?? normalizeNullableEmail(preflightDraft.customerEmail);
 
     let customer = customerPhone
-      ? await app.prisma.customer.findFirst({
-          where: {
-            phone: customerPhone,
-            ...tenantActiveCustomerScope(claims.tenantId),
-          },
-        })
+      ? await findActiveCustomerByPhone(app.prisma, claims.tenantId, customerPhone)
       : null;
 
     if (!customer && customerEmail) {
@@ -3374,6 +3582,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           tenantId: claims.tenantId,
           fullName: detectedCustomerName ?? "New Customer",
           phone: customerPhone!,
+          phoneDigits: normalizePhoneSearchDigits(customerPhone),
           email: customerEmail,
         },
       });
@@ -3850,7 +4059,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteSchema.parse(request.body);
     const claims = getJwtClaims(request);
-    const actor = await resolveActivityActor(app.prisma, claims);
     const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -3860,41 +4068,47 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    if (entitlements.limits.quotesPerMonth !== null) {
-      const periodStart = startOfCurrentUtcMonth();
-      const periodEnd = startOfNextUtcMonth();
-      const monthlyQuoteCount = await app.prisma.quote.count({
+    const periodStart = startOfCurrentUtcMonth();
+    const periodEnd = startOfNextUtcMonth();
+    const [monthlyQuoteCount, customer, actor] = await Promise.all([
+      entitlements.limits.quotesPerMonth !== null
+        ? app.prisma.quote.count({
+            where: {
+              tenantId: claims.tenantId,
+              createdAt: {
+                gte: periodStart,
+                lt: periodEnd,
+              },
+            },
+          })
+        : Promise.resolve<number | null>(null),
+      app.prisma.customer.findFirst({
         where: {
-          tenantId: claims.tenantId,
-          createdAt: {
-            gte: periodStart,
-            lt: periodEnd,
-          },
+          id: payload.customerId,
+          ...tenantActiveCustomerScope(claims.tenantId),
         },
+        select: { id: true },
+      }),
+      resolveActivityActor(app.prisma, claims),
+    ]);
+
+    if (
+      entitlements.limits.quotesPerMonth !== null &&
+      monthlyQuoteCount !== null &&
+      monthlyQuoteCount >= entitlements.limits.quotesPerMonth
+    ) {
+      const requiredPlan =
+        entitlements.planCode === "starter" ? "professional" : "enterprise";
+      return reply.code(403).send({
+        code: "PLAN_LIMIT_EXCEEDED",
+        error: `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
+        feature: "quotesPerMonth",
+        currentPlan: entitlements.planCode,
+        requiredPlan,
+        limit: entitlements.limits.quotesPerMonth,
+        used: monthlyQuoteCount,
       });
-
-      if (monthlyQuoteCount >= entitlements.limits.quotesPerMonth) {
-        const requiredPlan =
-          entitlements.planCode === "starter" ? "professional" : "enterprise";
-        return reply.code(403).send({
-          code: "PLAN_LIMIT_EXCEEDED",
-          error: `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
-          feature: "quotesPerMonth",
-          currentPlan: entitlements.planCode,
-          requiredPlan,
-          limit: entitlements.limits.quotesPerMonth,
-          used: monthlyQuoteCount,
-        });
-      }
     }
-
-    const customer = await app.prisma.customer.findFirst({
-      where: {
-        id: payload.customerId,
-        ...tenantActiveCustomerScope(claims.tenantId),
-      },
-      select: { id: true },
-    });
 
     if (!customer) {
       return reply.code(404).send({ error: "Customer not found for tenant." });
