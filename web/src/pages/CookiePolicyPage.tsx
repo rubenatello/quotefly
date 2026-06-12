@@ -8,14 +8,13 @@ import {
 } from "../lib/cookie-consent";
 
 export function CookiePolicyPage() {
-  const [choice, setChoice] = useState<CookieConsentChoice | null>(null);
+  const [choice, setChoice] = useState<CookieConsentChoice | null>(() => getStoredCookieConsent());
 
   useEffect(() => {
     setSEOMetadata({
       title: "Cookie Policy - QuoteFly",
       description: "Review QuoteFly's use of essential cookies and optional analytics cookies.",
     });
-    setChoice(getStoredCookieConsent());
   }, []);
 
   function updateChoice(nextChoice: CookieConsentChoice) {

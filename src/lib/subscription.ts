@@ -2,6 +2,13 @@ import { PrismaClient } from "@prisma/client";
 import { isSuperuserEmail } from "./superuser";
 
 export type PlanCode = "starter" | "professional" | "enterprise";
+export type TenantAccessReason =
+  | "superuser"
+  | "trial"
+  | "paid"
+  | "payment_required"
+  | "past_due"
+  | "inactive";
 
 export interface TenantBillingSnapshot {
   subscriptionStatus: string;
@@ -39,7 +46,7 @@ interface PlanDefinition {
 const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
   starter: {
     code: "starter",
-    name: "Starter",
+    name: "Basic",
     limits: {
       quotesPerMonth: 600,
       aiQuotesPerMonth: 30,
@@ -100,6 +107,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
 };
 
 const PLAN_CODES = new Set<PlanCode>(["starter", "professional", "enterprise"]);
+const PAID_ACCESS_STATUSES = new Set(["active"]);
 
 function parsePlanCode(value: string | null | undefined): PlanCode | null {
   if (!value) return null;
@@ -117,22 +125,81 @@ function isSuperuser(context?: EntitlementContext): boolean {
   return isSuperuserEmail(context?.userEmail);
 }
 
+function normalizeSubscriptionStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function hasActivePaidSubscription(snapshot: TenantBillingSnapshot, now: Date): boolean {
+  const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
+  if (!explicitPlan) return false;
+  if (!PAID_ACCESS_STATUSES.has(normalizeSubscriptionStatus(snapshot.subscriptionStatus))) return false;
+  if (!snapshot.subscriptionCurrentPeriodEndUtc) return true;
+  return snapshot.subscriptionCurrentPeriodEndUtc.getTime() > now.getTime();
+}
+
+function resolveTenantAccess(
+  snapshot: TenantBillingSnapshot,
+  now: Date,
+  context?: EntitlementContext,
+): {
+  planCode: PlanCode;
+  hasWorkspaceAccess: boolean;
+  billingRequired: boolean;
+  accessReason: TenantAccessReason;
+} {
+  if (isSuperuser(context)) {
+    return {
+      planCode: "enterprise",
+      hasWorkspaceAccess: true,
+      billingRequired: false,
+      accessReason: "superuser",
+    };
+  }
+
+  if (isActiveTrial(snapshot, now)) {
+    return {
+      planCode: "enterprise",
+      hasWorkspaceAccess: true,
+      billingRequired: false,
+      accessReason: "trial",
+    };
+  }
+
+  const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
+  if (explicitPlan && hasActivePaidSubscription(snapshot, now)) {
+    return {
+      planCode: explicitPlan,
+      hasWorkspaceAccess: true,
+      billingRequired: false,
+      accessReason: "paid",
+    };
+  }
+
+  const status = normalizeSubscriptionStatus(snapshot.subscriptionStatus);
+
+  return {
+    planCode: explicitPlan ?? "starter",
+    hasWorkspaceAccess: false,
+    billingRequired: true,
+    accessReason: status === "past_due" ? "past_due" : explicitPlan ? "inactive" : "payment_required",
+  };
+}
+
 export function resolveEffectivePlanCode(
   snapshot: TenantBillingSnapshot,
   now = new Date(),
   context?: EntitlementContext,
 ): PlanCode {
-  if (isSuperuser(context)) return "enterprise";
-  if (isActiveTrial(snapshot, now)) return "enterprise";
-  const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
-  if (explicitPlan) return explicitPlan;
-  return "starter";
+  return resolveTenantAccess(snapshot, now, context).planCode;
 }
 
 export interface TenantEntitlements {
   planCode: PlanCode;
   planName: string;
   isTrial: boolean;
+  hasWorkspaceAccess: boolean;
+  billingRequired: boolean;
+  accessReason: TenantAccessReason;
   limits: PlanDefinition["limits"];
   features: PlanDefinition["features"];
 }
@@ -142,13 +209,16 @@ export function buildTenantEntitlements(
   now = new Date(),
   context?: EntitlementContext,
 ): TenantEntitlements {
-  const planCode = resolveEffectivePlanCode(snapshot, now, context);
-  const definition = PLAN_DEFINITIONS[planCode];
+  const access = resolveTenantAccess(snapshot, now, context);
+  const definition = PLAN_DEFINITIONS[access.planCode];
 
   return {
-    planCode,
+    planCode: access.planCode,
     planName: definition.name,
     isTrial: isActiveTrial(snapshot, now) && !isSuperuser(context),
+    hasWorkspaceAccess: access.hasWorkspaceAccess,
+    billingRequired: access.billingRequired,
+    accessReason: access.accessReason,
     limits: definition.limits,
     features: definition.features,
   };

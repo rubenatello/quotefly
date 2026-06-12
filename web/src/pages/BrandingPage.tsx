@@ -711,7 +711,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     {effectivePlanCode === "starter"
-                      ? "Starter always shows QuoteFly attribution."
+                      ? "Basic always shows QuoteFly attribution."
                       : "Professional and Enterprise can hide it."}
                   </p>
                 </div>
@@ -894,7 +894,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
                     {effectivePlanCode === "starter"
-                      ? "Starter always shows QuoteFly attribution for brand recognition."
+                      ? "Basic always shows QuoteFly attribution for brand recognition."
                       : "Turn this off if you do not want QuoteFly attribution on customer-facing quotes."}
                   </p>
                 </div>

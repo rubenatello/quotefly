@@ -66,7 +66,7 @@ const EMPTY_NEW_USER: NewUserForm = {
 const PLAN_CARDS: readonly PlanCard[] = [
   {
     code: "starter",
-    name: "Starter",
+    name: "Basic",
     price: "$19/mo",
     launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
@@ -222,7 +222,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const ownerView = sessionRole === "owner";
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
-  const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Starter";
+  const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Basic";
   const seatLimitReached = teamMembersLimit !== null && teamMembersUsed >= teamMembersLimit;
   const hasPortalAccess =
     activeSubscriptionPlan !== null ||
@@ -468,7 +468,7 @@ export function AdminPage({ session }: AdminPageProps) {
                 {sentenceCaseStatus(session?.subscriptionStatus)}
               </Badge>
               <Badge tone={starterLaunchMode ? "blue" : "amber"}>
-                {starterLaunchMode ? "Starter launch" : "Advanced tiers later"}
+                {starterLaunchMode ? "Basic launch" : "Advanced tiers later"}
               </Badge>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
@@ -562,7 +562,7 @@ export function AdminPage({ session }: AdminPageProps) {
               ) : null}
               {settingsMode === "org" && ownerView ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                  Starter launch keeps the product focused on customer management and quoting. Advanced accounting integrations stay off-sale for now.
+                  Basic launch keeps the product focused on customer management and quoting. Advanced accounting integrations stay off-sale for now.
                 </div>
               ) : null}
             </div>
@@ -632,13 +632,13 @@ export function AdminPage({ session }: AdminPageProps) {
             id="admin-billing"
             step="Step 2"
             title="Billing"
-            description="Starter is the launch plan. Advanced tiers stay visible here, but they are not for sale yet."
+            description="Basic is the launch plan. Advanced tiers stay visible here, but they are not for sale yet."
             actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
           title="Billing and Plan Controls"
-          subtitle="Launch with Starter. Stripe handles billing and QuoteFly enforces access while Professional and Enterprise stay off-sale."
+          subtitle="Launch with Basic. Stripe handles billing and QuoteFly enforces access while Professional and Enterprise stay off-sale."
         />
         <div className="grid gap-4 xl:grid-cols-3">
           {PLAN_CARDS.map((plan) => {
@@ -695,7 +695,7 @@ export function AdminPage({ session }: AdminPageProps) {
         <Card variant="default" padding="md" className="mt-4 bg-slate-50/80">
           <p className="text-sm font-semibold text-slate-900">Launch note</p>
           <p className="mt-1 text-sm text-slate-600">
-            Starter is the only sellable launch plan right now. Professional and Enterprise remain visible so the roadmap is clear, but they stay off-sale until the deeper reporting and accounting surfaces are hardened.
+            Basic is the only sellable launch plan right now. Professional and Enterprise remain visible so the roadmap is clear, but they stay off-sale until the deeper reporting and accounting surfaces are hardened.
           </p>
         </Card>
             </Card>
@@ -707,13 +707,13 @@ export function AdminPage({ session }: AdminPageProps) {
             id="admin-quickbooks"
             step="Step 3"
             title="Accounting"
-            description={starterLaunchMode ? "Starter launch is focused on CRM and quoting first. Direct accounting sync stays off-sale until the next release." : "Accounting integrations are being hardened for the next release."}
+            description={starterLaunchMode ? "Basic launch is focused on CRM and quoting first. Direct accounting sync stays off-sale until the next release." : "Accounting integrations are being hardened for the next release."}
             actions={<Badge tone="amber">V2 roadmap</Badge>}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
           title="Accounting roadmap"
-          subtitle={starterLaunchMode ? "Starter customers should focus on customer management, quote tracking, and PDF delivery. Direct accounting sync is being staged after launch." : "Advanced accounting sync is still being hardened before sale."}
+          subtitle={starterLaunchMode ? "Basic customers should focus on customer management, quote tracking, and PDF delivery. Direct accounting sync is being staged after launch." : "Advanced accounting sync is still being hardened before sale."}
         />
 
         <div className="flex flex-wrap gap-2">
@@ -728,7 +728,7 @@ export function AdminPage({ session }: AdminPageProps) {
             <div className="mt-3 grid gap-2 text-sm text-slate-700">
               <p><span className="font-semibold text-slate-900">Customer pipeline:</span> new through sold, with clear status handling.</p>
               <p><span className="font-semibold text-slate-900">Quote workflow:</span> draft, send, close, and PDF actions from one workspace.</p>
-              <p><span className="font-semibold text-slate-900">Team access:</span> Starter seat and AI limits are enforced from billing.</p>
+              <p><span className="font-semibold text-slate-900">Team access:</span> Basic seat and AI limits are enforced from billing.</p>
               <p><span className="font-semibold text-slate-900">Exports:</span> PDF delivery is part of the launch workflow today.</p>
             </div>
           </div>
@@ -736,7 +736,7 @@ export function AdminPage({ session }: AdminPageProps) {
           <Card variant="default" padding="md">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Later release</p>
             <div className="mt-3 space-y-3 text-sm text-slate-600">
-              <p>Professional and Enterprise will take on accounting workflows only after the starter CRM and quoting path is stable in production.</p>
+              <p>Professional and Enterprise will take on accounting workflows only after the Basic CRM and quoting path is stable in production.</p>
               <ul className="space-y-2 text-sm text-slate-700">
                 <li>- Direct QuickBooks Online connection</li>
                 <li>- Invoice push and status refresh</li>

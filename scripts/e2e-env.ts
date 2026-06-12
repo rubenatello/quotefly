@@ -1,0 +1,52 @@
+import { config } from "dotenv";
+
+config({ quiet: true });
+
+export function applyE2eEnv() {
+  const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+
+  if (!testDatabaseUrl) {
+    throw new Error("TEST_DATABASE_URL is required for E2E. Use a dedicated database such as quotefly_test.");
+  }
+
+  process.env.NODE_ENV = "test";
+  process.env.PORT ||= process.env.E2E_API_PORT || "4100";
+  process.env.DATABASE_URL = testDatabaseUrl;
+  process.env.JWT_SECRET ||= "e2e-jwt-secret-for-quotefly-launch-readiness";
+  process.env.APP_URL = process.env.E2E_WEB_URL || "http://127.0.0.1:4173";
+  process.env.API_URL = process.env.E2E_API_URL || `http://127.0.0.1:${process.env.PORT}`;
+  process.env.CORS_ALLOWED_ORIGINS = process.env.APP_URL;
+  process.env.SESSION_COOKIE_NAME ||= "qf_session";
+  process.env.SESSION_COOKIE_DOMAIN ||= "";
+  process.env.SESSION_COOKIE_SAME_SITE ||= "lax";
+  process.env.OPENAI_API_KEY ||= "";
+  process.env.OPENAI_MODEL ||= "gpt-4o-mini";
+  process.env.STRIPE_SECRET_KEY ||= "sk_test_quotefly_e2e";
+  process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_e2e";
+  process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";
+  process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";
+  process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
+  process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
+  process.env.ENABLE_TWILIO_SMS ||= "false";
+}
+
+export function assertTestDatabaseUrl() {
+  const databaseUrl = process.env.TEST_DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error("TEST_DATABASE_URL is required for E2E.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("E2E database URL must be a valid PostgreSQL URL.");
+  }
+
+  const databaseName = parsed.pathname.replace(/^\//, "");
+  if (!databaseName.toLowerCase().includes("test")) {
+    throw new Error(
+      `Refusing to run E2E against database "${databaseName}". Use a dedicated test database such as quotefly_test.`,
+    );
+  }
+}

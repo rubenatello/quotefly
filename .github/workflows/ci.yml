@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: quotefly_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d quotefly_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
+      JWT_SECRET: ci-jwt-secret-for-quotefly-builds-at-least-32-chars
+      APP_URL: http://localhost:5173
+      API_URL: http://localhost:4000
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      E2E_API_PORT: 4100
+      E2E_WEB_PORT: 4173
+      E2E_API_URL: http://127.0.0.1:4100
+      E2E_WEB_URL: http://127.0.0.1:4173
+      SESSION_COOKIE_NAME: qf_session
+      SESSION_COOKIE_DOMAIN: ""
+      SESSION_COOKIE_SAME_SITE: lax
+      OPENAI_API_KEY: ""
+      OPENAI_MODEL: gpt-4o-mini
+      STRIPE_SECRET_KEY: sk_test_quotefly_ci
+      STRIPE_WEBHOOK_SECRET: whsec_quotefly_ci
+      STRIPE_PRICE_ID_STARTER: price_test_starter
+      STRIPE_PRICE_ID_PROFESSIONAL: price_test_professional
+      STRIPE_PRICE_ID_ENTERPRISE: price_test_enterprise
+      QUICKBOOKS_ENVIRONMENT: sandbox
+      ENABLE_TWILIO_SMS: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Apply database migrations
+        run: npm run prisma:migrate:deploy
+
+      - name: Verify launch readiness
+        run: npm run verify:launch

@@ -14,6 +14,15 @@
     "eval:ai:model": "tsx scripts/ai-quote-eval.ts --mode=ai",
     "build": "tsc -p tsconfig.json",
     "build:web": "npm --prefix web run build",
+    "lint:web": "npm --prefix web run lint",
+    "prisma:validate": "prisma validate",
+    "test:integration": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "audit:all": "npm audit && npm --prefix web audit",
+    "verify": "npm run build && npm run build:web && npm run lint:web && npm run prisma:validate && npm run eval:ai && npm run audit:all",
+    "verify:ci": "npm run build && npm run build:web && npm run lint:web && npm run prisma:validate && npm run test:integration && npm run eval:ai && npm run audit:all",
+    "verify:launch": "npm run verify:ci && npm run test:e2e",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -25,6 +34,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
     "@fastify/formbody": "^8.0.2",
     "@fastify/helmet": "^13.0.2",
@@ -48,10 +58,12 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.5.2",
-    "concurrently": "^9.2.1",
+    "@playwright/test": "^1.60.0",
+    "concurrently": "^10.0.3",
     "prisma": "^6.19.3",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.8"
   },
   "engines": {
     "node": ">=22.0.0"

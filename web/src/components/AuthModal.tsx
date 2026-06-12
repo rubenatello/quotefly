@@ -53,7 +53,6 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
         payload = await api.auth.signin({ email, password });
       }
 
-      localStorage.setItem("qf_token", payload.token);
       localStorage.setItem("qf_tenant_id", payload.tenant.id);
 
       onSuccess?.(payload);

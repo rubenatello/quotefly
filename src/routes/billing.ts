@@ -291,7 +291,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
 
     if (!SELLABLE_PLAN_CODES.has(payload.planCode)) {
       return reply.code(409).send({
-        error: "Starter is the only plan available for launch. Professional and Enterprise are coming soon.",
+        error: "Basic is the only plan available for launch. Professional and Enterprise are coming soon.",
       });
     }
 

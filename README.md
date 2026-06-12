@@ -110,6 +110,7 @@ Use Tailwind utility classes directly in React components.
 - `STRIPE_PRICE_ID_ENTERPRISE`: Stripe enterprise plan price id (`price_...`)
 - `APP_URL`: frontend URL (e.g. `http://localhost:5173`, `https://quotefly.us`)
 - `API_URL`: API URL (e.g. `http://localhost:4000`, `https://api.quotefly.us`)
+- `CORS_ALLOWED_ORIGINS`: comma-separated browser origins allowed to call the API in production (defaults to `APP_URL`; e.g. `https://quotefly.us,https://www.quotefly.us`)
 - `QUICKBOOKS_CLIENT_ID`: Intuit app client id for QuickBooks OAuth
 - `QUICKBOOKS_CLIENT_SECRET`: Intuit app client secret
 - `QUICKBOOKS_ENVIRONMENT`: `sandbox` or `production`

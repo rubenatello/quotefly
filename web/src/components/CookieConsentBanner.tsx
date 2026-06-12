@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   getStoredCookieConsent,
@@ -7,11 +7,7 @@ import {
 } from "../lib/cookie-consent";
 
 export function CookieConsentBanner() {
-  const [choice, setChoice] = useState<CookieConsentChoice | null>(null);
-
-  useEffect(() => {
-    setChoice(getStoredCookieConsent());
-  }, []);
+  const [choice, setChoice] = useState<CookieConsentChoice | null>(() => getStoredCookieConsent());
 
   if (choice !== null) return null;
 

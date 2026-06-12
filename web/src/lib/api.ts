@@ -1,9 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 
-function getToken(): string | null {
-  return localStorage.getItem("qf_token");
-}
-
 function toQueryString(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -15,7 +11,6 @@ function toQueryString(params: Record<string, string | number | boolean | undefi
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
   const headers = new Headers(options.headers);
   const body = options.body;
   const hasBody = body !== undefined && body !== null;
@@ -23,10 +18,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const isBlob = typeof Blob !== "undefined" && body instanceof Blob;
   const isUrlSearchParams =
     typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams;
-
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
 
   if (
     hasBody &&
@@ -42,7 +33,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.delete("Content-Type");
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, body, headers });
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    body,
+    credentials: options.credentials ?? "include",
+    headers,
+  });
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -63,15 +59,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function requestBlob(path: string, options: RequestInit = {}): Promise<Blob> {
-  const token = getToken();
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: options.credentials ?? "include",
+    headers,
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const message = (body as { error?: string }).error ?? `Request failed: ${res.status}`;
@@ -94,17 +90,26 @@ export class ApiError extends Error {
 }
 
 export type AuthPayload = {
-  token: string;
   user: { id: string; email: string; fullName: string };
   tenant: { id: string; name: string; slug: string };
 };
 
 export type PlanCode = "starter" | "professional" | "enterprise";
+export type TenantAccessReason =
+  | "superuser"
+  | "trial"
+  | "paid"
+  | "payment_required"
+  | "past_due"
+  | "inactive";
 
 export type TenantEntitlements = {
   planCode: PlanCode;
   planName: string;
   isTrial: boolean;
+  hasWorkspaceAccess: boolean;
+  billingRequired: boolean;
+  accessReason: TenantAccessReason;
   limits: {
     quotesPerMonth: number | null;
     aiQuotesPerMonth: number | null;
@@ -808,6 +813,8 @@ export const api = {
     signin: (body: { email: string; password: string }) =>
       request<AuthPayload>("/v1/auth/signin", { method: "POST", body: JSON.stringify(body) }),
 
+    logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
+
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
   },
 
@@ -1215,16 +1222,13 @@ export const api = {
       onProgress?: (event: AiProgressEvent) => void;
     }): Promise<AiQuoteSuggestionResult> =>
       (async () => {
-        const token = getToken();
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-        if (token) {
-          headers.Authorization = `Bearer ${token}`;
-        }
 
         const res = await fetch(`${API_BASE}/v1/quotes/ai-suggest`, {
           method: "POST",
+          credentials: "include",
           headers,
           body: JSON.stringify(body),
         });

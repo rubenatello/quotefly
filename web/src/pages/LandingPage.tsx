@@ -2,34 +2,34 @@ import { useEffect } from "react";
 import { setSEOMetadata } from "../lib/seo";
 import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
 
+const SEO_FAQS = [
+  {
+    q: "What is contractor quoting software?",
+    a: "Contractor quoting software helps service businesses create, price, send, and track quotes from one workflow.",
+  },
+  {
+    q: "Is QuoteFly also contractor estimating software?",
+    a: "Yes. QuoteFly supports estimating labor, materials, markup, and customer totals before you send the final quote.",
+  },
+  {
+    q: "Which trades can use QuoteFly?",
+    a: "HVAC, plumbing, roofing, flooring, construction, and landscaping teams can use the same core quote workflow.",
+  },
+  {
+    q: "Can I send branded quote PDFs from my phone?",
+    a: "Yes. QuoteFly is mobile-first and lets you generate and share branded quote PDFs from the field.",
+  },
+  {
+    q: "Does QuoteFly include customer tracking?",
+    a: "Yes. QuoteFly includes customer intake, follow-up status tracking, and quote pipeline visibility.",
+  },
+];
+
 interface LandingPageProps {
   onOpenAuth: () => void;
 }
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
-  const seoFaqs = [
-    {
-      q: "What is contractor quoting software?",
-      a: "Contractor quoting software helps service businesses create, price, send, and track quotes from one workflow.",
-    },
-    {
-      q: "Is QuoteFly also contractor estimating software?",
-      a: "Yes. QuoteFly supports estimating labor, materials, markup, and customer totals before you send the final quote.",
-    },
-    {
-      q: "Which trades can use QuoteFly?",
-      a: "HVAC, plumbing, roofing, flooring, construction, and landscaping teams can use the same core quote workflow.",
-    },
-    {
-      q: "Can I send branded quote PDFs from my phone?",
-      a: "Yes. QuoteFly is mobile-first and lets you generate and share branded quote PDFs from the field.",
-    },
-    {
-      q: "Does QuoteFly include customer tracking?",
-      a: "Yes. QuoteFly includes customer intake, follow-up status tracking, and quote pipeline visibility.",
-    },
-  ];
-
   useEffect(() => {
     setSEOMetadata({
       title: "Contractor Quoting Software and Estimating Software",
@@ -53,7 +53,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
     script.text = JSON.stringify({
       "@context": "https://schema.org",
       "@type": "FAQPage",
-      mainEntity: seoFaqs.map((item) => ({
+      mainEntity: SEO_FAQS.map((item) => ({
         "@type": "Question",
         name: item.q,
         acceptedAnswer: {
@@ -245,7 +245,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         <div className="mx-auto max-w-4xl">
           <h2 className="mb-10 text-center text-3xl font-bold text-slate-900">Contractor quoting software FAQ</h2>
           <div className="space-y-4">
-            {seoFaqs.map((faq) => (
+            {SEO_FAQS.map((faq) => (
               <article key={faq.q} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-lg font-semibold text-slate-900">{faq.q}</h3>
                 <p className="mt-2 text-slate-600">{faq.a}</p>

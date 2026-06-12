@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { FastifyPluginAsync } from "fastify";
+import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { getJwtClaims } from "../lib/auth";
@@ -10,8 +10,12 @@ import { applyOnboardingSetup } from "../services/onboarding";
 
 const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
+const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const TRIAL_DAYS = 14;
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
+const SignUpRateLimit = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } } as const;
+const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
+const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
 
 const SignUpSchema = z.object({
   email: z.string().trim().email(),
@@ -60,9 +64,31 @@ function uniqueViolationTargets(error: Prisma.PrismaClientKnownRequestError): st
   return [];
 }
 
+function sessionCookieBaseOptions(app: Parameters<FastifyPluginAsync>[0]) {
+  const domain = app.env.SESSION_COOKIE_DOMAIN.trim();
+  return {
+    httpOnly: true,
+    path: "/",
+    sameSite: app.env.SESSION_COOKIE_SAME_SITE,
+    secure: app.env.NODE_ENV === "production" || app.env.SESSION_COOKIE_SAME_SITE === "none",
+    ...(domain ? { domain } : {}),
+  } as const;
+}
+
+function setSessionCookie(app: Parameters<FastifyPluginAsync>[0], reply: FastifyReply, token: string) {
+  reply.setCookie(app.env.SESSION_COOKIE_NAME, token, {
+    ...sessionCookieBaseOptions(app),
+    maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
+  });
+}
+
+function clearSessionCookie(app: Parameters<FastifyPluginAsync>[0], reply: FastifyReply) {
+  reply.clearCookie(app.env.SESSION_COOKIE_NAME, sessionCookieBaseOptions(app));
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
   // POST /v1/auth/signup
-  app.post("/auth/signup", async (request, reply) => {
+  app.post("/auth/signup", SignUpRateLimit, async (request, reply) => {
     const payload = SignUpSchema.parse(request.body);
     const email = payload.email.toLowerCase();
 
@@ -129,8 +155,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           { expiresIn: JWT_TTL },
         );
 
+        setSessionCookie(app, reply, token);
+
         return reply.code(201).send({
-          token,
           user: { id: user.id, email: user.email, fullName: user.fullName },
           tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
         });
@@ -155,7 +182,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // POST /v1/auth/signin
-  app.post("/auth/signin", async (request, reply) => {
+  app.post("/auth/signin", SignInRateLimit, async (request, reply) => {
     const payload = SignInSchema.parse(request.body);
     const email = payload.email.toLowerCase();
 
@@ -201,15 +228,22 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       { expiresIn: JWT_TTL },
     );
 
+    setSessionCookie(app, reply, token);
+
     return reply.send({
-      token,
       user: { id: user.id, email: user.email, fullName: user.fullName },
       tenant: { id: tenantLink.tenant.id, name: tenantLink.tenant.name, slug: tenantLink.tenant.slug },
     });
   });
 
+  // POST /v1/auth/logout
+  app.post("/auth/logout", async (_request, reply) => {
+    clearSessionCookie(app, reply);
+    return reply.code(204).send();
+  });
+
   // GET /v1/auth/me  (protected)
-  app.get("/auth/me", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.get("/auth/me", { ...AuthMeRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
 
     const membership = await app.prisma.tenantUser.findFirst({

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { CheckIcon, ClockIcon, CustomerIcon, DeleteIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import { AppLoadingScreen } from "../components/AppLoadingScreen";
@@ -241,7 +241,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
   const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
   const canViewQuoteHistory = session?.entitlements?.features.quoteVersionHistory ?? true;
   const canViewCommunicationLog = session?.entitlements?.features.communicationLog ?? true;
-  const currentPlanLabel = session?.effectivePlanName ?? "Starter";
+  const currentPlanLabel = session?.effectivePlanName ?? "Basic";
   const canAutoUpgradeMessage = !(session?.isTrial ?? false);
 
   useEffect(() => {
@@ -270,18 +270,6 @@ export function DashboardPage({ session }: DashboardPageProps) {
     };
   }, [setupTrade]);
 
-  useEffect(() => {
-    if (!selectedQuoteId) return;
-    void loadQuoteDetail(selectedQuoteId);
-  }, [selectedQuoteId, canViewCommunicationLog]);
-
-  useEffect(() => {
-    if (!canViewQuoteHistory) {
-      setQuoteHistory([]);
-      return;
-    }
-    void loadQuoteHistory();
-  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
 
   async function loadAll() {
     setLoading(true);
@@ -327,7 +315,25 @@ export function DashboardPage({ session }: DashboardPageProps) {
     }
   }
 
-  async function loadQuoteDetail(quoteId: string) {
+  const loadOutboundEvents = useCallback(async (quoteId: string) => {
+    if (!canViewCommunicationLog) {
+      setOutboundEvents([]);
+      return;
+    }
+
+    setOutboundEventsLoading(true);
+    try {
+      const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
+      setOutboundEvents(events);
+    } catch (err) {
+      setOutboundEvents([]);
+      setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
+    } finally {
+      setOutboundEventsLoading(false);
+    }
+  }, [canViewCommunicationLog]);
+
+  const loadQuoteDetail = useCallback(async (quoteId: string) => {
     try {
       const { quote } = await api.quotes.get(quoteId);
       setSelectedQuote(quote);
@@ -348,27 +354,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
       setOutboundEvents([]);
       setError(err instanceof ApiError ? err.message : "Failed loading quote detail.");
     }
-  }
+  }, [canViewCommunicationLog, loadOutboundEvents]);
 
-  async function loadOutboundEvents(quoteId: string) {
-    if (!canViewCommunicationLog) {
-      setOutboundEvents([]);
-      return;
-    }
-
-    setOutboundEventsLoading(true);
-    try {
-      const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
-      setOutboundEvents(events);
-    } catch (err) {
-      setOutboundEvents([]);
-      setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
-    } finally {
-      setOutboundEventsLoading(false);
-    }
-  }
-
-  async function loadQuoteHistory() {
+  const loadQuoteHistory = useCallback(async () => {
     if (!canViewQuoteHistory) {
       setQuoteHistory([]);
       return;
@@ -404,7 +392,20 @@ export function DashboardPage({ session }: DashboardPageProps) {
     } finally {
       setHistoryLoading(false);
     }
-  }
+  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
+
+  useEffect(() => {
+    if (!selectedQuoteId) {
+      setSelectedQuote(null);
+      setOutboundEvents([]);
+      return;
+    }
+    void loadQuoteDetail(selectedQuoteId);
+  }, [selectedQuoteId, loadQuoteDetail]);
+
+  useEffect(() => {
+    void loadQuoteHistory();
+  }, [loadQuoteHistory]);
 
   function focusQuoteDesk(quoteId: string | null) {
     setSelectedQuoteId(quoteId);

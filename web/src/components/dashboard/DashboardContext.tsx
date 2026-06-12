@@ -399,7 +399,7 @@ export function DashboardProvider({
   const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
   const canViewQuoteHistory = session?.entitlements?.features.quoteVersionHistory ?? true;
   const canViewCommunicationLog = session?.entitlements?.features.communicationLog ?? true;
-  const currentPlanLabel = session?.effectivePlanName ?? "Starter";
+  const currentPlanLabel = session?.effectivePlanName ?? "Basic";
   const canAutoUpgradeMessage = !(session?.isTrial ?? false);
 
   /* ─── Data loaders ─── */
@@ -411,16 +411,6 @@ export function DashboardProvider({
       .catch(() => { if (mounted) setRecommendedPresetCount(0); });
     return () => { mounted = false; };
   }, [setupTrade]);
-
-  useEffect(() => {
-    if (!selectedQuoteId) return;
-    void loadQuoteDetail(selectedQuoteId);
-  }, [selectedQuoteId, canViewCommunicationLog]);
-
-  useEffect(() => {
-    if (!canViewQuoteHistory) { setQuoteHistory([]); return; }
-    void loadQuoteHistory();
-  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -489,10 +479,24 @@ export function DashboardProvider({
     }
   }, []);
 
-  async function loadQuoteDetail(
+  const loadOutboundEvents = useCallback(async (quoteId: string) => {
+    if (!canViewCommunicationLog) { setOutboundEvents([]); return; }
+    setOutboundEventsLoading(true);
+    try {
+      const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
+      setOutboundEvents(events);
+    } catch (err) {
+      setOutboundEvents([]);
+      setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
+    } finally {
+      setOutboundEventsLoading(false);
+    }
+  }, [canViewCommunicationLog]);
+
+  const loadQuoteDetail = useCallback(async (
     quoteId: string,
     options?: { includeOutboundEvents?: boolean },
-  ) {
+  ) => {
     try {
       const { quote } = await api.quotes.get(quoteId);
       setSelectedQuote(quote);
@@ -516,21 +520,7 @@ export function DashboardProvider({
       setOutboundEvents([]);
       setError(err instanceof ApiError ? err.message : "Failed loading quote detail.");
     }
-  }
-
-  async function loadOutboundEvents(quoteId: string) {
-    if (!canViewCommunicationLog) { setOutboundEvents([]); return; }
-    setOutboundEventsLoading(true);
-    try {
-      const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
-      setOutboundEvents(events);
-    } catch (err) {
-      setOutboundEvents([]);
-      setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
-    } finally {
-      setOutboundEventsLoading(false);
-    }
-  }
+  }, [canViewCommunicationLog, loadOutboundEvents]);
 
   const loadQuoteHistory = useCallback(async () => {
     if (!canViewQuoteHistory) { setQuoteHistory([]); return; }
@@ -558,37 +548,50 @@ export function DashboardProvider({
     }
   }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
 
+  useEffect(() => {
+    if (!selectedQuoteId) {
+      setSelectedQuote(null);
+      setOutboundEvents([]);
+      return;
+    }
+    void loadQuoteDetail(selectedQuoteId);
+  }, [selectedQuoteId, loadQuoteDetail]);
+
+  useEffect(() => {
+    void loadQuoteHistory();
+  }, [loadQuoteHistory]);
+
   const refreshSelectedQuote = useCallback(async () => {
     if (!selectedQuoteId) return;
     await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuoteId)]);
-  }, [selectedQuoteId, loadQuotes]);
+  }, [selectedQuoteId, loadQuotes, loadQuoteDetail]);
 
-  function focusQuoteDesk(quoteId: string | null) {
+  const focusQuoteDesk = useCallback((quoteId: string | null) => {
     setSelectedQuoteId(quoteId);
-  }
+  }, []);
 
-  function navigateToQuote(quoteId: string) {
+  const navigateToQuote = useCallback((quoteId: string) => {
     setSelectedQuoteId(quoteId);
     onNavigateToQuote?.(quoteId);
-  }
+  }, [onNavigateToQuote]);
 
-  function selectQuoteCustomer(customerId: string) {
+  const selectQuoteCustomer = useCallback((customerId: string) => {
     setQuoteForm((prev) => ({ ...prev, customerId }));
-  }
+  }, []);
 
-  function navigateToBuilder(customerId?: string | null) {
+  const navigateToBuilder = useCallback((customerId?: string | null) => {
     if (customerId) {
       setQuoteForm((prev) => ({ ...prev, customerId }));
     }
     onNavigateToBuilder?.();
-  }
+  }, [onNavigateToBuilder]);
 
   /* ─── Customer actions ─── */
 
-  async function submitCustomerPayload(
+  const submitCustomerPayload = useCallback(async (
     payload: CreateCustomerPayload,
     options?: { duplicateAction?: "merge" | "create_new" | "use_existing"; duplicateCustomerId?: string },
-  ) {
+  ) => {
     const result = await api.customers.create({
       ...payload,
       duplicateAction: options?.duplicateAction,
@@ -604,7 +607,7 @@ export function DashboardProvider({
         : result.restored ? "Customer restored." : "Customer created.",
     );
     void loadCustomers();
-  }
+  }, [loadCustomers]);
 
   const createCustomer = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -624,7 +627,7 @@ export function DashboardProvider({
       }
       setError("Failed creating customer.");
     } finally { setSaving(false); }
-  }, [customerForm]);
+  }, [customerForm, submitCustomerPayload]);
 
   const mergeDuplicateCustomer = useCallback(async () => {
     if (!duplicateModal) return;
@@ -632,7 +635,7 @@ export function DashboardProvider({
     try {
       await submitCustomerPayload(duplicateModal.payload, { duplicateAction: "merge", duplicateCustomerId: duplicateModal.selectedMatchId });
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed merging duplicate customer."); } finally { setSaving(false); }
-  }, [duplicateModal]);
+  }, [duplicateModal, submitCustomerPayload]);
 
   const createDuplicateAsNew = useCallback(async () => {
     if (!duplicateModal) return;
@@ -640,7 +643,7 @@ export function DashboardProvider({
     try {
       await submitCustomerPayload(duplicateModal.payload, { duplicateAction: "create_new" });
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed creating new customer record."); } finally { setSaving(false); }
-  }, [duplicateModal]);
+  }, [duplicateModal, submitCustomerPayload]);
 
   /* ─── Quote actions ─── */
 
@@ -665,7 +668,7 @@ export function DashboardProvider({
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");
     } finally { setSaving(false); }
-  }, [canUseChatToQuote, chatPrompt, loadCustomers, loadQuotes]);
+  }, [canUseChatToQuote, chatPrompt, focusQuoteDesk, loadCustomers, loadQuotes, navigateToQuote]);
 
   const applyTradeSetup = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -722,12 +725,12 @@ export function DashboardProvider({
       setError(err instanceof ApiError ? err.message : "Failed creating quote.");
       return null;
     } finally { setSaving(false); }
-  }, [quoteForm, loadQuotes]);
+  }, [focusQuoteDesk, quoteForm, loadQuotes, navigateToQuote]);
 
   const createQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
     await createQuoteDraftFromForm();
-  }, [quoteForm]);
+  }, [createQuoteDraftFromForm]);
 
   const persistSelectedQuote = useCallback(async () => {
     if (!selectedQuote) return;
@@ -749,7 +752,7 @@ export function DashboardProvider({
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Quote updated.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving quote."); } finally { setSaving(false); }
-  }, [selectedQuote, quoteEditForm, canViewQuoteHistory]);
+  }, [selectedQuote, quoteEditForm, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
     status?: QuoteStatus;
@@ -771,7 +774,7 @@ export function DashboardProvider({
     } finally {
       setSaving(false);
     }
-  }, [canViewQuoteHistory]);
+  }, [canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const saveQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -790,7 +793,7 @@ export function DashboardProvider({
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(result.message);
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating decision."); } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const openSendComposer = useCallback((channel: SendChannel) => {
     if (!selectedQuote) return;
@@ -921,7 +924,7 @@ export function DashboardProvider({
             : "PDF downloaded.",
       );
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed generating PDF."); } finally { setSaving(false); }
-  }, [selectedQuote]);
+  }, [selectedQuote, loadQuotes, loadQuoteDetail]);
 
   const exportQuotesAsInvoicesCsv = useCallback(
     async (quoteIds: string[], options?: { dueInDays?: number }) => {
@@ -985,7 +988,7 @@ export function DashboardProvider({
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(options?.notice ?? "Line item added.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed adding line item."); } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const addLineItem = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -1018,7 +1021,7 @@ export function DashboardProvider({
     } finally {
       setSaving(false);
     }
-  }, [selectedQuote, canViewQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const deleteLineItem = useCallback(async (lineItemId: string) => {
     if (!selectedQuote) return;
@@ -1032,7 +1035,7 @@ export function DashboardProvider({
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Line item deleted.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed deleting line item."); } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const updateLeadFollowUpStatus = useCallback(async (customerId: string, followUpStatus: LeadFollowUpStatus) => {
     setSaving(true); setError(null);
@@ -1042,7 +1045,7 @@ export function DashboardProvider({
       if (selectedQuote) await loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false });
       setNotice(`Follow-up status updated to ${followUpLabel(followUpStatus)}.`);
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating follow-up status."); } finally { setSaving(false); }
-  }, [selectedQuote]);
+  }, [selectedQuote, loadCustomers, loadQuotes, loadQuoteDetail]);
 
   /* ─── Computed ─── */
 

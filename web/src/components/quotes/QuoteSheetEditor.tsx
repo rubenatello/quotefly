@@ -64,6 +64,7 @@ export function QuoteSheetEditor({
 
   return (
     <div
+      data-testid="quote-sheet-editor"
       className={`overflow-hidden rounded-[20px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-sm)] ${
         usesFullBleedAccent ? "bg-[var(--qf-panel)]" : "p-2.5 sm:p-3"
       } ${
@@ -98,6 +99,7 @@ export function QuoteSheetEditor({
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
                   </div>
                   <input
+                    aria-label="Quote title"
                     value={title}
                     onChange={(event) => onTitleChange(event.target.value)}
                     placeholder={titlePlaceholder ?? "Untitled quote"}
@@ -175,6 +177,7 @@ export function QuoteSheetEditor({
                 Overview
               </label>
               <textarea
+                aria-label="Quote overview"
                 rows={3}
                 value={overview}
                 onChange={(event) => onOverviewChange(event.target.value)}

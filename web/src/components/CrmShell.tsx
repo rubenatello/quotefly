@@ -81,23 +81,16 @@ export function CrmShell({
   children,
   fullName,
   planName,
-  planCode: _planCode,
   isTrial,
   entitlements,
   usage,
 }: CrmShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [commandOpen, setCommandOpen] = useState(false);
-
-  useEffect(() => {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
-    if (savedValue === null) {
-      setSidebarCollapsed(true);
-    } else if (savedValue === "true") {
-      setSidebarCollapsed(true);
-    }
-  }, []);
+    return savedValue === null || savedValue === "true";
+  });
+  const [commandOpen, setCommandOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("qf_sidebar_collapsed", sidebarCollapsed ? "true" : "false");

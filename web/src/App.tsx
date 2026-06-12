@@ -6,6 +6,7 @@ import { AuthModal } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
+import { BillingRequiredScreen } from "./components/billing/BillingRequiredScreen";
 import { BottomTabBar } from "./components/crm/BottomTabBar";
 import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
 import {
@@ -115,12 +116,27 @@ function CrmLayout({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const workspaceLocked =
+    session.entitlements?.billingRequired === true &&
+    session.entitlements.hasWorkspaceAccess === false &&
+    !session.isSuperuser;
 
   useEffect(() => {
+    if (workspaceLocked) return;
     if (!session.onboardingCompletedAtUtc && !location.pathname.startsWith("/app/setup")) {
       navigate("/app/setup", { replace: true });
     }
-  }, [location.pathname, navigate, session.onboardingCompletedAtUtc]);
+  }, [location.pathname, navigate, session.onboardingCompletedAtUtc, workspaceLocked]);
+
+  if (workspaceLocked) {
+    return (
+      <BillingRequiredScreen
+        session={session}
+        onLogout={onLogout}
+        onRefreshSession={onRefreshSession}
+      />
+    );
+  }
 
   const currentPage = (() => {
     if (location.pathname.startsWith("/app/analytics")) return "analytics";
@@ -277,6 +293,8 @@ function AppRoutes() {
   const [session, setSession] = useState<Session | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const navigate = useNavigate();
+  const location = useLocation();
+  const [initialPath] = useState(() => location.pathname);
 
   async function refreshSessionState() {
     const payload = await api.auth.me();
@@ -287,12 +305,6 @@ function AppRoutes() {
 
   useEffect(() => {
     let isMounted = true;
-    const token = localStorage.getItem("qf_token");
-
-    if (!token) {
-      setIsSessionChecking(false);
-      return () => { isMounted = false; };
-    }
 
     async function restoreSession() {
       try {
@@ -301,7 +313,9 @@ function AppRoutes() {
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
         setSession(toSession(payload));
-        navigate("/app", { replace: true });
+        if (!initialPath.startsWith("/app")) {
+          navigate("/app", { replace: true });
+        }
       } catch (error) {
         clearStoredSession();
         if (isMounted) setSession(null);
@@ -315,7 +329,7 @@ function AppRoutes() {
 
     void restoreSession();
     return () => { isMounted = false; };
-  }, []);
+  }, [initialPath, navigate]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
     localStorage.setItem("qf_full_name", payload.user.fullName);
@@ -341,6 +355,11 @@ function AppRoutes() {
   };
 
   const handleLogout = () => {
+    void api.auth.logout().catch((error) => {
+      if (!(error instanceof ApiError && error.status === 401)) {
+        console.error("Logout failed", error);
+      }
+    });
     clearStoredSession();
     setSession(null);
     navigate("/", { replace: true });

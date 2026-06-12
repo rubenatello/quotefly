@@ -2,11 +2,12 @@
 
 ## Launch Window
 
-Target launch date: `2026-05-01`
+Target launch status: `ASAP readiness review` (original target: `2026-05-01`)
 
-Reference plan:
+Reference plans:
 
-- `docs/plan/development-plan.md`
+- `docs/plan/launch-improvement-tracker-2026-05-01.md`
+- `docs/plan/subscription-tiers.md`
 
 ## Immediate Launch Blockers
 
@@ -151,7 +152,7 @@ That command runs `prisma migrate deploy` before starting the API so production 
 ## 9. Cost Estimation (AI Usage)
 
 Each Chat-to-Quote AI call uses ~500-800 tokens. At `gpt-4o-mini` pricing:
-- **Starter plan** (30 AI quotes/month): still effectively pennies per month
+- **Basic plan** (30 AI quotes/month): still effectively pennies per month
 - **Professional plan** (300 AI quotes/month): still very low cost for normal usage
 - **Enterprise plan** (800 AI quotes/month): materially higher than the other tiers, but still manageable if prompts and outputs stay disciplined
 

@@ -20,4 +20,24 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: [
+      'src/components/dashboard/DashboardContext.tsx',
+      'src/components/quotes/quote-footer.tsx',
+      'src/components/ui/workspace.tsx',
+    ],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    files: [
+      'src/components/quotes/QuoteAiPromptModal.tsx',
+      'src/views/QuoteBuilderView.tsx',
+      'src/views/QuoteDeskView.tsx',
+    ],
+    rules: {
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
 ])

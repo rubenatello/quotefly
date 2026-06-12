@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { canTrackAnalytics } from "./cookie-consent";
 
 type AnalyticsEvent = {
@@ -38,13 +38,17 @@ export function trackEvent(name: string, properties?: AnalyticsEvent["properties
 /** Page-level tracking — deduplicated per page */
 export function usePageView(page: string) {
   const lastPage = useRef<string | null>(null);
-  if (page !== lastPage.current) {
-    lastPage.current = page;
-    trackEvent("page_view", { page });
-  }
+  useEffect(() => {
+    if (page !== lastPage.current) {
+      lastPage.current = page;
+      trackEvent("page_view", { page });
+    }
+  }, [page]);
 }
 
 /** Returns a stable `track` function for component-level events */
 export function useTrack() {
-  return useCallback(trackEvent, []);
+  return useCallback((name: string, properties?: AnalyticsEvent["properties"]) => {
+    trackEvent(name, properties);
+  }, []);
 }

@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -8,7 +9,9 @@ import fastifyRawBody from "fastify-raw-body";
 import { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import { env } from "./config/env";
+import { getJwtClaims } from "./lib/auth";
 import { prisma } from "./lib/prisma";
+import { loadTenantEntitlements } from "./lib/subscription";
 import { healthRoutes } from "./routes/health";
 import { tenantRoutes } from "./routes/tenants";
 import { customerRoutes } from "./routes/customers";
@@ -23,6 +26,71 @@ import { quickBooksRoutes } from "./routes/quickbooks";
 import { internalAdminRoutes } from "./routes/internal-admin";
 import { swaggerPlugin } from "./plugins/swagger";
 
+type CorsOriginCallback = (error: Error | null, origin: boolean) => void;
+type CorsOriginFunction = (origin: string | undefined, callback: CorsOriginCallback) => void;
+
+function normalizeOrigin(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const url = new URL(trimmed);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildCorsOrigin(): true | CorsOriginFunction {
+  if (env.NODE_ENV !== "production") {
+    return true;
+  }
+
+  const allowedOrigins = new Set(
+    [env.APP_URL, env.API_URL, ...env.CORS_ALLOWED_ORIGINS.split(",")]
+      .map(normalizeOrigin)
+      .filter((origin): origin is string => Boolean(origin)),
+  );
+
+  return (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, false);
+  };
+}
+
+const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
+  "/v1/customers",
+  "/v1/quotes",
+  "/v1/onboarding",
+  "/v1/tenants",
+  "/v1/org",
+  "/v1/integrations/quickbooks",
+];
+const WORKSPACE_ACCESS_MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function requestPathname(url: string): string {
+  return url.split("?")[0] ?? url;
+}
+
+function requiresWorkspaceAccess(method: string, url: string): boolean {
+  const pathname = requestPathname(url);
+  const normalizedMethod = method.toUpperCase();
+
+  if (normalizedMethod === "GET" && /^\/v1\/quotes\/[^/]+\/pdf$/.test(pathname)) {
+    return true;
+  }
+
+  if (!WORKSPACE_ACCESS_MUTATION_METHODS.has(normalizedMethod)) {
+    return false;
+  }
+
+  return WORKSPACE_ACCESS_MUTATION_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     prisma: PrismaClient;
@@ -34,6 +102,7 @@ declare module "fastify" {
 export function buildServer() {
   const app = Fastify({
     bodyLimit: 6 * 1024 * 1024,
+    trustProxy: env.NODE_ENV === "production",
     logger: {
       transport:
         env.NODE_ENV === "development"
@@ -48,10 +117,12 @@ export function buildServer() {
   app.decorate("env", env);
 
   app.register(cors, {
-    origin: true,
+    origin: buildCorsOrigin(),
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
   });
+  app.register(cookie);
   app.register(formbody);
   app.register(fastifyRawBody, {
     field: "rawBody",
@@ -61,7 +132,13 @@ export function buildServer() {
   });
   app.register(helmet);
   app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
-  app.register(jwt, { secret: env.JWT_SECRET });
+  app.register(jwt, {
+    secret: env.JWT_SECRET,
+    cookie: {
+      cookieName: env.SESSION_COOKIE_NAME,
+      signed: false,
+    },
+  });
   app.register(swaggerPlugin);
 
   app.setErrorHandler((error, request, reply) => {
@@ -99,6 +176,39 @@ export function buildServer() {
       await request.jwtVerify();
     } catch {
       reply.code(401).send({ error: "Unauthorized" });
+    }
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (!requiresWorkspaceAccess(request.method, request.url)) {
+      return;
+    }
+
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+
+    const claims = getJwtClaims(request);
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
+
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Workspace not found." });
+    }
+
+    if (!entitlements.hasWorkspaceAccess) {
+      return reply.code(402).send({
+        code: "BILLING_REQUIRED",
+        error: "A Basic subscription is required to continue using this workspace.",
+        requiredPlan: "starter",
+        planCode: entitlements.planCode,
+        planName: entitlements.planName,
+        accessReason: entitlements.accessReason,
+        billingRequired: entitlements.billingRequired,
+      });
     }
   });
 

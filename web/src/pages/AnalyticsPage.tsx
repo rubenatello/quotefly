@@ -752,7 +752,7 @@ export function AnalyticsPage() {
                 <div>
                   <p className="text-sm font-semibold text-slate-900">Plan and AI usage</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge tone="blue">{session?.effectivePlanName ?? "Starter"}</Badge>
+                    <Badge tone="blue">{session?.effectivePlanName ?? "Basic"}</Badge>
                     {session?.isTrial ? <Badge tone="orange">Trial</Badge> : null}
                   </div>
                 </div>

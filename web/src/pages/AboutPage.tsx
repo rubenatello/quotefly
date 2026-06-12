@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckIcon } from "../components/Icons";
 import { setSEOMetadata } from "../lib/seo";
 
@@ -44,7 +44,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
     },
     {
       title: "Made to integrate",
-      description: "Stripe billing works now. Starter is focused on CRM and quoting first, with accounting integrations staged after launch.",
+      description: "Stripe billing works now. Basic is focused on CRM and quoting first, with accounting integrations staged after launch.",
     },
     {
       title: "Customer-obsessed",
@@ -134,9 +134,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
     },
   ];
 
-  const testimonials = useMemo(() => {
-    return [...baseTestimonials].sort(() => Math.random() - 0.5);
-  }, []);
+  const testimonials = baseTestimonials;
   const [activeTestimonialIndex, setActiveTestimonialIndex] = useState(0);
 
   useEffect(() => {

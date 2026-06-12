@@ -599,7 +599,7 @@ export function QuoteBuilderView() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="quote-builder">
       <PageHeader
         title="Build Quote"
         subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
@@ -1184,7 +1184,7 @@ function DraftLineEditorRow({
   }
 
   return (
-    <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60">
+    <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60" data-testid={`quote-line-row-${index + 1}`}>
       <div className="xl:hidden">
         <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
           <button
@@ -1239,12 +1239,14 @@ function DraftLineEditorRow({
             <div className="space-y-3">
               <Input
                 label="Line"
+                aria-label={`Line ${index + 1} title`}
                 placeholder="Asphalt shingle tear-off"
                 value={line.title}
                 onChange={(event) => onChange(line.id, "title", event.target.value)}
               />
               <Textarea
                 label="Description"
+                aria-label={`Line ${index + 1} description`}
                 rows={3}
                 placeholder="Optional scope details for this line"
                 value={line.details}
@@ -1257,9 +1259,9 @@ function DraftLineEditorRow({
                 onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
               />
               <div className="grid grid-cols-3 gap-2">
-                <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-                <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-                <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+                <Input label="Qty" aria-label={`Line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+                <Input label="Cost" aria-label={`Line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+                <Input label="Price" aria-label={`Line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
               </div>
               <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
@@ -1293,6 +1295,7 @@ function DraftLineEditorRow({
             compact
           />
           <Input
+            aria-label={`Line ${index + 1} title`}
             className="min-h-[38px] rounded-lg"
             placeholder="Line"
             value={line.title}
@@ -1300,15 +1303,16 @@ function DraftLineEditorRow({
           />
         </div>
         <Textarea
+          aria-label={`Line ${index + 1} description`}
           rows={2}
           className="min-h-[64px] rounded-lg"
           placeholder="Description"
           value={line.details}
           onChange={(event) => onChange(line.id, "details", event.target.value)}
         />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+        <Input aria-label={`Line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+        <Input aria-label={`Line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+        <Input aria-label={`Line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}
         </div>

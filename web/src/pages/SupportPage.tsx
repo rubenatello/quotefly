@@ -33,7 +33,7 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
   ];
 
   const responseTargets = [
-    { plan: "Starter", target: "Within 2 business days" },
+    { plan: "Basic", target: "Within 2 business days" },
     { plan: "Professional", target: "Within 1 business day" },
     { plan: "Enterprise", target: "Priority handling, same business day when possible" },
   ];

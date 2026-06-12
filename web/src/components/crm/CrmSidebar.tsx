@@ -58,7 +58,7 @@ export function CrmSidebar({
   usage,
 }: CrmSidebarProps) {
   const [navQuery, setNavQuery] = useState("");
-  const displayPlanName = planName ?? "Starter";
+  const displayPlanName = planName ?? "Basic";
   const showTrialBadge = Boolean(isTrial);
 
   const sidebarWidthClass = collapsed ? "lg:w-[74px]" : "lg:w-[228px]";

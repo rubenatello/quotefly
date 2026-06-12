@@ -11,7 +11,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     setSEOMetadata({
       title: "Contractor Quoting Software Pricing",
       description:
-        "Pricing for contractor quoting software and contractor estimating software. Start with QuoteFly Starter and scale as your crew grows.",
+        "Pricing for contractor quoting software and contractor estimating software. Start with QuoteFly Basic and scale as your crew grows.",
       keywords: "contractor quoting software pricing, contractor estimating software pricing, contractor estimate app cost, hvac quoting software pricing, plumbing quoting software pricing",
       canonicalUrl: "https://quotefly.us/pricing",
     });
@@ -19,7 +19,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
   const plans = [
     {
-      name: "Starter",
+      name: "Basic",
       price: "$19",
       period: "/month",
       description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
@@ -43,7 +43,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       description: "Planned for the next release once advanced analytics, history, and accounting workflows are fully hardened.",
       features: [
-        "Everything in Starter, plus:",
+        "Everything in Basic, plus:",
         "Est. AI prompts: ~6,800/month",
         "Advanced analytics and reporting",
         "Customer communication log",
@@ -91,7 +91,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Do you support QuickBooks?",
-      a: "Not as a sellable launch feature. Starter is focused on customer management, quoting, and PDF workflow first. Accounting integrations are planned after launch.",
+      a: "Not as a sellable launch feature. Basic is focused on customer management, quoting, and PDF workflow first. Accounting integrations are planned after launch.",
     },
     {
       q: "How does AI usage work?",
@@ -109,13 +109,13 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         <div className="mx-auto max-w-4xl text-center">
           <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Contractor quoting software pricing</h1>
           <p className="text-lg text-slate-600">
-            QuoteFly pricing for contractor quoting software and contractor estimating software. Starter is live now, with advanced tiers staged after core workflow hardening.
+            QuoteFly pricing for contractor quoting software and contractor estimating software. Basic is live now, with advanced tiers staged after core workflow hardening.
           </p>
 
           <div className="mt-8 flex items-center justify-center gap-4">
             <span className="text-sm text-slate-600">Billed monthly</span>
             <span className="inline-flex items-center rounded-full border border-quotefly-blue/15 bg-quotefly-blue/[0.06] px-4 py-2 text-xs font-semibold text-quotefly-blue">
-              Starter is live now
+              Basic is live now
             </span>
           </div>
         </div>
@@ -207,7 +207,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h2 className="mb-4 text-3xl font-bold text-slate-900">Start with Starter</h2>
+          <h2 className="mb-4 text-3xl font-bold text-slate-900">Start with Basic</h2>
           <p className="mb-8 text-lg text-slate-600">No credit card required. Full access to the launch workflow for 14 days.</p>
           <p className="mb-5 text-sm text-slate-500">AI usage applies only when you draft or revise with AI. The app shows percentage used and estimated prompts remaining.</p>
           <button

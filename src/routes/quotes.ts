@@ -877,6 +877,57 @@ async function findActiveCustomerByPhone(
   });
 }
 
+async function findOrCreatePromptCustomer(
+  prisma: PrismaClient,
+  tenantId: string,
+  params: {
+    fullName?: string | null;
+    phone: string;
+    email?: string | null;
+  },
+) {
+  const phoneDigits = normalizePhoneSearchDigits(params.phone);
+  const normalizedEmail = params.email?.trim().toLowerCase() || null;
+  const existing = await prisma.customer.findFirst({
+    where: {
+      tenantId,
+      OR: [
+        { phone: params.phone },
+        ...(phoneDigits ? [{ phoneDigits }] : []),
+        ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (existing?.deletedAtUtc) {
+    return null;
+  }
+
+  if (existing) {
+    return prisma.customer.update({
+      where: { id: existing.id },
+      data: {
+        fullName: params.fullName?.trim() || existing.fullName,
+        phone: params.phone,
+        phoneDigits,
+        email: normalizedEmail ?? existing.email,
+        archivedAtUtc: null,
+      },
+    });
+  }
+
+  return prisma.customer.create({
+    data: {
+      tenantId,
+      fullName: params.fullName?.trim() || "New Customer",
+      phone: params.phone,
+      phoneDigits,
+      email: normalizedEmail,
+    },
+  });
+}
+
 function normalizeTextForComparison(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -3143,6 +3194,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ...tenantActiveCustomerScope(claims.tenantId),
         },
       });
+    }
+
+    if (!selectedCustomer && customerPhone) {
+      selectedCustomer = await findOrCreatePromptCustomer(app.prisma, claims.tenantId, {
+        fullName: parsedDraft.customerName,
+        phone: customerPhone,
+        email: customerEmail,
+      });
+
+      if (selectedCustomer) {
+        stream.progress(
+          "loading_customer_context",
+          `Matched the prompt to ${selectedCustomer.fullName} and attached the draft to that customer.`,
+        );
+      }
     }
 
     if (selectedCustomer && !hadExplicitCustomerContext) {

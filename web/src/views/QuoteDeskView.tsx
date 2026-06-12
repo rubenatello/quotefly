@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Archive,
@@ -270,23 +270,18 @@ export function QuoteDeskView() {
     setMobilePane("editor");
     setAiInsight(null);
     setAiRuns([]);
-  }, [selectedQuote?.id, selectedQuote?.updatedAt]);
+  }, [selectedQuote]);
 
   const requiresExplicitUnlock = useMemo(() => {
     if (!selectedQuote) return false;
     return ["SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"].includes(selectedQuote.status);
-  }, [selectedQuote?.id, selectedQuote?.status]);
+  }, [selectedQuote]);
 
   useEffect(() => {
     setIsEditUnlocked(!requiresExplicitUnlock);
   }, [selectedQuote?.id, requiresExplicitUnlock]);
 
-  useEffect(() => {
-    if (activeTab !== "history" || !selectedQuote?.id) return;
-    void loadAiRuns(selectedQuote.id);
-  }, [activeTab, selectedQuote?.id]);
-
-  async function loadAiRuns(targetQuoteId = selectedQuote?.id) {
+  const loadAiRuns = useCallback(async (targetQuoteId = selectedQuote?.id) => {
     if (!targetQuoteId) {
       setAiRuns([]);
       return;
@@ -302,7 +297,12 @@ export function QuoteDeskView() {
     } finally {
       setAiRunsLoading(false);
     }
-  }
+  }, [selectedQuote?.id, setError]);
+
+  useEffect(() => {
+    if (activeTab !== "history" || !selectedQuote?.id) return;
+    void loadAiRuns(selectedQuote.id);
+  }, [activeTab, selectedQuote?.id, loadAiRuns]);
 
   const availablePresets = useMemo(
     () =>
@@ -353,7 +353,7 @@ export function QuoteDeskView() {
   const originalLineMap = useMemo(() => {
     const entries = (selectedQuote?.lineItems ?? []).map((lineItem) => [lineItem.id, toEditableQuoteLine(lineItem)] as const);
     return new Map(entries);
-  }, [selectedQuote?.id, selectedQuote?.updatedAt]);
+  }, [selectedQuote]);
 
   const dirtyLineIds = useMemo(() => {
     return editableLines
@@ -818,7 +818,7 @@ export function QuoteDeskView() {
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="quote-desk">
       <PageHeader
         title={quoteEditForm.title || selectedQuote.title}
         subtitle="Edit the quote directly: update the customer-facing copy, adjust the lines, then send or export when it is ready."
@@ -861,7 +861,7 @@ export function QuoteDeskView() {
           </div>
           {aiInsight.sources.length ? (
             <p className="mt-2 text-xs text-slate-500">
-              Context used: {aiInsight.sources.map((source) => source.label).join(" • ")}
+              Context used: {aiInsight.sources.map((source) => source.label).join(" | ")}
             </p>
           ) : null}
         </div>
@@ -1060,7 +1060,7 @@ export function QuoteDeskView() {
 
                 <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 xl:flex">
                   {presetsLoading ? (
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work…</div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work...</div>
                   ) : availablePresets.length ? (
                     availablePresets.slice(0, 10).map((preset) => (
                       <button
@@ -1378,7 +1378,7 @@ export function QuoteDeskView() {
       {activeTab === "send" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <Card variant="default" padding="md">
-            <CardHeader title="Send the quote" subtitle="When the sheet is ready, open the customer’s app or export the PDF." />
+            <CardHeader title="Send the quote" subtitle="When the sheet is ready, open the customer's app or export the PDF." />
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Button variant="outline" icon={<Mail size={14} />} onClick={() => openSendComposer("email")} disabled={saving}>
                 Email App
@@ -1396,7 +1396,7 @@ export function QuoteDeskView() {
           </Card>
 
           <Card variant="blue" padding="md">
-            <CardHeader title="Send notes" subtitle="QuoteFly opens the user’s native apps so V1 does not need a paid send service." />
+            <CardHeader title="Send notes" subtitle="QuoteFly opens the user's native apps so V1 does not need a paid send service." />
             <div className="space-y-2 text-sm text-slate-700">
               <p>Email and text actions use the native share sheet with the PDF attached on supported phones.</p>
               <p>If file sharing is not available, QuoteFly falls back to the device app and you can attach the downloaded PDF manually.</p>
@@ -1431,7 +1431,7 @@ export function QuoteDeskView() {
               </div>
 
               {aiRunsLoading ? (
-                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading AI runs…</p>
+                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading AI runs...</p>
               ) : aiRuns.length === 0 ? (
                 <EmptyState title="No AI runs yet" description="AI prompt history appears here after draft or revise actions." />
               ) : (
@@ -1448,7 +1448,7 @@ export function QuoteDeskView() {
                           ) : null}
                           {typeof run.patchAdded === "number" || typeof run.patchUpdated === "number" || typeof run.patchRemoved === "number" ? (
                             <span className="text-xs text-slate-500">
-                              {run.patchUpdated ?? 0} updated • {run.patchAdded ?? 0} added • {run.patchRemoved ?? 0} removed
+                              {run.patchUpdated ?? 0} updated | {run.patchAdded ?? 0} added | {run.patchRemoved ?? 0} removed
                             </span>
                           ) : null}
                         </div>
@@ -1466,7 +1466,7 @@ export function QuoteDeskView() {
                       ) : null}
                       {run.insightSourceLabels.length ? (
                         <p className="mt-2 text-xs text-slate-500">
-                          Context used: {run.insightSourceLabels.join(" • ")}
+                          Context used: {run.insightSourceLabels.join(" | ")}
                         </p>
                       ) : null}
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
@@ -1520,7 +1520,7 @@ export function QuoteDeskView() {
                     ) : null}
                   </div>
                   {historyLoading ? (
-                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading history…</p>
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading history...</p>
                   ) : quoteHistory.length === 0 ? (
                     <EmptyState title="No history yet" description="History entries appear after the quote changes." />
                   ) : (
@@ -1578,7 +1578,7 @@ export function QuoteDeskView() {
               actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
             />
             {outboundEventsLoading ? (
-              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading send log…</p>
+              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading send log...</p>
             ) : outboundEvents.length === 0 ? (
               <EmptyState title="No send log yet" description="Send activity appears after an email, text, or copy action is confirmed." />
             ) : (
@@ -1731,8 +1731,8 @@ export function QuoteDeskView() {
         starterPrompts={aiPromptStarters}
         onUseStarterPrompt={setChatPrompt}
         customerContextName={customerName}
-        customerContextDetails={[customerPhone, customerEmail].filter(Boolean).join(" • ")}
-        customerContextText={`${customerName}${customerPhone ? ` • ${customerPhone}` : ""}${customerEmail ? ` • ${customerEmail}` : ""}`}
+        customerContextDetails={[customerPhone, customerEmail].filter(Boolean).join(" | ")}
+        customerContextText={`${customerName}${customerPhone ? ` | ${customerPhone}` : ""}${customerEmail ? ` | ${customerEmail}` : ""}`}
         customerContextBadge="Using current quote"
         usageHint={aiUsageHint}
         errorMessage={aiErrorMessage}
@@ -1909,7 +1909,7 @@ function ExistingLineEditorRow({
   }, [line.id, startExpanded]);
 
   return (
-    <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60">
+    <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60" data-testid={`existing-quote-line-row-${index + 1}`}>
       <div className="xl:hidden">
         <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
           <button
@@ -1946,12 +1946,12 @@ function ExistingLineEditorRow({
               </Button>
             </div>
             <div className="space-y-3">
-              <Input label="Line" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
-              <Textarea label="Description" rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+              <Input label="Line" aria-label={`Existing line ${index + 1} title`} value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+              <Textarea label="Description" aria-label={`Existing line ${index + 1} description`} rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
               <div className="grid grid-cols-3 gap-2">
-                <Input label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-                <Input label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
-                <Input label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
+                <Input label="Qty" aria-label={`Existing line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+                <Input label="Cost" aria-label={`Existing line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+                <Input label="Price" aria-label={`Existing line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
               </div>
               <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
@@ -1974,12 +1974,12 @@ function ExistingLineEditorRow({
               {sectionPillLabel}
             </span>
           </div>
-          <Input className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+          <Input aria-label={`Existing line ${index + 1} title`} className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
         </div>
-        <Textarea rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
+        <Textarea aria-label={`Existing line ${index + 1} description`} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+        <Input aria-label={`Existing line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+        <Input aria-label={`Existing line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+        <Input aria-label={`Existing line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}
         </div>

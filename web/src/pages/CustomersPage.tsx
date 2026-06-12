@@ -366,7 +366,11 @@ function CustomerDesktopRow({
           icon={<FilePlus2 size={14} />}
           onClick={(event) => {
             event.stopPropagation();
-            latestQuote ? onOpenQuote(latestQuote.id) : onStartQuote(customer.id);
+            if (latestQuote) {
+              onOpenQuote(latestQuote.id);
+            } else {
+              onStartQuote(customer.id);
+            }
           }}
         >
           {latestQuote ? "Open" : "Quote"}
