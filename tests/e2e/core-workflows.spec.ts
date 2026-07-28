@@ -22,7 +22,7 @@ test.describe("controlled beta core workflow", () => {
     await addSessionCookie(context, account);
     await page.goto("/app/customers");
 
-    await expect(page.getByRole("heading", { name: /customers/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
     await expectNoFrontendJwtStorage(page);
 
     const customerLabel = uniqueRunLabel("field");

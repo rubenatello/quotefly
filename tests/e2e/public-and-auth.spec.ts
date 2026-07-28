@@ -16,7 +16,7 @@ test.describe("public site and session auth", () => {
     await expect(page.getByRole("button", { name: "Coming Soon" }).first()).toBeDisabled();
 
     await page.goto("/support");
-    await expect(page.getByRole("heading", { name: "Support" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Support", exact: true })).toBeVisible();
 
     await page.goto("/privacy");
     await expect(page.getByRole("heading", { name: /handles personal data/i })).toBeVisible();

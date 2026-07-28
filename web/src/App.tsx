@@ -297,11 +297,17 @@ function AppRoutes() {
   const location = useLocation();
   const [initialPath] = useState(() => location.pathname);
 
-  async function refreshSessionState() {
+  async function hydrateSessionState(): Promise<Session> {
     const payload = await api.auth.me();
     localStorage.setItem("qf_tenant_id", payload.tenant.id);
     localStorage.setItem("qf_full_name", payload.user.fullName);
-    setSession(toSession(payload));
+    const nextSession = toSession(payload);
+    setSession(nextSession);
+    return nextSession;
+  }
+
+  async function refreshSessionState(): Promise<void> {
+    await hydrateSessionState();
   }
 
   useEffect(() => {
@@ -336,7 +342,10 @@ function AppRoutes() {
     localStorage.setItem("qf_full_name", payload.user.fullName);
     setIsSessionChecking(true);
 
-    void refreshSessionState()
+    void hydrateSessionState()
+      .then((nextSession) => {
+        navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
+      })
       .catch((error) => {
         if (!(error instanceof ApiError && error.status === 401)) {
           console.error("Session hydration after auth failed", error);
@@ -348,9 +357,9 @@ function AppRoutes() {
           tenantName: payload.tenant.name,
           role: "owner",
         });
+        navigate("/app/setup", { replace: true });
       })
       .finally(() => {
-        navigate("/app", { replace: true });
         setIsSessionChecking(false);
       });
   };

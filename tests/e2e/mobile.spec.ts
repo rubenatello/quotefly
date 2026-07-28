@@ -22,7 +22,7 @@ test.describe("mobile launch smoke", () => {
     await addSessionCookie(context, account);
 
     await page.goto("/app/customers");
-    await expect(page.getByRole("heading", { name: /customers/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Mobile Beta Customer")).toBeVisible();
 
     const quickQuote = page.getByTestId("mobile-quick-quote");
