@@ -166,10 +166,14 @@ const QuoteHistoryByQuoteQuerySchema = PaginationQuerySchema;
 const QuoteAiRunsByQuoteQuerySchema = PaginationQuerySchema;
 
 const CreateQuoteOutboundEventSchema = z.object({
-  channel: z.enum(["EMAIL_APP", "SMS_APP", "COPY"]),
+  channel: z.enum(["EMAIL_APP", "SMS_APP", "COPY", "NATIVE_SHARE"]),
   destination: z.string().trim().min(1).max(320).optional(),
   subject: z.string().trim().min(1).max(220).optional(),
   body: z.string().trim().min(1).max(5000).optional(),
+});
+
+const ConfirmQuoteSendSchema = CreateQuoteOutboundEventSchema.extend({
+  idempotencyKey: z.string().trim().min(16).max(100),
 });
 
 const QuoteOutboundEventQuerySchema = PaginationQuerySchema;
@@ -5197,6 +5201,157 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           total,
         },
       };
+    },
+  );
+
+  app.post(
+    "/quotes/:quoteId/confirm-send",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      const actor = await resolveActivityActor(app.prisma, claims);
+      const { quoteId } = QuoteParamsSchema.parse(request.params);
+      const payload = ConfirmQuoteSendSchema.parse(request.body);
+
+      const findConfirmedSend = () =>
+        app.prisma.quoteOutboundEvent.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            idempotencyKey: payload.idempotencyKey,
+          },
+        });
+
+      try {
+        const result = await app.prisma.$transaction(async (tx) => {
+          const existingEvent = await tx.quoteOutboundEvent.findFirst({
+            where: {
+              tenantId: claims.tenantId,
+              idempotencyKey: payload.idempotencyKey,
+            },
+          });
+
+          if (existingEvent) {
+            if (existingEvent.quoteId !== quoteId) {
+              return { conflict: true as const };
+            }
+
+            const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+            return quote
+              ? { quote, event: existingEvent, duplicate: true as const }
+              : null;
+          }
+
+          const existingQuote = await tx.quote.findFirst({
+            where: {
+              id: quoteId,
+              ...tenantActiveQuoteScope(claims.tenantId),
+            },
+            include: {
+              customer: {
+                select: {
+                  email: true,
+                  phone: true,
+                },
+              },
+            },
+          });
+
+          if (!existingQuote) return null;
+
+          const sentAt = existingQuote.sentAt ?? new Date();
+          const quote =
+            existingQuote.status === "SENT_TO_CUSTOMER"
+              ? existingQuote
+              : await tx.quote.update({
+                  where: { id: existingQuote.id },
+                  data: {
+                    status: "SENT_TO_CUSTOMER",
+                    sentAt,
+                  },
+                });
+
+          if (existingQuote.status !== "SENT_TO_CUSTOMER") {
+            await tx.quoteDecisionSession.updateMany({
+              where: {
+                quoteId: existingQuote.id,
+                ...tenantActiveScope(claims.tenantId),
+                status: "AWAITING_APPROVAL",
+              },
+              data: { status: "APPROVED" },
+            });
+
+            await createQuoteRevision(tx, {
+              tenantId: claims.tenantId,
+              quoteId: quote.id,
+              eventType: "DECISION",
+              actor,
+              changedFields: ["status", "sentAt", "decisionSession.status"],
+            });
+
+            await tx.customer.updateMany({
+              where: {
+                id: quote.customerId,
+                ...tenantActiveCustomerScope(claims.tenantId),
+              },
+              data: {
+                followUpStatus: "NEEDS_FOLLOW_UP",
+                followUpUpdatedAtUtc: new Date(),
+              },
+            });
+          }
+
+          const destination =
+            payload.destination ??
+            (payload.channel === "EMAIL_APP"
+              ? existingQuote.customer.email ?? undefined
+              : payload.channel === "SMS_APP"
+                ? existingQuote.customer.phone
+                : undefined);
+
+          const event = await tx.quoteOutboundEvent.create({
+            data: {
+              tenantId: claims.tenantId,
+              quoteId: quote.id,
+              customerId: quote.customerId,
+              actorUserId: actor.actorUserId,
+              actorEmail: actor.actorEmail,
+              actorName: actor.actorName,
+              channel: payload.channel as QuoteOutboundChannel,
+              destination,
+              subject: payload.subject,
+              bodyPreview: payload.body?.slice(0, 500),
+              idempotencyKey: payload.idempotencyKey,
+            },
+          });
+
+          return { quote, event, duplicate: false as const };
+        });
+
+        if (!result) {
+          return reply.code(404).send({ error: "Quote not found for tenant." });
+        }
+
+        if ("conflict" in result) {
+          return reply.code(409).send({ error: "This send confirmation key was already used." });
+        }
+
+        return reply.send(result);
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          const existingEvent = await findConfirmedSend();
+          if (existingEvent?.quoteId === quoteId) {
+            const quote = await app.prisma.quote.findFirst({
+              where: {
+                id: quoteId,
+                ...tenantActiveQuoteScope(claims.tenantId),
+              },
+            });
+            if (quote) return reply.send({ quote, event: existingEvent, duplicate: true });
+          }
+        }
+
+        throw error;
+      }
     },
   );
 

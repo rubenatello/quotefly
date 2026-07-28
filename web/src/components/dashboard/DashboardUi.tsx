@@ -208,6 +208,14 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
     };
   }
 
+  if (channel === "NATIVE_SHARE") {
+    return {
+      label: "Share",
+      className: "text-violet-700 border-violet-200 bg-violet-50",
+      icon: <SendIcon size={12} />,
+    };
+  }
+
   return {
     label: "Copy",
     className: "text-slate-600 border-slate-200 bg-slate-50",

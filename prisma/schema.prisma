@@ -71,6 +71,7 @@ enum QuoteOutboundChannel {
   EMAIL_APP
   SMS_APP
   COPY
+  NATIVE_SHARE
 }
 
 enum AiUsageEventType {
@@ -611,12 +612,14 @@ model QuoteOutboundEvent {
   destination  String?
   subject      String?
   bodyPreview  String?
+  idempotencyKey String?
   createdAt    DateTime             @default(now()) @db.Timestamptz(3)
   deletedAtUtc DateTime?            @db.Timestamptz(3)
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
   customer     Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
 
+  @@unique([tenantId, idempotencyKey])
   @@index([tenantId, quoteId, createdAt])
   @@index([tenantId, customerId, createdAt])
   @@index([tenantId, actorUserId, createdAt])

@@ -115,9 +115,10 @@ function buildRevisionDetail(
   return label;
 }
 
-function buildOutboundTitle(channel: "EMAIL_APP" | "SMS_APP" | "COPY"): string {
+function buildOutboundTitle(channel: "EMAIL_APP" | "SMS_APP" | "COPY" | "NATIVE_SHARE"): string {
   if (channel === "EMAIL_APP") return "Quote prepared for email";
   if (channel === "SMS_APP") return "Quote prepared for text";
+  if (channel === "NATIVE_SHARE") return "Quote shared from device";
   return "Quote message copied";
 }
 

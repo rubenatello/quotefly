@@ -4,6 +4,7 @@ import {
   Archive,
   ChevronDown,
   ChevronUp,
+  Copy,
   Eye,
   FileOutput,
   Lock,
@@ -12,7 +13,6 @@ import {
   Plus,
   RotateCcw,
   Save,
-  Send,
   Sparkles,
   Trash2,
   X,
@@ -51,6 +51,7 @@ import {
 import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
+import { formatUsPhoneDisplay } from "../lib/phone";
 import {
   applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
@@ -1348,7 +1349,7 @@ export function QuoteDeskView() {
       {activeTab === "quote" ? (
         <div className="xl:hidden">
           <div className="h-24" />
-          <div className="fixed inset-x-4 bottom-20 z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+          <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
             <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
               <span>{lineItemCount} line{lineItemCount === 1 ? "" : "s"}</span>
               <span>Total {money(totalAmount)}</span>
@@ -1386,11 +1387,11 @@ export function QuoteDeskView() {
               <Button variant="outline" icon={<MessageSquare size={14} />} onClick={() => openSendComposer("sms")} disabled={saving}>
                 Text App
               </Button>
-              <Button variant="outline" icon={<FileOutput size={14} />} onClick={() => void downloadQuotePdf()} disabled={saving}>
-                Download PDF
+              <Button variant="outline" icon={<Copy size={14} />} onClick={() => openSendComposer("copy")} disabled={saving}>
+                Copy Message
               </Button>
-              <Button variant="secondary" icon={<Send size={14} />} onClick={() => void downloadQuotePdf({ afterSend: true })} disabled={saving}>
-                Send + PDF
+              <Button variant="secondary" icon={<FileOutput size={14} />} onClick={() => void downloadQuotePdf()} disabled={saving}>
+                Download PDF
               </Button>
             </div>
           </Card>
@@ -1398,8 +1399,8 @@ export function QuoteDeskView() {
           <Card variant="blue" padding="md">
             <CardHeader title="Send notes" subtitle="QuoteFly opens the user's native apps so V1 does not need a paid send service." />
             <div className="space-y-2 text-sm text-slate-700">
-              <p>Email and text actions use the native share sheet with the PDF attached on supported phones.</p>
-              <p>If file sharing is not available, QuoteFly falls back to the device app and you can attach the downloaded PDF manually.</p>
+              <p>Text App opens Messages at the customer's phone number with the quote message filled in.</p>
+              <p>Email can use the native share sheet with the PDF attached on supported phones; otherwise attach the downloaded PDF manually.</p>
               <p>Sent date updates once the quote is marked sent.</p>
             </div>
           </Card>
@@ -1787,7 +1788,7 @@ export function QuoteDeskView() {
                   ? "Text Quote"
                   : "Copy Quote Message"
             }
-            description={`Customer: ${sendComposer.customerName}`}
+            description={`Customer: ${sendComposer.customerName}${sendComposer.channel === "sms" ? ` • ${formatUsPhoneDisplay(sendComposer.customerPhone)}` : ""}`}
             onClose={() => setSendComposer(null)}
           />
           <ModalBody className="space-y-4">
@@ -1809,19 +1810,37 @@ export function QuoteDeskView() {
               }
             />
             <div className="rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-3 text-sm text-slate-700">
-              Confirming will mark the quote sent, log the action, and {canSharePdfFromDevice ? "open the share sheet with the PDF when supported." : "open the selected app."}
+              {sendComposer.handoffComplete
+                ? "Did the message leave your phone? QuoteFly has not changed the quote status yet."
+                : canSharePdfFromDevice && sendComposer.channel === "email"
+                  ? "QuoteFly will open your phone's share sheet with the PDF attached. Come back here to confirm after you send it."
+                  : sendComposer.channel === "copy"
+                    ? "Copy the message, send it in the app you prefer, then come back here to confirm."
+                    : "QuoteFly will open the selected app with the customer and message filled in. Attach the downloaded PDF if needed, then come back here to confirm."}
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button variant="outline" onClick={() => setSendComposer(null)} disabled={saving}>
-              Cancel
+            <Button
+              variant="outline"
+              onClick={() =>
+                sendComposer.handoffComplete
+                  ? setSendComposer((prev) => (prev ? { ...prev, handoffComplete: false } : prev))
+                  : setSendComposer(null)
+              }
+              disabled={saving}
+            >
+              {sendComposer.handoffComplete ? "Share Again" : "Cancel"}
             </Button>
             <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
-              {sendComposer.channel === "copy"
-                ? "Copy and Mark Sent"
-                : canSharePdfFromDevice
-                  ? "Share PDF and Mark Sent"
-                  : "Open App and Mark Sent"}
+              {sendComposer.handoffComplete
+                ? "Yes, Mark Sent"
+                : sendComposer.channel === "copy"
+                  ? "Copy Message"
+                  : canSharePdfFromDevice && sendComposer.channel === "email"
+                    ? "Share PDF"
+                    : sendComposer.channel === "sms"
+                      ? "Open Text App"
+                      : "Open Email App"}
             </Button>
           </ModalFooter>
         </Modal>

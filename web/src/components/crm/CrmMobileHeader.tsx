@@ -29,7 +29,8 @@ export function CrmMobileHeader({
           <button
             type="button"
             onClick={onToggleMobile}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700"
+            aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
           >
             {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
           </button>
@@ -48,7 +49,7 @@ export function CrmMobileHeader({
           <button
             type="button"
             onClick={onOpenCommand}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
             aria-label="Open workspace search"
           >
             <Search size={17} />
@@ -58,7 +59,7 @@ export function CrmMobileHeader({
             <DropdownMenuPrimitive.Trigger asChild>
               <button
                 type="button"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
                 aria-label="Open workspace menu"
               >
                 <MoreHorizontal size={18} />

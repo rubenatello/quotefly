@@ -55,7 +55,8 @@ export type LeadFollowUpStatus =
 export type QuoteOutboundChannel =
   | "EMAIL_APP"
   | "SMS_APP"
-  | "COPY";
+  | "COPY"
+  | "NATIVE_SHARE";
 
 export type PresetCategory =
   | "LABOR"

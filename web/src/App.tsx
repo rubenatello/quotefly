@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import "./App.css";
 import { Navbar } from "./components/Navbar";
 import { CrmShell } from "./components/CrmShell";
 import { AuthModal } from "./components/AuthModal";
@@ -190,7 +191,7 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main className="crm-light min-h-screen bg-slate-50 px-3 pb-24 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
+        <main className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-28 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto w-full max-w-[1840px]">
               <Routes>

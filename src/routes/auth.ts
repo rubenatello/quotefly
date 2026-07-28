@@ -13,7 +13,6 @@ const JWT_TTL = "7d";
 const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const TRIAL_DAYS = 14;
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
-const SignUpRateLimit = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } } as const;
 const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
 const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
 
@@ -87,8 +86,17 @@ function clearSessionCookie(app: Parameters<FastifyPluginAsync>[0], reply: Fasti
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
+  const signUpRateLimit = {
+    config: {
+      rateLimit: {
+        max: app.env.NODE_ENV === "test" ? 100 : 5,
+        timeWindow: "10 minutes",
+      },
+    },
+  } as const;
+
   // POST /v1/auth/signup
-  app.post("/auth/signup", SignUpRateLimit, async (request, reply) => {
+  app.post("/auth/signup", signUpRateLimit, async (request, reply) => {
     const payload = SignUpSchema.parse(request.body);
     const email = payload.email.toLowerCase();
 

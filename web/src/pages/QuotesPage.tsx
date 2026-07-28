@@ -31,6 +31,12 @@ import {
 type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
 type QuoteRetentionAction = { type: "archive" | "delete"; quote: Quote } | null;
+type PreparedSend = {
+  quoteId: string;
+  channel: QuoteOutboundChannel;
+  idempotencyKey: string;
+  draft: { subject: string; body: string };
+};
 
 const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
 const QUOTE_BOARD_GRID_COLUMNS =
@@ -49,10 +55,9 @@ function customerInitials(fullName: string) {
     .toUpperCase();
 }
 
-function mapSendChannelToOutboundChannel(channel: "email" | "sms" | "copy"): QuoteOutboundChannel {
-  if (channel === "email") return "EMAIL_APP";
-  if (channel === "sms") return "SMS_APP";
-  return "COPY";
+function createSendIdempotencyKey(): string {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  return `quote-send:${randomId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
 function quoteLifecycleStage(quote: Quote): QuoteLifecycleStage {
@@ -398,11 +403,13 @@ export function QuotesPage() {
     navigateToBuilder,
     selectedQuoteId,
     branding,
+    canViewCommunicationLog,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
   const [pdfActionQuote, setPdfActionQuote] = useState<Quote | null>(null);
   const [pdfActionLoading, setPdfActionLoading] = useState<PdfActionType | null>(null);
+  const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null);
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<QuoteRetentionAction>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
@@ -490,15 +497,42 @@ export function QuotesPage() {
     }
   }
 
-  async function recordOutboundAndMarkSent(quote: Quote, channel: "email" | "sms" | "copy", draft: { subject: string; body: string }) {
-    await api.quotes.decision(quote.id, "send");
-    await api.quotes.outboundEvents.create(quote.id, {
-      channel: mapSendChannelToOutboundChannel(channel),
-      destination: channel === "email" ? quote.customer?.email ?? undefined : channel === "sms" ? quote.customer?.phone : undefined,
-      subject: draft.subject,
-      body: draft.body,
+  async function recordOutboundAndMarkSent(quote: Quote, prepared: PreparedSend) {
+    await api.quotes.confirmSend(quote.id, {
+      channel: prepared.channel,
+      idempotencyKey: prepared.idempotencyKey,
+      destination:
+        prepared.channel === "EMAIL_APP"
+          ? quote.customer?.email ?? undefined
+          : prepared.channel === "SMS_APP"
+            ? quote.customer?.phone
+            : undefined,
+      subject: prepared.draft.subject,
+      body: prepared.draft.body,
     });
     await loadQuotes();
+  }
+
+  async function confirmPreparedSend(quote: Quote) {
+    if (!preparedSend || preparedSend.quoteId !== quote.id) return;
+    setPdfActionLoading(
+      preparedSend.channel === "EMAIL_APP"
+        ? "email"
+        : preparedSend.channel === "SMS_APP"
+          ? "sms"
+          : "native-share",
+    );
+    setError(null);
+
+    try {
+      await recordOutboundAndMarkSent(quote, preparedSend);
+      setPreparedSend(null);
+      setNotice(canViewCommunicationLog ? "Quote marked sent and the communication was logged." : "Quote marked sent.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed marking the quote sent.");
+    } finally {
+      setPdfActionLoading(null);
+    }
   }
 
   async function openQuoteInApp(quote: Quote, channel: "email" | "sms") {
@@ -528,30 +562,40 @@ export function QuotesPage() {
         scopeText: quote.scopeText,
         branding,
       });
-      const shouldPreferAttachmentShare = isLikelyMobileRuntime();
+      const shouldPreferAttachmentShare = channel === "email" && isLikelyMobileRuntime();
 
       if (shouldPreferAttachmentShare) {
         const blob = await getPdfBlob(quote.id);
         const shared = await sharePdfBlobNatively(blob, quote.title, draft);
 
         if (shared) {
-          await recordOutboundAndMarkSent(quote, channel, draft);
+          setPreparedSend({
+            quoteId: quote.id,
+            channel: "NATIVE_SHARE",
+            idempotencyKey: createSendIdempotencyKey(),
+            draft,
+          });
           setNotice(
-            `Share sheet opened with the quote PDF attached. Choose ${channel === "email" ? "Mail" : "Messages"} to send it.`,
+            `Share sheet completed. Confirm here after you send the quote through ${channel === "email" ? "Mail" : "Messages"}.`,
           );
           return;
         }
       }
 
-      await recordOutboundAndMarkSent(quote, channel, draft);
+      setPreparedSend({
+        quoteId: quote.id,
+        channel: channel === "email" ? "EMAIL_APP" : "SMS_APP",
+        idempotencyKey: createSendIdempotencyKey(),
+        draft,
+      });
 
       if (channel === "email") {
         const mailto = `mailto:${quote.customer.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
         window.location.assign(mailto);
-        setNotice("Email app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your mail app.");
+        setNotice("Email app opened. Return here after sending to mark the quote sent.");
       } else {
         window.location.assign(`sms:${toPhoneHrefValue(quote.customer.phone)}?&body=${encodeURIComponent(draft.body)}`);
-        setNotice("Text app opened. This browser cannot attach the PDF automatically, so attach the downloaded file in your messages app.");
+        setNotice("Text app opened with the customer's phone number. Return here after sending to mark the quote sent.");
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -585,10 +629,16 @@ export function QuotesPage() {
         scopeText: quote.scopeText,
         branding,
       });
-      await sharePdfBlobNatively(blob, quote.title, draft);
-
-      await recordOutboundAndMarkSent(quote, "copy", draft);
-      setNotice("Native share sheet opened with the quote PDF.");
+      const shared = await sharePdfBlobNatively(blob, quote.title, draft);
+      if (shared) {
+        setPreparedSend({
+          quoteId: quote.id,
+          channel: "NATIVE_SHARE",
+          idempotencyKey: createSendIdempotencyKey(),
+          draft,
+        });
+        setNotice("Share sheet completed. Return here after sending to mark the quote sent.");
+      }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
@@ -743,11 +793,11 @@ export function QuotesPage() {
       </Card>
 
       {pdfActionQuote ? (
-        <Modal open={true} onClose={() => setPdfActionQuote(null)} size="lg" ariaLabel="PDF quote actions">
+        <Modal open={true} onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }} size="lg" ariaLabel="PDF quote actions">
           <ModalHeader
             title="PDF quote actions"
             description={`${quoteNumber(pdfActionQuote.id)} · ${pdfActionQuote.customer?.fullName ?? "Customer missing"}`}
-            onClose={() => setPdfActionQuote(null)}
+            onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }}
           />
           <ModalBody className="space-y-5">
             <div className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -758,7 +808,7 @@ export function QuotesPage() {
                 <p className="text-sm font-semibold text-slate-900">{pdfActionQuote.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  Preview first if you want to verify the layout. On supported phones, Email App and Text App open the native share sheet with the PDF attached.
+                  Preview first to verify the layout. Email App can share the PDF on supported phones; Text App opens Messages with the customer's number and message filled in.
                 </p>
               </div>
             </div>
@@ -782,9 +832,23 @@ export function QuotesPage() {
                 </Button>
               ) : null}
             </div>
+            {preparedSend?.quoteId === pdfActionQuote.id ? (
+              <div className="rounded-2xl border border-quotefly-blue/20 bg-quotefly-blue/[0.06] px-4 py-4">
+                <p className="text-sm font-semibold text-slate-900">Did you send it?</p>
+                <p className="mt-1 text-sm text-slate-600">QuoteFly has not changed the status yet. Confirm only after the message leaves your phone.</p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setPreparedSend(null)} disabled={pdfActionLoading !== null}>
+                    Share Again
+                  </Button>
+                  <Button onClick={() => void confirmPreparedSend(pdfActionQuote)} loading={pdfActionLoading !== null}>
+                    Yes, Mark Sent
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </ModalBody>
           <ModalFooter>
-            <Button variant="ghost" onClick={() => setPdfActionQuote(null)} disabled={pdfActionLoading !== null}>
+            <Button variant="ghost" onClick={() => { setPdfActionQuote(null); setPreparedSend(null); }} disabled={pdfActionLoading !== null}>
               Close
             </Button>
           </ModalFooter>

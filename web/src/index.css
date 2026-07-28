@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@config "../tailwind.config.js";
 
 @theme {
   --color-quotefly-primary: #2f6fd6;
@@ -38,6 +39,9 @@
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-bottom: calc(7rem + env(safe-area-inset-bottom));
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */
@@ -53,6 +57,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: "DM Sans", "Segoe UI", sans-serif;
   letter-spacing: -0.01em;
   font-feature-settings: "ss01" 1, "cv10" 1, "cv11" 1;
@@ -79,12 +84,36 @@ img {
 
 button {
   font: inherit;
+  touch-action: manipulation;
 }
 
 input,
 textarea,
 select {
   font: inherit;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: rgba(47, 111, 214, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 ::selection {

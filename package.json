@@ -19,7 +19,7 @@
     "test:integration": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "audit:all": "npm audit && npm --prefix web audit",
+    "audit:all": "node --test scripts/dependency-audit-policy.test.mjs && node scripts/audit-dependencies.mjs",
     "verify": "npm run build && npm run build:web && npm run lint:web && npm run prisma:validate && npm run eval:ai && npm run audit:all",
     "verify:ci": "npm run build && npm run build:web && npm run lint:web && npm run prisma:validate && npm run test:integration && npm run eval:ai && npm run audit:all",
     "verify:launch": "npm run verify:ci && npm run test:e2e",
@@ -41,7 +41,7 @@
     "@fastify/jwt": "^10.0.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/swagger": "^9.7.0",
-    "@fastify/swagger-ui": "^5.2.5",
+    "@fastify/swagger-ui": "^6.1.0",
     "@prisma/client": "^6.19.3",
     "@types/pdfkit": "^0.17.5",
     "bcryptjs": "^3.0.3",
@@ -56,9 +56,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.5.2",
-    "@playwright/test": "^1.60.0",
     "concurrently": "^10.0.3",
     "prisma": "^6.19.3",
     "tsx": "^4.21.0",
@@ -67,5 +67,8 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "overrides": {
+    "@fastify/static": "10.1.2"
   }
 }

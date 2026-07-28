@@ -263,7 +263,7 @@ export type QuoteRevisionEventType =
   | "LINE_ITEM_CHANGED"
   | "DECISION";
 
-export type QuoteOutboundChannel = "EMAIL_APP" | "SMS_APP" | "COPY";
+export type QuoteOutboundChannel = "EMAIL_APP" | "SMS_APP" | "COPY" | "NATIVE_SHARE";
 export type LeadFollowUpStatus = "NEEDS_FOLLOW_UP" | "FOLLOWED_UP" | "WON" | "LOST";
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
@@ -462,6 +462,7 @@ export type QuoteOutboundEvent = {
   destination?: string | null;
   subject?: string | null;
   bodyPreview?: string | null;
+  idempotencyKey?: string | null;
   createdAt: string;
 };
 
@@ -1397,5 +1398,23 @@ export const api = {
           body: JSON.stringify(body),
         }),
     },
+
+    confirmSend: (
+      quoteId: string,
+      body: {
+        channel: QuoteOutboundChannel;
+        idempotencyKey: string;
+        destination?: string;
+        subject?: string;
+        body?: string;
+      },
+    ) =>
+      request<{ quote: Quote; event: QuoteOutboundEvent; duplicate: boolean }>(
+        `/v1/quotes/${quoteId}/confirm-send`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+      ),
   },
 };

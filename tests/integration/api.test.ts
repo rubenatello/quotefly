@@ -214,6 +214,87 @@ describe("QuoteFly API integration", () => {
     expect(betaCannotUseAlphaCustomer.statusCode).toBe(404);
   });
 
+  test("confirms a customer send atomically and deduplicates retries", async () => {
+    const session = await signUp("confirm-send");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "Mobile Send Customer",
+        phone: "555-010-3300",
+        email: "mobile-send@example.com",
+      },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const { customer } = parseJson<CustomerResponse>(customerResponse);
+
+    const quoteResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: authHeaders(session.cookie),
+      payload: {
+        customerId: customer.id,
+        serviceType: "ROOFING",
+        title: "Mobile Send Quote",
+        scopeText: "Repair roof flashing and verify the seal.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 300,
+        taxAmount: 0,
+      },
+    });
+    expect(quoteResponse.statusCode).toBe(201);
+    const { quote } = parseJson<QuoteResponse>(quoteResponse);
+    const idempotencyKey = `integration-confirm-send-${Date.now()}`;
+    const payload = {
+      channel: "SMS_APP",
+      idempotencyKey,
+      destination: customer.phone,
+      subject: "Your QuoteFly quote",
+      body: "Your quote is ready.",
+    };
+
+    const firstConfirmation = await app.inject({
+      method: "POST",
+      url: `/v1/quotes/${quote.id}/confirm-send`,
+      headers: authHeaders(session.cookie),
+      payload,
+    });
+    expect(firstConfirmation.statusCode).toBe(200);
+    expect(parseJson<{ quote: { status: string }; event: { channel: string }; duplicate: boolean }>(firstConfirmation)).toMatchObject({
+      quote: { status: "SENT_TO_CUSTOMER" },
+      event: { channel: "SMS_APP" },
+      duplicate: false,
+    });
+
+    const retryConfirmation = await app.inject({
+      method: "POST",
+      url: `/v1/quotes/${quote.id}/confirm-send`,
+      headers: authHeaders(session.cookie),
+      payload,
+    });
+    expect(retryConfirmation.statusCode).toBe(200);
+    expect(parseJson<{ duplicate: boolean }>(retryConfirmation).duplicate).toBe(true);
+
+    await expect(
+      prisma.quoteOutboundEvent.count({
+        where: { tenantId: session.tenant.id, quoteId: quote.id, idempotencyKey },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.quoteRevision.count({
+        where: { tenantId: session.tenant.id, quoteId: quote.id, eventType: "DECISION" },
+      }),
+    ).resolves.toBe(1);
+
+    const storedQuote = await prisma.quote.findFirstOrThrow({
+      where: { id: quote.id, tenantId: session.tenant.id },
+      select: { status: true, sentAt: true },
+    });
+    expect(storedQuote.status).toBe("SENT_TO_CUSTOMER");
+    expect(storedQuote.sentAt).not.toBeNull();
+  });
+
   test("verifies and deduplicates Stripe billing webhooks", async () => {
     const session = await signUp("billing");
     const eventPayload = JSON.stringify({

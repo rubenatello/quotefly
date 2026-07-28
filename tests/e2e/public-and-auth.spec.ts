@@ -9,7 +9,7 @@ import {
 test.describe("public site and session auth", () => {
   test("public launch pages render and the auth modal opens", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: /contractor quoting software/i })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: /contractor quoting software/i })).toBeVisible();
 
     await page.goto("/pricing");
     await expect(page.getByRole("heading", { name: /contractor quoting software pricing/i })).toBeVisible();
@@ -50,14 +50,14 @@ test.describe("public site and session auth", () => {
     await dialog.getByLabel("Password").fill("TestPassword123!");
     await dialog.getByRole("button", { name: /create account/i }).click();
 
-    await expect(page).toHaveURL(/\/app/);
-    await expect(page.getByRole("heading", { name: /customers/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/app\/setup/);
+    await expect(page.getByRole("heading", { level: 1, name: "Workspace Setup" })).toBeVisible({ timeout: 15_000 });
     await expectSessionCookiePresent(context);
     await expectNoFrontendJwtStorage(page);
 
     await page.reload();
-    await expect(page).toHaveURL(/\/app/);
-    await expect(page.getByRole("heading", { name: /customers/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/app\/setup/);
+    await expect(page.getByRole("heading", { level: 1, name: "Workspace Setup" })).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: /sign out/i }).first().click();
     await expect(page).toHaveURL("/");
@@ -65,4 +65,3 @@ test.describe("public site and session auth", () => {
     await expectSessionCookieCleared(context);
   });
 });
-

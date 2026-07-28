@@ -108,7 +108,6 @@ export async function addSessionCookie(context: BrowserContext, account: E2eAcco
       name: account.cookieName,
       value: account.cookieValue,
       url: apiBaseUrl,
-      path: "/",
       httpOnly: true,
       secure: false,
       sameSite: "Lax",
@@ -197,6 +196,20 @@ export async function createQuoteViaApi(
   });
 
   await expectStatus(response, 201);
+  const payload = (await response.json()) as { quote: Quote };
+  return payload.quote;
+}
+
+export async function getQuoteViaApi(
+  request: APIRequestContext,
+  account: E2eAccount,
+  quoteId: string,
+) {
+  const response = await request.get(`${apiBaseUrl}/v1/quotes/${quoteId}`, {
+    headers: { Cookie: account.cookieHeader },
+  });
+
+  await expectStatus(response, 200);
   const payload = (await response.json()) as { quote: Quote };
   return payload.quote;
 }

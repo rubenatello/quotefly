@@ -68,12 +68,15 @@ export type DuplicateCustomerModalState = {
 };
 export type SendComposerState = {
   channel: SendChannel;
+  confirmedChannel?: QuoteOutboundChannel;
+  idempotencyKey: string;
   quoteId: string;
   customerName: string;
   customerEmail: string | null;
   customerPhone: string;
   subject: string;
   body: string;
+  handoffComplete?: boolean;
 };
 export type QuoteMathSummary = {
   internalSubtotal: number;
@@ -218,6 +221,11 @@ function mapSendChannelToOutboundChannel(channel: SendChannel): QuoteOutboundCha
   return "COPY";
 }
 
+function createSendIdempotencyKey(): string {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  return `quote-send:${randomId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+}
+
 /* ─────────────── Context Shape ─────────────── */
 
 export interface DashboardContextValue {
@@ -327,7 +335,7 @@ export interface DashboardContextValue {
   sendDecision: (decision: "send" | "revise") => Promise<void>;
   openSendComposer: (channel: SendChannel) => void;
   confirmSendComposer: () => Promise<void>;
-  downloadQuotePdf: (options?: { inline?: boolean; afterSend?: boolean }) => Promise<void>;
+  downloadQuotePdf: (options?: { inline?: boolean }) => Promise<void>;
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
   addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<void>;
@@ -809,6 +817,7 @@ export function DashboardProvider({
     });
     setSendComposer({
       channel, quoteId: selectedQuote.id,
+      idempotencyKey: createSendIdempotencyKey(),
       customerName: customerRecord.fullName, customerEmail: customerRecord.email ?? null, customerPhone: customerRecord.phone,
       subject: draft.subject, body: draft.body,
     });
@@ -818,12 +827,38 @@ export function DashboardProvider({
     if (!sendComposer) return;
     setSaving(true); setError(null);
     try {
+      if (sendComposer.handoffComplete) {
+        await api.quotes.confirmSend(sendComposer.quoteId, {
+          channel: sendComposer.confirmedChannel ?? mapSendChannelToOutboundChannel(sendComposer.channel),
+          idempotencyKey: sendComposer.idempotencyKey,
+          destination:
+            sendComposer.confirmedChannel === "NATIVE_SHARE"
+              ? undefined
+              : sendComposer.channel === "email"
+                ? sendComposer.customerEmail ?? undefined
+                : sendComposer.channel === "sms"
+                  ? sendComposer.customerPhone
+                  : undefined,
+          subject: sendComposer.subject,
+          body: sendComposer.body,
+        });
+        await Promise.all([
+          loadQuotes(),
+          loadQuoteDetail(sendComposer.quoteId, { includeOutboundEvents: false }),
+          canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
+        ]);
+        if (canViewQuoteHistory) void loadQuoteHistory();
+        setNotice(canViewCommunicationLog ? "Quote marked sent and the communication was logged." : "Quote marked sent.");
+        setSendComposer(null);
+        return;
+      }
+
       const activeQuote =
         selectedQuote?.id === sendComposer.quoteId
           ? selectedQuote
           : quotes.find((quote) => quote.id === sendComposer.quoteId) ?? null;
 
-      if ((sendComposer.channel === "email" || sendComposer.channel === "sms") && activeQuote && isLikelyMobileRuntime()) {
+      if (sendComposer.channel === "email" && activeQuote && isLikelyMobileRuntime()) {
         const blob = await api.quotes.downloadPdf(sendComposer.quoteId);
         const shared = await sharePdfBlobNatively(blob, activeQuote.title, {
           subject: sendComposer.subject,
@@ -831,61 +866,29 @@ export function DashboardProvider({
         });
 
         if (shared) {
-          await api.quotes.decision(sendComposer.quoteId, "send");
-          if (canViewCommunicationLog) {
-            await api.quotes.outboundEvents.create(sendComposer.quoteId, {
-              channel: mapSendChannelToOutboundChannel(sendComposer.channel),
-              destination:
-                sendComposer.channel === "email"
-                  ? sendComposer.customerEmail ?? undefined
-                  : sendComposer.channel === "sms"
-                    ? sendComposer.customerPhone
-                    : undefined,
-              subject: sendComposer.subject,
-              body: sendComposer.body,
-            });
-          }
-          await Promise.all([
-            loadQuotes(),
-            loadQuoteDetail(sendComposer.quoteId, { includeOutboundEvents: false }),
-            canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
-          ]);
-          if (canViewQuoteHistory) void loadQuoteHistory();
+          setSendComposer((current) => current ? { ...current, confirmedChannel: "NATIVE_SHARE", handoffComplete: true } : current);
           setNotice(
-            `Share sheet opened with the quote PDF attached. Choose ${sendComposer.channel === "email" ? "Mail" : "Messages"} to send it.`,
+            `Share sheet completed. Confirm here after you send the quote through ${sendComposer.channel === "email" ? "Mail" : "Messages"}.`,
           );
-          setSendComposer(null);
           return;
         }
       }
 
-      await api.quotes.decision(sendComposer.quoteId, "send");
-      if (canViewCommunicationLog) {
-        await api.quotes.outboundEvents.create(sendComposer.quoteId, {
-          channel: mapSendChannelToOutboundChannel(sendComposer.channel),
-          destination: sendComposer.channel === "email" ? sendComposer.customerEmail ?? undefined : sendComposer.channel === "sms" ? sendComposer.customerPhone : undefined,
-          subject: sendComposer.subject, body: sendComposer.body,
-        });
-      }
       if (sendComposer.channel === "email") {
+        setSendComposer((current) => current ? { ...current, confirmedChannel: "EMAIL_APP", handoffComplete: true } : current);
         const mailto = `mailto:${sendComposer.customerEmail ?? ""}?subject=${encodeURIComponent(sendComposer.subject)}&body=${encodeURIComponent(sendComposer.body)}`;
         window.location.assign(mailto);
-        setNotice("Quote marked as quoted and email app opened. This browser cannot attach the PDF automatically.");
+        setNotice("Email app opened. Return here after sending to mark the quote sent.");
       } else if (sendComposer.channel === "sms") {
+        setSendComposer((current) => current ? { ...current, confirmedChannel: "SMS_APP", handoffComplete: true } : current);
         window.location.assign(`sms:${toPhoneHrefValue(sendComposer.customerPhone)}?&body=${encodeURIComponent(sendComposer.body)}`);
-        setNotice("Quote marked as quoted and text app opened. This browser cannot attach the PDF automatically.");
+        setNotice(`Text app opened for ${formatUsPhoneDisplay(sendComposer.customerPhone)}. Return here after sending to mark the quote sent.`);
       } else {
         if (!navigator.clipboard) throw new Error("Clipboard API is not available in this browser.");
         await navigator.clipboard.writeText(sendComposer.body);
-        setNotice("Quote marked as quoted and message copied.");
+        setSendComposer((current) => current ? { ...current, confirmedChannel: "COPY", handoffComplete: true } : current);
+        setNotice("Message copied. Return here after sending to mark the quote sent.");
       }
-      await Promise.all([
-        loadQuotes(),
-        loadQuoteDetail(sendComposer.quoteId, { includeOutboundEvents: false }),
-        canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
-      ]);
-      if (canViewQuoteHistory) void loadQuoteHistory();
-      setSendComposer(null);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
@@ -894,11 +897,10 @@ export function DashboardProvider({
     } finally { setSaving(false); }
   }, [sendComposer, canViewCommunicationLog, canViewQuoteHistory, selectedQuote, quotes, loadQuotes, loadQuoteDetail, loadOutboundEvents, loadQuoteHistory]);
 
-  const downloadQuotePdf = useCallback(async (options?: { inline?: boolean; afterSend?: boolean }) => {
+  const downloadQuotePdf = useCallback(async (options?: { inline?: boolean }) => {
     if (!selectedQuote) return;
     setSaving(true); setError(null);
     try {
-      if (options?.afterSend) await api.quotes.decision(selectedQuote.id, "send");
       const blob = await api.quotes.downloadPdf(selectedQuote.id, { inline: options?.inline });
       if (options?.inline) {
         openPdfPreviewBlob(blob);
@@ -914,15 +916,7 @@ export function DashboardProvider({
         loadQuotes(),
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
-      setNotice(
-        options?.afterSend
-          ? options?.inline
-            ? "Quote sent and PDF preview opened."
-            : "Quote sent and PDF downloaded."
-          : options?.inline
-            ? "PDF preview opened."
-            : "PDF downloaded.",
-      );
+      setNotice(options?.inline ? "PDF preview opened." : "PDF downloaded.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed generating PDF."); } finally { setSaving(false); }
   }, [selectedQuote, loadQuotes, loadQuoteDetail]);
 

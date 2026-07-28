@@ -585,7 +585,7 @@ export function QuoteBuilderView() {
         unitCost: Number(line.unitCost) || 0,
         unitPrice: Number(line.unitPrice) || 0,
       })),
-      successNotice: "Quote created. Continue editing in the quote desk.",
+      successNotice: "Quote ready. Review it, then share it from the quote desk.",
     });
 
     if (createdQuote) {
@@ -601,8 +601,8 @@ export function QuoteBuilderView() {
   return (
     <div className="space-y-5" data-testid="quote-builder">
       <PageHeader
-        title="Build Quote"
-        subtitle="Start with the customer, then build the quote line by line. Load common work names when you need speed, but keep the quote sheet simple."
+        title="Quick Quote"
+        subtitle="Choose an existing customer or add one here, price the work, preview, and share from your phone."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
@@ -961,7 +961,7 @@ export function QuoteBuilderView() {
 
       <div className="xl:hidden">
         <div className="h-24" />
-        <div className="fixed inset-x-4 bottom-20 z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+        <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
           <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
             <span>{filteredDraftLines.length} line{filteredDraftLines.length === 1 ? "" : "s"}</span>
             <span>Total {money(totalAmount)}</span>

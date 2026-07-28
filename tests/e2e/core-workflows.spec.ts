@@ -3,9 +3,9 @@ import {
   addSessionCookie,
   apiBaseUrl,
   createCustomerViaApi,
-  createOutboundEventViaApi,
   createQuoteViaApi,
   escapeRegExp,
+  getQuoteViaApi,
   expectNoFrontendJwtStorage,
   expectPdfResponseSucceeds,
   signUpViaApi,
@@ -94,14 +94,26 @@ test.describe("controlled beta core workflow", () => {
     expect(download.suggestedFilename()).toMatch(/\.pdf$/);
     await expect(page.getByText(/pdf downloaded/i)).toBeVisible();
 
-    await page.getByRole("button", { name: "Quote" }).click();
-    await page.getByRole("button", { name: "Mark sent" }).click();
-    await expect(page.getByText(/sent/i).first()).toBeVisible();
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(page.url()).origin,
+    });
+    await page.getByRole("button", { name: "Copy Message" }).click();
+    const sendDialog = page.getByRole("dialog", { name: "Send quote confirmation" });
+    await sendDialog.getByRole("button", { name: "Cancel" }).click();
+    expect((await getQuoteViaApi(request, account, quoteId!)).status).not.toBe("SENT_TO_CUSTOMER");
 
-    await createOutboundEventViaApi(request, account, quoteId!);
+    await page.getByRole("button", { name: "Copy Message" }).click();
+    await sendDialog.getByRole("button", { name: "Copy Message" }).click();
+    await expect(sendDialog.getByText(/has not changed the quote status yet/i)).toBeVisible();
+    expect((await getQuoteViaApi(request, account, quoteId!)).status).not.toBe("SENT_TO_CUSTOMER");
+
+    await sendDialog.getByRole("button", { name: "Yes, Mark Sent" }).click();
+    await expect(sendDialog).toBeHidden();
+    await expect.poll(async () => (await getQuoteViaApi(request, account, quoteId!)).status).toBe("SENT_TO_CUSTOMER");
+
     await page.getByRole("button", { name: "Send Log" }).click();
     await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(page.getByText("QuoteFly beta smoke quote")).toBeVisible();
+    await expect(page.getByText("Copy", { exact: true })).toBeVisible();
 
     const meResponse = await request.get(`${apiBaseUrl}/v1/auth/me`, {
       headers: { Cookie: account.cookieHeader },
