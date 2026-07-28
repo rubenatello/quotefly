@@ -39,7 +39,14 @@ type Quote = {
 };
 
 export function uniqueRunLabel(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const safePrefix =
+    prefix
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "run";
+  return `${safePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function escapeRegExp(value: string) {
