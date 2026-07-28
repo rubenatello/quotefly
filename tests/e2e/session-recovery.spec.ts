@@ -54,10 +54,11 @@ test.describe("session recovery", () => {
     const sessionPayload = await readSessionPayload(page, account.cookieHeader);
     await addSessionCookie(context, account);
     let attempts = 0;
+    let allowRestore = false;
 
     await page.route("**/v1/auth/me", async (route) => {
       attempts += 1;
-      if (attempts === 1) {
+      if (!allowRestore) {
         await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "provider detail" }) });
         return;
       }
@@ -78,6 +79,7 @@ test.describe("session recovery", () => {
     const retry = page.getByRole("button", { name: "Retry" });
     await expect(retry).toBeVisible();
     expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    allowRestore = true;
     await retry.click();
 
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
@@ -103,27 +105,28 @@ test.describe("session recovery", () => {
   test("post-signin hydration failure uses recovery instead of a partial workspace session", async ({ page, request }) => {
     const account = await signUpViaApi(request, "post-signin-retry");
     const sessionPayload = await readSessionPayload(page, account.cookieHeader);
-    let sessionChecks = 0;
+    let signedIn = false;
+    let allowHydration = false;
 
     await page.route("**/v1/auth/me", async (route) => {
-      sessionChecks += 1;
-      if (sessionChecks === 1) {
+      if (!signedIn) {
         await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Unauthorized" }) });
         return;
       }
-      if (sessionChecks === 2) {
+      if (!allowHydration) {
         await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "internal provider response" }) });
         return;
       }
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(sessionPayload) });
     });
-    await page.route("**/v1/auth/signin", (route) =>
-      route.fulfill({
+    await page.route("**/v1/auth/signin", async (route) => {
+      signedIn = true;
+      await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ user: account.user, tenant: account.tenant }),
-      }),
-    );
+      });
+    });
 
     await page.goto("/");
     await page.getByRole("button", { name: "Sign In", exact: true }).first().click();
@@ -137,6 +140,7 @@ test.describe("session recovery", () => {
     await expect(page.getByRole("status")).not.toContainText("internal provider response");
     await expect(page).not.toHaveURL(/\/app\/setup$/);
 
+    allowHydration = true;
     await page.getByRole("button", { name: "Retry" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
     await expect(page).toHaveURL(/\/app\/customers$/);

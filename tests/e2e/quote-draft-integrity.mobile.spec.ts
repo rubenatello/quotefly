@@ -25,15 +25,18 @@ test("mobile line save keeps a second expanded row draft and field actions remai
   const secondRow = page.getByTestId("existing-quote-line-row-2");
   await firstRow.getByRole("button").first().click();
   await secondRow.getByRole("button").first().click();
-  await firstRow.getByLabel("Existing line 1 description").fill("Mobile saved description");
-  await secondRow.getByLabel("Existing line 2 description").fill("Mobile unsaved description");
-  await secondRow.getByLabel("Existing line 2 quantity").fill("4");
+  const firstDescription = firstRow.locator('[aria-label="Existing line 1 description"]:visible');
+  const secondDescription = secondRow.locator('[aria-label="Existing line 2 description"]:visible');
+  const secondQuantity = secondRow.locator('[aria-label="Existing line 2 quantity"]:visible');
+  await firstDescription.fill("Mobile saved description");
+  await secondDescription.fill("Mobile unsaved description");
+  await secondQuantity.fill("4");
 
-  const saveButton = firstRow.getByRole("button", { name: "Save" });
+  const saveButton = firstRow.getByRole("button", { name: "Save", exact: true });
   expect((await saveButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   await saveButton.click();
 
-  await expect(secondRow.getByLabel("Existing line 2 description")).toHaveValue("Mobile unsaved description");
-  await expect(secondRow.getByLabel("Existing line 2 quantity")).toHaveValue("4");
+  await expect(secondDescription).toHaveValue("Mobile unsaved description");
+  await expect(secondQuantity).toHaveValue("4");
   await expect(page).toHaveURL(new RegExp(`/app/quotes/${quote.id}$`));
 });

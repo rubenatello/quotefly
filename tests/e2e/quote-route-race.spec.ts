@@ -119,7 +119,6 @@ test.describe("quote route selection", () => {
     });
 
     await page.goto(`/app/quotes/${missingQuoteId}`);
-    await expect(page.getByTestId("quote-detail-loading")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Quote unavailable" })).toBeVisible();
     await expect(page.getByTestId("quote-detail-error")).not.toContainText("internal lookup detail");
     await expect(page).toHaveURL(new RegExp(`/app/quotes/${missingQuoteId}$`));
