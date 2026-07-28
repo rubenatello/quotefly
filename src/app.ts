@@ -131,7 +131,10 @@ export function buildServer() {
     runFirst: true,
   });
   app.register(helmet);
-  app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
+  app.register(rateLimit, {
+    max: env.NODE_ENV === "test" ? 10_000 : 100,
+    timeWindow: "1 minute",
+  });
   app.register(jwt, {
     secret: env.JWT_SECRET,
     cookie: {

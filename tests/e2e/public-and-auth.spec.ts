@@ -60,8 +60,8 @@ test.describe("public site and session auth", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: /sign out/i }).first().click();
+    await expectSessionCookieCleared(context);
     await expect(page).toHaveURL("/");
     await expect(page.getByRole("button", { name: /start free trial/i }).first()).toBeVisible();
-    await expectSessionCookieCleared(context);
   });
 });

@@ -84,7 +84,7 @@ test.describe("controlled beta core workflow", () => {
 
     await expectPdfResponseSucceeds(request, account, quoteId!);
 
-    await page.getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByRole("button", { name: "Email App" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Text App" })).toBeVisible();
 

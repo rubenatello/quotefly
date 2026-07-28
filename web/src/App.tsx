@@ -364,15 +364,17 @@ function AppRoutes() {
       });
   };
 
-  const handleLogout = () => {
-    void api.auth.logout().catch((error) => {
+  const handleLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch (error) {
       if (!(error instanceof ApiError && error.status === 401)) {
         console.error("Logout failed", error);
       }
-    });
-    clearStoredSession();
-    setSession(null);
-    navigate("/", { replace: true });
+    } finally {
+      clearStoredSession();
+      setSession(null);
+    }
   };
 
   if (isSessionChecking) {
