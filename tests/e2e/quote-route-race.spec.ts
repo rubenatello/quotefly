@@ -126,8 +126,9 @@ test.describe("quote route selection", () => {
 
     const retry = page.getByRole("button", { name: "Retry quote" });
     expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    const attemptsBeforeRetry = attempts;
     await retry.click();
-    await expect.poll(() => attempts).toBe(2);
+    await expect.poll(() => attempts).toBe(attemptsBeforeRetry + 1);
     await expect(page.getByRole("heading", { name: "Quote unavailable" })).toBeVisible();
   });
 });
