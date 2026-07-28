@@ -87,6 +87,21 @@ function getQuickBooksWebhookSignature(request: FastifyRequest): string | null {
 }
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
+  async function hasLiveQuickBooksManagerAccess(tenantId: string, userId: string): Promise<boolean> {
+    const membership = await app.prisma.tenantUser.findFirst({
+      where: {
+        tenantId,
+        userId,
+        deletedAtUtc: null,
+        user: { deletedAtUtc: null },
+        tenant: { deletedAtUtc: null },
+      },
+      select: { role: true },
+    });
+
+    return Boolean(membership && canManageQuickBooks(membership.role));
+  }
+
   async function loadQuickBooksSyncContext(tenantId: string, quoteId: string, dueInDays = 14) {
     const connection = await app.prisma.quickBooksConnection.findFirst({
       where: {
@@ -588,6 +603,17 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
+      // OAuth state proves the callback originated from QuoteFly, but its role
+      // claim can be stale for ten minutes. Revalidate the signed actor and
+      // tenant before exchanging the one-time code or writing credentials.
+      const hasManagerAccess = await hasLiveQuickBooksManagerAccess(
+        verifiedState.tenantId,
+        verifiedState.userId,
+      );
+      if (!hasManagerAccess) {
+        return failureRedirect("quickbooks_error");
+      }
+
       const existingRealmConnection = await app.prisma.quickBooksConnection.findFirst({
         where: {
           realmId: query.realmId,
@@ -603,6 +629,18 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
       const tokenResponse = await exchangeQuickBooksAuthorizationCode(app.env, query.code);
       const companyInfo = await fetchQuickBooksCompanyInfo(app.env, query.realmId, tokenResponse.access_token);
+
+      // Provider calls intentionally stay outside database transactions. Check
+      // authorization again so a revocation during the exchange cannot persist
+      // newly issued credentials.
+      const stillHasManagerAccess = await hasLiveQuickBooksManagerAccess(
+        verifiedState.tenantId,
+        verifiedState.userId,
+      );
+      if (!stillHasManagerAccess) {
+        return failureRedirect("quickbooks_error");
+      }
+
       const now = new Date();
       const accessTokenExpiresAtUtc = new Date(now.getTime() + tokenResponse.expires_in * 1000);
 
@@ -642,8 +680,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return failureRedirect("quickbooks_connected");
-    } catch (error) {
-      request.log.error(error);
+    } catch {
+      request.log.error("QuickBooks OAuth callback failed.");
       return failureRedirect("quickbooks_error");
     }
   });

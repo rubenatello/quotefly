@@ -1,7 +1,8 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Command, FilePlus2, MoreHorizontal, Search, UserPlus2 } from "lucide-react";
+import { Command, FilePlus2, LifeBuoy, MoreHorizontal, Search, UserPlus2 } from "lucide-react";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
+import { SUPPORT_MAILTO } from "../../lib/contact";
 
 interface CrmMobileHeaderProps {
   mobileOpen: boolean;
@@ -104,6 +105,15 @@ export function CrmMobileHeader({
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
                 >
                   Open branding
+                </DropdownMenuPrimitive.Item>
+                <DropdownMenuPrimitive.Item asChild>
+                  <a
+                    href={SUPPORT_MAILTO}
+                    className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  >
+                    <LifeBuoy size={15} className="text-quotefly-blue" aria-hidden="true" />
+                    Contact support
+                  </a>
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
                 <DropdownMenuPrimitive.Item

@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { Headphones, Mail } from "lucide-react";
+import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { setSEOMetadata } from "../lib/seo";
 
 interface SupportPageProps {
@@ -63,15 +65,33 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-2xl font-bold text-slate-900">Contact support</h2>
               <p className="mt-3 text-slate-600">
-                Email{" "}
-                <a href="mailto:support@quotefly.us" className="font-semibold text-quotefly-blue hover:text-blue-700">
-                  support@quotefly.us
-                </a>{" "}
-                and include enough detail for us to reproduce the issue quickly.
+                Send account, billing, workflow, or technical issues to {SUPPORT_EMAIL}. The email shortcut includes a
+                checklist so we can reproduce the issue quickly.
               </p>
+              <a
+                href={SUPPORT_MAILTO}
+                className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-quotefly-blue px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:w-auto"
+              >
+                <Headphones size={18} aria-hidden="true" />
+                Email support
+              </a>
               <p className="mt-3 text-sm text-slate-500">
                 V1 support is email-first. We are optimizing for fast, clear responses before we add more channels.
               </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-slate-900">Sales and general inquiries</h2>
+              <p className="mt-3 text-sm text-slate-600">
+                Questions about plans, fit, partnerships, or QuoteFly before signing up? Contact {INFO_EMAIL}.
+              </p>
+              <a
+                href={INFO_MAILTO}
+                className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 transition hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:w-auto"
+              >
+                <Mail size={18} aria-hidden="true" />
+                Email sales
+              </a>
             </div>
 
             <div className="grid gap-4 md:grid-cols-3">

@@ -35,6 +35,7 @@ The API still accepts `Authorization: Bearer <jwt>` for controlled server-to-ser
 Public or provider-callback endpoints:
 
 - `GET /v1/health`
+- `GET /v1/ready`
 - `POST /v1/auth/signup`
 - `POST /v1/auth/signin`
 - `POST /v1/auth/logout`
@@ -114,7 +115,7 @@ Clears the session cookie. The frontend should also clear non-sensitive local UI
 
 ### `GET /v1/health`
 
-Returns service status.
+Returns process liveness without querying PostgreSQL.
 
 Example response:
 
@@ -123,6 +124,24 @@ Example response:
   "status": "ok",
   "service": "quotefly-api",
   "timestamp": "2026-06-10T00:00:00.000Z"
+}
+```
+
+### `GET /v1/ready`
+
+Returns `200` only when the API can query PostgreSQL. Dependency failures return `503` with a stable response that does not expose connection details:
+
+```json
+{
+  "status": "ready",
+  "service": "quotefly-api",
+  "timestamp": "2026-06-10T00:00:00.000Z"
+}
+```
+
+```json
+{
+  "error": "Service is not ready."
 }
 ```
 
@@ -632,7 +651,7 @@ Returns tenant-level AI usage and quality metrics.
 
 - Run `npm run verify` before production handoff.
 - Use `npm run start:prod` for API startup so Prisma migrations deploy before the server starts.
-- Configure health checks against `/v1/health`.
+- Use `/v1/health` for process liveness and `/v1/ready` for deployment readiness.
 - Keep provider webhook event IDs persisted for idempotency.
 - Avoid external API calls inside long database transactions.
 

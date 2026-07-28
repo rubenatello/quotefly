@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { ReactNode, FormEvent } from "react";
+import { useLocation } from "react-router-dom";
 import {
   api,
   ApiError,
@@ -145,6 +146,16 @@ export const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", u
 export const CHAT_PROMPT_EXAMPLE =
   "New quote for Alan Johnson 818-233-4333. He has a roof that is about 1,250 square feet and wants to replace his roof-shingles. We will remove old and aged roofing and check for any damage underneath and apply new layer as needed. Whole job should cost about 8,500 using standard asphalt shingles.";
 
+const QUOTE_EDIT_FIELDS: Array<keyof QuoteEditForm> = [
+  "serviceType",
+  "status",
+  "jobStatus",
+  "afterSaleFollowUpStatus",
+  "title",
+  "scopeText",
+  "taxAmount",
+];
+
 /* ─────────────── Helpers ─────────────── */
 
 const USD_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -201,6 +212,46 @@ function normalizeCustomerPayload(form: CustomerForm): CreateCustomerPayload {
   };
 }
 
+function toQuoteEditForm(quote: Quote): QuoteEditForm {
+  return {
+    serviceType: quote.serviceType,
+    status: quote.status,
+    jobStatus: quote.jobStatus,
+    afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus,
+    title: quote.title,
+    scopeText: quote.scopeText,
+    taxAmount: String(Number(quote.taxAmount)),
+  };
+}
+
+function quoteEditFieldMatches(
+  field: keyof QuoteEditForm,
+  left: QuoteEditForm[keyof QuoteEditForm],
+  right: QuoteEditForm[keyof QuoteEditForm],
+): boolean {
+  if (field === "taxAmount") return Number(left) === Number(right);
+  if (field === "title" || field === "scopeText") return left.trim() === right.trim();
+  return left === right;
+}
+
+function reconcileQuoteEditForm(
+  current: QuoteEditForm,
+  previousSaved: QuoteEditForm,
+  server: QuoteEditForm,
+): QuoteEditForm {
+  const next = { ...server };
+
+  for (const field of QUOTE_EDIT_FIELDS) {
+    const hasLocalDraft = !quoteEditFieldMatches(field, current[field], previousSaved[field]);
+    const serverAcceptedDraft = quoteEditFieldMatches(field, current[field], server[field]);
+    if (hasLocalDraft && !serverAcceptedDraft) {
+      Object.assign(next, { [field]: current[field] });
+    }
+  }
+
+  return next;
+}
+
 export function fileLabel(value: string): string {
   return (
     value
@@ -237,6 +288,8 @@ export interface DashboardContextValue {
   branding: TenantBranding | null;
   selectedQuoteId: string | null;
   selectedQuote: Quote | null;
+  quoteDetailLoading: boolean;
+  quoteDetailError: { kind: "not-found" | "load"; message: string } | null;
   quoteHistory: QuoteRevision[];
   outboundEvents: QuoteOutboundEvent[];
   // UI state
@@ -310,6 +363,7 @@ export interface DashboardContextValue {
   loadCustomers: () => Promise<void>;
   loadQuoteHistory: () => Promise<void>;
   refreshSelectedQuote: () => Promise<void>;
+  retrySelectedQuote: () => Promise<void>;
   focusQuoteDesk: (quoteId: string | null) => void;
   selectQuoteCustomer: (customerId: string) => void;
   navigateToBuilder: (customerId?: string | null) => void;
@@ -325,7 +379,7 @@ export interface DashboardContextValue {
     aiUsageEventId?: string;
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
-  persistSelectedQuote: () => Promise<void>;
+  persistSelectedQuote: () => Promise<boolean>;
   updateQuoteLifecycle: (quoteId: string, patch: {
     status?: QuoteStatus;
     jobStatus?: QuoteJobStatus;
@@ -338,12 +392,12 @@ export interface DashboardContextValue {
   downloadQuotePdf: (options?: { inline?: boolean }) => Promise<void>;
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
-  addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<void>;
+  addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<boolean>;
   updateLineItem: (
     lineItemId: string,
     input: Partial<CreateLineItemInput> & { description?: string },
     options?: { notice?: string },
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   deleteLineItem: (lineItemId: string) => Promise<void>;
   updateLeadFollowUpStatus: (customerId: string, followUpStatus: LeadFollowUpStatus) => Promise<void>;
   loadOutboundEvents: (quoteId: string) => Promise<void>;
@@ -371,11 +425,27 @@ export function DashboardProvider({
   onNavigateToQuote?: (quoteId: string) => void;
   onNavigateToBuilder?: () => void;
 }) {
+  const location = useLocation();
+  const routeQuoteId = useMemo(() => {
+    const match = location.pathname.match(/^\/app\/quotes\/([^/]+)\/?$/);
+    if (!match?.[1]) return null;
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }, [location.pathname]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [branding, setBranding] = useState<TenantBranding | null>(null);
-  const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
+  const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(() => routeQuoteId);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
+  const [quoteDetailLoading, setQuoteDetailLoading] = useState(Boolean(routeQuoteId));
+  const [quoteDetailError, setQuoteDetailError] = useState<DashboardContextValue["quoteDetailError"]>(null);
+  const routeQuoteIdRef = useRef<string | null>(routeQuoteId);
+  const selectedQuoteIdRef = useRef<string | null>(routeQuoteId);
+  const quoteDetailRequestIdRef = useRef(0);
+  const outboundRequestIdRef = useRef(0);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteStatus | "ALL">("ALL");
   const [loading, setLoading] = useState(true);
@@ -392,6 +462,8 @@ export function DashboardProvider({
   const [customerForm, setCustomerForm] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [quoteForm, setQuoteForm] = useState<QuoteForm>(EMPTY_QUOTE);
   const [quoteEditForm, setQuoteEditForm] = useState<QuoteEditForm>(EMPTY_EDIT);
+  const quoteEditBaselineQuoteIdRef = useRef<string | null>(null);
+  const quoteEditBaselineRef = useRef<QuoteEditForm | null>(null);
   const [lineItemForm, setLineItemForm] = useState<LineItemForm>(EMPTY_LINE_ITEM);
   const [duplicateModal, setDuplicateModal] = useState<DuplicateCustomerModalState | null>(null);
   const [sendComposer, setSendComposer] = useState<SendComposerState | null>(null);
@@ -409,6 +481,21 @@ export function DashboardProvider({
   const canViewCommunicationLog = session?.entitlements?.features.communicationLog ?? true;
   const currentPlanLabel = session?.effectivePlanName ?? "Basic";
   const canAutoUpgradeMessage = !(session?.isTrial ?? false);
+
+  const selectQuoteId = useCallback((quoteId: string | null) => {
+    if (selectedQuoteIdRef.current === quoteId) return;
+    selectedQuoteIdRef.current = quoteId;
+    quoteDetailRequestIdRef.current += 1;
+    outboundRequestIdRef.current += 1;
+    setSelectedQuoteId(quoteId);
+    setSelectedQuote((current) => current?.id === quoteId ? current : null);
+    setQuoteDetailError(null);
+  }, []);
+
+  useEffect(() => {
+    routeQuoteIdRef.current = routeQuoteId;
+    if (routeQuoteId) selectQuoteId(routeQuoteId);
+  }, [routeQuoteId, selectQuoteId]);
 
   /* ─── Data loaders ─── */
 
@@ -439,17 +526,18 @@ export function DashboardProvider({
             : "";
         return { ...prev, customerId: nextCustomerId };
       });
-      setSelectedQuoteId((current) => {
-        if (!quoteRes.quotes.length) return null;
-        if (!current) return quoteRes.quotes[0].id;
-        return quoteRes.quotes.some((quote) => quote.id === current) ? current : quoteRes.quotes[0].id;
-      });
+      const currentQuoteId = selectedQuoteIdRef.current;
+      const nextQuoteId = routeQuoteIdRef.current
+        ?? (currentQuoteId && quoteRes.quotes.some((quote) => quote.id === currentQuoteId)
+          ? currentQuoteId
+          : quoteRes.quotes[0]?.id ?? null);
+      selectQuoteId(nextQuoteId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading dashboard data.");
     } finally {
       setLoading(false);
     }
-  }, [session?.tenantId]);
+  }, [selectQuoteId, session?.tenantId]);
 
   useEffect(() => { void loadAll(); }, [loadAll]);
 
@@ -461,15 +549,16 @@ export function DashboardProvider({
         status: statusFilter === "ALL" ? undefined : statusFilter,
       });
       setQuotes(res.quotes);
-      setSelectedQuoteId((current) => {
-        if (!res.quotes.length) return null;
-        if (!current) return res.quotes[0].id;
-        return res.quotes.some((q) => q.id === current) ? current : res.quotes[0].id;
-      });
+      const currentQuoteId = selectedQuoteIdRef.current;
+      const nextQuoteId = routeQuoteIdRef.current
+        ?? (currentQuoteId && res.quotes.some((quote) => quote.id === currentQuoteId)
+          ? currentQuoteId
+          : res.quotes[0]?.id ?? null);
+      selectQuoteId(nextQuoteId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading quotes.");
     }
-  }, [search, statusFilter]);
+  }, [search, selectQuoteId, statusFilter]);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -489,15 +578,18 @@ export function DashboardProvider({
 
   const loadOutboundEvents = useCallback(async (quoteId: string) => {
     if (!canViewCommunicationLog) { setOutboundEvents([]); return; }
+    const requestId = ++outboundRequestIdRef.current;
     setOutboundEventsLoading(true);
     try {
       const { events } = await api.quotes.outboundEvents.list(quoteId, { limit: 15 });
+      if (requestId !== outboundRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
       setOutboundEvents(events);
     } catch (err) {
+      if (requestId !== outboundRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
       setOutboundEvents([]);
       setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
     } finally {
-      setOutboundEventsLoading(false);
+      if (requestId === outboundRequestIdRef.current) setOutboundEventsLoading(false);
     }
   }, [canViewCommunicationLog]);
 
@@ -505,28 +597,39 @@ export function DashboardProvider({
     quoteId: string,
     options?: { includeOutboundEvents?: boolean },
   ) => {
+    const requestId = ++quoteDetailRequestIdRef.current;
+    setQuoteDetailLoading(true);
+    setQuoteDetailError(null);
+    setSelectedQuote((current) => current?.id === quoteId ? current : null);
     try {
       const { quote } = await api.quotes.get(quoteId);
+      if (requestId !== quoteDetailRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
       setSelectedQuote(quote);
+      const serverEditForm = toQuoteEditForm(quote);
+      const previousSaved =
+        quoteEditBaselineQuoteIdRef.current === quote.id ? quoteEditBaselineRef.current : null;
+      setQuoteEditForm((current) =>
+        previousSaved ? reconcileQuoteEditForm(current, previousSaved, serverEditForm) : serverEditForm,
+      );
+      quoteEditBaselineQuoteIdRef.current = quote.id;
+      quoteEditBaselineRef.current = serverEditForm;
       const includeOutboundEvents = options?.includeOutboundEvents ?? true;
       if (canViewCommunicationLog && includeOutboundEvents) {
         await loadOutboundEvents(quoteId);
       } else if (!canViewCommunicationLog) {
         setOutboundEvents([]);
       }
-      setQuoteEditForm({
-        serviceType: quote.serviceType,
-        status: quote.status,
-        jobStatus: quote.jobStatus,
-        afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus,
-        title: quote.title,
-        scopeText: quote.scopeText,
-        taxAmount: String(Number(quote.taxAmount)),
-      });
     } catch (err) {
+      if (requestId !== quoteDetailRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
       setSelectedQuote(null);
       setOutboundEvents([]);
-      setError(err instanceof ApiError ? err.message : "Failed loading quote detail.");
+      setQuoteDetailError(
+        err instanceof ApiError && err.status === 404
+          ? { kind: "not-found", message: "This quote could not be found. It may have been archived, deleted, or you may no longer have access." }
+          : { kind: "load", message: "Quote details could not be loaded. Check your connection and try again." },
+      );
+    } finally {
+      if (requestId === quoteDetailRequestIdRef.current) setQuoteDetailLoading(false);
     }
   }, [canViewCommunicationLog, loadOutboundEvents]);
 
@@ -560,6 +663,7 @@ export function DashboardProvider({
     if (!selectedQuoteId) {
       setSelectedQuote(null);
       setOutboundEvents([]);
+      setQuoteDetailLoading(false);
       return;
     }
     void loadQuoteDetail(selectedQuoteId);
@@ -574,14 +678,19 @@ export function DashboardProvider({
     await Promise.all([loadQuotes(), loadQuoteDetail(selectedQuoteId)]);
   }, [selectedQuoteId, loadQuotes, loadQuoteDetail]);
 
+  const retrySelectedQuote = useCallback(async () => {
+    if (!selectedQuoteId) return;
+    await loadQuoteDetail(selectedQuoteId);
+  }, [loadQuoteDetail, selectedQuoteId]);
+
   const focusQuoteDesk = useCallback((quoteId: string | null) => {
-    setSelectedQuoteId(quoteId);
-  }, []);
+    selectQuoteId(quoteId);
+  }, [selectQuoteId]);
 
   const navigateToQuote = useCallback((quoteId: string) => {
-    setSelectedQuoteId(quoteId);
+    selectQuoteId(quoteId);
     onNavigateToQuote?.(quoteId);
-  }, [onNavigateToQuote]);
+  }, [onNavigateToQuote, selectQuoteId]);
 
   const selectQuoteCustomer = useCallback((customerId: string) => {
     setQuoteForm((prev) => ({ ...prev, customerId }));
@@ -741,8 +850,8 @@ export function DashboardProvider({
   }, [createQuoteDraftFromForm]);
 
   const persistSelectedQuote = useCallback(async () => {
-    if (!selectedQuote) return;
-    setSaving(true); setError(null);
+    if (!selectedQuote) return false;
+    setSaving(true); setError(null); setNotice(null);
     try {
       await api.quotes.update(selectedQuote.id, {
         serviceType: quoteEditForm.serviceType,
@@ -759,7 +868,11 @@ export function DashboardProvider({
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice("Quote updated.");
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving quote."); } finally { setSaving(false); }
+      return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Quote changes could not be saved. Try again.");
+      return false;
+    } finally { setSaving(false); }
   }, [selectedQuote, quoteEditForm, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
@@ -963,11 +1076,13 @@ export function DashboardProvider({
     input: CreateLineItemInput,
     options?: { resetForm?: boolean; notice?: string },
   ) => {
-    if (!selectedQuote) return;
-    setSaving(true); setError(null);
+    if (!selectedQuote) return false;
+    setSaving(true); setError(null); setNotice(null);
     try {
       await api.quotes.lineItems.create(selectedQuote.id, {
         description: input.description,
+        sectionType: input.sectionType,
+        sectionLabel: input.sectionLabel,
         quantity: input.quantity,
         unitCost: input.unitCost,
         unitPrice: input.unitPrice,
@@ -981,7 +1096,11 @@ export function DashboardProvider({
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(options?.notice ?? "Line item added.");
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed adding line item."); } finally { setSaving(false); }
+      return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The line could not be added. Check the fields and try again.");
+      return false;
+    } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const addLineItem = useCallback(async (event: FormEvent) => {
@@ -999,9 +1118,10 @@ export function DashboardProvider({
     input: Partial<CreateLineItemInput> & { description?: string },
     options?: { notice?: string },
   ) => {
-    if (!selectedQuote) return;
+    if (!selectedQuote) return false;
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       await api.quotes.lineItems.update(selectedQuote.id, lineItemId, input);
       await Promise.all([
@@ -1010,8 +1130,10 @@ export function DashboardProvider({
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
       setNotice(options?.notice ?? "Line item updated.");
+      return true;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed updating line item.");
+      setError(err instanceof ApiError ? err.message : "The line could not be saved. Review it and try again.");
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1177,7 +1299,7 @@ export function DashboardProvider({
   }, [lineItemForm.quantity, lineItemForm.unitCost, lineItemForm.unitPrice]);
 
   const value: DashboardContextValue = {
-    session, customers, quotes, branding, selectedQuoteId, selectedQuote, quoteHistory, outboundEvents,
+    session, customers, quotes, branding, selectedQuoteId, selectedQuote, quoteDetailLoading, quoteDetailError, quoteHistory, outboundEvents,
     search, statusFilter, loading, saving, error, notice,
     historyMode, historyCustomerId, historyLoading, outboundEventsLoading,
     customerForm, quoteForm, quoteEditForm, lineItemForm,
@@ -1189,7 +1311,7 @@ export function DashboardProvider({
     setCustomerForm, setQuoteForm, setQuoteEditForm, setLineItemForm,
     setChatPrompt, setChatParsed, setSetupTrade, setSetupSqFtMode, setSetupSqFtUnitCost, setSetupSqFtUnitPrice,
     setDuplicateModal, setSendComposer,
-    loadAll, loadQuotes, loadCustomers, loadQuoteHistory, refreshSelectedQuote,
+    loadAll, loadQuotes, loadCustomers, loadQuoteHistory, refreshSelectedQuote, retrySelectedQuote,
     focusQuoteDesk, selectQuoteCustomer, navigateToBuilder, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
     createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,

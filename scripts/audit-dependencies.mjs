@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { acceptedPolicyFor, advisoryId } from "./dependency-audit-policy.mjs";
+import { advisoryId, resolveAcceptedVulnerabilityPackages } from "./dependency-audit-policy.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npmCommand = "npm";
@@ -28,44 +28,12 @@ function runAudit(label, cwd) {
 
   const vulnerabilities = report.vulnerabilities ?? {};
   const lockPackages = JSON.parse(readFileSync(path.join(cwd, "package-lock.json"), "utf8")).packages ?? {};
-  const acceptedPackages = new Set();
-  const acceptedPolicies = new Map();
   const unresolved = [];
-
-  for (const [packageName, vulnerability] of Object.entries(vulnerabilities)) {
-    const directFindings = vulnerability.via.filter((via) => typeof via === "object");
-    const dependencyFindings = vulnerability.via.filter((via) => typeof via === "string");
-    const acceptedDirectFindings = directFindings.filter((via) => {
-      const policy = acceptedPolicyFor({ workspace: label, packageName, vulnerability, via, lockPackages });
-      if (policy) acceptedPolicies.set(`${packageName}:${advisoryId(via)}`, policy);
-      return Boolean(policy);
-    });
-    const rejectedDirectFindings = directFindings.filter(
-      (via) => !acceptedPolicyFor({ workspace: label, packageName, vulnerability, via, lockPackages }),
-    );
-
-    if (rejectedDirectFindings.length === 0 && dependencyFindings.length === 0 && acceptedDirectFindings.length > 0) {
-      acceptedPackages.add(packageName);
-    }
-  }
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const [packageName, vulnerability] of Object.entries(vulnerabilities)) {
-      if (acceptedPackages.has(packageName)) continue;
-      const directFindings = vulnerability.via.filter((via) => typeof via === "object");
-      const dependencyFindings = vulnerability.via.filter((via) => typeof via === "string");
-      const directAccepted = directFindings.every((via) =>
-        Boolean(acceptedPolicyFor({ workspace: label, packageName, vulnerability, via, lockPackages })),
-      );
-      const dependenciesAccepted = dependencyFindings.length > 0 && dependencyFindings.every((name) => acceptedPackages.has(name));
-      if (directAccepted && dependenciesAccepted) {
-        acceptedPackages.add(packageName);
-        changed = true;
-      }
-    }
-  }
+  const { acceptedPackages, acceptedPolicies } = resolveAcceptedVulnerabilityPackages({
+    workspace: label,
+    vulnerabilities,
+    lockPackages,
+  });
 
   for (const [packageName, vulnerability] of Object.entries(vulnerabilities)) {
     if (!acceptedPackages.has(packageName)) {

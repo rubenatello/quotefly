@@ -72,7 +72,8 @@ Railway/Render settings:
 - Root directory: repository root.
 - Build command: `npm ci && npm run prisma:generate && npm run build`.
 - Start command: `npm run start:prod`.
-- Health check: `GET /v1/health`.
+- Process liveness: `GET /v1/health`.
+- Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
 
 `start:prod` runs `prisma migrate deploy` before starting the API. For safer production rollouts, run migrations as a release/predeploy command and start with `node dist/server.js` after migrations succeed.
 
@@ -92,7 +93,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 
 1. Provision staging Postgres and set API env vars.
 2. Deploy API to Railway/Render staging.
-3. Confirm `GET /v1/health` returns OK.
+3. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness.
 4. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at staging API.
 5. Run migrations with `npm run prisma:migrate:deploy`.
 6. Run staging smoke checks.
@@ -135,4 +136,3 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 - QuickBooks: configure sandbox app credentials, exact redirect URI, webhook verifier, and realm conflict handling before enabling direct sync.
 - Twilio: keep `ENABLE_TWILIO_SMS=false` until compliance, auth validation, and opt-out behavior are production reviewed.
 - OpenAI: set spend alerts and review AI quality telemetry before expanding beta access.
-

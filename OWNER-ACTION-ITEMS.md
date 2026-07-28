@@ -13,7 +13,7 @@ Reference plans:
 
 These are the owner-side items that still matter most before launch:
 
-1. Confirm `support@quotefly.us` mailbox is live
+1. Confirm inbound and outbound delivery for the newly created `support@quotefly.us` and `info@quotefly.us` shared mailboxes
 2. Confirm `quotefly.us` and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values

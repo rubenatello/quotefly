@@ -254,34 +254,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.get("/auth/me", { ...AuthMeRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
 
-    const membership = await app.prisma.tenantUser.findFirst({
-      where: {
-        tenantId: claims.tenantId,
-        userId: claims.userId,
-        deletedAtUtc: null,
-        user: { deletedAtUtc: null },
-        tenant: { deletedAtUtc: null },
-      },
-      include: {
-        user: {
-          select: { id: true, email: true, fullName: true, createdAt: true },
-        },
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            subscriptionStatus: true,
-            subscriptionPlanCode: true,
-            primaryTrade: true,
-            onboardingCompletedAtUtc: true,
-            trialStartsAtUtc: true,
-            trialEndsAtUtc: true,
-            subscriptionCurrentPeriodEndUtc: true,
-          },
-        },
-      },
-    });
+    const membership = request.liveAuthMembership;
 
     if (!membership) {
       return reply.code(401).send({ error: "Session is no longer valid." });

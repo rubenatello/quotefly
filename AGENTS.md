@@ -62,6 +62,22 @@ npm run audit:all
 
 Backend integration tests cover the launch-critical auth, tenant isolation, customer, quote, and billing webhook flows. For risky backend changes, extend those tests before broad refactors. Still perform manual smoke checks for signup/signin, onboarding, customer create/update, quote create/update, PDF download, billing access, and QuickBooks/Twilio paths when touched.
 
+## Specialist Agent Workflow
+
+Project-scoped custom agents live in `.codex/agents`; their reusable workflows live in `.agents/skills`.
+
+- `sweep`: public SEO, crawlability, structured data, and search performance.
+- `renford`: API latency, Prisma/PostgreSQL, backend architecture, and infrastructure integrity.
+- `goldface`: responsive mobile/desktop UX, accessibility, and frontend reliability.
+- `sentinel`: tenant isolation, auth, privacy, payments, providers, webhooks, and dependencies.
+- `harbor`: CI, release evidence, migrations, observability, rollback, and launch operations.
+- `rook`: bounded junior remediation with explicit acceptance criteria.
+- `opera`: independent senior review and the final engineering verdict.
+
+For multi-area production work, use `$quotefly-production-loop` and delegate independent specialist tasks when that improves speed or confidence. Keep the root agent as coordinator. Run Opera only after implementation evidence is ready; Opera must not edit the work it reviews. If Opera returns `CHANGES_REQUIRED`, route bounded findings to Rook and systemic findings to the owning senior specialist, rerun affected gates, and send the new diff back to Opera. A failed or unavailable required gate cannot receive approval.
+
+Do not route ambiguous architecture, security-boundary, migration-strategy, or provider-policy work to Rook. Agent approval never overrides the BCP rule or authorizes deployment, provider enablement, or production data changes.
+
 ## Backend Guidelines
 
 - Keep route handlers thin. Put reusable business logic in `src/services` or `src/lib`.
@@ -108,7 +124,7 @@ Backend integration tests cover the launch-critical auth, tenant isolation, cust
 - API:
   - Build with `npm install`, `npm run prisma:generate`, and `npm run build`.
   - Start with `npm run start:prod` so `prisma migrate deploy` runs before `node dist/server.js`.
-  - Configure health check at `/v1/health`.
+  - Configure process liveness at `/v1/health` and database-backed readiness at `/v1/ready`.
   - Set production env vars in the host, not in files.
 - Frontend:
   - Build from `web` with `npm run build`.
@@ -125,8 +141,13 @@ Backend integration tests cover the launch-critical auth, tenant isolation, cust
 
 ## Current Launch Risks To Track
 
-- No automated backend or end-to-end test suite yet.
-- Frontend lint has React hook dependency warnings in dashboard and quote workflow files.
+- As of 2026-07-28, `npm run verify` passes on the local worktree, including the documented dependency-advisory dispositions. Consumer-release approval still requires `npm run verify:launch` on the exact candidate.
+- The latest `main` CI launch gate passed at committed SHA `c09157a`; it does not cover the current uncommitted worktree.
+- The local release candidate contains fixes for live membership revalidation, Stripe owner authorization, QuickBooks webhook routing, and live-role checks in the QuickBooks OAuth callback. Treat them as pending until database-backed integration tests pass and Opera approves the remediated diff.
+- Integration and Playwright suites exist, with new recovery, quote-route race, and quote-draft cases in the local candidate. Coverage remains thin for onboarding customization, edit/archive/delete flows, team administration, Twilio, provider-backed AI, and broader failure recovery.
+- Local database-backed gates require a dedicated `TEST_DATABASE_URL` whose database name contains `test`; do not weaken this guard.
 - Add explicit CSRF protection if deployment requires `SESSION_COOKIE_SAME_SITE=none`.
+- Production routing still needs owner attention: `www.quotefly.us` serves the web build and the Railway API responds at `/v1/health`, but the apex has conflicting/broken HTTPS resolution. `/v1/ready` exists only in the local candidate until deployed.
 - Production launch still depends on owner-managed provider setup: domain/DNS, Stripe live prices/webhooks, OpenAI key, QuickBooks app approval/config, support inbox, and legal copy review.
+- Production observability, alert destinations, backup/restore evidence, and rollback evidence remain incomplete.
 - Run real device smoke tests for the full customer-to-quote-to-send workflow on mobile before public launch.

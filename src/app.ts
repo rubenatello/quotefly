@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
@@ -9,9 +9,9 @@ import fastifyRawBody from "fastify-raw-body";
 import { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import { env } from "./config/env";
-import { getJwtClaims } from "./lib/auth";
+import { getJwtClaims, LiveAuthMembershipSelect } from "./lib/auth";
 import { prisma } from "./lib/prisma";
-import { loadTenantEntitlements } from "./lib/subscription";
+import { buildTenantEntitlements } from "./lib/subscription";
 import { healthRoutes } from "./routes/health";
 import { tenantRoutes } from "./routes/tenants";
 import { customerRoutes } from "./routes/customers";
@@ -71,6 +71,10 @@ const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
   "/v1/integrations/quickbooks",
 ];
 const WORKSPACE_ACCESS_MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const PUBLIC_PROVIDER_MUTATION_PATHS = new Set([
+  "/v1/integrations/quickbooks/webhook",
+  "/v1/integrations/quickbooks/webhook/",
+]);
 
 function requestPathname(url: string): string {
   return url.split("?")[0] ?? url;
@@ -79,6 +83,10 @@ function requestPathname(url: string): string {
 function requiresWorkspaceAccess(method: string, url: string): boolean {
   const pathname = requestPathname(url);
   const normalizedMethod = method.toUpperCase();
+
+  if (PUBLIC_PROVIDER_MUTATION_PATHS.has(pathname)) {
+    return false;
+  }
 
   if (normalizedMethod === "GET" && /^\/v1\/quotes\/[^/]+\/pdf$/.test(pathname)) {
     return true;
@@ -115,6 +123,12 @@ export function buildServer() {
 
   app.decorate("prisma", prisma);
   app.decorate("env", env);
+  app.decorateRequest("liveAuthMembership", null);
+
+  // An app-level workspace-access hook and a route preHandler can both invoke
+  // authenticate. Revalidate membership once per request without weakening the
+  // live membership check.
+  const membershipValidatedRequests = new WeakSet<FastifyRequest>();
 
   app.register(cors, {
     origin: buildCorsOrigin(),
@@ -175,11 +189,49 @@ export function buildServer() {
 
   // Reusable preHandler hook for protected routes
   app.decorate("authenticate", async function (request, reply) {
+    if (membershipValidatedRequests.has(request)) {
+      return;
+    }
+
     try {
       await request.jwtVerify();
     } catch {
       reply.code(401).send({ error: "Unauthorized" });
+      return;
     }
+
+    let claims;
+    try {
+      claims = getJwtClaims(request);
+    } catch {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const membership = await app.prisma.tenantUser.findFirst({
+      where: {
+        tenantId: claims.tenantId,
+        userId: claims.userId,
+        deletedAtUtc: null,
+        user: { deletedAtUtc: null },
+        tenant: { deletedAtUtc: null },
+      },
+      select: LiveAuthMembershipSelect,
+    });
+
+    if (!membership) {
+      reply.code(401).send({ error: "Session is no longer valid." });
+      return;
+    }
+
+    // Roles and email-based superuser entitlements must reflect the live
+    // database state rather than the potentially stale JWT payload.
+    Object.assign(request.user as object, {
+      email: membership.user.email,
+      role: membership.role,
+    });
+    request.liveAuthMembership = membership;
+    membershipValidatedRequests.add(request);
   });
 
   app.addHook("preHandler", async (request, reply) => {
@@ -187,20 +239,17 @@ export function buildServer() {
       return;
     }
 
-    try {
-      await request.jwtVerify();
-    } catch {
-      return reply.code(401).send({ error: "Unauthorized" });
-    }
+    await app.authenticate(request, reply);
+    if (reply.sent) return;
 
     const claims = getJwtClaims(request);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
-      userEmail: claims.email,
-    });
-
-    if (!entitlements) {
-      return reply.code(404).send({ error: "Workspace not found." });
-    }
+    const membership = request.liveAuthMembership;
+    if (!membership) return reply.code(401).send({ error: "Session is no longer valid." });
+    const entitlements = buildTenantEntitlements(
+      membership.tenant,
+      new Date(),
+      { userEmail: membership.user.email },
+    );
 
     if (!entitlements.hasWorkspaceAccess) {
       return reply.code(402).send({

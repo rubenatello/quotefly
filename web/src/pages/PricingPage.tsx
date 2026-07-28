@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { CheckIcon } from "../components/Icons";
+import { INFO_MAILTO } from "../lib/contact";
 import { setSEOMetadata } from "../lib/seo";
 
 interface PricingPageProps {
@@ -216,6 +217,13 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
           >
             Start Free Trial
           </button>
+          <p className="mt-5 text-sm text-slate-600">
+            Have a sales or plan question?{" "}
+            <a href={INFO_MAILTO} className="font-semibold text-quotefly-blue hover:text-blue-700">
+              Email our team
+            </a>
+            .
+          </p>
         </div>
       </section>
     </div>

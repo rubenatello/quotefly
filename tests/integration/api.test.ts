@@ -1,8 +1,27 @@
 import type { FastifyInstance } from "fastify";
+import { createHmac } from "crypto";
 import Stripe from "stripe";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { buildServer } from "../../src/app";
+import { env } from "../../src/config/env";
 import { prisma } from "../../src/lib/prisma";
+import { createSignedQuickBooksState } from "../../src/services/quickbooks";
+
+const quickBooksProviderMocks = vi.hoisted(() => ({
+  exchangeAuthorizationCode: vi.fn(),
+  fetchCompanyInfo: vi.fn(),
+}));
+
+vi.mock("../../src/services/quickbooks", async () => {
+  const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>(
+    "../../src/services/quickbooks",
+  );
+  return {
+    ...actual,
+    exchangeQuickBooksAuthorizationCode: quickBooksProviderMocks.exchangeAuthorizationCode,
+    fetchQuickBooksCompanyInfo: quickBooksProviderMocks.fetchCompanyInfo,
+  };
+});
 
 type AuthSession = {
   cookie: string;
@@ -371,5 +390,336 @@ describe("QuoteFly API integration", () => {
       payload: eventPayload,
     });
     expect(invalidSignatureResponse.statusCode).toBe(400);
+  });
+
+  test("rejects a revoked membership on protected reads and mutations", async () => {
+    const session = await signUp("revoked-member");
+
+    await prisma.tenantUser.update({
+      where: {
+        tenantId_userId: {
+          tenantId: session.tenant.id,
+          userId: session.user.id,
+        },
+      },
+      data: { deletedAtUtc: new Date() },
+    });
+
+    const readResponse = await app.inject({
+      method: "GET",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+    });
+    expect(readResponse.statusCode).toBe(401);
+    expect(parseJson<{ error: string }>(readResponse).error).toBe("Session is no longer valid.");
+
+    const mutationResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "Revoked Membership Customer",
+        phone: "555-010-9911",
+      },
+    });
+    expect(mutationResponse.statusCode).toBe(401);
+    await expect(
+      prisma.customer.count({ where: { tenantId: session.tenant.id } }),
+    ).resolves.toBe(0);
+  });
+
+  test("requires a live owner role for Stripe checkout and portal sessions", async () => {
+    const session = await signUp("billing-role");
+
+    await prisma.tenantUser.update({
+      where: {
+        tenantId_userId: {
+          tenantId: session.tenant.id,
+          userId: session.user.id,
+        },
+      },
+      data: { role: "member" },
+    });
+
+    const checkoutResponse = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(session.cookie),
+      payload: { planCode: "starter" },
+    });
+    expect(checkoutResponse.statusCode).toBe(403);
+    expect(parseJson<{ error: string }>(checkoutResponse).error).toBe(
+      "Only an active workspace owner can manage billing.",
+    );
+
+    const portalResponse = await app.inject({
+      method: "POST",
+      url: "/v1/billing/portal-session",
+      headers: authHeaders(session.cookie),
+    });
+    expect(portalResponse.statusCode).toBe(403);
+    expect(parseJson<{ error: string }>(portalResponse).error).toBe(
+      "Only an active workspace owner can manage billing.",
+    );
+  });
+
+  test("routes unauthenticated QuickBooks webhooks through signature verification", async () => {
+    const payload = "[]";
+    const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(payload)
+      .digest("base64");
+
+    const validResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: {
+        "content-type": "application/json",
+        "intuit-signature": signature,
+      },
+      payload,
+    });
+    expect(validResponse.statusCode).toBe(200);
+    expect(parseJson<{ received: boolean; count: number }>(validResponse)).toEqual({
+      received: true,
+      count: 0,
+    });
+
+    const invalidResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: {
+        "content-type": "application/json",
+        "intuit-signature": "invalid",
+      },
+      payload,
+    });
+    expect(invalidResponse.statusCode).toBe(401);
+
+    const missingSignatureResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+    expect(missingSignatureResponse.statusCode).toBe(400);
+
+    const protectedWorkspaceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/disconnect",
+    });
+    expect(protectedWorkspaceResponse.statusCode).toBe(401);
+  });
+
+  test("rejects stale QuickBooks OAuth state before provider exchange or credential writes", async () => {
+    const rejectedActors = [
+      {
+        label: "quickbooks-demoted",
+        revoke: async (session: AuthSession) => {
+          await prisma.tenantUser.update({
+            where: {
+              tenantId_userId: {
+                tenantId: session.tenant.id,
+                userId: session.user.id,
+              },
+            },
+            data: { role: "member" },
+          });
+        },
+      },
+      {
+        label: "quickbooks-membership-deleted",
+        revoke: async (session: AuthSession) => {
+          await prisma.tenantUser.update({
+            where: {
+              tenantId_userId: {
+                tenantId: session.tenant.id,
+                userId: session.user.id,
+              },
+            },
+            data: { deletedAtUtc: new Date() },
+          });
+        },
+      },
+      {
+        label: "quickbooks-user-deleted",
+        revoke: async (session: AuthSession) => {
+          await prisma.user.update({
+            where: { id: session.user.id },
+            data: { deletedAtUtc: new Date() },
+          });
+        },
+      },
+      {
+        label: "quickbooks-tenant-deleted",
+        revoke: async (session: AuthSession) => {
+          await prisma.tenant.update({
+            where: { id: session.tenant.id },
+            data: { deletedAtUtc: new Date() },
+          });
+        },
+      },
+    ];
+
+    for (const [index, rejectedActor] of rejectedActors.entries()) {
+      const session = await signUp(rejectedActor.label);
+      const state = createSignedQuickBooksState(env, {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        role: "owner",
+      });
+      await rejectedActor.revoke(session);
+      quickBooksProviderMocks.exchangeAuthorizationCode.mockClear();
+      quickBooksProviderMocks.fetchCompanyInfo.mockClear();
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=one-time-code-${index}&realmId=realm-rejected-${index}`,
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toContain("integrations=quickbooks_error");
+      expect(response.body).not.toContain("one-time-code");
+      expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
+      expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
+      await expect(
+        prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
+      ).resolves.toBe(0);
+    }
+  });
+
+  test.each(["owner", "admin"])(
+    "preserves QuickBooks OAuth callback success for an active %s",
+    async (role) => {
+      const session = await signUp(`quickbooks-active-${role}`);
+      if (role !== "owner") {
+        await prisma.tenantUser.update({
+          where: {
+            tenantId_userId: {
+              tenantId: session.tenant.id,
+              userId: session.user.id,
+            },
+          },
+          data: { role },
+        });
+      }
+
+      const state = createSignedQuickBooksState(env, {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        role,
+      });
+      const accessToken = `sandbox-access-${role}`;
+      const refreshToken = `sandbox-refresh-${role}`;
+      quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
+      quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+      quickBooksProviderMocks.exchangeAuthorizationCode.mockResolvedValue({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_type: "bearer",
+        expires_in: 3600,
+      });
+      quickBooksProviderMocks.fetchCompanyInfo.mockResolvedValue({
+        companyName: `Sandbox ${role} Company`,
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=active-${role}-code&realmId=realm-active-${role}`,
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toContain("integrations=quickbooks_connected");
+      expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
+      expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+
+      const connection = await prisma.quickBooksConnection.findUniqueOrThrow({
+        where: { tenantId: session.tenant.id },
+        select: {
+          status: true,
+          realmId: true,
+          accessTokenEncrypted: true,
+          refreshTokenEncrypted: true,
+        },
+      });
+      expect(connection).toMatchObject({
+        status: "CONNECTED",
+        realmId: `realm-active-${role}`,
+      });
+      expect(connection.accessTokenEncrypted).not.toBe(accessToken);
+      expect(connection.refreshTokenEncrypted).not.toBe(refreshToken);
+    },
+  );
+
+  test("does not persist QuickBooks credentials when access changes during exchange", async () => {
+    const session = await signUp("quickbooks-exchange-revocation");
+    const state = createSignedQuickBooksState(env, {
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      role: "owner",
+    });
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockImplementation(async () => {
+      await prisma.tenantUser.update({
+        where: {
+          tenantId_userId: {
+            tenantId: session.tenant.id,
+            userId: session.user.id,
+          },
+        },
+        data: { role: "member" },
+      });
+      return {
+        access_token: "revoked-during-exchange-access",
+        refresh_token: "revoked-during-exchange-refresh",
+        token_type: "bearer",
+        expires_in: 3600,
+      };
+    });
+    quickBooksProviderMocks.fetchCompanyInfo.mockResolvedValue({
+      companyName: "Revoked During Exchange Company",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=revocation-race-code&realmId=realm-revocation-race`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toContain("integrations=quickbooks_error");
+    expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
+    expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+    await expect(
+      prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
+    ).resolves.toBe(0);
+  });
+
+  test("keeps QuickBooks provider failures out of the OAuth redirect", async () => {
+    const session = await signUp("quickbooks-provider-failure");
+    const state = createSignedQuickBooksState(env, {
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      role: "owner",
+    });
+    const sensitiveProviderMessage = "provider rejected secret-access-token";
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockRejectedValue(
+      new Error(sensitiveProviderMessage),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=failing-code&realmId=realm-provider-failure`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toContain("integrations=quickbooks_error");
+    expect(response.headers.location).not.toContain("secret-access-token");
+    expect(response.body).not.toContain("secret-access-token");
+    expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
+    await expect(
+      prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
+    ).resolves.toBe(0);
   });
 });

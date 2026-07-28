@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 
 const PRODUCT_LINKS = [
   { label: "Pricing", to: "/pricing" },
@@ -29,8 +30,14 @@ export function Footer() {
             <div className="mt-4 space-y-1 text-sm text-slate-600">
               <p>
                 Support:{" "}
-                <a href="mailto:support@quotefly.us" className="font-medium text-quotefly-blue hover:text-blue-700">
-                  support@quotefly.us
+                <a href={SUPPORT_MAILTO} className="font-medium text-quotefly-blue hover:text-blue-700">
+                  {SUPPORT_EMAIL}
+                </a>
+              </p>
+              <p>
+                Sales &amp; inquiries:{" "}
+                <a href={INFO_MAILTO} className="font-medium text-quotefly-blue hover:text-blue-700">
+                  {INFO_EMAIL}
                 </a>
               </p>
               <p>Headquarters: United States</p>

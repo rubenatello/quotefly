@@ -14,7 +14,10 @@ process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_integration";
 process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";
 process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";
 process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
+process.env.QUICKBOOKS_CLIENT_ID ||= "quickbooks-integration-client";
+process.env.QUICKBOOKS_CLIENT_SECRET ||= "quickbooks-integration-secret";
 process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
+process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
 process.env.ENABLE_TWILIO_SMS ||= "false";
 
 const databaseUrl = process.env.DATABASE_URL;

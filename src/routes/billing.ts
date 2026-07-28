@@ -299,7 +299,14 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: claims.tenantId,
         deletedAtUtc: null,
-        users: { some: { userId: claims.userId } },
+        users: {
+          some: {
+            userId: claims.userId,
+            role: "owner",
+            deletedAtUtc: null,
+            user: { deletedAtUtc: null },
+          },
+        },
       },
       select: {
         id: true,
@@ -309,7 +316,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     });
 
     if (!tenant) {
-      return reply.code(404).send({ error: "Tenant not found for account." });
+      return reply.code(403).send({ error: "Only an active workspace owner can manage billing." });
     }
 
     const priceId = getPriceIdForPlan(app, payload.planCode);
@@ -371,7 +378,14 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: claims.tenantId,
         deletedAtUtc: null,
-        users: { some: { userId: claims.userId } },
+        users: {
+          some: {
+            userId: claims.userId,
+            role: "owner",
+            deletedAtUtc: null,
+            user: { deletedAtUtc: null },
+          },
+        },
       },
       select: {
         id: true,
@@ -380,7 +394,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     });
 
     if (!tenant) {
-      return reply.code(404).send({ error: "Tenant not found for account." });
+      return reply.code(403).send({ error: "Only an active workspace owner can manage billing." });
     }
 
     if (!tenant.stripeCustomerId) {

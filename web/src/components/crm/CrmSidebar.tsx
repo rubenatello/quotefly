@@ -1,6 +1,7 @@
 ﻿import { useMemo, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FilePlus2, Search, UserPlus2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FilePlus2, LifeBuoy, Search, UserPlus2, X } from "lucide-react";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
+import { SUPPORT_MAILTO } from "../../lib/contact";
 import { CloseIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { formatAiRenewalDate } from "../../lib/ai-credits";
@@ -325,6 +326,20 @@ export function CrmSidebar({
               />
             </div>
           ) : null}
+
+          <SidebarTooltip label="Contact support" collapsed={collapsed}>
+            <a
+              href={SUPPORT_MAILTO}
+              aria-label="Contact support"
+              className={cn(
+                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 sm:min-h-[40px]",
+                collapsed ? "px-0" : "gap-2 px-4",
+              )}
+            >
+              <LifeBuoy size={15} className="text-quotefly-blue" aria-hidden="true" />
+              {!collapsed && "Contact support"}
+            </a>
+          </SidebarTooltip>
 
           <SidebarTooltip label="Sign out" collapsed={collapsed}>
             <button

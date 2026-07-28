@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Archive,
@@ -125,6 +125,18 @@ const QUOTE_DESK_NEW_LINE_GRID_COLUMNS =
   "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_104px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px]";
 const QUOTE_DESK_LINE_GRID_MIN_WIDTH = "xl:min-w-[900px] 2xl:min-w-[980px]";
 
+function editableQuoteLinesMatch(left: EditableQuoteLine, right: EditableQuoteLine): boolean {
+  return (
+    left.title.trim() === right.title.trim() &&
+    left.details.trim() === right.details.trim() &&
+    left.sectionType === right.sectionType &&
+    left.sectionLabel === right.sectionLabel &&
+    Number(left.quantity) === Number(right.quantity) &&
+    Number(left.unitCost) === Number(right.unitCost) &&
+    Number(left.unitPrice) === Number(right.unitPrice)
+  );
+}
+
 export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
@@ -138,6 +150,8 @@ export function QuoteDeskView() {
   const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("1");
   const [editableLines, setEditableLines] = useState<EditableQuoteLine[]>([]);
   const [newLine, setNewLine] = useState<EditableQuoteLine>(makeEditableQuoteLine());
+  const editableQuoteIdRef = useRef<string | null>(null);
+  const savedLineBaselineRef = useRef<Map<string, EditableQuoteLine>>(new Map());
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
   const [presetPromptSaving, setPresetPromptSaving] = useState(false);
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
@@ -163,6 +177,8 @@ export function QuoteDeskView() {
     selectedQuoteId,
     focusQuoteDesk,
     selectedQuote,
+    quoteDetailLoading,
+    quoteDetailError,
     quoteEditForm,
     setQuoteEditForm,
     saving,
@@ -200,6 +216,7 @@ export function QuoteDeskView() {
     loadQuotes,
     loadQuoteHistory,
     refreshSelectedQuote,
+    retrySelectedQuote,
     loadOutboundEvents,
     navigateToBuilder,
     navigateToQuote,
@@ -259,6 +276,8 @@ export function QuoteDeskView() {
 
   useEffect(() => {
     if (!selectedQuote) {
+      editableQuoteIdRef.current = null;
+      savedLineBaselineRef.current = new Map();
       setEditableLines([]);
       setNewLine(makeEditableQuoteLine());
       setAiInsight(null);
@@ -266,11 +285,40 @@ export function QuoteDeskView() {
       return;
     }
 
-    setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
-    setNewLine(makeEditableQuoteLine());
-    setMobilePane("editor");
-    setAiInsight(null);
-    setAiRuns([]);
+    const serverLines = (selectedQuote.lineItems ?? []).map(toEditableQuoteLine);
+    const nextBaseline = new Map(serverLines.map((line) => [line.id, line] as const));
+
+    if (editableQuoteIdRef.current !== selectedQuote.id) {
+      editableQuoteIdRef.current = selectedQuote.id;
+      savedLineBaselineRef.current = nextBaseline;
+      setEditableLines(serverLines);
+      setNewLine(makeEditableQuoteLine());
+      setMobilePane("editor");
+      setAiInsight(null);
+      setAiRuns([]);
+      return;
+    }
+
+    const previousBaseline = savedLineBaselineRef.current;
+    setEditableLines((currentLines) => {
+      const currentLineMap = new Map(currentLines.map((line) => [line.id, line] as const));
+      const reconciledServerLines = serverLines.map((serverLine) => {
+        const currentLine = currentLineMap.get(serverLine.id);
+        const previousSavedLine = previousBaseline.get(serverLine.id);
+        const hasLocalDraft = Boolean(
+          currentLine && previousSavedLine && !editableQuoteLinesMatch(currentLine, previousSavedLine),
+        );
+
+        if (!hasLocalDraft || !currentLine) return serverLine;
+        return editableQuoteLinesMatch(currentLine, serverLine) ? serverLine : currentLine;
+      });
+      const localOnlyDrafts = currentLines.filter(
+        (line) => !nextBaseline.has(line.id) && !previousBaseline.has(line.id),
+      );
+
+      return [...reconciledServerLines, ...localOnlyDrafts];
+    });
+    savedLineBaselineRef.current = nextBaseline;
   }, [selectedQuote]);
 
   const requiresExplicitUnlock = useMemo(() => {
@@ -485,19 +533,19 @@ export function QuoteDeskView() {
     );
   }
 
-  async function saveLine(lineId: string) {
+  async function saveLine(lineId: string): Promise<boolean> {
     if (isQuoteLocked) {
       setUnlockConfirmOpen(true);
-      return;
+      return false;
     }
     const line = editableLines.find((entry) => entry.id === lineId);
     if (!line || !line.title.trim()) {
       setError("Each line needs a title before it can be saved.");
-      return;
+      return false;
     }
 
     track("quote_line_save");
-    await updateLineItem(
+    return updateLineItem(
       lineId,
       {
         description: joinQuoteLineDescription(line.title, line.details),
@@ -511,10 +559,11 @@ export function QuoteDeskView() {
     );
   }
 
-  async function saveAllLineEdits() {
+  async function saveAllLineEdits(): Promise<boolean> {
     for (const lineId of dirtyLineIds) {
-      await saveLine(lineId);
+      if (!(await saveLine(lineId))) return false;
     }
+    return true;
   }
 
   async function addNewLine() {
@@ -529,7 +578,7 @@ export function QuoteDeskView() {
 
     const lineToMaybeSave = newLine;
     track("quote_line_add");
-    await addLineItemDraft(
+    const added = await addLineItemDraft(
       {
         description: joinQuoteLineDescription(lineToMaybeSave.title, lineToMaybeSave.details),
         sectionType: lineToMaybeSave.sectionType,
@@ -542,6 +591,7 @@ export function QuoteDeskView() {
         notice: `${lineToMaybeSave.title} added to the quote.`,
       },
     );
+    if (!added) return;
     setNewLine(makeEditableQuoteLine());
     if (
       lineToMaybeSave.title.trim() &&
@@ -560,7 +610,8 @@ export function QuoteDeskView() {
       return;
     }
     track("quote_sheet_save");
-    await persistSelectedQuote();
+    const metadataSaved = await persistSelectedQuote();
+    if (!metadataSaved) return;
     if (dirtyLineIds.length) {
       await saveAllLineEdits();
     }
@@ -788,7 +839,54 @@ export function QuoteDeskView() {
     }
   }
 
-  if (!selectedQuote) {
+  if (quoteDetailLoading && (!selectedQuote || selectedQuote.id !== quoteId)) {
+    return (
+      <div className="space-y-5" data-testid="quote-detail-loading">
+        <PageHeader title="Loading quote" subtitle="Getting the latest quote details and customer information." />
+        <Card variant="default" padding="lg">
+          <div role="status" aria-live="polite" className="space-y-3">
+            <div className="h-4 w-32 animate-pulse rounded-full bg-slate-200" aria-hidden="true" />
+            <div className="h-8 w-3/4 animate-pulse rounded-lg bg-slate-200" aria-hidden="true" />
+            <p className="text-sm text-slate-600">Loading this quote...</p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (quoteDetailError) {
+    return (
+      <div className="space-y-5" data-testid="quote-detail-error">
+        <PageHeader
+          title={quoteDetailError.kind === "not-found" ? "Quote unavailable" : "Quote did not load"}
+          subtitle={quoteDetailError.message}
+        />
+        <Card variant="default" padding="lg">
+          <div role="alert" className="space-y-4">
+            <p className="text-sm text-slate-700">
+              {quoteDetailError.kind === "not-found"
+                ? "Open the quote board to choose another quote, or retry if this link should still be active."
+                : "Your current page has not changed. Retry when your connection is ready."}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button onClick={() => void retrySelectedQuote()}>Retry quote</Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  focusQuoteDesk(null);
+                  navigate("/app/quotes");
+                }}
+              >
+                Back to quotes
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!selectedQuote || selectedQuote.id !== quoteId) {
     return (
       <div className="space-y-5">
         <EmptyState
@@ -1909,7 +2007,7 @@ function ExistingLineEditorRow({
   readOnly?: boolean;
   startExpanded?: boolean;
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
-  onSave: (lineId: string) => Promise<void>;
+  onSave: (lineId: string) => Promise<boolean>;
   onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
@@ -2045,7 +2143,7 @@ function NewLineEditorRow({
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-testid="new-quote-line-row">
       <div
         className={`grid gap-3 ${QUOTE_DESK_NEW_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
@@ -2055,6 +2153,7 @@ function NewLineEditorRow({
         <Input
           className="min-h-[38px] rounded-lg"
           label="Line"
+          aria-label="New line title"
           placeholder="Service or job name"
           value={line.title}
           onChange={(event) => onChange({ ...line, title: event.target.value })}
@@ -2062,6 +2161,7 @@ function NewLineEditorRow({
         />
         <Textarea
           label="Description"
+          aria-label="New line description"
           rows={3}
           className="rounded-lg lg:min-h-[64px]"
           placeholder="Optional line description"
@@ -2069,15 +2169,42 @@ function NewLineEditorRow({
           onChange={(event) => onChange({ ...line, details: event.target.value })}
           disabled={readOnly}
         />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} />
-        <Input className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
+        <Input aria-label="New line quantity" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
+        <Input aria-label="New line cost" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} />
+        <Input aria-label="New line price" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
         <div className="space-y-1">
           <label className="block text-xs font-medium text-slate-600">Total</label>
           <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5 text-sm font-semibold text-slate-900 tabular-nums">
             {money(lineTotal)}
           </div>
         </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Select
+          label="Line type"
+          value={line.sectionType}
+          onChange={(event) =>
+            onChange({
+              ...line,
+              sectionType: event.target.value as EditableQuoteLine["sectionType"],
+              sectionLabel: event.target.value === "ALTERNATE" ? line.sectionLabel : "",
+            })
+          }
+          disabled={readOnly}
+          options={[
+            { value: "INCLUDED", label: "Included in total" },
+            { value: "ALTERNATE", label: "Alternate option" },
+          ]}
+        />
+        {line.sectionType === "ALTERNATE" ? (
+          <Input
+            label="Option label"
+            value={line.sectionLabel}
+            onChange={(event) => onChange({ ...line, sectionLabel: event.target.value })}
+            placeholder="Optional alternate name"
+            disabled={readOnly}
+          />
+        ) : null}
       </div>
       <div className="flex justify-end gap-2">
         <Button

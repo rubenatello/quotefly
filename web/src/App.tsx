@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import { Navbar } from "./components/Navbar";
@@ -59,6 +59,29 @@ type Session = {
   usage?: TenantUsageSnapshot;
   isSuperuser?: boolean;
 };
+
+type SessionRecovery = {
+  source: "restore" | "post-auth";
+};
+
+const SESSION_CHECK_TIMEOUT_MS = 15_000;
+
+async function loadAuthSession(): Promise<AuthSessionPayload> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Session check timed out.")), SESSION_CHECK_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([api.auth.me(), timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+}
+
+function isDefinitiveSignedOut(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
 
 function clearStoredSession() {
   localStorage.removeItem("qf_token");
@@ -293,12 +316,14 @@ function AppRoutes() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
+  const [sessionRecovery, setSessionRecovery] = useState<SessionRecovery | null>(null);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const navigate = useNavigate();
   const location = useLocation();
   const [initialPath] = useState(() => location.pathname);
 
   async function hydrateSessionState(): Promise<Session> {
-    const payload = await api.auth.me();
+    const payload = await loadAuthSession();
     localStorage.setItem("qf_tenant_id", payload.tenant.id);
     localStorage.setItem("qf_full_name", payload.user.fullName);
     const nextSession = toSession(payload);
@@ -310,12 +335,41 @@ function AppRoutes() {
     await hydrateSessionState();
   }
 
+  const handleSessionCheckFailure = useCallback((error: unknown, source: SessionRecovery["source"]) => {
+    if (isDefinitiveSignedOut(error)) {
+      clearStoredSession();
+      setSession(null);
+      setSessionRecovery(null);
+      return;
+    }
+
+    console.error(source === "post-auth" ? "Session hydration after auth failed" : "Session restore failed", error);
+    setSession(null);
+    setSessionRecovery(source === "post-auth" || initialPath.startsWith("/app") ? { source } : null);
+  }, [initialPath]);
+
+  function navigateAfterHydration(nextSession: Session, source: SessionRecovery["source"]) {
+    if (source === "post-auth" || !initialPath.startsWith("/app")) {
+      navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
+    }
+  }
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener("online", updateOnlineStatus);
+    window.addEventListener("offline", updateOnlineStatus);
+    return () => {
+      window.removeEventListener("online", updateOnlineStatus);
+      window.removeEventListener("offline", updateOnlineStatus);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
     async function restoreSession() {
       try {
-        const payload = await api.auth.me();
+        const payload = await loadAuthSession();
         if (!isMounted) return;
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
@@ -324,11 +378,7 @@ function AppRoutes() {
           navigate(payload.tenant.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
         }
       } catch (error) {
-        clearStoredSession();
-        if (isMounted) setSession(null);
-        if (!(error instanceof ApiError && error.status === 401)) {
-          console.error("Session restore failed", error);
-        }
+        if (isMounted) handleSessionCheckFailure(error, "restore");
       } finally {
         if (isMounted) setIsSessionChecking(false);
       }
@@ -336,32 +386,40 @@ function AppRoutes() {
 
     void restoreSession();
     return () => { isMounted = false; };
-  }, [initialPath, navigate]);
+  }, [handleSessionCheckFailure, initialPath, navigate]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
     localStorage.setItem("qf_full_name", payload.user.fullName);
     setIsSessionChecking(true);
+    setSessionRecovery(null);
+    setSession(null);
 
     void hydrateSessionState()
       .then((nextSession) => {
-        navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
+        navigateAfterHydration(nextSession, "post-auth");
       })
       .catch((error) => {
-        if (!(error instanceof ApiError && error.status === 401)) {
-          console.error("Session hydration after auth failed", error);
-        }
-        setSession({
-          email: payload.user.email,
-          fullName: payload.user.fullName,
-          tenantId: payload.tenant.id,
-          tenantName: payload.tenant.name,
-          role: "owner",
-        });
-        navigate("/app/setup", { replace: true });
+        handleSessionCheckFailure(error, "post-auth");
       })
       .finally(() => {
         setIsSessionChecking(false);
       });
+  };
+
+  const retrySessionRestore = async () => {
+    if (!sessionRecovery || isSessionChecking) return;
+    const recoverySource = sessionRecovery.source;
+    setIsSessionChecking(true);
+
+    try {
+      const nextSession = await hydrateSessionState();
+      setSessionRecovery(null);
+      navigateAfterHydration(nextSession, recoverySource);
+    } catch (error) {
+      handleSessionCheckFailure(error, recoverySource);
+    } finally {
+      setIsSessionChecking(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -376,6 +434,19 @@ function AppRoutes() {
       setSession(null);
     }
   };
+
+  if (sessionRecovery) {
+    return (
+      <AppLoadingScreen
+        message="QuoteFly couldn't verify your secure session. Your current page has not been changed."
+        recovery={{
+          isOnline,
+          retrying: isSessionChecking,
+          onRetry: () => void retrySessionRestore(),
+        }}
+      />
+    );
+  }
 
   if (isSessionChecking) {
     return <AppLoadingScreen message="Restoring your session..." />;

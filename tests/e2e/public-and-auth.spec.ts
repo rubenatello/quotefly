@@ -17,6 +17,14 @@ test.describe("public site and session auth", () => {
 
     await page.goto("/support");
     await expect(page.getByRole("heading", { level: 1, name: "Support", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Email support" })).toHaveAttribute(
+      "href",
+      /^mailto:support@quotefly\.us\?subject=QuoteFly\+support\+request/,
+    );
+    await expect(page.getByRole("link", { name: "Email sales" })).toHaveAttribute(
+      "href",
+      /^mailto:info@quotefly\.us\?subject=QuoteFly\+sales\+inquiry/,
+    );
 
     await page.goto("/privacy");
     await expect(page.getByRole("heading", { name: /handles personal data/i })).toBeVisible();
