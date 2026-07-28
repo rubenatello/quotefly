@@ -321,7 +321,7 @@ function AppRoutes() {
         localStorage.setItem("qf_full_name", payload.user.fullName);
         setSession(toSession(payload));
         if (!initialPath.startsWith("/app")) {
-          navigate("/app", { replace: true });
+          navigate(payload.tenant.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
         }
       } catch (error) {
         clearStoredSession();

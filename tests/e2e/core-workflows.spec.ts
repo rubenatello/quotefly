@@ -39,10 +39,10 @@ test.describe("controlled beta core workflow", () => {
     await customerDialog.getByRole("button", { name: "Save Customer" }).click();
 
     await expect(customerDialog).toBeHidden();
-    await expect(page.getByText(customerName)).toBeVisible();
+    await expect(page.getByText(customerName).filter({ visible: true })).toBeVisible();
 
     await page.getByPlaceholder(/search customer name/i).fill(customerName);
-    await expect(page.getByText(customerEmail)).toBeVisible();
+    await expect(page.getByText(customerEmail).filter({ visible: true })).toBeVisible();
 
     await page.getByPlaceholder(/search customer name/i).clear();
     await page.getByRole("button", { name: "Add Customer" }).first().click();

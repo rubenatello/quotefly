@@ -23,7 +23,7 @@ test.describe("mobile launch smoke", () => {
 
     await page.goto("/app/customers");
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("Mobile Beta Customer")).toBeVisible();
+    await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
     const quickQuote = page.getByTestId("mobile-quick-quote");
     await expect(quickQuote).toBeVisible();
@@ -33,7 +33,7 @@ test.describe("mobile launch smoke", () => {
     await expect(page.getByTestId("quote-builder")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Quick Quote" })).toBeVisible();
     await page.getByPlaceholder(/find customer by name/i).fill("Mobile Beta Customer");
-    await expect(page.getByText("Mobile Beta Customer").last()).toBeVisible();
+    await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Add Customer" }).first().click();
     const quickCustomerDialog = page.getByRole("dialog", { name: /add customer fast/i });
