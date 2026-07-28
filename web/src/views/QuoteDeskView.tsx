@@ -869,9 +869,12 @@ export function QuoteDeskView() {
                 : "Your current page has not changed. Retry when your connection is ready."}
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button onClick={() => void retrySelectedQuote()}>Retry quote</Button>
+              <Button className="min-h-[44px] sm:min-h-[44px]" onClick={() => void retrySelectedQuote()}>
+                Retry quote
+              </Button>
               <Button
                 variant="outline"
+                className="min-h-[44px] sm:min-h-[44px]"
                 onClick={() => {
                   focusQuoteDesk(null);
                   navigate("/app/quotes");
