@@ -56,7 +56,7 @@ test.describe("controlled beta core workflow", () => {
 
     await page.goto("/app/build");
     await expect(page.getByTestId("quote-builder")).toBeVisible();
-    await page.getByPlaceholder(/find customer by name/i).fill(customerName);
+    await page.getByRole("textbox", { name: /find customer by name/i }).fill(customerName);
     await page
       .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") })
       .click();

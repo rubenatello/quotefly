@@ -65,6 +65,7 @@ export function InlineCustomerLookup({
           <div className="relative flex-1">
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
+              aria-label="Find customer by name, phone, or email"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={

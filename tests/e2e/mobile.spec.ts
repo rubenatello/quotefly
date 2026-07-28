@@ -32,7 +32,7 @@ test.describe("mobile launch smoke", () => {
     await expect(page).toHaveURL(/\/app\/build$/);
     await expect(page.getByTestId("quote-builder")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Quick Quote" })).toBeVisible();
-    await page.getByPlaceholder(/find customer by name/i).fill("Mobile Beta Customer");
+    await page.getByRole("textbox", { name: /find customer by name/i }).fill("Mobile Beta Customer");
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Add Customer" }).first().click();
