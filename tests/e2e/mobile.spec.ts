@@ -45,7 +45,7 @@ test.describe("mobile launch smoke", () => {
     await expect(page.getByRole("heading", { name: "Mobile Roof Leak Smoke" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Preview" }).first()).toBeVisible();
 
-    await page.getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByRole("button", { name: "Download PDF" })).toBeVisible();
 
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {

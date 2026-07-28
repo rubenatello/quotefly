@@ -436,7 +436,7 @@ export function DashboardProvider({
         const nextCustomerId =
           prev.customerId && customerRes.customers.some((customer) => customer.id === prev.customerId)
             ? prev.customerId
-            : customerRes.customers[0]?.id || "";
+            : "";
         return { ...prev, customerId: nextCustomerId };
       });
       setSelectedQuoteId((current) => {
@@ -479,7 +479,7 @@ export function DashboardProvider({
         const nextCustomerId =
           prev.customerId && res.customers.some((customer) => customer.id === prev.customerId)
             ? prev.customerId
-            : res.customers[0]?.id || "";
+            : "";
         return { ...prev, customerId: nextCustomerId };
       });
     } catch (err) {
