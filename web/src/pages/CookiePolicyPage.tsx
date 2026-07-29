@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 import {
   clearStoredCookieConsent,
   getStoredCookieConsent,
@@ -11,10 +11,7 @@ export function CookiePolicyPage() {
   const [choice, setChoice] = useState<CookieConsentChoice | null>(() => getStoredCookieConsent());
 
   useEffect(() => {
-    setSEOMetadata({
-      title: "Cookie Policy - QuoteFly",
-      description: "Review QuoteFly's use of essential cookies and optional analytics cookies.",
-    });
+    setPublicSEOMetadata("/cookies");
   }, []);
 
   function updateChoice(nextChoice: CookieConsentChoice) {
@@ -33,7 +30,7 @@ export function CookiePolicyPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Cookie Policy</p>
           <h1 className="mt-2 text-4xl font-bold text-slate-900">How cookies work on QuoteFly</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: April 10, 2026</p>
+          <p className="mt-3 text-sm text-slate-500">Last updated: July 28, 2026</p>
           <p className="mt-4 text-slate-600">
             QuoteFly uses a small number of browser storage items and cookies to keep the website and application working.
           </p>
@@ -46,6 +43,12 @@ export function CookiePolicyPage() {
               <p className="font-semibold text-slate-900">Essential cookies and storage</p>
               <p className="mt-1">
                 Used for sign-in state, security, saved UI preferences, and core application behavior.
+              </p>
+              <p className="mt-2">
+                While you build a quote, QuoteFly temporarily keeps the draft in this browser tab's session storage,
+                including customer details, quote text, line pricing, and internal job costs. This supports refresh and
+                in-app navigation recovery. The draft is cleared when you create the quote, sign out, switch accounts,
+                or close the tab.
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">

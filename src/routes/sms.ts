@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import twilio from "twilio";
 import { parseInboundJobText } from "../services/sms-parser";
@@ -24,232 +24,210 @@ function toFormStringRecord(value: unknown): Record<string, string> {
 }
 
 export const smsRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/sms/webhook", async (request, reply) => {
+  app.post("/sms/webhook", { bodyLimit: 64 * 1024 }, async (request, reply) => {
+    if (!app.env.TWILIO_WEBHOOK_AUTH_TOKEN) {
+      return reply.code(503).send({ message: "Twilio webhook verification is not configured" });
+    }
+
     const body = toFormStringRecord(request.body);
     const from = body.From ?? "";
     const to = body.To ?? "";
     const smsBody = body.Body ?? "";
-    const smsSid = body.SmsSid;
+    const smsSid = body.SmsSid || body.MessageSid || "";
 
     const signature = toHeaderString(request.headers["x-twilio-signature"]);
-    if (app.env.TWILIO_WEBHOOK_AUTH_TOKEN) {
-      if (!signature) {
-        return reply.code(401).send({ message: "Missing Twilio signature" });
-      }
+    if (!signature) {
+      return reply.code(401).send({ message: "Missing Twilio signature" });
+    }
 
-      const forwardedProto = toHeaderString(request.headers["x-forwarded-proto"]);
-      const forwardedHost = toHeaderString(request.headers["x-forwarded-host"]);
-      const protocol = forwardedProto?.split(",")[0]?.trim() || request.protocol;
-      const host = forwardedHost?.split(",")[0]?.trim() || request.headers.host || "";
-      const path = request.raw.url ?? "";
-      const webhookUrl = `${protocol}://${host}${path}`;
+    const webhookUrl = new URL(request.raw.url ?? "/v1/sms/webhook", app.env.API_URL).toString();
+    const valid = twilio.validateRequest(
+      app.env.TWILIO_WEBHOOK_AUTH_TOKEN,
+      signature,
+      webhookUrl,
+      body,
+    );
+    if (!valid) {
+      return reply.code(401).send({ message: "Invalid webhook signature" });
+    }
 
-      const valid = twilio.validateRequest(
-        app.env.TWILIO_WEBHOOK_AUTH_TOKEN,
-        signature,
-        webhookUrl,
-        body,
-      );
-
-      if (!valid) {
-        // Fallback for local/dev tunnels where host/proto rewriting can differ by proxy.
-        const expected = crypto
-          .createHmac("sha256", app.env.TWILIO_WEBHOOK_AUTH_TOKEN)
-          .update(smsBody)
-          .digest("base64");
-        if (expected !== signature) {
-          return reply.code(401).send({ message: "Invalid webhook signature" });
-        }
-      }
+    if (!from || !to || !smsSid) {
+      return reply.code(400).send({ message: "Invalid Twilio webhook payload" });
     }
 
     const tenantPhone = await app.prisma.tenantPhoneNumber.findUnique({
-      where: { e164Number: to },
+      where: {
+        e164Number: to,
+        deletedAtUtc: null,
+        tenant: { deletedAtUtc: null },
+      },
     });
 
     if (!tenantPhone) {
       return reply.code(404).send({ message: "Unknown destination number" });
     }
 
-    const cleanedBody = smsBody.trim();
-
-    if (cleanedBody === SEND_REPLY || cleanedBody === REVISE_REPLY) {
-      const pendingSession = await app.prisma.quoteDecisionSession.findFirst({
-        where: {
-          tenantId: tenantPhone.tenantId,
-          requesterPhone: from,
-          status: "AWAITING_APPROVAL",
-        },
-        orderBy: { updatedAt: "desc" },
-      });
-
-      if (!pendingSession) {
-        return {
-          acknowledged: true,
-          message: "No pending quote decision found. Send a new job details message first.",
-        };
-      }
-
-      const approve = cleanedBody === SEND_REPLY;
-
-      const quote = await app.prisma.quote.update({
-        where: { id: pendingSession.quoteId },
-        data: {
-          status: approve ? "SENT_TO_CUSTOMER" : "READY_FOR_REVIEW",
-          sentAt: approve ? new Date() : null,
-        },
-      });
-
-      await app.prisma.quoteDecisionSession.update({
-        where: { id: pendingSession.id },
-        data: { status: approve ? "APPROVED" : "REVISION_REQUESTED" },
-      });
-
-      const responseMessage = approve
-        ? "Quote approved. We will forward to customer now."
-        : "Revision requested. Open QuoteFly app to adjust costs/pricing and resend.";
-
-      await app.prisma.smsMessage.create({
-        data: {
-          tenantId: tenantPhone.tenantId,
-          direction: "OUTBOUND",
-          fromNumber: to,
-          toNumber: from,
-          body: responseMessage,
-        },
-      });
-
-      return {
-        acknowledged: true,
-        quoteId: quote.id,
-        status: quote.status,
-        message: responseMessage,
-      };
+    const existingMessage = await app.prisma.smsMessage.findUnique({
+      where: { externalSid: smsSid },
+      select: { id: true },
+    });
+    if (existingMessage) {
+      return { acknowledged: true, duplicate: true };
     }
 
+    const cleanedBody = smsBody.trim();
     const parsed = parseInboundJobText(smsBody);
     const draft = generateDraftFromSms(smsBody);
-
     const customerPhone = normalizeCustomerPhone(parsed.customerPhone ?? from);
     const customerPhoneDigits = normalizePhoneSearchDigits(customerPhone);
-    const existingCustomer = await app.prisma.customer.findFirst({
-      where: {
-        tenantId: tenantPhone.tenantId,
-        OR: [
-          { phone: customerPhone },
-          ...(customerPhoneDigits ? [{ phoneDigits: customerPhoneDigits }] : []),
-        ],
-      },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        fullName: true,
-        email: true,
-      },
-    });
-    const customer = existingCustomer
-      ? await app.prisma.customer.update({
-          where: { id: existingCustomer.id },
-          data: {
-            fullName: parsed.customerName ?? existingCustomer.fullName,
-            phone: customerPhone,
-            phoneDigits: customerPhoneDigits,
-            email: parsed.customerEmail ?? existingCustomer.email ?? undefined,
-            archivedAtUtc: null,
-            deletedAtUtc: null,
-          },
-        })
-      : await app.prisma.customer.create({
+
+    try {
+      return await app.prisma.$transaction(async (tx) => {
+        await tx.smsMessage.create({
           data: {
             tenantId: tenantPhone.tenantId,
-            fullName: parsed.customerName ?? "New Customer",
-            phone: customerPhone,
-            phoneDigits: customerPhoneDigits,
-            email: parsed.customerEmail,
+            externalSid: smsSid,
+            direction: "INBOUND",
+            fromNumber: from,
+            toNumber: to,
+            body: smsBody,
           },
         });
 
-    const pricingProfile = await app.prisma.pricingProfile.findFirst({
-      where: {
-        tenantId: tenantPhone.tenantId,
-        serviceType: draft.serviceType,
-      },
-      orderBy: {
-        isDefault: "desc",
-      },
-    });
+        if (cleanedBody === SEND_REPLY || cleanedBody === REVISE_REPLY) {
+          const pendingSession = await tx.quoteDecisionSession.findFirst({
+            where: {
+              tenantId: tenantPhone.tenantId,
+              requesterPhone: from,
+              status: "AWAITING_APPROVAL",
+              deletedAtUtc: null,
+            },
+            orderBy: { updatedAt: "desc" },
+          });
 
-    const laborRate = Number(pricingProfile?.laborRate ?? 2.25);
-    const materialMarkup = Number(pricingProfile?.materialMarkup ?? 0.35);
-    const internalCostSubtotal = Number((draft.squareFeetEstimate * laborRate).toFixed(2));
-    const customerPriceSubtotal = Number(
-      (internalCostSubtotal * (1 + materialMarkup)).toFixed(2),
-    );
-    const taxAmount = Number((customerPriceSubtotal * 0.08).toFixed(2));
-    const totalAmount = Number((customerPriceSubtotal + taxAmount).toFixed(2));
+          if (!pendingSession) {
+            return { acknowledged: true };
+          }
 
-    const quote = await app.prisma.quote.create({
-      data: {
-        tenantId: tenantPhone.tenantId,
-        customerId: customer.id,
-        serviceType: draft.serviceType,
-        status: "READY_FOR_REVIEW",
-        title: `${draft.serviceType} SMS Draft Quote`,
-        scopeText: draft.scopeText,
-        internalCostSubtotal,
-        customerPriceSubtotal,
-        taxAmount,
-        totalAmount,
-      },
-    });
+          const approve = cleanedBody === SEND_REPLY;
+          const quote = await tx.quote.update({
+            where: {
+              id_tenantId: { id: pendingSession.quoteId, tenantId: tenantPhone.tenantId },
+            },
+            data: {
+              status: approve ? "SENT_TO_CUSTOMER" : "READY_FOR_REVIEW",
+              sentAt: approve ? new Date() : null,
+            },
+          });
+          await tx.quoteDecisionSession.update({
+            where: { id: pendingSession.id },
+            data: { status: approve ? "APPROVED" : "REVISION_REQUESTED" },
+          });
 
-    await app.prisma.quoteDecisionSession.create({
-      data: {
-        tenantId: tenantPhone.tenantId,
-        quoteId: quote.id,
-        requesterPhone: from,
-      },
-    });
+          const responseMessage = approve
+            ? "Quote approved. We will forward to customer now."
+            : "Revision requested. Open QuoteFly app to adjust costs/pricing and resend.";
+          await tx.smsMessage.create({
+            data: {
+              tenantId: tenantPhone.tenantId,
+              direction: "OUTBOUND",
+              fromNumber: to,
+              toNumber: from,
+              body: responseMessage,
+            },
+          });
+          return { acknowledged: true };
+        }
 
-    const confirmationMessage = [
-      `Quote draft ready for ${customer.fullName}.`,
-      `Estimated total: $${totalAmount.toFixed(2)}.`,
-      "Reply 1 to send to customer.",
-      "Reply 2 for revisions.",
-    ].join(" ");
+        const existingCustomer = await tx.customer.findFirst({
+          where: {
+            tenantId: tenantPhone.tenantId,
+            OR: [
+              { phone: customerPhone },
+              ...(customerPhoneDigits ? [{ phoneDigits: customerPhoneDigits }] : []),
+            ],
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, fullName: true, email: true },
+        });
+        const customer = existingCustomer
+          ? await tx.customer.update({
+              where: { id_tenantId: { id: existingCustomer.id, tenantId: tenantPhone.tenantId } },
+              data: {
+                fullName: parsed.customerName ?? existingCustomer.fullName,
+                phone: customerPhone,
+                phoneDigits: customerPhoneDigits,
+                email: parsed.customerEmail ?? existingCustomer.email ?? undefined,
+                archivedAtUtc: null,
+                deletedAtUtc: null,
+              },
+            })
+          : await tx.customer.create({
+              data: {
+                tenantId: tenantPhone.tenantId,
+                fullName: parsed.customerName ?? "New Customer",
+                phone: customerPhone,
+                phoneDigits: customerPhoneDigits,
+                email: parsed.customerEmail,
+              },
+            });
 
-    await app.prisma.smsMessage.create({
-      data: {
-        tenantId: tenantPhone.tenantId,
-        externalSid: smsSid,
-        direction: "INBOUND",
-        fromNumber: from,
-        toNumber: to,
-        body: smsBody,
-      },
-    });
+        const pricingProfile = await tx.pricingProfile.findFirst({
+          where: { tenantId: tenantPhone.tenantId, serviceType: draft.serviceType },
+          orderBy: { isDefault: "desc" },
+        });
+        const laborRate = Number(pricingProfile?.laborRate ?? 2.25);
+        const materialMarkup = Number(pricingProfile?.materialMarkup ?? 0.35);
+        const internalCostSubtotal = Number((draft.squareFeetEstimate * laborRate).toFixed(2));
+        const customerPriceSubtotal = Number((internalCostSubtotal * (1 + materialMarkup)).toFixed(2));
+        const taxAmount = Number((customerPriceSubtotal * 0.08).toFixed(2));
+        const totalAmount = Number((customerPriceSubtotal + taxAmount).toFixed(2));
 
-    await app.prisma.smsMessage.create({
-      data: {
-        tenantId: tenantPhone.tenantId,
-        direction: "OUTBOUND",
-        fromNumber: to,
-        toNumber: from,
-        body: confirmationMessage,
-      },
-    });
+        const quote = await tx.quote.create({
+          data: {
+            tenantId: tenantPhone.tenantId,
+            customerId: customer.id,
+            serviceType: draft.serviceType,
+            status: "READY_FOR_REVIEW",
+            title: `${draft.serviceType} SMS Draft Quote`,
+            scopeText: draft.scopeText,
+            internalCostSubtotal,
+            customerPriceSubtotal,
+            taxAmount,
+            totalAmount,
+          },
+        });
+        await tx.quoteDecisionSession.create({
+          data: { tenantId: tenantPhone.tenantId, quoteId: quote.id, requesterPhone: from },
+        });
 
-    return {
-      acknowledged: true,
-      tenantId: tenantPhone.tenantId,
-      customerId: customer.id,
-      quoteId: quote.id,
-      parsed,
-      draft: {
-        serviceType: draft.serviceType,
-        estimatedTotal: totalAmount,
-      },
-      nextAction: "Quote drafted. Wait for reply 1 (send) or 2 (revise).",
-    };
+        const confirmationMessage = [
+          `Quote draft ready for ${customer.fullName}.`,
+          `Estimated total: $${totalAmount.toFixed(2)}.`,
+          "Reply 1 to send to customer.",
+          "Reply 2 for revisions.",
+        ].join(" ");
+        await tx.smsMessage.create({
+          data: {
+            tenantId: tenantPhone.tenantId,
+            direction: "OUTBOUND",
+            fromNumber: to,
+            toNumber: from,
+            body: confirmationMessage,
+          },
+        });
+
+        return { acknowledged: true };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const duplicate = await app.prisma.smsMessage.findUnique({
+          where: { externalSid: smsSid },
+          select: { id: true },
+        });
+        if (duplicate) return { acknowledged: true, duplicate: true };
+      }
+      throw error;
+    }
   });
 };

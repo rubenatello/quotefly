@@ -69,7 +69,8 @@ function addDaysUtc(input: Date, days: number): Date {
 
 function csvCell(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return "";
-  const raw = String(value);
+  if (typeof value === "number") return String(value);
+  const raw = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   if (!/[",\n\r]/.test(raw)) return raw;
   return `"${raw.replace(/"/g, "\"\"")}"`;
 }

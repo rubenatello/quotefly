@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { CheckIcon } from "../components/Icons";
 import { INFO_MAILTO } from "../lib/contact";
-import { setSEOMetadata } from "../lib/seo";
+import { PUBLIC_BASIC_PLAN } from "../lib/public-seo-data";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 interface PricingPageProps {
   onOpenAuth: () => void;
@@ -9,19 +10,13 @@ interface PricingPageProps {
 
 export function PricingPage({ onOpenAuth }: PricingPageProps) {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Contractor Quoting Software Pricing",
-      description:
-        "Pricing for contractor quoting software and contractor estimating software. Start with QuoteFly Basic and scale as your crew grows.",
-      keywords: "contractor quoting software pricing, contractor estimating software pricing, contractor estimate app cost, hvac quoting software pricing, plumbing quoting software pricing",
-      canonicalUrl: "https://quotefly.us/pricing",
-    });
+    setPublicSEOMetadata("/pricing");
   }, []);
 
   const plans = [
     {
       name: "Basic",
-      price: "$19",
+      price: `$${PUBLIC_BASIC_PLAN.monthlyPriceUsd}`,
       period: "/month",
       description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
       features: [

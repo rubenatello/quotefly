@@ -34,8 +34,10 @@ type Quote = {
   id: string;
   customerId: string;
   title: string;
+  scopeText: string;
   status: string;
   totalAmount: number | string;
+  lineItems?: Array<{ id: string; description: string }>;
 };
 
 export function uniqueRunLabel(prefix: string) {

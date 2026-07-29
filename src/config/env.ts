@@ -64,9 +64,29 @@ const EnvSchema = z.object({
       });
     }
   }
+
+  if (value.SESSION_COOKIE_SAME_SITE === "none") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["SESSION_COOKIE_SAME_SITE"],
+      message: "SESSION_COOKIE_SAME_SITE=none is not allowed until explicit CSRF protection is implemented.",
+    });
+  }
+
+  if (value.ENABLE_TWILIO_SMS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ENABLE_TWILIO_SMS"],
+      message: "ENABLE_TWILIO_SMS cannot be enabled in production until sender authorization is implemented.",
+    });
+  }
 });
 
-export const env = EnvSchema.parse({
-  ...process.env,
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? process.env.OPEN_API_KEY ?? "",
-});
+export function parseEnv(input: NodeJS.ProcessEnv) {
+  return EnvSchema.parse({
+    ...input,
+    OPENAI_API_KEY: input.OPENAI_API_KEY ?? input.OPEN_API_KEY ?? "",
+  });
+}
+
+export const env = parseEnv(process.env);

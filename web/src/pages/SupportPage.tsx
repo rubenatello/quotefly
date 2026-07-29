@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Headphones, Mail } from "lucide-react";
 import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 interface SupportPageProps {
   onOpenAuth: () => void;
@@ -9,14 +9,7 @@ interface SupportPageProps {
 
 export function SupportPage({ onOpenAuth }: SupportPageProps) {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Support - QuoteFly",
-      description:
-        "Get help with billing, setup, quote workflows, and workspace issues in QuoteFly.",
-      keywords:
-        "contractor quoting software support, contractor estimating software help, quote workflow support",
-      canonicalUrl: "https://quotefly.us/support",
-    });
+    setPublicSEOMetadata("/support");
   }, []);
 
   const supportAreas = [
@@ -32,12 +25,6 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
       title: "Technical troubleshooting",
       text: "Login issues, browser problems, mobile layout bugs, and performance concerns.",
     },
-  ];
-
-  const responseTargets = [
-    { plan: "Basic", target: "Within 2 business days" },
-    { plan: "Professional", target: "Within 1 business day" },
-    { plan: "Enterprise", target: "Priority handling, same business day when possible" },
   ];
 
   const checklist = [
@@ -118,15 +105,10 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
 
           <div className="space-y-6">
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-xl font-semibold text-slate-900">Response targets</h2>
-              <div className="mt-4 space-y-3">
-                {responseTargets.map((target) => (
-                  <div key={target.plan} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="font-semibold text-slate-900">{target.plan}</p>
-                    <p className="mt-1 text-sm text-slate-600">{target.target}</p>
-                  </div>
-                ))}
-              </div>
+              <h2 className="text-xl font-semibold text-slate-900">Controlled beta support</h2>
+              <p className="mt-4 text-sm leading-6 text-slate-600">
+                Support is currently email-first. Include the affected page, device, and steps to reproduce so the team can investigate efficiently. Formal tier-based service levels are not offered during the controlled beta.
+              </p>
             </div>
 
             <div className="rounded-2xl border border-blue-200 bg-blue-50 p-6">

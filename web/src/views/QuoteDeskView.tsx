@@ -48,7 +48,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import { formatUsPhoneDisplay } from "../lib/phone";
@@ -117,6 +117,7 @@ function buildDeskAiPromptStarters(
 
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
+type PendingOutboundAction = "send-tab" | "email" | "sms" | "copy" | "pdf";
 const QUOTE_DESK_HEADER_GRID_COLUMNS =
   "xl:grid-cols-[minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_106px_130px] 2xl:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
 const QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS =
@@ -143,6 +144,8 @@ export function QuoteDeskView() {
   const navigate = useNavigate();
   const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DeskTab>("quote");
+  const [pendingOutboundAction, setPendingOutboundAction] = useState<PendingOutboundAction | null>(null);
+  const [outboundPreparationSaving, setOutboundPreparationSaving] = useState(false);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
@@ -190,7 +193,7 @@ export function QuoteDeskView() {
     chatPrompt,
     setChatPrompt,
     setChatParsed,
-    persistSelectedQuote,
+    saveQuoteSheet,
     updateQuoteLifecycle,
     openSendComposer,
     confirmSendComposer,
@@ -559,21 +562,14 @@ export function QuoteDeskView() {
     );
   }
 
-  async function saveAllLineEdits(): Promise<boolean> {
-    for (const lineId of dirtyLineIds) {
-      if (!(await saveLine(lineId))) return false;
-    }
-    return true;
-  }
-
-  async function addNewLine() {
+  async function addNewLine(options?: { offerPreset?: boolean }): Promise<boolean> {
     if (isQuoteLocked) {
       setUnlockConfirmOpen(true);
-      return;
+      return false;
     }
     if (!newLine.title.trim()) {
       setError("Add a line title before inserting a new row.");
-      return;
+      return false;
     }
 
     const lineToMaybeSave = newLine;
@@ -591,9 +587,10 @@ export function QuoteDeskView() {
         notice: `${lineToMaybeSave.title} added to the quote.`,
       },
     );
-    if (!added) return;
+    if (!added) return false;
     setNewLine(makeEditableQuoteLine());
     if (
+      options?.offerPreset !== false &&
       lineToMaybeSave.title.trim() &&
       !lineToMaybeSave.sourcePresetId &&
       !savedPresetKeys.has(
@@ -602,18 +599,126 @@ export function QuoteDeskView() {
     ) {
       setPresetPromptLine(lineToMaybeSave);
     }
+    return true;
   }
 
-  async function handleSaveQuoteSheet() {
+  async function handleSaveQuoteSheet(options?: { offerPreset?: boolean }): Promise<Quote | null> {
     if (isQuoteLocked) {
       setUnlockConfirmOpen(true);
+      return null;
+    }
+    if (hasDraftNewLine && !newLine.title.trim()) {
+      setError("Finish the new line title or clear that row before sending the quote.");
+      return null;
+    }
+    const invalidDirtyLine = editableLines.find(
+      (line) => dirtyLineIds.includes(line.id) && !line.title.trim(),
+    );
+    if (invalidDirtyLine) {
+      setError("Each edited line needs a title before the quote can be saved.");
+      return null;
+    }
+
+    const linePayload = (line: EditableQuoteLine) => ({
+      description: joinQuoteLineDescription(line.title, line.details),
+      sectionType: line.sectionType,
+      sectionLabel: line.sectionLabel || null,
+      quantity: Number(line.quantity) || 1,
+      unitCost: Number(line.unitCost) || 0,
+      unitPrice: Number(line.unitPrice) || 0,
+    });
+    const lineToMaybeSave = newLine.title.trim() ? newLine : null;
+    track("quote_sheet_save");
+    const savedQuote = await saveQuoteSheet({
+      quote: {
+        serviceType: quoteEditForm.serviceType,
+        status: quoteEditForm.status,
+        jobStatus: quoteEditForm.jobStatus,
+        afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
+        title: quoteEditForm.title,
+        scopeText: quoteEditForm.scopeText,
+        taxAmount: Number(quoteEditForm.taxAmount),
+      },
+      lineItems: editableLines
+        .filter((line) => dirtyLineIds.includes(line.id))
+        .map((line) => ({ id: line.id, ...linePayload(line) })),
+      newLineItems: lineToMaybeSave ? [linePayload(lineToMaybeSave)] : [],
+    });
+    if (!savedQuote) return null;
+
+    if (lineToMaybeSave) {
+      setNewLine(makeEditableQuoteLine());
+      if (
+        options?.offerPreset !== false &&
+        !lineToMaybeSave.sourcePresetId &&
+        !savedPresetKeys.has(
+          `${quoteEditForm.serviceType}:${lineToMaybeSave.title.trim().toLowerCase()}:${lineToMaybeSave.details.trim().toLowerCase()}`,
+        )
+      ) {
+        setPresetPromptLine(lineToMaybeSave);
+      }
+    }
+    return savedQuote;
+  }
+
+  async function runOutboundAction(action: PendingOutboundAction, quoteOverride = selectedQuote) {
+    setActiveTab("send");
+    if (action === "send-tab") return;
+    if (action === "pdf") {
+      await downloadQuotePdf({ quoteOverride: quoteOverride ?? undefined });
       return;
     }
-    track("quote_sheet_save");
-    const metadataSaved = await persistSelectedQuote();
-    if (!metadataSaved) return;
-    if (dirtyLineIds.length) {
-      await saveAllLineEdits();
+    openSendComposer(action, quoteOverride ?? undefined);
+  }
+
+  function requestOutboundAction(action: PendingOutboundAction) {
+    if (hasUnsavedQuoteSheetChanges) {
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setPendingOutboundAction(action);
+      return;
+    }
+    void runOutboundAction(action);
+  }
+
+  function cancelOutboundPreparation() {
+    if (outboundPreparationSaving) return;
+    setPendingOutboundAction(null);
+    setActiveTab("quote");
+    setMobilePane("editor");
+  }
+
+  function discardEditsAndContinueOutbound() {
+    if (!pendingOutboundAction || outboundPreparationSaving) return;
+    const action = pendingOutboundAction;
+    revertQuoteSheetToLastSaved();
+    setPendingOutboundAction(null);
+    void runOutboundAction(action, selectedQuote);
+  }
+
+  async function saveAndContinueOutbound() {
+    if (!pendingOutboundAction || !selectedQuote || outboundPreparationSaving) return;
+    const action = pendingOutboundAction;
+    setOutboundPreparationSaving(true);
+    const persistedQuote = await handleSaveQuoteSheet({ offerPreset: false });
+    if (!persistedQuote) {
+      setPendingOutboundAction(null);
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setOutboundPreparationSaving(false);
+      return;
+    }
+
+    try {
+      setPendingOutboundAction(null);
+      await runOutboundAction(action, persistedQuote);
+    } catch (err) {
+      setPendingOutboundAction(null);
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setError(err instanceof Error ? err.message : "The saved quote could not be reloaded. Try sending again.");
+    } finally {
+      setOutboundPreparationSaving(false);
     }
   }
 
@@ -996,7 +1101,7 @@ export function QuoteDeskView() {
           <button
             key={tab.id}
             type="button"
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => tab.id === "send" ? requestOutboundAction("send-tab") : setActiveTab(tab.id)}
             className={`rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
               activeTab === tab.id
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
@@ -1482,16 +1587,16 @@ export function QuoteDeskView() {
           <Card variant="default" padding="md">
             <CardHeader title="Send the quote" subtitle="When the sheet is ready, open the customer's app or export the PDF." />
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <Button variant="outline" icon={<Mail size={14} />} onClick={() => openSendComposer("email")} disabled={saving}>
+              <Button variant="outline" icon={<Mail size={14} />} onClick={() => requestOutboundAction("email")} disabled={saving}>
                 Email App
               </Button>
-              <Button variant="outline" icon={<MessageSquare size={14} />} onClick={() => openSendComposer("sms")} disabled={saving}>
+              <Button variant="outline" icon={<MessageSquare size={14} />} onClick={() => requestOutboundAction("sms")} disabled={saving}>
                 Text App
               </Button>
-              <Button variant="outline" icon={<Copy size={14} />} onClick={() => openSendComposer("copy")} disabled={saving}>
+              <Button variant="outline" icon={<Copy size={14} />} onClick={() => requestOutboundAction("copy")} disabled={saving}>
                 Copy Message
               </Button>
-              <Button variant="secondary" icon={<FileOutput size={14} />} onClick={() => void downloadQuotePdf()} disabled={saving}>
+              <Button variant="secondary" icon={<FileOutput size={14} />} onClick={() => requestOutboundAction("pdf")} disabled={saving}>
                 Download PDF
               </Button>
             </div>
@@ -1713,6 +1818,39 @@ export function QuoteDeskView() {
           />
         )
       ) : null}
+
+      <Modal
+        open={pendingOutboundAction !== null}
+        onClose={cancelOutboundPreparation}
+        closeOnBackdrop={!outboundPreparationSaving}
+        size="md"
+        ariaLabel="Save changes before sending"
+      >
+        <ModalHeader
+          title="Save changes before sending"
+          description="The customer should only receive the quote currently shown in the editor."
+          onClose={cancelOutboundPreparation}
+        />
+        <ModalBody className="space-y-3">
+          <Alert tone="warning">
+            This quote has unsaved changes. Save them before continuing, or explicitly discard them and use the last saved quote.
+          </Alert>
+          {newLine.title.trim() ? (
+            <p className="text-sm text-slate-600">The completed new line will be added to the quote before sending.</p>
+          ) : null}
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="outline" onClick={cancelOutboundPreparation} disabled={outboundPreparationSaving}>
+            Cancel
+          </Button>
+          <Button variant="ghost" onClick={discardEditsAndContinueOutbound} disabled={outboundPreparationSaving}>
+            Discard Edits
+          </Button>
+          <Button onClick={() => void saveAndContinueOutbound()} loading={outboundPreparationSaving}>
+            Save and Continue
+          </Button>
+        </ModalFooter>
+      </Modal>
 
       <ConfirmModal
         open={lineItemPendingDeleteId !== null}
@@ -2139,7 +2277,7 @@ function NewLineEditorRow({
 }: {
   line: EditableQuoteLine;
   onChange: (line: EditableQuoteLine) => void;
-  onAdd: () => Promise<void>;
+  onAdd: () => Promise<unknown>;
   saving: boolean;
   readOnly?: boolean;
 }) {

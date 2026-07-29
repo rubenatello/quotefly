@@ -19,6 +19,7 @@ import {
   type TenantEntitlements,
   type TenantUsageSnapshot,
 } from "./lib/api";
+import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
 import { Toaster } from "sonner";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
@@ -41,6 +42,7 @@ const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((mod
 const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
 
 type Session = {
+  userId: string;
   email: string;
   fullName: string;
   tenantId: string;
@@ -91,6 +93,7 @@ function clearStoredSession() {
 
 function toSession(payload: AuthSessionPayload): Session {
   return {
+    userId: payload.user.id,
     email: payload.user.email,
     fullName: payload.user.fullName,
     tenantId: payload.tenant.id,
@@ -113,6 +116,7 @@ function toSession(payload: AuthSessionPayload): Session {
 
 function toDashboardSession(s: Session): DashboardSession {
   return {
+    userId: s.userId,
     email: s.email,
     fullName: s.fullName,
     tenantId: s.tenantId,
@@ -323,12 +327,22 @@ function AppRoutes() {
   const [initialPath] = useState(() => location.pathname);
 
   async function hydrateSessionState(): Promise<Session> {
-    const payload = await loadAuthSession();
-    localStorage.setItem("qf_tenant_id", payload.tenant.id);
-    localStorage.setItem("qf_full_name", payload.user.fullName);
-    const nextSession = toSession(payload);
-    setSession(nextSession);
-    return nextSession;
+    try {
+      const payload = await loadAuthSession();
+      prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
+      localStorage.setItem("qf_tenant_id", payload.tenant.id);
+      localStorage.setItem("qf_full_name", payload.user.fullName);
+      const nextSession = toSession(payload);
+      setSession(nextSession);
+      return nextSession;
+    } catch (error) {
+      if (isDefinitiveSignedOut(error)) {
+        purgeQuoteBuilderDraftStorage();
+        clearStoredSession();
+        setSession(null);
+      }
+      throw error;
+    }
   }
 
   async function refreshSessionState(): Promise<void> {
@@ -337,6 +351,7 @@ function AppRoutes() {
 
   const handleSessionCheckFailure = useCallback((error: unknown, source: SessionRecovery["source"]) => {
     if (isDefinitiveSignedOut(error)) {
+      purgeQuoteBuilderDraftStorage();
       clearStoredSession();
       setSession(null);
       setSessionRecovery(null);
@@ -371,6 +386,7 @@ function AppRoutes() {
       try {
         const payload = await loadAuthSession();
         if (!isMounted) return;
+        prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
         setSession(toSession(payload));
@@ -389,6 +405,7 @@ function AppRoutes() {
   }, [handleSessionCheckFailure, initialPath, navigate]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
+    purgeQuoteBuilderDraftStorage();
     localStorage.setItem("qf_full_name", payload.user.fullName);
     setIsSessionChecking(true);
     setSessionRecovery(null);
@@ -423,6 +440,7 @@ function AppRoutes() {
   };
 
   const handleLogout = async () => {
+    purgeQuoteBuilderDraftStorage();
     try {
       await api.auth.logout();
     } catch (error) {

@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import type Stripe from "stripe";
 import { isSuperuserEmail } from "./superuser";
 
 export type PlanCode = "starter" | "professional" | "enterprise";
@@ -109,6 +110,64 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
 const PLAN_CODES = new Set<PlanCode>(["starter", "professional", "enterprise"]);
 const PAID_ACCESS_STATUSES = new Set(["active"]);
 
+export function resolveSubscriptionItemBilling(
+  subscription: Stripe.Subscription,
+  pricePlans: ReadonlyMap<string, PlanCode>,
+): { planCode: PlanCode | null; currentPeriodEndUtc: Date | null } {
+  const matchingItems = subscription.items.data.filter((item) => pricePlans.has(item.price.id));
+  if (matchingItems.length !== 1) {
+    return { planCode: null, currentPeriodEndUtc: null };
+  }
+
+  const item = matchingItems[0];
+  const planCode = pricePlans.get(item.price.id) ?? null;
+  const periodEnd = item.current_period_end;
+  return {
+    planCode,
+    currentPeriodEndUtc:
+      planCode && Number.isFinite(periodEnd) && periodEnd > 0 ? new Date(periodEnd * 1000) : null,
+  };
+}
+
+export function resolveReconciledSubscriptionPeriod(input: {
+  subscription: Stripe.Subscription;
+  expectedTenantId: string;
+  expectedCustomerId: string | null;
+  expectedSubscriptionId: string;
+  expectedPlanCode: string;
+  pricePlans: ReadonlyMap<string, PlanCode>;
+  now?: Date;
+}): Date | null {
+  const {
+    subscription,
+    expectedTenantId,
+    expectedCustomerId,
+    expectedSubscriptionId,
+    expectedPlanCode,
+    pricePlans,
+    now = new Date(),
+  } = input;
+  const subscriptionCustomerId =
+    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+  const metadataTenantId = subscription.metadata.tenantId;
+  const billing = resolveSubscriptionItemBilling(subscription, pricePlans);
+
+  if (
+    subscription.id !== expectedSubscriptionId ||
+    !expectedCustomerId ||
+    subscriptionCustomerId !== expectedCustomerId ||
+    (metadataTenantId !== undefined && metadataTenantId !== expectedTenantId) ||
+    (subscription.status !== "active" && subscription.status !== "trialing") ||
+    billing.planCode !== expectedPlanCode ||
+    !billing.currentPeriodEndUtc ||
+    billing.currentPeriodEndUtc.getTime() <= now.getTime()
+  ) {
+    return null;
+  }
+
+  return billing.currentPeriodEndUtc;
+}
+
 function parsePlanCode(value: string | null | undefined): PlanCode | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
@@ -133,7 +192,10 @@ function hasActivePaidSubscription(snapshot: TenantBillingSnapshot, now: Date): 
   const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
   if (!explicitPlan) return false;
   if (!PAID_ACCESS_STATUSES.has(normalizeSubscriptionStatus(snapshot.subscriptionStatus))) return false;
-  if (!snapshot.subscriptionCurrentPeriodEndUtc) return true;
+  // Stripe's Dahlia API reports the billing period on the subscription item.
+  // A missing synchronized period is incomplete billing evidence, so access must
+  // fail closed until a later webhook repairs the snapshot.
+  if (!snapshot.subscriptionCurrentPeriodEndUtc) return false;
   return snapshot.subscriptionCurrentPeriodEndUtc.getTime() > now.getTime();
 }
 

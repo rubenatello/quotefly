@@ -1,0 +1,105 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseEnv } from "../../src/config/env.js";
+import { generateQuotePdfBuffer } from "../../src/services/quote-pdf.js";
+import { buildQuickBooksInvoiceCsv } from "../../src/services/quickbooks-csv.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("security boundary helpers", () => {
+  it("rejects production cross-site session cookies until CSRF protection exists", () => {
+    expect(() =>
+      parseEnv({
+        ...process.env,
+        NODE_ENV: "production",
+        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+        APP_URL: "https://app.quotefly.example",
+        API_URL: "https://api.quotefly.example",
+        SESSION_COOKIE_SAME_SITE: "none",
+        ENABLE_TWILIO_SMS: "false",
+      }),
+    ).toThrow(/explicit CSRF protection/i);
+  });
+
+  it("rejects production Twilio enablement until sender authorization exists", () => {
+    expect(() =>
+      parseEnv({
+        ...process.env,
+        NODE_ENV: "production",
+        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+        APP_URL: "https://app.quotefly.example",
+        API_URL: "https://api.quotefly.example",
+        SESSION_COOKIE_SAME_SITE: "lax",
+        ENABLE_TWILIO_SMS: "true",
+        TWILIO_WEBHOOK_AUTH_TOKEN: "configured-verifier",
+      }),
+    ).toThrow(/until sender authorization is implemented/i);
+  });
+
+  it("neutralizes spreadsheet formulas in tenant-controlled QuickBooks CSV cells", () => {
+    const csv = buildQuickBooksInvoiceCsv(
+      [
+        {
+          id: "quote-security-test",
+          title: "=HYPERLINK(\"https://attacker.invalid\")",
+          serviceType: "@malicious",
+          status: "ACCEPTED",
+          scopeText: "scope",
+          customerPriceSubtotal: 100,
+          taxAmount: 8,
+          totalAmount: 108,
+          createdAt: new Date("2026-07-29T00:00:00.000Z"),
+          customer: {
+            fullName: "+SUM(1,1)",
+            email: "-cmd@example.invalid",
+            phone: "\t=1+1",
+          },
+          lineItems: [{ description: "=WEBSERVICE(\"https://attacker.invalid\")", quantity: 2, unitPrice: 50 }],
+        },
+      ],
+      { exportedAt: new Date("2026-07-29T00:00:00.000Z") },
+    );
+
+    expect(csv).toContain("\"'+SUM(1,1)\"");
+    expect(csv).toContain("'-cmd@example.invalid");
+    expect(csv).toContain("'\t=1+1");
+    expect(csv).toContain("'@malicious Service");
+    expect(csv).toContain("\"'=WEBSERVICE(\"\"https://attacker.invalid\"\")\"");
+    expect(csv).toContain(",2.00,50.00,100.00,8.00,108.00,");
+  });
+
+  it("does not fetch a tenant-controlled remote logo while rendering a quote PDF", async () => {
+    const fetchSpy = vi.fn(() => {
+      throw new Error("remote logo fetch must not occur");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const pdf = await generateQuotePdfBuffer({
+      quoteId: "quote-security-test",
+      serviceType: "General",
+      status: "DRAFT",
+      title: "Safe quote",
+      scopeText: "Scoped work",
+      createdAt: new Date("2026-07-29T00:00:00.000Z"),
+      sentAt: null,
+      customerPriceSubtotal: 100,
+      taxAmount: 8,
+      totalAmount: 108,
+      customer: { fullName: "Customer", email: null, phone: "5555550100" },
+      tenant: { name: "Tenant", timezone: "UTC" },
+      branding: {
+        templateId: "modern",
+        primaryColor: "#2563eb",
+        logoUrl: "http://169.254.169.254/latest/meta-data/",
+        showQuoteFlyAttribution: false,
+      },
+      lineItems: [{ description: "Work", quantity: 1, unitPrice: 100 }],
+    });
+
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

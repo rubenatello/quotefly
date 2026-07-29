@@ -14,6 +14,7 @@ import {
   type Quote,
   type QuoteJobStatus,
   type QuoteRevision,
+  type SaveQuoteSheetInput,
   type QuoteStatus,
   type ServiceType,
   type TenantBranding,
@@ -105,6 +106,7 @@ export type LeadCardItem = {
 };
 
 export interface DashboardSession {
+  userId: string;
   email: string;
   fullName: string;
   tenantId: string;
@@ -380,6 +382,7 @@ export interface DashboardContextValue {
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<boolean>;
+  saveQuoteSheet: (input: SaveQuoteSheetInput) => Promise<Quote | null>;
   updateQuoteLifecycle: (quoteId: string, patch: {
     status?: QuoteStatus;
     jobStatus?: QuoteJobStatus;
@@ -387,9 +390,9 @@ export interface DashboardContextValue {
   }) => Promise<void>;
   saveQuote: (event: FormEvent) => Promise<void>;
   sendDecision: (decision: "send" | "revise") => Promise<void>;
-  openSendComposer: (channel: SendChannel) => void;
+  openSendComposer: (channel: SendChannel, quoteOverride?: Quote) => void;
   confirmSendComposer: () => Promise<void>;
-  downloadQuotePdf: (options?: { inline?: boolean }) => Promise<void>;
+  downloadQuotePdf: (options?: { inline?: boolean; quoteOverride?: Quote }) => Promise<void>;
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
   addLineItem: (event: FormEvent) => Promise<void>;
   addLineItemDraft: (input: CreateLineItemInput, options?: { resetForm?: boolean; notice?: string }) => Promise<boolean>;
@@ -875,6 +878,24 @@ export function DashboardProvider({
     } finally { setSaving(false); }
   }, [selectedQuote, quoteEditForm, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
+  const saveQuoteSheet = useCallback(async (input: SaveQuoteSheetInput) => {
+    if (!selectedQuote) return null;
+    setSaving(true); setError(null); setNotice(null);
+    try {
+      const result = await api.quotes.saveSheet(selectedQuote.id, input);
+      await Promise.all([
+        loadQuotes(),
+        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+      ]);
+      if (canViewQuoteHistory) void loadQuoteHistory();
+      setNotice("Quote updated.");
+      return result.quote;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Quote changes could not be saved. Try again.");
+      return null;
+    } finally { setSaving(false); }
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+
   const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
     status?: QuoteStatus;
     jobStatus?: QuoteJobStatus;
@@ -916,20 +937,21 @@ export function DashboardProvider({
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating decision."); } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
-  const openSendComposer = useCallback((channel: SendChannel) => {
-    if (!selectedQuote) return;
-    const customerRecord = selectedQuote.customer ?? customers.find((c) => c.id === selectedQuote.customerId);
+  const openSendComposer = useCallback((channel: SendChannel, quoteOverride?: Quote) => {
+    const quoteForSend = quoteOverride ?? selectedQuote;
+    if (!quoteForSend) return;
+    const customerRecord = quoteForSend.customer ?? customers.find((c) => c.id === quoteForSend.customerId);
     if (!customerRecord) { setError("Customer details are not loaded yet. Try selecting the quote again."); return; }
     if (channel === "email" && !customerRecord.email) { setError("Customer does not have an email address yet."); return; }
     const draft = buildQuoteMessageDraft({
       customerName: customerRecord.fullName,
-      quoteTitle: selectedQuote.title,
-      quoteTotalAmount: selectedQuote.totalAmount,
-      scopeText: selectedQuote.scopeText,
+      quoteTitle: quoteForSend.title,
+      quoteTotalAmount: quoteForSend.totalAmount,
+      scopeText: quoteForSend.scopeText,
       branding,
     });
     setSendComposer({
-      channel, quoteId: selectedQuote.id,
+      channel, quoteId: quoteForSend.id,
       idempotencyKey: createSendIdempotencyKey(),
       customerName: customerRecord.fullName, customerEmail: customerRecord.email ?? null, customerPhone: customerRecord.phone,
       subject: draft.subject, body: draft.body,
@@ -1010,15 +1032,16 @@ export function DashboardProvider({
     } finally { setSaving(false); }
   }, [sendComposer, canViewCommunicationLog, canViewQuoteHistory, selectedQuote, quotes, loadQuotes, loadQuoteDetail, loadOutboundEvents, loadQuoteHistory]);
 
-  const downloadQuotePdf = useCallback(async (options?: { inline?: boolean }) => {
-    if (!selectedQuote) return;
+  const downloadQuotePdf = useCallback(async (options?: { inline?: boolean; quoteOverride?: Quote }) => {
+    const quoteForDownload = options?.quoteOverride ?? selectedQuote;
+    if (!quoteForDownload) return;
     setSaving(true); setError(null);
     try {
-      const blob = await api.quotes.downloadPdf(selectedQuote.id, { inline: options?.inline });
+      const blob = await api.quotes.downloadPdf(quoteForDownload.id, { inline: options?.inline });
       if (options?.inline) {
         openPdfPreviewBlob(blob);
       } else {
-        const fileName = `${fileLabel(selectedQuote.title)}.pdf`;
+        const fileName = `${fileLabel(quoteForDownload.title)}.pdf`;
         const objectUrl = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = objectUrl; anchor.download = fileName;
@@ -1027,7 +1050,7 @@ export function DashboardProvider({
       }
       await Promise.all([
         loadQuotes(),
-        loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
+        loadQuoteDetail(quoteForDownload.id, { includeOutboundEvents: false }),
       ]);
       setNotice(options?.inline ? "PDF preview opened." : "PDF downloaded.");
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed generating PDF."); } finally { setSaving(false); }
@@ -1313,7 +1336,7 @@ export function DashboardProvider({
     setDuplicateModal, setSendComposer,
     loadAll, loadQuotes, loadCustomers, loadQuoteHistory, refreshSelectedQuote, retrySelectedQuote,
     focusQuoteDesk, selectQuoteCustomer, navigateToBuilder, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
-    createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, updateQuoteLifecycle, saveQuote,
+    createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, saveQuoteSheet, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,
     downloadQuotePdf, exportQuotesAsInvoicesCsv,
     addLineItem, addLineItemDraft, updateLineItem, deleteLineItem, updateLeadFollowUpStatus, loadOutboundEvents, navigateToQuote,

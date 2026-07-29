@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { QuickBooksConnection } from "@prisma/client";
 import type { env } from "../config/env";
 
@@ -127,7 +127,7 @@ async function quickBooksApiRequest<T>(
 
   const responseBody = await response.text();
   if (!response.ok) {
-    throw new Error(`QuickBooks API request failed: ${response.status} ${responseBody}`);
+    throw new Error(`QuickBooks API request failed with status ${response.status}.`);
   }
 
   return responseBody ? (JSON.parse(responseBody) as T) : (undefined as T);
@@ -152,7 +152,7 @@ export async function queryQuickBooksEntity<T>(
 
   const responseBody = await response.text();
   if (!response.ok) {
-    throw new Error(`QuickBooks query failed: ${response.status} ${responseBody}`);
+    throw new Error(`QuickBooks query failed with status ${response.status}.`);
   }
 
   const payload = responseBody
@@ -385,11 +385,15 @@ export function createSignedQuickBooksState(
 }
 
 export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: string): SignedStatePayload | null {
-  const [encodedPayload, signature] = state.split(".");
+  const parts = state.split(".");
+  if (parts.length !== 2) return null;
+  const [encodedPayload, signature] = parts;
   if (!encodedPayload || !signature) return null;
 
   const expectedSignature = createHmac("sha256", runtimeEnv.JWT_SECRET).update(encodedPayload).digest("base64url");
-  if (signature !== expectedSignature) return null;
+  const actualBytes = Buffer.from(signature, "utf8");
+  const expectedBytes = Buffer.from(expectedSignature, "utf8");
+  if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return null;
 
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as SignedStatePayload;
@@ -427,8 +431,7 @@ export async function exchangeQuickBooksAuthorizationCode(
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QuickBooks token exchange failed: ${response.status} ${errorBody}`);
+    throw new Error(`QuickBooks token exchange failed with status ${response.status}.`);
   }
 
   return (await response.json()) as QuickBooksTokenResponse;
@@ -490,8 +493,7 @@ export async function refreshQuickBooksAccessToken(
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QuickBooks token refresh failed: ${response.status} ${errorBody}`);
+    throw new Error(`QuickBooks token refresh failed with status ${response.status}.`);
   }
 
   return (await response.json()) as QuickBooksTokenResponse;
@@ -591,7 +593,9 @@ export function verifyQuickBooksWebhookSignature(
     .update(payload, "utf8")
     .digest("base64");
 
-  return computed === signature;
+  const actualBytes = Buffer.from(signature, "utf8");
+  const expectedBytes = Buffer.from(computed, "utf8");
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = ACCOUNTING_SCOPE;

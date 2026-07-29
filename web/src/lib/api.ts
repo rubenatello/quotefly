@@ -348,6 +348,29 @@ export type QuoteLineItem = {
   createdAt: string;
 };
 
+export type QuoteSheetLineInput = {
+  description: string;
+  sectionType: "INCLUDED" | "ALTERNATE";
+  sectionLabel?: string | null;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+};
+
+export type SaveQuoteSheetInput = {
+  quote: {
+    serviceType: ServiceType;
+    status: QuoteStatus;
+    jobStatus: QuoteJobStatus;
+    afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
+    title: string;
+    scopeText: string;
+    taxAmount: number;
+  };
+  lineItems: Array<QuoteSheetLineInput & { id: string }>;
+  newLineItems: QuoteSheetLineInput[];
+};
+
 export type Quote = {
   id: string;
   tenantId: string;
@@ -1310,6 +1333,12 @@ export const api = {
       },
     ) =>
       request<{ quote: Quote }>(`/v1/quotes/${quoteId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+    saveSheet: (quoteId: string, body: SaveQuoteSheetInput) =>
+      request<{ quote: Quote }>(`/v1/quotes/${quoteId}/sheet`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
