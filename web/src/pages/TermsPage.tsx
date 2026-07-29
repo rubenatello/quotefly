@@ -1,12 +1,9 @@
 import { useEffect } from "react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 export function TermsPage() {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Terms of Service - QuoteFly",
-      description: "Review the service terms for using QuoteFly, including billing, acceptable use, and account responsibilities.",
-    });
+    setPublicSEOMetadata("/terms");
   }, []);
 
   const sections = [

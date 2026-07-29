@@ -1,7 +1,7 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Eye, Plus, Sparkles, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
-import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
 import { QuoteLineSectionField } from "../components/quotes/QuoteLineSectionField";
@@ -26,6 +26,12 @@ import {
 } from "../components/ui";
 import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
+import {
+  quoteBuilderDraftStorageKey,
+  readQuoteBuilderDraft,
+  removeQuoteBuilderDraft,
+  writeQuoteBuilderDraft,
+} from "../lib/quote-builder-draft-storage";
 import {
   applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
@@ -130,6 +136,133 @@ function resolveQuoteAccentColor(branding: TenantBranding | null): string {
 }
 
 type BuilderPane = "editor" | "preview";
+type BuilderDraftLine = Omit<EditableQuoteLine, "id">;
+type BuilderDraftData = {
+  quote: {
+    customerId: string;
+    serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
+    title: string;
+    scopeText: string;
+    taxAmount: string;
+  };
+  lines: BuilderDraftLine[];
+  mobilePane: BuilderPane;
+  quickCustomerOpen: boolean;
+  quickCustomerForm: QuickCustomerForm;
+  lastAppliedAiRunId: string | null;
+};
+type StoredBuilderDraft = BuilderDraftData & { version: 1; savedAtUtc: string };
+
+const EMPTY_QUICK_CUSTOMER_FORM: QuickCustomerForm = { fullName: "", phone: "", email: "", notes: "" };
+const SERVICE_TYPE_SET = new Set(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isDraftString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
+  const value: unknown = JSON.parse(raw);
+  if (!isRecord(value) || value.version !== 1 || !isDraftString(value.savedAtUtc, 64)) return null;
+  const savedAt = Date.parse(value.savedAtUtc);
+  if (!Number.isFinite(savedAt) || savedAt > Date.now() + 60_000) return null;
+  if (!isRecord(value.quote) || !Array.isArray(value.lines) || value.lines.length === 0 || value.lines.length > 100) return null;
+  if (
+    !isDraftString(value.quote.customerId, 200) ||
+    !isDraftString(value.quote.serviceType, 32) ||
+    !SERVICE_TYPE_SET.has(value.quote.serviceType) ||
+    !isDraftString(value.quote.title, 500) ||
+    !isDraftString(value.quote.scopeText, 20_000) ||
+    !isDraftString(value.quote.taxAmount, 100)
+  ) return null;
+  if (value.mobilePane !== "editor" && value.mobilePane !== "preview") return null;
+  if (typeof value.quickCustomerOpen !== "boolean" || !isRecord(value.quickCustomerForm)) return null;
+  const quickCustomerForm = value.quickCustomerForm;
+  if (
+    !isDraftString(quickCustomerForm.fullName, 500) ||
+    !isDraftString(quickCustomerForm.phone, 100) ||
+    !isDraftString(quickCustomerForm.email, 500) ||
+    !isDraftString(quickCustomerForm.notes, 20_000)
+  ) return null;
+  if (value.lastAppliedAiRunId !== null && !isDraftString(value.lastAppliedAiRunId, 200)) return null;
+
+  const lines: BuilderDraftLine[] = [];
+  for (const candidate of value.lines) {
+    if (!isRecord(candidate)) return null;
+    if (
+      !isDraftString(candidate.title, 1_000) ||
+      !isDraftString(candidate.details, 20_000) ||
+      (candidate.sectionType !== "INCLUDED" && candidate.sectionType !== "ALTERNATE") ||
+      !isDraftString(candidate.sectionLabel, 1_000) ||
+      !isDraftString(candidate.quantity, 100) ||
+      !isDraftString(candidate.unitCost, 100) ||
+      !isDraftString(candidate.unitPrice, 100) ||
+      (candidate.sourcePresetId !== undefined && candidate.sourcePresetId !== null && !isDraftString(candidate.sourcePresetId, 200)) ||
+      (candidate.presetPromptHandled !== undefined && typeof candidate.presetPromptHandled !== "boolean")
+    ) return null;
+    lines.push({
+      title: candidate.title,
+      details: candidate.details,
+      sectionType: candidate.sectionType,
+      sectionLabel: candidate.sectionLabel,
+      quantity: candidate.quantity,
+      unitCost: candidate.unitCost,
+      unitPrice: candidate.unitPrice,
+      sourcePresetId: candidate.sourcePresetId as string | null | undefined,
+      presetPromptHandled: candidate.presetPromptHandled as boolean | undefined,
+    });
+  }
+
+  return {
+    version: 1,
+    savedAtUtc: value.savedAtUtc,
+    quote: {
+      customerId: value.quote.customerId,
+      serviceType: value.quote.serviceType as BuilderDraftData["quote"]["serviceType"],
+      title: value.quote.title,
+      scopeText: value.quote.scopeText,
+      taxAmount: value.quote.taxAmount,
+    },
+    lines,
+    mobilePane: value.mobilePane,
+    quickCustomerOpen: value.quickCustomerOpen,
+    quickCustomerForm: {
+      fullName: quickCustomerForm.fullName,
+      phone: quickCustomerForm.phone,
+      email: quickCustomerForm.email,
+      notes: quickCustomerForm.notes,
+    },
+    lastAppliedAiRunId: value.lastAppliedAiRunId as string | null,
+  };
+}
+
+function hasMeaningfulBuilderDraft(draft: BuilderDraftData) {
+  const quoteIsMeaningful = Boolean(
+    draft.quote.customerId || draft.quote.title.trim() || draft.quote.scopeText.trim() || Number(draft.quote.taxAmount) !== 0,
+  );
+  const linesAreMeaningful = draft.lines.some((line) =>
+    Boolean(
+      line.title.trim() || line.details.trim() || line.sectionType === "ALTERNATE" || line.sectionLabel.trim() ||
+      Number(line.quantity) !== 1 || Number(line.unitCost) !== 0 || Number(line.unitPrice) !== 0,
+    ),
+  );
+  const customerIsMeaningful = Object.values(draft.quickCustomerForm).some((value) => value.trim().length > 0);
+  return quoteIsMeaningful || linesAreMeaningful || customerIsMeaningful;
+}
+
+function writeStoredBuilderDraft(storageKey: string, draft: BuilderDraftData) {
+  if (!hasMeaningfulBuilderDraft(draft)) {
+    removeQuoteBuilderDraft(storageKey);
+    return null;
+  }
+  const savedAtUtc = new Date().toISOString();
+  const stored = JSON.stringify({ ...draft, version: 1, savedAtUtc } satisfies StoredBuilderDraft);
+  return writeQuoteBuilderDraft(storageKey, stored) ? savedAtUtc : null;
+}
+
 const QUOTE_BUILDER_LINE_GRID_COLUMNS =
   "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_108px_84px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_88px]";
 const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
@@ -138,6 +271,17 @@ export function QuoteBuilderView() {
   usePageView("quote_builder");
   const track = useTrack();
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [quickCustomerForm, setQuickCustomerForm] = useState<QuickCustomerForm>(EMPTY_QUICK_CUSTOMER_FORM);
+  const [hydratedDraftStorageKey, setHydratedDraftStorageKey] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [draftSavedAtUtc, setDraftSavedAtUtc] = useState<string | null>(null);
+  const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
+  const [draftRecoveryMessage, setDraftRecoveryMessage] = useState<string | null>(null);
+  const [conflictingStoredDraft, setConflictingStoredDraft] = useState<StoredBuilderDraft | null>(null);
+  const [discardDraftConfirmOpen, setDiscardDraftConfirmOpen] = useState(false);
+  const keepDraftButtonRef = useRef<HTMLButtonElement | null>(null);
+  const latestDraftRef = useRef<BuilderDraftData | null>(null);
+  const quoteCreationCompletedRef = useRef(false);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
@@ -176,6 +320,7 @@ export function QuoteBuilderView() {
     navigateToQuote,
     loadCustomers,
   } = useDashboard();
+  const selectedCustomerIdRef = useRef(quoteForm.customerId);
 
   const activeCustomer = useMemo(
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
@@ -197,6 +342,121 @@ export function QuoteBuilderView() {
     ],
   );
   const preparedDateLabel = useMemo(() => new Date().toLocaleDateString(), []);
+  const draftStorageKey = useMemo(
+    () => session ? quoteBuilderDraftStorageKey(session.tenantId, session.userId) : null,
+    [session],
+  );
+  const currentBuilderDraft = useMemo<BuilderDraftData>(
+    () => ({
+      quote: {
+        customerId: quoteForm.customerId,
+        serviceType: quoteForm.serviceType,
+        title: quoteForm.title,
+        scopeText: quoteForm.scopeText,
+        taxAmount: quoteForm.taxAmount,
+      },
+      lines: draftLines.map((line) => ({
+        title: line.title,
+        details: line.details,
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel,
+        quantity: line.quantity,
+        unitCost: line.unitCost,
+        unitPrice: line.unitPrice,
+        sourcePresetId: line.sourcePresetId,
+        presetPromptHandled: line.presetPromptHandled,
+      })),
+      mobilePane,
+      quickCustomerOpen,
+      quickCustomerForm,
+      lastAppliedAiRunId,
+    }),
+    [draftLines, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteForm],
+  );
+  const hasMeaningfulDraft = useMemo(() => hasMeaningfulBuilderDraft(currentBuilderDraft), [currentBuilderDraft]);
+  latestDraftRef.current = currentBuilderDraft;
+  selectedCustomerIdRef.current = quoteForm.customerId;
+
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    let hydrationDeferred = false;
+    quoteCreationCompletedRef.current = false;
+    setDraftRestored(false);
+    setDraftRecoveryMessage(null);
+    try {
+      const raw = readQuoteBuilderDraft(draftStorageKey);
+      if (!raw) {
+        setHydratedDraftStorageKey(draftStorageKey);
+        return;
+      }
+      const stored = parseStoredBuilderDraft(raw);
+      if (!stored || !hasMeaningfulBuilderDraft(stored)) {
+        removeQuoteBuilderDraft(draftStorageKey);
+        setDraftRecoveryMessage("An incompatible saved draft was cleared safely.");
+        setHydratedDraftStorageKey(draftStorageKey);
+        return;
+      }
+      if (selectedCustomerIdRef.current && stored.quote.customerId !== selectedCustomerIdRef.current) {
+        hydrationDeferred = true;
+        setConflictingStoredDraft(stored);
+        return;
+      }
+      setQuoteForm((current) => ({
+        ...current,
+        customerId: stored.quote.customerId,
+        serviceType: stored.quote.serviceType,
+        title: stored.quote.title,
+        scopeText: stored.quote.scopeText,
+        taxAmount: stored.quote.taxAmount,
+        internalCostSubtotal: "0",
+        customerPriceSubtotal: "0",
+      }));
+      setDraftLines(stored.lines.map((line) => makeEditableQuoteLine(line)));
+      setMobilePane(stored.mobilePane);
+      setQuickCustomerOpen(stored.quickCustomerOpen);
+      setQuickCustomerForm(stored.quickCustomerForm);
+      setLastAppliedAiRunId(stored.lastAppliedAiRunId);
+      setDraftSavedAtUtc(stored.savedAtUtc);
+      setDraftPersistenceFailed(false);
+      setDraftRestored(true);
+      setConflictingStoredDraft(null);
+    } catch {
+      try {
+        removeQuoteBuilderDraft(draftStorageKey);
+      } catch {
+        // Storage can be unavailable in locked-down browser modes; the builder remains usable in memory.
+      }
+      setDraftRecoveryMessage("The saved draft could not be read and was cleared safely.");
+    } finally {
+      if (!hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
+    }
+  }, [draftStorageKey, setQuoteForm]);
+
+  useEffect(() => {
+    if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || quoteCreationCompletedRef.current) return;
+    const savedAtUtc = writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft);
+    setDraftSavedAtUtc(savedAtUtc);
+    setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
+  }, [currentBuilderDraft, draftStorageKey, hasMeaningfulDraft, hydratedDraftStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey) return;
+    const persistLatestDraft = () => {
+      if (quoteCreationCompletedRef.current || !latestDraftRef.current) return;
+      writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current);
+    };
+    window.addEventListener("beforeunload", persistLatestDraft);
+    window.addEventListener("pagehide", persistLatestDraft);
+    return () => {
+      window.removeEventListener("beforeunload", persistLatestDraft);
+      window.removeEventListener("pagehide", persistLatestDraft);
+      persistLatestDraft();
+    };
+  }, [draftStorageKey, hydratedDraftStorageKey]);
+
+  useEffect(() => {
+    if (discardDraftConfirmOpen) keepDraftButtonRef.current?.focus();
+  }, [discardDraftConfirmOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -540,6 +800,79 @@ export function QuoteBuilderView() {
     setPresetPromptLine(null);
   }
 
+  function restoreConflictingDraft() {
+    if (!conflictingStoredDraft || !draftStorageKey) return;
+    const stored = conflictingStoredDraft;
+    setQuoteForm((current) => ({
+      ...current,
+      customerId: stored.quote.customerId,
+      serviceType: stored.quote.serviceType,
+      title: stored.quote.title,
+      scopeText: stored.quote.scopeText,
+      taxAmount: stored.quote.taxAmount,
+      internalCostSubtotal: "0",
+      customerPriceSubtotal: "0",
+    }));
+    setDraftLines(stored.lines.map((line) => makeEditableQuoteLine(line)));
+    setMobilePane(stored.mobilePane);
+    setQuickCustomerOpen(stored.quickCustomerOpen);
+    setQuickCustomerForm(stored.quickCustomerForm);
+    setLastAppliedAiRunId(stored.lastAppliedAiRunId);
+    setDraftSavedAtUtc(stored.savedAtUtc);
+    setDraftRestored(true);
+    setConflictingStoredDraft(null);
+    setHydratedDraftStorageKey(draftStorageKey);
+    setNotice("Restored the saved quote draft.");
+  }
+
+  function startFreshForSelectedCustomer() {
+    if (!draftStorageKey) return;
+    removeQuoteBuilderDraft(draftStorageKey);
+    setConflictingStoredDraft(null);
+    setDraftRestored(false);
+    setDraftSavedAtUtc(null);
+    setHydratedDraftStorageKey(draftStorageKey);
+    setNotice("Started a fresh quote for the selected customer.");
+  }
+
+  function clearStoredBuilderDraft() {
+    quoteCreationCompletedRef.current = true;
+    if (draftStorageKey) removeQuoteBuilderDraft(draftStorageKey);
+    setDraftSavedAtUtc(null);
+    setDraftPersistenceFailed(false);
+    setDraftRestored(false);
+  }
+
+  function startBuilderOver() {
+    clearStoredBuilderDraft();
+    setQuoteForm({
+      customerId: "",
+      serviceType: session?.primaryTrade ?? "HVAC",
+      title: "",
+      scopeText: "",
+      internalCostSubtotal: "0",
+      customerPriceSubtotal: "0",
+      taxAmount: "0",
+    });
+    setDraftLines([makeEditableQuoteLine()]);
+    setQuickCustomerOpen(false);
+    setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
+    setMobilePane("editor");
+    setAiModalOpen(false);
+    setAiInsight(null);
+    setLastAppliedAiRunId(null);
+    setChatPrompt("");
+    setChatParsed(null);
+    setPresetPromptLine(null);
+    setDiscardDraftConfirmOpen(false);
+    setDraftRecoveryMessage(null);
+    setConflictingStoredDraft(null);
+    setNotice("Started a fresh quote.");
+    window.setTimeout(() => {
+      quoteCreationCompletedRef.current = false;
+    }, 0);
+  }
+
   async function handleCreateQuote() {
     if (!quoteForm.customerId) {
       setError("Select a customer before creating the quote.");
@@ -589,6 +922,7 @@ export function QuoteBuilderView() {
     });
 
     if (createdQuote) {
+      clearStoredBuilderDraft();
       setDraftLines([makeEditableQuoteLine()]);
       setAiInsight(null);
       setLastAppliedAiRunId(null);
@@ -612,6 +946,73 @@ export function QuoteBuilderView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {draftRecoveryMessage ? (
+        <Alert tone="warning" onDismiss={() => setDraftRecoveryMessage(null)}>{draftRecoveryMessage}</Alert>
+      ) : null}
+      {conflictingStoredDraft ? (
+        <div
+          role="alert"
+          data-testid="quote-builder-draft-conflict"
+          className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-slate-900"
+        >
+          <p className="text-sm font-semibold">Saved quote draft found</p>
+          <p className="mt-1 text-sm text-slate-700">
+            This tab has a saved draft for a different customer. Choose which quote you want to continue.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" size="sm" onClick={restoreConflictingDraft}>
+              Restore Saved Draft
+            </Button>
+            <Button size="sm" onClick={startFreshForSelectedCustomer}>
+              Start Fresh for Selected Customer
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {hasMeaningfulDraft && hydratedDraftStorageKey === draftStorageKey ? (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="quote-builder-draft-status"
+          className="flex flex-col gap-3 rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div>
+            <p className="text-sm font-semibold text-slate-900">
+              {draftPersistenceFailed
+                ? "Draft open in this tab"
+                : draftRestored
+                  ? "Draft restored in this tab"
+                  : "Draft autosaved in this tab"}
+            </p>
+            <p className="mt-1 text-xs text-slate-600">
+              {draftPersistenceFailed
+                ? "This browser blocked local draft storage. Keep this tab open until the quote is created."
+                : `Saved only in this tab for the signed-in workspace account${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}. Closing the tab clears it.`}
+            </p>
+          </div>
+          {discardDraftConfirmOpen ? (
+            <div role="group" aria-label="Confirm discard saved quote draft" className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <span className="w-full text-xs font-semibold text-slate-700 sm:w-auto">Discard this draft?</span>
+              <Button ref={keepDraftButtonRef} variant="outline" size="sm" onClick={() => setDiscardDraftConfirmOpen(false)}>
+                Keep Draft
+              </Button>
+              <Button variant="danger" size="sm" onClick={startBuilderOver}>
+                Discard Draft
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={() => setDiscardDraftConfirmOpen(true)}
+              aria-label="Discard saved quote draft and start over"
+            >
+              Start Over
+            </Button>
+          )}
+        </div>
+      ) : null}
       {aiInsight ? (
         <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -984,6 +1385,8 @@ export function QuoteBuilderView() {
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={() => setQuickCustomerOpen(false)}
+        draftValue={quickCustomerForm}
+        onDraftChange={setQuickCustomerForm}
         onCreated={async ({ customer, intent, merged, restored, reusedExisting }) => {
           void loadCustomers();
           selectQuoteCustomer(customer.id);

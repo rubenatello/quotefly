@@ -41,11 +41,7 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
-function buildCorsOrigin(): true | CorsOriginFunction {
-  if (env.NODE_ENV !== "production") {
-    return true;
-  }
-
+function buildCorsOrigin(): CorsOriginFunction {
   const allowedOrigins = new Set(
     [env.APP_URL, env.API_URL, ...env.CORS_ALLOWED_ORIGINS.split(",")]
       .map(normalizeOrigin)

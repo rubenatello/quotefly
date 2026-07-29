@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
 
 const SEO_FAQS = [
@@ -31,15 +31,7 @@ interface LandingPageProps {
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Contractor Quoting Software and Estimating Software",
-      description:
-        "QuoteFly is contractor quoting software and contractor estimating software for field teams. Add leads, estimate fast, and send branded quote PDFs.",
-      keywords:
-        "contractor quoting software, contractor estimating software, estimate software for contractors, contractor estimate app, contractor quote app, hvac estimating software, plumbing estimating software, roofing estimating software",
-      canonicalUrl: "https://quotefly.us/",
-      ogType: "website",
-    });
+    setPublicSEOMetadata("/");
   }, []);
 
   useEffect(() => {
@@ -68,24 +60,6 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       script.remove();
     };
   }, []);
-
-  const testimonials = [
-    {
-      name: "Adam J",
-      location: "Charlotte, North Carolina",
-      text: "QuoteFly cleaned up our quote process fast. My team can get a draft out while the lead is still fresh.",
-    },
-    {
-      name: "Marissa T",
-      location: "Tampa, Florida",
-      text: "The biggest win is speed. Customer info, pricing, and the PDF are all in one place instead of three different tools.",
-    },
-    {
-      name: "Carlos R",
-      location: "Phoenix, Arizona",
-      text: "We stopped losing quotes in text threads and notes. That alone made the software worth it.",
-    },
-  ];
 
   const features = [
     {
@@ -136,7 +110,8 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
   return (
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="relative overflow-hidden px-4 py-20 sm:px-6 sm:py-32 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
+        <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="text-center lg:text-left">
           <div className="mb-6 inline-block">
             <span className="rounded-full bg-quotefly-blue/10 px-4 py-2 text-sm font-medium text-quotefly-blue">
               Free for 14 days. No credit card required.
@@ -144,27 +119,40 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           </div>
 
           <h1 className="mb-6 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
-            Contractor quoting software and estimating software built for field teams
+            Contractor quoting software built for field teams
           </h1>
 
           <p className="mb-8 text-lg text-slate-600 sm:text-xl">
             QuoteFly gives contractors one place to intake customers, build estimates, send branded quotes, and track follow-up without workflow drag.
           </p>
 
-          <div className="flex flex-col gap-4 sm:flex-row sm:justify-center">
+          <div className="flex flex-col gap-4 sm:flex-row sm:justify-center lg:justify-start">
             <button
               onClick={onOpenAuth}
               className="rounded-lg bg-quotefly-blue px-8 py-3 font-semibold text-white transition-colors hover:bg-blue-600"
             >
               Start Free Trial
             </button>
-            <button
-              onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })}
+            <a
+              href="#workflow"
               className="rounded-lg border border-slate-300 px-8 py-3 font-semibold text-slate-800 transition-colors hover:border-slate-400"
             >
-              See Demo
-            </button>
+              See how it works
+            </a>
           </div>
+          </div>
+          <figure className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
+            <img
+              src="/quote-workflow.jpg"
+              alt="QuoteFly mobile workflow showing customer lookup, estimate line items, and quote sharing"
+              width="1280"
+              height="960"
+              loading="eager"
+              fetchPriority="high"
+              decoding="async"
+              className="h-auto w-full"
+            />
+          </figure>
         </div>
       </section>
 
@@ -187,7 +175,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
+      <section id="workflow" className="scroll-mt-24 border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-3xl font-bold text-slate-900">One platform for quoting and estimating</h2>
           <p className="mt-4 text-slate-600">
@@ -220,24 +208,14 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       </section>
 
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-6xl">
-          <h2 className="mb-12 text-center text-3xl font-bold text-slate-900">What contractors are saying</h2>
-
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-            {testimonials.map((testimonial) => (
-              <div
-                key={testimonial.name}
-                className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm transition-colors hover:border-slate-300"
-              >
-                <div className="mb-4">
-                  <p className="font-semibold text-slate-900">
-                    {testimonial.name} - <span className="text-quotefly-blue">{testimonial.location}</span>
-                  </p>
-                </div>
-                <p className="text-slate-700 italic">"{testimonial.text}"</p>
-              </div>
-            ))}
-          </div>
+        <div className="mx-auto max-w-4xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-3xl font-bold text-slate-900">Evaluate the complete workflow during your trial</h2>
+          <p className="mt-4 text-slate-600">
+            Add a sample customer, build a quote from your own job scope, review the PDF, and test the phone sharing flow before deciding whether QuoteFly fits your business.
+          </p>
+          <p className="mt-3 text-sm text-slate-500">
+            QuoteFly does not promise a specific close-rate or time-saving result. The trial is the clearest way to evaluate the current product with your process.
+          </p>
         </div>
       </section>
 

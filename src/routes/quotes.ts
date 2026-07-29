@@ -24,6 +24,10 @@ import {
   getAiQuoteRuntimeInfo,
 } from "../services/ai-quote";
 import { generateQuotePdfBuffer } from "../services/quote-pdf";
+import {
+  applyQuoteSheetLineMutations,
+  QuoteSheetLineNotFoundError,
+} from "../services/quote-sheet";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
 
@@ -136,6 +140,51 @@ const UpdateLineItemSchema = z
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: "At least one field is required.",
+  });
+
+const QuoteSheetLineSchema = z.object({
+  description: z.string().min(1),
+  sectionType: QuoteLineSectionTypeSchema.default("INCLUDED"),
+  sectionLabel: z.string().trim().max(80).optional().nullable(),
+  quantity: z.number().positive(),
+  unitCost: z.number().nonnegative(),
+  unitPrice: z.number().nonnegative(),
+});
+
+const SaveQuoteSheetSchema = z
+  .object({
+    quote: z.object({
+      serviceType: ServiceTypeSchema,
+      status: QuoteStatusSchema,
+      jobStatus: QuoteJobStatusSchema,
+      afterSaleFollowUpStatus: AfterSaleFollowUpStatusSchema,
+      title: z.string().min(3),
+      scopeText: z.string().min(3),
+      taxAmount: z.number().nonnegative(),
+    }),
+    lineItems: z.array(QuoteSheetLineSchema.extend({ id: z.string().min(1) })).max(300).default([]),
+    newLineItems: z.array(QuoteSheetLineSchema).max(300).default([]),
+  })
+  .superRefine((payload, context) => {
+    if (payload.lineItems.length + payload.newLineItems.length > 300) {
+      context.addIssue({
+        code: "custom",
+        path: ["lineItems"],
+        message: "At most 300 line changes can be saved at once.",
+      });
+    }
+
+    const ids = new Set<string>();
+    for (const [index, line] of payload.lineItems.entries()) {
+      if (ids.has(line.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["lineItems", index, "id"],
+          message: "Each existing line can only be saved once.",
+        });
+      }
+      ids.add(line.id);
+    }
   });
 
 const QuoteLineItemParamsSchema = z.object({
@@ -4797,7 +4846,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       scopeText: quote.scopeText,
       createdAt: quote.createdAt,
       sentAt: quote.sentAt,
-      internalCostSubtotal: Number(quote.internalCostSubtotal),
       customerPriceSubtotal: Number(quote.customerPriceSubtotal),
       taxAmount: Number(quote.taxAmount),
       totalAmount: Number(quote.totalAmount),
@@ -4848,7 +4896,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
         sectionLabel: lineItem.sectionLabel,
         quantity: Number(lineItem.quantity),
-        unitCost: Number(lineItem.unitCost),
         unitPrice: Number(lineItem.unitPrice),
       })),
     });
@@ -4862,6 +4909,119 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send(pdfBuffer);
+  });
+
+  app.patch("/quotes/:quoteId/sheet", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const actor = await resolveActivityActor(app.prisma, claims);
+    const { quoteId } = QuoteParamsSchema.parse(request.params);
+    const payload = SaveQuoteSheetSchema.parse(request.body);
+
+    try {
+      const quote = await app.prisma.$transaction(async (tx) => {
+        const existingQuote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+        if (!existingQuote) return null;
+
+        const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload.quote);
+        const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.quote.status);
+        const updatedQuote = await tx.quote.update({
+          where: { id: existingQuote.id },
+          data: {
+            serviceType: payload.quote.serviceType,
+            status: payload.quote.status,
+            title: payload.quote.title,
+            scopeText: payload.quote.scopeText,
+            taxAmount: payload.quote.taxAmount,
+            sentAt:
+              payload.quote.status === "SENT_TO_CUSTOMER"
+                ? existingQuote.sentAt ?? new Date()
+                : payload.quote.status === "DRAFT" || payload.quote.status === "READY_FOR_REVIEW"
+                  ? null
+                  : existingQuote.sentAt,
+            ...lifecycleUpdate.data,
+          },
+        });
+
+        await applyQuoteSheetLineMutations(tx, {
+          tenantId: claims.tenantId,
+          quoteId: updatedQuote.id,
+          updates: payload.lineItems,
+          creates: payload.newLineItems,
+        });
+
+        const recalculatedQuote = await recalculateQuoteFromLineItems(tx, updatedQuote.id, claims.tenantId);
+        if (!recalculatedQuote) return null;
+
+        const lineFields =
+          payload.lineItems.length > 0 || payload.newLineItems.length > 0
+            ? [
+                "lineItems",
+                "internalCostSubtotal",
+                "customerPriceSubtotal",
+                "totalAmount",
+              ]
+            : ["totalAmount"];
+        await createQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId: recalculatedQuote.id,
+          eventType:
+            payload.quote.status !== existingQuote.status ||
+            payload.quote.jobStatus !== existingQuote.jobStatus ||
+            payload.quote.afterSaleFollowUpStatus !== existingQuote.afterSaleFollowUpStatus
+              ? "STATUS_CHANGED"
+              : payload.lineItems.length > 0 || payload.newLineItems.length > 0
+                ? "LINE_ITEM_CHANGED"
+                : "UPDATED",
+          actor,
+          changedFields: Array.from(
+            new Set([
+              ...quoteChangedFields(payload.quote),
+              ...lifecycleUpdate.changedFields,
+              "sentAt",
+              ...lineFields,
+            ]),
+          ),
+        });
+
+        if (followUpStatusUpdate) {
+          await tx.customer.updateMany({
+            where: {
+              id: recalculatedQuote.customerId,
+              ...tenantActiveCustomerScope(claims.tenantId),
+            },
+            data: {
+              followUpStatus: followUpStatusUpdate,
+              followUpUpdatedAtUtc: new Date(),
+            },
+          });
+        }
+
+        return tx.quote.findFirst({
+          where: {
+            id: recalculatedQuote.id,
+            ...tenantActiveQuoteScope(claims.tenantId),
+          },
+          include: {
+            customer: true,
+            lineItems: {
+              where: tenantActiveScope(claims.tenantId),
+              orderBy: { createdAt: "asc" },
+            },
+          },
+        });
+      });
+
+      if (!quote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
+
+      return reply.send({ quote });
+    } catch (error) {
+      if (error instanceof QuoteSheetLineNotFoundError) {
+        return reply.code(404).send({ error: error.message });
+      }
+      throw error;
+    }
   });
 
   app.patch("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {

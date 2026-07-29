@@ -1,12 +1,9 @@
 import { useEffect } from "react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 export function PrivacyPage() {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Privacy Policy - QuoteFly",
-      description: "Understand what data QuoteFly collects, why it is used, and how privacy requests are handled.",
-    });
+    setPublicSEOMetadata("/privacy");
   }, []);
 
   const sections = [

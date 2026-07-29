@@ -9,6 +9,17 @@ const braceFinding = {
   via: { url: "https://github.com/advisories/GHSA-mh99-v99m-4gvg" },
 };
 
+const esbuildFinding = {
+  workspace: "Web",
+  packageName: "esbuild",
+  vulnerability: { nodes: ["node_modules/esbuild"] },
+  via: { url: "https://github.com/advisories/GHSA-g7r4-m6w7-qqqr" },
+};
+
+const exactEsbuildLockPackages = {
+  "node_modules/esbuild": { version: "0.27.7", dev: true },
+};
+
 test("accepts the documented ESLint-only brace-expansion node", () => {
   const policy = acceptedPolicyFor({
     ...braceFinding,
@@ -39,6 +50,62 @@ test("rejects an exception when workspace, package, node, or version drifts", ()
   assert.equal(acceptedPolicyFor({ ...braceFinding, workspace: "Root", lockPackages }), null);
   assert.equal(acceptedPolicyFor({ ...braceFinding, packageName: "other-package", lockPackages }), null);
   assert.equal(acceptedPolicyFor({ ...braceFinding, lockPackages }), null);
+});
+
+test("accepts only the exact Web tsx esbuild development node", () => {
+  const policy = acceptedPolicyFor({
+    ...esbuildFinding,
+    lockPackages: exactEsbuildLockPackages,
+  });
+
+  assert.equal(policy?.advisoryId, "GHSA-g7r4-m6w7-qqqr");
+  assert.deepEqual(policy?.nodes, [
+    { path: "node_modules/esbuild", version: "0.27.7", devOnly: true },
+  ]);
+});
+
+test("rejects the esbuild disposition in the Root workspace", () => {
+  assert.equal(
+    acceptedPolicyFor({
+      ...esbuildFinding,
+      workspace: "Root",
+      lockPackages: exactEsbuildLockPackages,
+    }),
+    null,
+  );
+});
+
+test("rejects the esbuild disposition when the installed version drifts", () => {
+  assert.equal(
+    acceptedPolicyFor({
+      ...esbuildFinding,
+      lockPackages: { "node_modules/esbuild": { version: "0.27.8", dev: true } },
+    }),
+    null,
+  );
+});
+
+test("rejects the esbuild disposition when the vulnerable node path drifts", () => {
+  assert.equal(
+    acceptedPolicyFor({
+      ...esbuildFinding,
+      vulnerability: { nodes: ["node_modules/tsx/node_modules/esbuild"] },
+      lockPackages: {
+        "node_modules/tsx/node_modules/esbuild": { version: "0.27.7", dev: true },
+      },
+    }),
+    null,
+  );
+});
+
+test("rejects the esbuild disposition if the node enters the production install", () => {
+  assert.equal(
+    acceptedPolicyFor({
+      ...esbuildFinding,
+      lockPackages: { "node_modules/esbuild": { version: "0.27.7" } },
+    }),
+    null,
+  );
 });
 
 test("accepts a cyclic transitive report only when it is grounded in an accepted advisory", () => {

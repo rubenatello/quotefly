@@ -1,12 +1,9 @@
 import { useEffect } from "react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 export function DataPrivacyPage() {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Data Privacy and Security - QuoteFly",
-      description: "Review QuoteFly's approach to tenant isolation, access controls, retention, and data handling.",
-    });
+    setPublicSEOMetadata("/data-privacy");
   }, []);
 
   const sections = [
@@ -33,7 +30,7 @@ export function DataPrivacyPage() {
     {
       title: "Retention and export",
       text:
-        "Customers control the records they add to QuoteFly. Data export and accounting paths such as PDF quotes, QuickBooks CSV, and direct QuickBooks invoice sync are part of the product so you keep operational portability from the beginning.",
+        "Customers control the records they add to QuoteFly. The current export paths include PDF quotes and QuickBooks-compatible CSV files. Direct QuickBooks sync remains a staged integration and is not presented as a launch feature.",
     },
     {
       title: "Reporting a concern",

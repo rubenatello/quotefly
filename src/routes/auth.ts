@@ -18,7 +18,7 @@ const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute
 
 const SignUpSchema = z.object({
   email: z.string().trim().email(),
-  password: z.string().min(8),
+  password: z.string().min(8).max(120),
   fullName: z.string().trim().min(2),
   companyName: z.string().trim().min(2),
   primaryTrade: z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]),
@@ -28,7 +28,7 @@ const SignUpSchema = z.object({
 
 const SignInSchema = z.object({
   email: z.string().trim().email(),
-  password: z.string().min(1),
+  password: z.string().min(1).max(120),
 });
 
 function slugifyCompanyName(companyName: string): string {

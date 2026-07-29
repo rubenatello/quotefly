@@ -8,6 +8,8 @@ type QuickCustomerIntent = "save" | "quote";
 type QuickCustomerModalProps = {
   open: boolean;
   onClose: () => void;
+  draftValue?: QuickCustomerForm;
+  onDraftChange?: (draft: QuickCustomerForm) => void;
   onCreated: (result: {
     customer: Customer;
     merged?: boolean;
@@ -17,7 +19,7 @@ type QuickCustomerModalProps = {
   }) => Promise<void> | void;
 };
 
-type QuickCustomerForm = {
+export type QuickCustomerForm = {
   fullName: string;
   phone: string;
   email: string;
@@ -61,8 +63,9 @@ function preferredDuplicateMatchId(matches: CustomerDuplicateMatch[]) {
   return matches[0]?.id ?? null;
 }
 
-export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerModalProps) {
-  const [form, setForm] = useState<QuickCustomerForm>(EMPTY_FORM);
+export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, onCreated }: QuickCustomerModalProps) {
+  const [internalForm, setInternalForm] = useState<QuickCustomerForm>(EMPTY_FORM);
+  const form = draftValue ?? internalForm;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [intent, setIntent] = useState<QuickCustomerIntent>("save");
@@ -79,8 +82,15 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
   );
   const selectedMatchInactive = Boolean(selectedMatch && isInactiveDuplicateMatch(selectedMatch));
 
+  function updateForm(updater: (current: QuickCustomerForm) => QuickCustomerForm) {
+    const next = updater(form);
+    if (draftValue === undefined) setInternalForm(next);
+    onDraftChange?.(next);
+  }
+
   function resetState() {
-    setForm(EMPTY_FORM);
+    setInternalForm(EMPTY_FORM);
+    onDraftChange?.(EMPTY_FORM);
     setError(null);
     setSaving(false);
     setIntent("save");
@@ -160,7 +170,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
             label="Full name"
             placeholder="Alan Johnson"
             value={form.fullName}
-            onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
+            onChange={(event) => updateForm((prev) => ({ ...prev, fullName: event.target.value }))}
             disabled={saving}
           />
           <Input
@@ -168,7 +178,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
             placeholder="(818) 233-4333"
             value={form.phone}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, phone: formatUsPhoneInput(event.target.value) }))
+              updateForm((prev) => ({ ...prev, phone: formatUsPhoneInput(event.target.value) }))
             }
             disabled={saving}
           />
@@ -178,7 +188,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
           label="Email"
           placeholder="Optional"
           value={form.email}
-          onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+          onChange={(event) => updateForm((prev) => ({ ...prev, email: event.target.value }))}
           disabled={saving}
         />
 
@@ -187,7 +197,7 @@ export function QuickCustomerModal({ open, onClose, onCreated }: QuickCustomerMo
           rows={4}
           placeholder="Internal notes, property details, concerns, preferences, or follow-up context for your team and AI."
           value={form.notes}
-          onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+          onChange={(event) => updateForm((prev) => ({ ...prev, notes: event.target.value }))}
           disabled={saving}
         />
 

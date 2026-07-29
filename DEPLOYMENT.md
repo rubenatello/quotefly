@@ -57,7 +57,7 @@ npm run verify:launch
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
 | `QUICKBOOKS_ENVIRONMENT` | Required if configured | No | `sandbox` | Use `production` only after Intuit production approval |
-| `ENABLE_TWILIO_SMS` | Optional | No | `false` | Keep false for beta unless Twilio compliance is ready |
+| `ENABLE_TWILIO_SMS` | Optional | No | `false` | Must remain false in production until sender authorization is implemented |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Provider setup | No | Twilio test credentials | Required only when SMS provider is enabled |
 | `TWILIO_WEBHOOK_AUTH_TOKEN` | Provider setup | No | random secret | Required for webhook validation |
 | `SUPERUSER_EMAILS` | Optional | No | owner emails | Restrict internal admin/AI quality access |
@@ -95,7 +95,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 2. Deploy API to Railway/Render staging.
 3. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness.
 4. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at staging API.
-5. Run migrations with `npm run prisma:migrate:deploy`.
+5. Rehearse migrations with `npm run prisma:migrate:deploy` and follow any feature-specific rollout document, including `docs/billing-integrity-rollout.md`.
 6. Run staging smoke checks.
 7. Keep Stripe, QuickBooks, Twilio, and OpenAI in test/sandbox modes.
 
@@ -104,8 +104,8 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 1. Confirm `main` has passing CI with `verify:launch`.
 2. Snapshot or verify backup on production Postgres.
 3. Apply production env vars in API provider.
-4. Deploy API.
-5. Verify health and migrations.
+4. Follow `docs/billing-integrity-rollout.md` before deploying the current billing migration; its coordinated webhook/API cutover replaces a normal rolling deploy.
+5. Verify health, readiness, migrations, webhook processing, and paid access.
 6. Deploy Vercel production with production `VITE_API_BASE_URL`.
 7. Run production smoke checks with a beta test account.
 8. Enable only the providers that passed sandbox smoke checks.
@@ -126,7 +126,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 ## Rollback
 
 - Web rollback: use Vercel deployment rollback.
-- API rollback: redeploy the previous Railway/Render release image or commit.
+- API rollback: normally redeploy the previous Railway/Render release image or commit. After the current billing migration, old billing code is not webhook-safe; pause Stripe webhook ingress and use a forward fix or verified backup restore plan.
 - Database rollback: prefer forward fixes. Do not manually reverse production migrations unless a tested rollback migration and backup restore plan exist.
 - Provider rollback: disable affected provider env vars or feature flags first, then redeploy API.
 
@@ -134,5 +134,5 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 
 - Stripe: configure checkout success/cancel URLs, customer portal, and `/v1/billing/webhook`.
 - QuickBooks: configure sandbox app credentials, exact redirect URI, webhook verifier, and realm conflict handling before enabling direct sync.
-- Twilio: keep `ENABLE_TWILIO_SMS=false` until compliance, auth validation, and opt-out behavior are production reviewed.
+- Twilio: production startup rejects `ENABLE_TWILIO_SMS=true` until sender authorization is implemented; keep it false until compliance, authorization, and opt-out behavior are production reviewed.
 - OpenAI: set spend alerts and review AI quality telemetry before expanding beta access.

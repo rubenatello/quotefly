@@ -349,6 +349,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           },
         });
 
+        if (eventRecord.processedAtUtc) {
+          continue;
+        }
+
         if (!connection) {
           await app.prisma.quickBooksWebhookEvent.update({
             where: { id: eventRecord.id },
@@ -485,7 +489,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "Invalid QuickBooks webhook payload." });
       }
 
-      void processQuickBooksWebhookNotifications(notifications);
+      void processQuickBooksWebhookNotifications(notifications).catch((error) => {
+        app.log.error({ err: error }, "QuickBooks webhook batch processing failed");
+      });
       return { received: true, count: notifications.length };
     },
   );
@@ -794,6 +800,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
       const body = QuickBooksPushInvoiceBodySchema.parse(request.body ?? {});
+
+      if (!canManageQuickBooks(claims.role)) {
+        return reply.code(403).send({ error: "Only owners and admins can push invoices to QuickBooks." });
+      }
 
       let context: Awaited<ReturnType<typeof loadQuickBooksSyncContext>>;
       try {

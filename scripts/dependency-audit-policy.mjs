@@ -21,6 +21,14 @@ export const acceptedAdvisories = [
     reason:
       "This exact vulnerable node is reachable only through ESLint development tooling and is not installed in the production bundle.",
   },
+  {
+    workspace: "Web",
+    packageName: "esbuild",
+    advisoryId: "GHSA-g7r4-m6w7-qqqr",
+    nodes: [{ path: "node_modules/esbuild", version: "0.27.7", devOnly: true }],
+    reason:
+      "This exact node is used only by tsx for build, prerender, and SEO test transformation; QuoteFly never starts esbuild's affected Windows HTTP development server.",
+  },
 ];
 
 export function advisoryId(via) {

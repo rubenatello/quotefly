@@ -112,6 +112,9 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
     if (!actingMembership || !canManageUsers(actingMembership.role)) {
       return reply.code(403).send({ error: "Insufficient permission to manage organization users." });
     }
+    if (normalizeRole(actingMembership.role) !== "owner" && payload.role === "owner") {
+      return reply.code(403).send({ error: "Only owners can add another owner." });
+    }
 
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -194,15 +197,6 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         const latestLink = existingUser.tenantLink[0];
         if (latestLink?.deletedAtUtc === null) {
           throw new Error("ACTIVE_MEMBERSHIP_EXISTS");
-        }
-
-        if (existingUser.fullName !== payload.fullName) {
-          await tx.user.update({
-            where: { id: existingUser.id },
-            data: {
-              fullName: payload.fullName,
-            },
-          });
         }
 
         if (latestLink?.deletedAtUtc) {

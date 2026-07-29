@@ -1,3 +1,11 @@
+import {
+  getPublicRouteSeo,
+  publicCanonicalUrl,
+  PUBLIC_OG_IMAGE_URL,
+  PUBLIC_SITE_URL,
+  type PublicRoutePath,
+} from "./public-seo-data";
+
 export interface SEOProps {
   title: string;
   description: string;
@@ -13,7 +21,11 @@ export interface SEOProps {
 export function setSEOMetadata(props: SEOProps) {
   const hasBrandInTitle = /\bquotefly\b/i.test(props.title);
   const resolvedTitle = hasBrandInTitle ? props.title : `${props.title} | QuoteFly`;
-  const resolvedCanonicalUrl = props.canonicalUrl || `${window.location.origin}${window.location.pathname}`;
+  const isPrivateRoute = window.location.pathname === "/app" || window.location.pathname.startsWith("/app/");
+  const requestedCanonicalPath = props.canonicalUrl
+    ? new URL(props.canonicalUrl, PUBLIC_SITE_URL).pathname
+    : window.location.pathname;
+  const resolvedCanonicalUrl = `${PUBLIC_SITE_URL}${requestedCanonicalPath === "/" ? "/" : requestedCanonicalPath.replace(/\/$/, "")}`;
 
   // Update document title
   document.title = resolvedTitle;
@@ -36,16 +48,21 @@ export function setSEOMetadata(props: SEOProps) {
       document.head.appendChild(metaKeywords);
     }
     metaKeywords.setAttribute("content", props.keywords);
+  } else {
+    document.querySelector('meta[name="keywords"]')?.remove();
   }
 
   // Update canonical URL
   let canonical = document.querySelector('link[rel="canonical"]');
-  if (!canonical) {
+  if (isPrivateRoute) {
+    canonical?.remove();
+    canonical = null;
+  } else if (!canonical) {
     canonical = document.createElement("link");
     canonical.setAttribute("rel", "canonical");
     document.head.appendChild(canonical);
   }
-  canonical.setAttribute("href", resolvedCanonicalUrl);
+  canonical?.setAttribute("href", resolvedCanonicalUrl);
 
   // Update robots
   let robots = document.querySelector('meta[name="robots"]');
@@ -54,7 +71,10 @@ export function setSEOMetadata(props: SEOProps) {
     robots.setAttribute("name", "robots");
     document.head.appendChild(robots);
   }
-  robots.setAttribute("content", props.robots || "index,follow");
+  robots.setAttribute(
+    "content",
+    isPrivateRoute ? "noindex,nofollow,noarchive" : props.robots || "index,follow",
+  );
 
   // Update Open Graph tags
   const ogTitle = document.querySelector('meta[property="og:title"]') || createMetaTag("og:title");
@@ -67,8 +87,17 @@ export function setSEOMetadata(props: SEOProps) {
   const ogImage = document.querySelector('meta[property="og:image"]') || createMetaTag("og:image");
   ogImage?.setAttribute(
     "content",
-    props.ogImage || "https://quotefly.us/og-image.png"
+    props.ogImage || PUBLIC_OG_IMAGE_URL,
   );
+
+  const ogImageWidth = document.querySelector('meta[property="og:image:width"]') || createMetaTag("og:image:width");
+  ogImageWidth?.setAttribute("content", "1200");
+
+  const ogImageHeight = document.querySelector('meta[property="og:image:height"]') || createMetaTag("og:image:height");
+  ogImageHeight?.setAttribute("content", "630");
+
+  const ogImageAlt = document.querySelector('meta[property="og:image:alt"]') || createMetaTag("og:image:alt");
+  ogImageAlt?.setAttribute("content", "QuoteFly contractor quoting workspace");
 
   const ogType = document.querySelector('meta[property="og:type"]') || createMetaTag("og:type");
   ogType?.setAttribute("content", props.ogType || "website");
@@ -86,8 +115,18 @@ export function setSEOMetadata(props: SEOProps) {
   const twitterImage = ensureNamedMeta("twitter:image");
   twitterImage?.setAttribute(
     "content",
-    props.ogImage || "https://quotefly.us/og-image.png"
+    props.ogImage || PUBLIC_OG_IMAGE_URL,
   );
+}
+
+export function setPublicSEOMetadata(path: PublicRoutePath) {
+  const route = getPublicRouteSeo(path);
+  setSEOMetadata({
+    title: route.title,
+    description: route.description,
+    canonicalUrl: publicCanonicalUrl(path),
+    ogType: "website",
+  });
 }
 
 function createMetaTag(property: string) {

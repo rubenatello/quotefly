@@ -14,7 +14,7 @@ Reference plans:
 These are the owner-side items that still matter most before launch:
 
 1. Confirm inbound and outbound delivery for the newly created `support@quotefly.us` and `info@quotefly.us` shared mailboxes
-2. Confirm `quotefly.us` and `api.quotefly.us` are resolving correctly in production
+2. Confirm `quotefly.us`, `www.quotefly.us`, and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values
 5. Run one real QuickBooks Online sync test and one CSV fallback import test if you have access
@@ -24,7 +24,7 @@ These are the owner-side items that still matter most before launch:
 
 ## 1. Environment Variables
 
-Add these to your `.env` file (root of the project):
+Use a local `.env` only for local development. Configure staging and production values in Railway/Vercel; never copy the production database URL into the development environment.
 
 ```env
 # Required — already should exist
@@ -70,25 +70,28 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 
 ## 2. Database Migration
 
-After pulling the latest code:
+For local development against a dedicated development database:
 
 ```bash
 npx prisma migrate dev
 npx prisma generate
 ```
 
-## 3. React Router — SPA Fallback
+For staging and production, use checked-in migrations only:
 
-Since we moved to client-side routing with React Router, your web server
-must return `index.html` for all non-API routes (SPA fallback).
+```bash
+npm run prisma:migrate:deploy
+```
 
-**Vite dev server** already handles this automatically.
+Follow `docs/billing-integrity-rollout.md` for the current billing migration. Do not run `migrate dev`, reconciliation, or ad-hoc SQL against production.
 
-**Production (common setups):**
-- **Vercel**: Add a `vercel.json` with `"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]`
-- **Netlify**: Add `_redirects` file: `/* /index.html 200`
-- **Nginx**: `try_files $uri $uri/ /index.html;`
-- **Fastify static**: Use `@fastify/static` with wildcard fallback
+## 3. Public Pages and App Fallback
+
+Public marketing routes are prerendered as route-specific HTML so search engines receive unique titles, descriptions, canonical URLs, headings, and structured data without running JavaScript.
+
+Only `/app` and `/app/*` use the authenticated React app shell fallback. Those responses are marked `noindex`. Unknown routes use the static noindex `404.html`; they must not rewrite to the marketing homepage.
+
+The checked-in `web/vercel.json` contains the production routing and indexing headers. Do not replace it with a catch-all rewrite.
 
 ## 4. New App Routes
 

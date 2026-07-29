@@ -3,4 +3,5 @@ Allow: /
 Disallow: /app
 Disallow: /api/
 
-Sitemap: https://quotefly.us/sitemap.xml
+Host: www.quotefly.us
+Sitemap: https://www.quotefly.us/sitemap.xml

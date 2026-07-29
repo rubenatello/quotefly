@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Zap, Wrench, Hammer, Leaf } from "lucide-react";
-import { setSEOMetadata } from "../lib/seo";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 interface SolutionsPageProps {
   onOpenAuth: () => void;
@@ -8,14 +8,7 @@ interface SolutionsPageProps {
 
 export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
   useEffect(() => {
-    setSEOMetadata({
-      title: "Contractor Estimating Software by Trade",
-      description:
-        "Contractor estimating software and contractor quoting software workflows for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",
-      keywords:
-        "contractor estimating software, contractor quoting software, hvac estimating software, plumbing estimating software, roofing estimating software, flooring estimating software",
-      canonicalUrl: "https://quotefly.us/solutions",
-    });
+    setPublicSEOMetadata("/solutions");
   }, []);
 
   const solutions = [
@@ -25,10 +18,10 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       icon: <Zap className="h-12 w-12 text-blue-600" />,
       description: "Furnace replacement, repairs, and seasonal peak demand quoting for service crews.",
       benefits: [
-        "Service calls to quotes in minutes",
-        "Preset seasonal and emergency pricing scenarios",
-        "Track equipment and warranty notes",
-        "Built for service fleets and growing HVAC teams",
+        "Reusable work names and pricing defaults",
+        "Labor, material, quantity, and customer price controls",
+        "Customer notes for job and equipment context",
+        "Branded quote PDF review before sharing",
       ],
       example:
         "New quote for an AC unit replacement with existing ducts. QuoteFly drafts labor, materials, and totals so your team can review and send quickly.",
@@ -39,10 +32,10 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       icon: <Wrench className="h-12 w-12 text-cyan-600" />,
       description: "Leak diagnosis, repairs, and replacement work with clear pricing controls.",
       benefits: [
-        "Material costs by job type",
-        "Labor rates for diagnostic versus replacement work",
-        "Emergency call-out pricing support",
-        "Useful for solo plumbers and multi-location shops",
+        "Reusable work names for common service calls",
+        "Separate internal cost and customer price fields",
+        "Clear scope and line-item descriptions",
+        "Customer and quote follow-up tracking",
       ],
       example:
         "New quote for a kitchen sink backup with possible pipe replacement. Diagnostic labor and likely repair costs are ready for review.",
@@ -53,10 +46,10 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       icon: <Hammer className="h-12 w-12 text-amber-600" />,
       description: "Tile, hardwood, and vinyl pricing by square footage, prep, and labor complexity.",
       benefits: [
-        "Material-specific pricing and labor rates",
-        "Room-dimension-based estimating",
-        "Subfloor prep and repair support",
-        "Designed for installation teams and design-build firms",
+        "Square-foot quantities and adjustable unit prices",
+        "Separate prep, labor, and material lines",
+        "Customer-facing scope and alternate options",
+        "Reusable defaults for common flooring work",
       ],
       example:
         "New hardwood flooring quote for 800 square feet. Material costs and labor per square foot are loaded and ready to adjust.",
@@ -65,15 +58,15 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       id: "roofing",
       name: "Roofing",
       icon: <Hammer className="h-12 w-12 text-red-600" />,
-      description: "Repairs, replacements, and claim-ready scopes for roofing contractors.",
+      description: "Repairs and replacements with clear scopes, quantities, and customer-facing prices.",
       benefits: [
-        "Roof material pricing for shingles, metal, and tile",
-        "Square footage estimating support",
-        "Claim-ready quote documentation",
-        "Useful for restoration teams and insurance-driven jobs",
+        "Square-foot quantities and adjustable unit prices",
+        "Separate tear-off, material, labor, and cleanup lines",
+        "Branded PDF quotes for customer review",
+        "Quote status and follow-up tracking",
       ],
       example:
-        "New roofing replacement quote for hail damage. Scope, materials, and claim-ready line items are assembled fast.",
+        "New roofing replacement quote with tear-off, material, labor, and cleanup lines ready for contractor review.",
     },
     {
       id: "gardening",
@@ -81,13 +74,27 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       icon: <Leaf className="h-12 w-12 text-green-600" />,
       description: "Lawn care, cleanup, and landscape installs with hourly or area-based pricing.",
       benefits: [
-        "Per-square-foot and hourly flexibility",
-        "Seasonal package setup",
-        "Equipment rental pricing support",
-        "Works for solo landscapers and maintenance crews",
+        "Area, hourly, or flat-quantity line items",
+        "Reusable work names for recurring services",
+        "Separate material, labor, and optional service lines",
+        "Customer and quote follow-up tracking",
       ],
       example:
         "New landscaping quote for spring cleanup, hedge trimming, and mulch beds. Labor and area-based pricing are ready to send.",
+    },
+    {
+      id: "construction",
+      name: "General Construction",
+      icon: <Hammer className="h-12 w-12 text-slate-600" />,
+      description: "Multi-step project scopes with separate labor, material, fee, and optional lines.",
+      benefits: [
+        "Detailed scope and line-item descriptions",
+        "Separate internal cost and customer price fields",
+        "Alternate options outside the customer total",
+        "Quote status and follow-up tracking",
+      ],
+      example:
+        "New renovation quote with demolition, framing, material, labor, cleanup, and alternate upgrade lines ready for contractor review.",
     },
   ];
 
@@ -95,7 +102,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Contractor estimating software for every trade</h1>
+          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Estimating workflows for small contractor teams</h1>
           <p className="text-lg text-slate-600">
             Whether you install HVAC systems or manage landscaping crews, QuoteFly adapts contractor quoting software workflows to real-world field operations.
           </p>

@@ -20,7 +20,6 @@ export interface QuotePdfLineItem {
   sectionType?: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
   quantity: number;
-  unitCost: number;
   unitPrice: number;
 }
 
@@ -32,7 +31,6 @@ export interface QuotePdfData {
   scopeText: string;
   createdAt: Date;
   sentAt: Date | null;
-  internalCostSubtotal: number;
   customerPriceSubtotal: number;
   taxAmount: number;
   totalAmount: number;
@@ -250,18 +248,9 @@ async function loadLogoBuffer(logoUrl: string | null): Promise<Buffer | null> {
     }
   }
 
-  if (!logoUrl.startsWith("http://") && !logoUrl.startsWith("https://")) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(logoUrl);
-    if (!response.ok) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  } catch {
-    return null;
-  }
+  // Branding is tenant-controlled. Never fetch remote URLs from the API/PDF
+  // runtime because that would turn PDF generation into an SSRF primitive.
+  return null;
 }
 
 async function loadQuoteFlyMarkBuffer(): Promise<Buffer | null> {
@@ -432,7 +421,7 @@ function drawLineItemsTable(
   const normalizedItems =
     items.length > 0
       ? items
-      : [{ description: emptyDescription, quantity: 1, unitCost: 0, unitPrice: 0 }];
+      : [{ description: emptyDescription, quantity: 1, unitPrice: 0 }];
 
   const xDescription = 48;
   const xQty = 350;

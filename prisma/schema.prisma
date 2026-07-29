@@ -112,81 +112,89 @@ enum QuickBooksInvoiceSyncStatus {
 }
 
 model TenantBranding {
-  id              String    @id @default(cuid())
-  tenantId        String    @unique
-  logoUrl         String?
-  logoPosition    String    @default("left")
-  hideQuoteFlyAttribution Boolean @default(false)
-  primaryColor    String    @default("#5B85AA")
-  templateId      String    @default("modern")
-  businessEmail   String?
-  businessPhone   String?
-  quoteMessageTemplate String?  @db.Text
-  addressLine1    String?
-  addressLine2    String?
-  city            String?
-  state           String?
-  postalCode      String?
-  componentColors Json?
-  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAtUtc    DateTime? @db.Timestamptz(3)
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                      String    @id @default(cuid())
+  tenantId                String    @unique
+  logoUrl                 String?
+  logoPosition            String    @default("left")
+  hideQuoteFlyAttribution Boolean   @default(false)
+  primaryColor            String    @default("#5B85AA")
+  templateId              String    @default("modern")
+  businessEmail           String?
+  businessPhone           String?
+  quoteMessageTemplate    String?   @db.Text
+  addressLine1            String?
+  addressLine2            String?
+  city                    String?
+  state                   String?
+  postalCode              String?
+  componentColors         Json?
+  createdAt               DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc            DateTime? @db.Timestamptz(3)
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model Tenant {
-  id                              String                   @id @default(cuid())
-  name                            String
-  slug                            String                   @unique
-  timezone                        String                   @default("UTC")
-  primaryTrade                    ServiceCategory?
-  onboardingCompletedAtUtc        DateTime?                @db.Timestamptz(3)
-  subscriptionStatus              String                   @default("inactive")
-  subscriptionPlanCode            String?
-  trialStartsAtUtc                DateTime?                @db.Timestamptz(3)
-  trialEndsAtUtc                  DateTime?                @db.Timestamptz(3)
-  subscriptionCurrentPeriodEndUtc DateTime?                @db.Timestamptz(3)
-  createdAt                       DateTime                 @default(now()) @db.Timestamptz(3)
-  updatedAt                       DateTime                 @updatedAt @db.Timestamptz(3)
-  deletedAtUtc                    DateTime?                @db.Timestamptz(3)
-  phoneNumber                     TenantPhoneNumber?
-  users                           TenantUser[]
-  customers                       Customer[]
-  pricingProfiles                 PricingProfile[]
-  quoteTemplates                  QuoteTemplate[]
-  quotes                          Quote[]
-  customerActivityEvents          CustomerActivityEvent[]
-  aiUsageEvents                   AiUsageEvent[]
-  quoteDecisionSessions           QuoteDecisionSession[]
-  smsMessages                     SmsMessage[]
-  stripeCustomerId                String?
-  stripeSubscriptionId            String?
-  branding                        TenantBranding?
-  quoteLineItems                  QuoteLineItem[]
-  quoteRevisions                  QuoteRevision[]
-  quoteOutboundEvents             QuoteOutboundEvent[]
-  billingWebhookEvents            BillingWebhookEvent[]
-  workPresets                     WorkPreset[]
-  quickBooksConnection            QuickBooksConnection?
-  quickBooksCustomerMaps          QuickBooksCustomerMap[]
-  quickBooksItemMaps              QuickBooksItemMap[]
-  quickBooksInvoiceSyncs          QuickBooksInvoiceSync[]
-  quickBooksWebhookEvents         QuickBooksWebhookEvent[]
+  id                                String                   @id @default(cuid())
+  name                              String
+  slug                              String                   @unique
+  timezone                          String                   @default("UTC")
+  primaryTrade                      ServiceCategory?
+  onboardingCompletedAtUtc          DateTime?                @db.Timestamptz(3)
+  subscriptionStatus                String                   @default("inactive")
+  subscriptionPlanCode              String?
+  trialStartsAtUtc                  DateTime?                @db.Timestamptz(3)
+  trialEndsAtUtc                    DateTime?                @db.Timestamptz(3)
+  subscriptionCurrentPeriodEndUtc   DateTime?                @db.Timestamptz(3)
+  createdAt                         DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt                         DateTime                 @updatedAt @db.Timestamptz(3)
+  deletedAtUtc                      DateTime?                @db.Timestamptz(3)
+  phoneNumber                       TenantPhoneNumber?
+  users                             TenantUser[]
+  customers                         Customer[]
+  pricingProfiles                   PricingProfile[]
+  quoteTemplates                    QuoteTemplate[]
+  quotes                            Quote[]
+  customerActivityEvents            CustomerActivityEvent[]
+  aiUsageEvents                     AiUsageEvent[]
+  quoteDecisionSessions             QuoteDecisionSession[]
+  smsMessages                       SmsMessage[]
+  stripeCustomerId                  String?                  @unique
+  stripeSubscriptionId              String?                  @unique
+  stripeCheckoutSessionId           String?                  @unique
+  stripeCheckoutSessionExpiresAtUtc DateTime?                @db.Timestamptz(3)
+  stripeCheckoutAttemptId           String?
+  stripeCheckoutAttemptExpiresAtUtc DateTime?                @db.Timestamptz(3)
+  billingStateEventCreatedAtUtc     DateTime?                @db.Timestamptz(3)
+  billingStateEventId               String?
+  branding                          TenantBranding?
+  quoteLineItems                    QuoteLineItem[]
+  quoteRevisions                    QuoteRevision[]
+  quoteOutboundEvents               QuoteOutboundEvent[]
+  billingWebhookEvents              BillingWebhookEvent[]
+  workPresets                       WorkPreset[]
+  quickBooksConnection              QuickBooksConnection?
+  quickBooksCustomerMaps            QuickBooksCustomerMap[]
+  quickBooksItemMaps                QuickBooksItemMap[]
+  quickBooksInvoiceSyncs            QuickBooksInvoiceSync[]
+  quickBooksWebhookEvents           QuickBooksWebhookEvent[]
 
   @@index([createdAt])
   @@index([primaryTrade])
   @@index([deletedAtUtc])
+  @@index([stripeCheckoutAttemptExpiresAtUtc], map: "Tenant_checkout_attempt_expiry_idx")
+  @@index([stripeCheckoutSessionExpiresAtUtc], map: "Tenant_checkout_session_expiry_idx")
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  fullName     String
-  passwordHash String
-  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime     @updatedAt @db.Timestamptz(3)
-  deletedAtUtc DateTime?    @db.Timestamptz(3)
-  tenantLink   TenantUser[]
+  id            String         @id @default(cuid())
+  email         String         @unique
+  fullName      String
+  passwordHash  String
+  createdAt     DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @db.Timestamptz(3)
+  deletedAtUtc  DateTime?      @db.Timestamptz(3)
+  tenantLink    TenantUser[]
   aiUsageEvents AiUsageEvent[]
 
   @@index([deletedAtUtc])
@@ -330,37 +338,37 @@ model Quote {
 }
 
 model AiUsageEvent {
-  id             String           @id @default(cuid())
-  tenantId       String
-  quoteId        String?
-  customerId     String?
-  actorUserId    String?
-  actorEmail     String?
-  actorName      String?
-  eventType      AiUsageEventType
-  creditsConsumed Int             @default(1)
-  requestCount   Int              @default(1)
-  promptTokens   Int?
-  completionTokens Int?
-  totalTokens    Int?
-  estimatedCostUsd Decimal?       @db.Decimal(10, 6)
-  promptText     String           @db.Text
-  model          String?
-  insightSummary String?          @db.Text
-  insightReasons String[]         @default([])
-  insightSourceLabels String[]    @default([])
-  confidenceLevel String?
-  confidenceLabel String?
-  riskNote       String?          @db.Text
-  patchAdded     Int?
-  patchUpdated   Int?
-  patchRemoved   Int?
-  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
-  deletedAtUtc   DateTime?        @db.Timestamptz(3)
-  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  quote          Quote?           @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  customer       Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  actorUser      User?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  id                  String           @id @default(cuid())
+  tenantId            String
+  quoteId             String?
+  customerId          String?
+  actorUserId         String?
+  actorEmail          String?
+  actorName           String?
+  eventType           AiUsageEventType
+  creditsConsumed     Int              @default(1)
+  requestCount        Int              @default(1)
+  promptTokens        Int?
+  completionTokens    Int?
+  totalTokens         Int?
+  estimatedCostUsd    Decimal?         @db.Decimal(10, 6)
+  promptText          String           @db.Text
+  model               String?
+  insightSummary      String?          @db.Text
+  insightReasons      String[]         @default([])
+  insightSourceLabels String[]         @default([])
+  confidenceLevel     String?
+  confidenceLabel     String?
+  riskNote            String?          @db.Text
+  patchAdded          Int?
+  patchUpdated        Int?
+  patchRemoved        Int?
+  createdAt           DateTime         @default(now()) @db.Timestamptz(3)
+  deletedAtUtc        DateTime?        @db.Timestamptz(3)
+  tenant              Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote               Quote?           @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  customer            Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  actorUser           User?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([tenantId, eventType, createdAt])
@@ -370,19 +378,19 @@ model AiUsageEvent {
 }
 
 model QuoteLineItem {
-  id           String    @id @default(cuid())
+  id           String               @id @default(cuid())
   tenantId     String
   quoteId      String
   description  String
   sectionType  QuoteLineSectionType @default(INCLUDED)
   sectionLabel String?
-  quantity     Decimal   @db.Decimal(10, 2)
-  unitCost     Decimal   @db.Decimal(10, 2)
-  unitPrice    Decimal   @db.Decimal(10, 2)
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  deletedAtUtc DateTime? @db.Timestamptz(3)
-  quote        Quote     @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quantity     Decimal              @db.Decimal(10, 2)
+  unitCost     Decimal              @db.Decimal(10, 2)
+  unitPrice    Decimal              @db.Decimal(10, 2)
+  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  deletedAtUtc DateTime?            @db.Timestamptz(3)
+  quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([quoteId, tenantId])
   @@index([tenantId, deletedAtUtc])
@@ -473,17 +481,26 @@ model QuoteDecisionSession {
 }
 
 model BillingWebhookEvent {
-  id             String   @id @default(cuid())
-  stripeEventId  String   @unique
-  eventType      String
-  tenantId       String?
-  payload        Json
-  createdAt      DateTime @default(now()) @db.Timestamptz(3)
-  processedAtUtc DateTime @default(now()) @db.Timestamptz(3)
-  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  id                   String    @id @default(cuid())
+  stripeEventId        String    @unique
+  eventType            String
+  tenantId             String?
+  payload              Json
+  status               String    @default("PROCESSING")
+  attemptCount         Int       @default(1)
+  processingLeaseToken String?
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+  stripeCreatedAtUtc   DateTime? @db.Timestamptz(3)
+  lastAttemptAtUtc     DateTime? @db.Timestamptz(3)
+  processedAtUtc       DateTime? @db.Timestamptz(3)
+  succeededAtUtc       DateTime? @db.Timestamptz(3)
+  failedAtUtc          DateTime? @db.Timestamptz(3)
+  lastError            String?
+  tenant               Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([createdAt])
+  @@index([status, lastAttemptAtUtc])
 }
 
 model QuickBooksConnection {
@@ -601,23 +618,23 @@ model QuickBooksWebhookEvent {
 }
 
 model QuoteOutboundEvent {
-  id           String               @id @default(cuid())
-  tenantId     String
-  quoteId      String
-  customerId   String
-  actorUserId  String?
-  actorEmail   String?
-  actorName    String?
-  channel      QuoteOutboundChannel
-  destination  String?
-  subject      String?
-  bodyPreview  String?
+  id             String               @id @default(cuid())
+  tenantId       String
+  quoteId        String
+  customerId     String
+  actorUserId    String?
+  actorEmail     String?
+  actorName      String?
+  channel        QuoteOutboundChannel
+  destination    String?
+  subject        String?
+  bodyPreview    String?
   idempotencyKey String?
-  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
-  deletedAtUtc DateTime?            @db.Timestamptz(3)
-  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  customer     Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+  deletedAtUtc   DateTime?            @db.Timestamptz(3)
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote          Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  customer       Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, quoteId, createdAt])

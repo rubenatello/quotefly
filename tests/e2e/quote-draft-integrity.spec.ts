@@ -207,7 +207,7 @@ test("failed line creation keeps every new-line field and does not offer to save
   await expect(page.getByRole("dialog", { name: "Save work name for future jobs" })).toHaveCount(0);
 });
 
-test("failed quote metadata save stops line writes and retains all quote-sheet drafts", async ({
+test("failed atomic quote-sheet save retains metadata and line drafts", async ({
   context,
   page,
   request,
@@ -219,21 +219,17 @@ test("failed quote metadata save stops line writes and retains all quote-sheet d
   await page.goto(`/app/quotes/${quote.id}`);
   await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
 
-  let quoteUpdateRequests = 0;
-  let lineUpdateRequests = 0;
+  let quoteSheetRequests = 0;
   await page.route("**/v1/quotes/**", async (route) => {
     const requestUrl = new URL(route.request().url());
-    if (route.request().method() === "PATCH" && requestUrl.pathname === `/v1/quotes/${quote.id}`) {
-      quoteUpdateRequests += 1;
+    if (route.request().method() === "PATCH" && requestUrl.pathname === `/v1/quotes/${quote.id}/sheet`) {
+      quoteSheetRequests += 1;
       await route.fulfill({
         status: 500,
         contentType: "application/json",
         body: JSON.stringify({ error: "Quote changes were not saved. Your draft is ready to retry." }),
       });
       return;
-    }
-    if (route.request().method() === "PATCH" && requestUrl.pathname.includes("/line-items/")) {
-      lineUpdateRequests += 1;
     }
     await route.continue();
   });
@@ -249,8 +245,7 @@ test("failed quote metadata save stops line writes and retains all quote-sheet d
 
   await page.getByRole("button", { name: "Save Quote Sheet", exact: true }).click();
 
-  await expect.poll(() => quoteUpdateRequests).toBe(1);
-  expect(lineUpdateRequests).toBe(0);
+  await expect.poll(() => quoteSheetRequests).toBe(1);
   await expect(page.getByText("Quote changes were not saved. Your draft is ready to retry.")).toBeVisible();
   await expect(page.getByText("Quote updated.")).toHaveCount(0);
   await expect(page.getByLabel("Quote title")).toHaveValue("Metadata failure draft title");
