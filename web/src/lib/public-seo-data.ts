@@ -10,6 +10,7 @@ export const PUBLIC_BASIC_PLAN = {
 export const PUBLIC_ROUTE_PATHS = [
   "/",
   "/pricing",
+  "/services",
   "/solutions",
   "/about",
   "/support",
@@ -33,12 +34,12 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    title: "Contractor Quoting and Estimating Software | QuoteFly",
+    title: "Easy Quoting Software for Contractors | QuoteFly",
     description:
-      "QuoteFly helps small contractors add customers, build estimates, create branded quote PDFs, and manage follow-up from one mobile-friendly workspace.",
-    heading: "Contractor quoting software built for field teams",
+      "The easiest quoting software for on-the-go contractors and professionals. Manage customers, build estimates, create branded PDFs, and follow up from any device.",
+    heading: "The easiest quoting software for on-the-go contractors and professionals",
     summary:
-      "Add a customer, price the work, review the customer-facing quote, and share a branded PDF from one practical workflow.",
+      "Manage a customer, price the work, review the customer-facing quote, and share a branded PDF from one clean mobile workflow.",
     schemaType: "SoftwareApplication",
   },
   "/pricing": {
@@ -50,6 +51,16 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
     summary:
       "Start with the current Basic plan for customer intake, quote creation, branded PDFs, and quote tracking.",
     schemaType: "SoftwareApplication",
+  },
+  "/services": {
+    path: "/services",
+    title: "Customer Management and Quoting Services | QuoteFly",
+    description:
+      "Explore QuoteFly customer management, estimates, branded quote PDFs, sharing, follow-up, and pipeline analytics for small contractors.",
+    heading: "Customer management and quoting services in one simple app",
+    summary:
+      "Move from customer intake to a reviewed estimate, branded quote PDF, and practical follow-up in one mobile-friendly service.",
+    schemaType: "CollectionPage",
   },
   "/solutions": {
     path: "/solutions",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { canTrackAnalytics } from "./cookie-consent";
+import { canTrackAnalytics, subscribeToCookieConsent } from "./cookie-consent";
 
 type AnalyticsEvent = {
   name: string;
@@ -25,6 +25,18 @@ function ensureFlushTimer() {
   if (flushTimer) return;
   flushTimer = setInterval(flush, FLUSH_INTERVAL_MS);
 }
+
+export function resetAnalyticsState() {
+  EVENT_BUFFER.splice(0, EVENT_BUFFER.length);
+  if (flushTimer) {
+    clearInterval(flushTimer);
+    flushTimer = null;
+  }
+}
+
+subscribeToCookieConsent(() => {
+  if (!canTrackAnalytics()) resetAnalyticsState();
+});
 
 export function trackEvent(name: string, properties?: AnalyticsEvent["properties"]) {
   if (!canTrackAnalytics()) return;

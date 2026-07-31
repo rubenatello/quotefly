@@ -57,13 +57,25 @@ export async function applyQuoteSheetLineMutations(
   }
 
   if (input.creates.length > 0) {
+    const lastLineItem = await tx.quoteLineItem.findFirst({
+      where: {
+        quoteId: input.quoteId,
+        tenantId: input.tenantId,
+        deletedAtUtc: null,
+      },
+      orderBy: [{ position: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      select: { position: true },
+    });
+    const firstPosition = (lastLineItem?.position ?? -1) + 1;
+
     await tx.quoteLineItem.createMany({
-      data: input.creates.map((line) => ({
+      data: input.creates.map((line, index) => ({
         tenantId: input.tenantId,
         quoteId: input.quoteId,
         description: line.description,
         sectionType: line.sectionType,
         sectionLabel: line.sectionLabel?.trim() || null,
+        position: firstPosition + index,
         quantity: line.quantity,
         unitCost: line.unitCost,
         unitPrice: line.unitPrice,

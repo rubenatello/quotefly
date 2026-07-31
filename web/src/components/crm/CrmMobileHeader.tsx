@@ -1,11 +1,14 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Command, FilePlus2, LifeBuoy, MoreHorizontal, Search, UserPlus2 } from "lucide-react";
+import type { Ref } from "react";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 
 interface CrmMobileHeaderProps {
   mobileOpen: boolean;
+  backgroundInert: boolean;
+  menuButtonRef: Ref<HTMLButtonElement>;
   onToggleMobile: () => void;
   onOpenCommand: () => void;
   onNavigate: (page: string) => void;
@@ -16,6 +19,8 @@ interface CrmMobileHeaderProps {
 
 export function CrmMobileHeader({
   mobileOpen,
+  backgroundInert,
+  menuButtonRef,
   onToggleMobile,
   onOpenCommand,
   onNavigate,
@@ -24,14 +29,21 @@ export function CrmMobileHeader({
   currentLabel,
 }: CrmMobileHeaderProps) {
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/96 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden">
+    <header
+      aria-hidden={backgroundInert || undefined}
+      inert={backgroundInert || undefined}
+      className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/96 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden"
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={onToggleMobile}
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700"
             aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+            aria-controls="quotefly-workspace-navigation"
+            aria-expanded={mobileOpen}
           >
             {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
           </button>

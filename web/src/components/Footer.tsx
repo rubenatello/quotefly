@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 
 const PRODUCT_LINKS = [
+  { label: "Services", to: "/services" },
   { label: "Pricing", to: "/pricing" },
   { label: "Solutions", to: "/solutions" },
   { label: "About", to: "/about" },
@@ -45,7 +46,7 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-slate-900">Product</h4>
+            <h2 className="font-semibold text-slate-900">Product</h2>
             <ul className="mt-4 space-y-2 text-sm text-slate-600">
               {PRODUCT_LINKS.map((link) => (
                 <li key={link.to}>
@@ -58,7 +59,7 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-slate-900">Legal</h4>
+            <h2 className="font-semibold text-slate-900">Legal and privacy</h2>
             <ul className="mt-4 space-y-2 text-sm text-slate-600">
               {LEGAL_LINKS.map((link) => (
                 <li key={link.to}>
@@ -72,7 +73,7 @@ export function Footer() {
         </div>
 
         <div className="mt-8 border-t border-slate-200 pt-8 text-center text-sm text-slate-500">
-          <p>&copy; {currentYear} QuoteFly. All rights reserved.</p>
+          <p>&copy; {currentYear} QuoteFly. All rights reserved. You can change optional analytics choices at any time in Cookie Policy.</p>
         </div>
       </div>
     </footer>

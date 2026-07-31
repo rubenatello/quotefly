@@ -187,15 +187,18 @@ model Tenant {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  fullName      String
-  passwordHash  String
-  createdAt     DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime       @updatedAt @db.Timestamptz(3)
-  deletedAtUtc  DateTime?      @db.Timestamptz(3)
-  tenantLink    TenantUser[]
-  aiUsageEvents AiUsageEvent[]
+  id                   String         @id @default(cuid())
+  email                String         @unique
+  fullName             String
+  passwordHash         String
+  legalAcceptedAtUtc   DateTime?      @db.Timestamptz(3)
+  termsVersion         String?
+  privacyPolicyVersion String?
+  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
+  deletedAtUtc         DateTime?      @db.Timestamptz(3)
+  tenantLink           TenantUser[]
+  aiUsageEvents        AiUsageEvent[]
 
   @@index([deletedAtUtc])
 }
@@ -384,6 +387,7 @@ model QuoteLineItem {
   description  String
   sectionType  QuoteLineSectionType @default(INCLUDED)
   sectionLabel String?
+  position     Int                  @default(0)
   quantity     Decimal              @db.Decimal(10, 2)
   unitCost     Decimal              @db.Decimal(10, 2)
   unitPrice    Decimal              @db.Decimal(10, 2)
@@ -393,6 +397,7 @@ model QuoteLineItem {
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([quoteId, tenantId])
+  @@index([quoteId, tenantId, position])
   @@index([tenantId, deletedAtUtc])
 }
 

@@ -23,9 +23,14 @@ async function seedQuotePair(request: Parameters<typeof signUpViaApi>[0], prefix
 
 test.describe("quote route selection", () => {
   test("direct route remains authoritative when the quote list returns another quote first", async ({ context, page, request }) => {
+    test.setTimeout(60_000);
     const seeded = await seedQuotePair(request, "Direct Route");
     await addSessionCookie(context, seeded.account);
     let otherDetailRequests = 0;
+    let releaseTarget = () => {};
+    let markTargetStarted = () => {};
+    const targetGate = new Promise<void>((resolve) => { releaseTarget = resolve; });
+    const targetStarted = new Promise<void>((resolve) => { markTargetStarted = resolve; });
 
     await page.route("**/v1/quotes?**", (route) =>
       route.fulfill({
@@ -46,7 +51,8 @@ test.describe("quote route selection", () => {
         return;
       }
       if (path === `/v1/quotes/${seeded.target.id}`) {
-        await new Promise((resolve) => setTimeout(resolve, 450));
+        markTargetStarted();
+        await targetGate;
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ quote: seeded.targetDetail }) });
         return;
       }
@@ -54,8 +60,10 @@ test.describe("quote route selection", () => {
     });
 
     await page.goto(`/app/quotes/${seeded.target.id}`);
-    await expect(page.getByTestId("quote-detail-loading")).toBeVisible();
+    await targetStarted;
+    await expect(page.getByTestId("quote-detail-loading")).toBeVisible({ timeout: 30_000 });
     await expect(page).toHaveURL(new RegExp(`/app/quotes/${seeded.target.id}$`));
+    releaseTarget();
     await expect(page.getByRole("heading", { name: seeded.target.title })).toBeVisible();
     await expect(page.getByRole("heading", { name: seeded.other.title })).toHaveCount(0);
     expect(otherDetailRequests).toBe(0);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   PUBLIC_BASIC_PLAN,
   PUBLIC_OG_IMAGE_URL,
@@ -11,7 +12,7 @@ import {
   publicCanonicalUrl,
 } from "../src/lib/public-seo-data";
 
-const webRoot = new URL("..", import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1));
+const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(webRoot, "dist");
 
 function extract(html: string, expression: RegExp, label: string): string {

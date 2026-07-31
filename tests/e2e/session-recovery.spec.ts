@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { addSessionCookie, apiBaseUrl, signUpViaApi } from "./helpers";
+import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
 async function readSessionPayload(page: Page, cookieHeader: string) {
   const response = await page.request.get(`${apiBaseUrl}/v1/auth/me`, {
@@ -11,9 +12,9 @@ async function readSessionPayload(page: Page, cookieHeader: string) {
 
 test.describe("session recovery", () => {
   for (const publicRoute of [
-    { path: "/", heading: "Contractor quoting software and estimating software built for field teams" },
-    { path: "/pricing", heading: "Contractor quoting software pricing" },
-    { path: "/support", heading: "Support" },
+    { path: "/" as const, heading: PUBLIC_ROUTE_SEO["/"].heading },
+    { path: "/pricing" as const, heading: PUBLIC_ROUTE_SEO["/pricing"].heading },
+    { path: "/support" as const, heading: PUBLIC_ROUTE_SEO["/support"].heading },
   ]) {
     test(`keeps ${publicRoute.path} available when the session API is degraded`, async ({ page }) => {
       await page.route("**/v1/auth/me", (route) =>

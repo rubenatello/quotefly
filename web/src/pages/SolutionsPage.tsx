@@ -101,11 +101,39 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
   return (
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Estimating workflows for small contractor teams</h1>
-          <p className="text-lg text-slate-600">
-            Whether you install HVAC systems or manage landscaping crews, QuoteFly adapts contractor quoting software workflows to real-world field operations.
-          </p>
+        <div className="mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Services and solutions by trade</p>
+            <h1 className="mt-3 text-4xl font-bold text-slate-900 sm:text-5xl">Estimating workflows for small contractor teams</h1>
+            <p className="mt-5 text-lg text-slate-600">
+              Whether you install HVAC systems or manage landscaping crews, QuoteFly keeps customer intake, estimating, quote delivery, and follow-up in one field-ready workflow.
+            </p>
+            <nav aria-label="Trade solutions" className="mt-6 flex flex-wrap gap-2">
+              {solutions.map((solution) => (
+                <a
+                  key={solution.id}
+                  href={`#${solution.id}`}
+                  className="inline-flex min-h-11 items-center rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-quotefly-blue hover:text-quotefly-blue"
+                >
+                  {solution.name}
+                </a>
+              ))}
+            </nav>
+          </div>
+          <figure className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
+            <img
+              src="/quote-workflow.jpg"
+              alt="Illustration of a contractor moving from customer lookup to estimate and quote sharing"
+              width="1280"
+              height="960"
+              loading="eager"
+              decoding="async"
+              className="h-auto w-full"
+            />
+            <figcaption className="border-t border-slate-100 px-4 py-2 text-center text-xs text-slate-500">
+              One connected workflow for customer management, estimating, and quote delivery.
+            </figcaption>
+          </figure>
         </div>
       </section>
 
@@ -114,12 +142,11 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
           {solutions.map((solution, idx) => (
             <div
               key={solution.id}
-              className={`overflow-hidden rounded-lg border border-slate-200 bg-white transition-colors hover:border-slate-300 ${
-                idx % 2 === 0 ? "" : "lg:flex-row-reverse"
-              }`}
+              id={solution.id}
+              className="scroll-mt-24 overflow-hidden rounded-lg border border-slate-200 bg-white transition-colors hover:border-slate-300"
             >
               <div className="grid gap-8 md:grid-cols-2">
-                <div className="flex flex-col justify-between p-8">
+                <div className={`flex flex-col justify-between p-6 sm:p-8 ${idx % 2 === 0 ? "" : "md:order-2"}`}>
                   <div>
                     <div className="mb-4 flex items-center gap-3">
                       <div>{solution.icon}</div>
@@ -148,7 +175,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                   </button>
                 </div>
 
-                <div className="flex items-center border-t border-slate-200 bg-slate-50 p-8 md:border-l md:border-t-0">
+                <div className={`flex items-center border-t border-slate-200 bg-slate-50 p-6 sm:p-8 md:border-t-0 ${idx % 2 === 0 ? "md:border-l" : "md:order-1 md:border-r"}`}>
                   <div>
                     <h3 className="mb-4 font-semibold text-slate-900">Example workflow:</h3>
                     <p className="text-sm italic text-slate-700">"{solution.example}"</p>

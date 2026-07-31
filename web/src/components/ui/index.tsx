@@ -258,7 +258,7 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 /* ─────────────────────────── EMPTY STATE ─────────────────────────── */
 
-export function EmptyState({ icon, title, description }: { icon?: ReactNode; title: string; description?: string }) {
+export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-5 py-8 text-center">
       {icon && <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-400">
@@ -266,6 +266,7 @@ export function EmptyState({ icon, title, description }: { icon?: ReactNode; tit
       </span>}
       <p className="text-sm font-medium text-slate-600">{title}</p>
       {description && <p className="mt-1 text-xs text-slate-500">{description}</p>}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }

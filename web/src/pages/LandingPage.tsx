@@ -119,11 +119,11 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           </div>
 
           <h1 className="mb-6 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
-            Contractor quoting software built for field teams
+            The easiest quoting software for on-the-go contractors and professionals
           </h1>
 
           <p className="mb-8 text-lg text-slate-600 sm:text-xl">
-            QuoteFly gives contractors one place to intake customers, build estimates, send branded quotes, and track follow-up without workflow drag.
+            Manage customers, build clear estimates, send branded quote PDFs, and keep follow-up moving from your phone, tablet, or desktop.
           </p>
 
           <div className="flex flex-col gap-4 sm:flex-row sm:justify-center lg:justify-start">
@@ -144,7 +144,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <figure className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
             <img
               src="/quote-workflow.jpg"
-              alt="QuoteFly mobile workflow showing customer lookup, estimate line items, and quote sharing"
+              alt="Illustration of QuoteFly customer lookup, estimate building, and quote sharing on a phone"
               width="1280"
               height="960"
               loading="eager"
@@ -152,6 +152,9 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
               decoding="async"
               className="h-auto w-full"
             />
+            <figcaption className="border-t border-slate-100 px-4 py-2 text-center text-xs text-slate-500">
+              An illustrative look at the customer-to-quote workflow. The current interface may vary.
+            </figcaption>
           </figure>
         </div>
       </section>

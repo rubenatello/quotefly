@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { FilePlus2, MoreHorizontal, Plus, Search, UserPlus2 } from "lucide-react";
+import { FilePlus2, MoreHorizontal, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
@@ -34,12 +34,12 @@ const OPERATIONS_LINKS: readonly CrmNavLink[] = [
   { label: "Customers", path: "customers", icon: <CustomerIcon size={15} /> },
   { label: "Quotes", path: "quotes", icon: <QuoteIcon size={15} /> },
   { label: "Analytics", path: "analytics", icon: <AnalyticsIcon size={15} /> },
-  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
 ] as const;
 
 const SETTINGS_LINKS: readonly CrmNavLink[] = [
-  { label: "Org", path: "settings", icon: <SettingsIcon size={14} /> },
-  { label: "Users", path: "settings-users", icon: <CustomerIcon size={14} /> },
+  { label: "Business", path: "settings", icon: <SettingsIcon size={14} /> },
+  { label: "Team", path: "settings-users", icon: <CustomerIcon size={14} /> },
+  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
 ];
 
 const PAGE_META: Record<string, { label: string; hint: string }> = {
@@ -68,7 +68,7 @@ const PAGE_META: Record<string, { label: string; hint: string }> = {
     hint: "Handle organization billing, launch-plan access, and workspace controls.",
   },
   "settings-users": {
-    label: "Users",
+    label: "Team",
     hint: "Manage roles, seats, and member access.",
   },
 };
@@ -88,13 +88,55 @@ export function CrmShell({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
-    return savedValue === null || savedValue === "true";
+    return savedValue === "true";
   });
   const [commandOpen, setCommandOpen] = useState(false);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileDrawerWasOpenRef = useRef(false);
 
   useEffect(() => {
     localStorage.setItem("qf_sidebar_collapsed", sidebarCollapsed ? "true" : "false");
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    const desktopMediaQuery = window.matchMedia("(min-width: 1024px)");
+    const closeMobileDrawerAtDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileOpen(false);
+    };
+
+    desktopMediaQuery.addEventListener("change", closeMobileDrawerAtDesktop);
+    return () => desktopMediaQuery.removeEventListener("change", closeMobileDrawerAtDesktop);
+  }, []);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      mobileDrawerWasOpenRef.current = true;
+      return;
+    }
+
+    if (!mobileDrawerWasOpenRef.current) return;
+    mobileDrawerWasOpenRef.current = false;
+
+    if (window.matchMedia("(min-width: 1024px)").matches) return;
+    window.requestAnimationFrame(() => mobileMenuTriggerRef.current?.focus());
+  }, [mobileOpen]);
 
   const handleNavigate = (page: string) => {
     onNavigate(page);
@@ -102,15 +144,27 @@ export function CrmShell({
     setCommandOpen(false);
   };
 
+  const handleQuickAction = (action: "new-customer" | "new-quote") => {
+    setMobileOpen(false);
+    onQuickAction(action);
+  };
+
+  const handleToggleMobile = () => {
+    setCommandOpen(false);
+    setMobileOpen((open) => !open);
+  };
+
   const pageMeta = PAGE_META[currentPage] ?? PAGE_META.customers;
   return (
     <div className="min-h-screen bg-slate-50">
       <CrmMobileHeader
         mobileOpen={mobileOpen}
-        onToggleMobile={() => setMobileOpen((open) => !open)}
+        backgroundInert={mobileOpen}
+        menuButtonRef={mobileMenuTriggerRef}
+        onToggleMobile={handleToggleMobile}
         onOpenCommand={() => setCommandOpen(true)}
         onNavigate={handleNavigate}
-        onQuickAction={onQuickAction}
+        onQuickAction={handleQuickAction}
         onLogout={onLogout}
         currentLabel={pageMeta.label}
       />
@@ -118,7 +172,7 @@ export function CrmShell({
         open={commandOpen}
         onOpenChange={setCommandOpen}
         onNavigate={(page) => handleNavigate(page)}
-        onQuickAction={onQuickAction}
+        onQuickAction={handleQuickAction}
       />
 
       <div
@@ -131,8 +185,8 @@ export function CrmShell({
           mobileOpen={mobileOpen}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+          onCloseMobile={() => setMobileOpen(false)}
           onNavigate={handleNavigate}
-          onQuickAction={onQuickAction}
           operationsLinks={OPERATIONS_LINKS}
           settingsLinks={SETTINGS_LINKS}
           onLogout={onLogout}
@@ -146,12 +200,18 @@ export function CrmShell({
           <button
             type="button"
             aria-label="Close navigation"
+            aria-hidden="true"
+            tabIndex={-1}
             onClick={() => setMobileOpen(false)}
             className="fixed inset-0 z-40 bg-black/40 lg:hidden"
           />
         )}
 
-        <div className="min-w-0">
+        <div
+          aria-hidden={mobileOpen || undefined}
+          inert={mobileOpen || undefined}
+          className="min-w-0"
+        >
           <div className="sticky top-0 z-30 hidden border-b border-slate-200/80 bg-white/96 lg:block">
             <div className="flex w-full items-center justify-between gap-4 px-5 py-2 xl:px-8 2xl:px-10">
               <div className="min-w-0">
@@ -164,39 +224,14 @@ export function CrmShell({
               </div>
 
               <div className="flex items-center gap-2">
-                <DropdownMenuPrimitive.Root>
-                  <DropdownMenuPrimitive.Trigger asChild>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-2 rounded-xl border border-quotefly-blue bg-quotefly-blue px-3.5 py-2 text-sm font-medium text-white transition hover:bg-[#256fbf]"
-                    >
-                      <Plus size={15} />
-                      New
-                    </button>
-                  </DropdownMenuPrimitive.Trigger>
-                  <DropdownMenuPrimitive.Portal>
-                    <DropdownMenuPrimitive.Content
-                      align="end"
-                      sideOffset={12}
-                      className="z-[130] min-w-[220px] rounded-[24px] border border-slate-200 bg-white p-2 shadow-[0_20px_44px_rgba(15,23,42,0.18)]"
-                    >
-                      <DropdownMenuPrimitive.Item
-                        onSelect={() => onQuickAction("new-customer")}
-                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
-                      >
-                        <UserPlus2 size={15} className="text-quotefly-blue" />
-                        New customer
-                      </DropdownMenuPrimitive.Item>
-                      <DropdownMenuPrimitive.Item
-                        onSelect={() => onQuickAction("new-quote")}
-                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
-                      >
-                        <FilePlus2 size={15} className="text-quotefly-blue" />
-                        New quote
-                      </DropdownMenuPrimitive.Item>
-                    </DropdownMenuPrimitive.Content>
-                  </DropdownMenuPrimitive.Portal>
-                </DropdownMenuPrimitive.Root>
+                <button
+                  type="button"
+                  onClick={() => handleQuickAction("new-quote")}
+                  className="inline-flex items-center gap-2 rounded-xl border border-quotefly-blue bg-quotefly-blue px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-[#256fbf]"
+                >
+                  <FilePlus2 size={15} />
+                  New quote
+                </button>
 
                 <button
                   type="button"

@@ -12,13 +12,14 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 15_000 });
 
   await page.getByLabel("Quote title").fill("Mobile navigation-safe draft");
+  await page.getByRole("button", { name: "Show details" }).click();
   await page.getByLabel("Quote overview").fill("Keep this mobile scope across navigation and refresh.");
   const firstRow = page.getByTestId("quote-line-row-1");
   await firstRow.locator('[aria-label="Line 1 title"]:visible').fill("Mobile saved line");
   await firstRow.locator('[aria-label="Line 1 quantity"]:visible').fill("2");
   await firstRow.locator('[aria-label="Line 1 price"]:visible').fill("325");
   await page.getByRole("button", { name: "Preview", exact: true }).first().click();
-  await expect(page.getByRole("button", { name: "Edit Quote" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit Quote" }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Add Customer" }).first().click();
   const customerDialog = page.getByRole("dialog", { name: /add customer fast/i });
@@ -37,7 +38,7 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(restoredDialog.getByLabel("Email")).toHaveValue("mobile-draft@example.com");
   await expect(restoredDialog.getByLabel("Customer notes")).toHaveValue("Gate code survives refresh.");
   await restoredDialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByRole("button", { name: "Edit Quote" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit Quote" }).first()).toBeVisible();
 
   await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Customers", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/customers/);
@@ -46,9 +47,11 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(page.getByTestId("quote-builder-draft-status")).toContainText("Draft restored");
   await expect(page.getByLabel("Quote title")).toHaveValue("Mobile navigation-safe draft");
   await expect(page.getByLabel("Quote overview")).toHaveValue("Keep this mobile scope across navigation and refresh.");
-  await page.getByRole("button", { name: "Edit Quote" }).click();
-  await expect(page.getByTestId("quote-line-row-1").locator('[aria-label="Line 1 title"]:visible')).toHaveValue("Mobile saved line");
-  await expect(page.getByTestId("quote-line-row-1").locator('[aria-label="Line 1 quantity"]:visible')).toHaveValue("2");
+  await page.getByRole("button", { name: "Edit Quote" }).first().click();
+  const restoredFirstRow = page.getByTestId("quote-line-row-1");
+  await restoredFirstRow.getByRole("button").first().click();
+  await expect(restoredFirstRow.locator('[aria-label="Line 1 title"]:visible')).toHaveValue("Mobile saved line");
+  await expect(restoredFirstRow.locator('[aria-label="Line 1 quantity"]:visible')).toHaveValue("2");
 
   const startOver = page.getByRole("button", { name: "Discard saved quote draft and start over" });
   expect((await startOver.boundingBox())?.height).toBeGreaterThanOrEqual(44);

@@ -41,7 +41,7 @@ export function BottomTabBar() {
         key={tab.path}
         type="button"
         onClick={() => navigate(tab.path)}
-        className={`relative flex min-h-[64px] flex-col items-center justify-center py-2 text-[9px] font-medium transition-colors ${
+        className={`relative flex min-h-[64px] flex-col items-center justify-center py-2 text-[10px] font-medium transition-colors ${
           active
             ? "text-quotefly-blue"
             : "text-slate-500 hover:text-slate-700"
@@ -64,15 +64,15 @@ export function BottomTabBar() {
         <button
           type="button"
           onClick={() => navigate("/app/build")}
-          className="relative flex min-h-[64px] flex-col items-center justify-center text-[9px] font-semibold text-quotefly-blue"
-          aria-label="Quick quote"
+          className="relative flex min-h-[64px] flex-col items-center justify-center text-[10px] font-semibold text-quotefly-blue"
+          aria-label="New quote"
           aria-current={location.pathname.startsWith("/app/build") ? "page" : undefined}
           data-testid="mobile-quick-quote"
         >
           <span className="mb-1 inline-flex h-10 w-10 -translate-y-1 items-center justify-center rounded-2xl bg-quotefly-blue text-white shadow-[0_8px_20px_rgba(47,111,214,0.3)]">
             <FilePlus2 size={20} />
           </span>
-          <span className="absolute bottom-2 whitespace-nowrap leading-none">Quick</span>
+          <span className="absolute bottom-2 whitespace-nowrap leading-none">New quote</span>
         </button>
         {SECONDARY_TABS.map(renderTab)}
       </div>

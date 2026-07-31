@@ -10,8 +10,8 @@
   --color-quotefly-blue: #2f6fd6;
   --color-quotefly-orange: #f28c28;
   --color-quotefly-gold: #4c5fa8;
-  --font-sans: "DM Sans", sans-serif;
-  --font-display: "Outfit", "DM Sans", sans-serif;
+  --font-sans: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 :root {
@@ -58,7 +58,7 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  font-family: "DM Sans", "Segoe UI", sans-serif;
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   letter-spacing: -0.01em;
   font-feature-settings: "ss01" 1, "cv10" 1, "cv11" 1;
   color: #0f172a;
@@ -70,7 +70,7 @@ h2,
 h3,
 h4,
 .font-display {
-  font-family: "Outfit", "DM Sans", sans-serif;
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 #root {

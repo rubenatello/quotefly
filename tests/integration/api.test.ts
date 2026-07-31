@@ -128,6 +128,9 @@ async function signUp(label: string): Promise<AuthSession> {
       companyName: `${label} QuoteFly Services ${unique}`,
       primaryTrade: "ROOFING",
       generateLogoIfMissing: false,
+      acceptedLegalTerms: true,
+      termsVersion: "2026-07-30",
+      privacyPolicyVersion: "2026-07-30",
     },
   });
 

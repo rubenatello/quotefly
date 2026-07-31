@@ -282,6 +282,7 @@ export function QuoteBuilderView() {
   const keepDraftButtonRef = useRef<HTMLButtonElement | null>(null);
   const latestDraftRef = useRef<BuilderDraftData | null>(null);
   const quoteCreationCompletedRef = useRef(false);
+  const draftRecoveryStorageKeyRef = useRef<string | null>(null);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
@@ -382,7 +383,10 @@ export function QuoteBuilderView() {
     let hydrationDeferred = false;
     quoteCreationCompletedRef.current = false;
     setDraftRestored(false);
-    setDraftRecoveryMessage(null);
+    if (draftRecoveryStorageKeyRef.current !== draftStorageKey) {
+      draftRecoveryStorageKeyRef.current = draftStorageKey;
+      setDraftRecoveryMessage(null);
+    }
     try {
       const raw = readQuoteBuilderDraft(draftStorageKey);
       if (!raw) {
@@ -906,6 +910,9 @@ export function QuoteBuilderView() {
     track("builder_quote_create");
     const createdQuote = await createQuoteDraftFromForm({
       quoteOverride: {
+        scopeText:
+          quoteForm.scopeText.trim() ||
+          linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n"),
         internalCostSubtotal: internalSubtotal.toFixed(2),
         customerPriceSubtotal: customerSubtotal.toFixed(2),
       },
@@ -1572,7 +1579,7 @@ function DraftLineEditorRow({
       : "border-slate-200 bg-slate-100 text-slate-600";
 
   useEffect(() => {
-    setExpanded(startExpanded ?? false);
+    if (startExpanded) setExpanded(true);
   }, [line.id, startExpanded]);
 
   function updateSectionType(nextSectionType: "INCLUDED" | "ALTERNATE") {

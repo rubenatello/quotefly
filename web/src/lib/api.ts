@@ -832,6 +832,9 @@ export const api = {
       primaryTrade: ServiceType;
       logoUrl?: string;
       generateLogoIfMissing?: boolean;
+      acceptedLegalTerms: true;
+      termsVersion: string;
+      privacyPolicyVersion: string;
     }) => request<AuthPayload>("/v1/auth/signup", { method: "POST", body: JSON.stringify(body) }),
 
     signin: (body: { email: string; password: string }) =>

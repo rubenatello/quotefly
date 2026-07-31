@@ -33,7 +33,7 @@ type ActivityItem = {
   icon: ReactNode;
 };
 
-type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
+type QuoteLifecycleStage = "DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED";
 type RangePreset = "last_week" | "last_month" | "this_month" | "last_90" | "custom";
 
 type DateRange = {
@@ -45,7 +45,7 @@ const DEFAULT_PRESET: RangePreset = "last_week";
 const CHART_HEIGHT = 224;
 
 const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
-  { value: "last_week", label: "Last week" },
+  { value: "last_week", label: "Last 7 days" },
   { value: "last_month", label: "Last month" },
   { value: "this_month", label: "This month" },
   { value: "last_90", label: "Last 90 days" },
@@ -165,18 +165,35 @@ function lifecycleStage(quote: Quote): QuoteLifecycleStage {
   );
 
   if (syncedInvoice) return "INVOICED";
-  if (quote.status === "ACCEPTED" || quote.status === "REJECTED") return "CLOSED";
+  if (quote.status === "ACCEPTED") return "ACCEPTED";
+  if (quote.status === "REJECTED") return "DECLINED";
   if (quote.status === "SENT_TO_CUSTOMER") return "SENT";
-  if (quote.status === "READY_FOR_REVIEW") return "COMPLETED";
+  if (quote.status === "READY_FOR_REVIEW") return "READY";
   return "DRAFT";
 }
 
 function lifecycleLabel(stage: QuoteLifecycleStage) {
   if (stage === "DRAFT") return "Draft";
-  if (stage === "COMPLETED") return "Completed";
+  if (stage === "READY") return "Ready to send";
   if (stage === "SENT") return "Sent";
-  if (stage === "CLOSED") return "Closed";
+  if (stage === "ACCEPTED") return "Accepted";
+  if (stage === "DECLINED") return "Declined";
   return "Invoiced";
+}
+
+function lifecycleInitial(stage: QuoteLifecycleStage) {
+  if (stage === "READY") return "R";
+  if (stage === "ACCEPTED") return "A";
+  if (stage === "DECLINED") return "X";
+  return stage[0];
+}
+
+function lifecycleColorClass(stage: QuoteLifecycleStage, bar = false) {
+  if (stage === "DRAFT") return bar ? "bg-slate-700" : "border-slate-700 bg-slate-700 text-white";
+  if (stage === "READY") return bar ? "bg-[#2559b8]" : "border-[#2559b8] bg-[#2559b8] text-white";
+  if (stage === "SENT") return bar ? "bg-[#d97706]" : "border-[#d97706] bg-[#d97706] text-white";
+  if (stage === "DECLINED") return bar ? "bg-red-600" : "border-red-600 bg-red-600 text-white";
+  return bar ? "bg-emerald-600" : "border-emerald-600 bg-emerald-600 text-white";
 }
 
 function lifecycleCountMap(quotes: Quote[]) {
@@ -185,12 +202,12 @@ function lifecycleCountMap(quotes: Quote[]) {
       accumulator[lifecycleStage(quote)] += 1;
       return accumulator;
     },
-    { DRAFT: 0, COMPLETED: 0, SENT: 0, CLOSED: 0, INVOICED: 0 },
+    { DRAFT: 0, READY: 0, SENT: 0, ACCEPTED: 0, DECLINED: 0, INVOICED: 0 },
   );
 }
 
 function firstResponseHours(customer: Customer, quotes: Quote[]) {
-  const candidateTimes = [customer.followUpUpdatedAtUtc, ...quotes.map((quote) => quote.sentAt ?? quote.createdAt)]
+  const candidateTimes = [customer.followUpUpdatedAtUtc, ...quotes.map((quote) => quote.sentAt)]
     .filter(Boolean)
     .map((value) => new Date(value as string).getTime())
     .filter((value) => Number.isFinite(value))
@@ -294,14 +311,14 @@ function MetricCard({
           : "border-[#334155] bg-[#334155]";
 
   return (
-    <div className={`rounded-2xl border px-4 py-4 text-white ${toneClasses}`}>
+    <div className={`rounded-xl border px-3 py-3 text-white sm:rounded-2xl sm:px-4 sm:py-4 ${toneClasses}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-[1.9rem]">{value}</p>
-          <p className="mt-1 text-xs leading-5 text-white/70">{hint}</p>
+          <p className="mt-2 text-xl font-bold tracking-tight text-white sm:text-[1.9rem]">{value}</p>
+          <p className="mt-1 hidden text-xs leading-5 text-white/70 sm:block">{hint}</p>
         </div>
-        <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white sm:h-10 sm:w-10">
           {icon}
         </span>
       </div>
@@ -461,8 +478,8 @@ function LifecycleMix({ quotes }: { quotes: Quote[] }) {
           <div key={stage} className="space-y-1.5">
             <div className="flex items-center justify-between gap-3 text-sm">
               <div className="flex items-center gap-2">
-                <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${stage === "DRAFT" ? "border-slate-700 bg-slate-700 text-white" : stage === "COMPLETED" ? "border-[#2559b8] bg-[#2559b8] text-white" : stage === "SENT" ? "border-[#d97706] bg-[#d97706] text-white" : stage === "CLOSED" ? "border-[#2b7aa5] bg-[#2b7aa5] text-white" : "border-emerald-600 bg-emerald-600 text-white"}`}>
-                  {stage === "CLOSED" ? "CL" : stage[0]}
+                <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleColorClass(stage)}`}>
+                  {lifecycleInitial(stage)}
                 </span>
                 <span className="font-medium text-slate-700">{lifecycleLabel(stage)}</span>
               </div>
@@ -470,7 +487,7 @@ function LifecycleMix({ quotes }: { quotes: Quote[] }) {
             </div>
             <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
               <div
-                className={`h-full rounded-full ${stage === "DRAFT" ? "bg-slate-700" : stage === "COMPLETED" ? "bg-[#2559b8]" : stage === "SENT" ? "bg-[#d97706]" : stage === "CLOSED" ? "bg-[#2b7aa5]" : "bg-emerald-600"}`}
+                className={`h-full rounded-full ${lifecycleColorClass(stage, true)}`}
                 style={{ width: widthPercent }}
               />
             </div>
@@ -486,7 +503,7 @@ function RangeButton({ active, label, onClick }: { active: boolean; label: strin
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex min-h-[36px] items-center justify-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+      className={`inline-flex min-h-[44px] items-center justify-center rounded-full border px-3 py-2 text-sm font-medium transition ${
         active
           ? "border-[#2559b8] bg-[#2559b8] text-white shadow-[0_8px_20px_rgba(37,89,184,0.18)]"
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
@@ -500,7 +517,6 @@ function RangeButton({ active, label, onClick }: { active: boolean; label: strin
 export function AnalyticsPage() {
   usePageView("analytics");
   const {
-    session,
     customers,
     quotes,
     loading,
@@ -516,6 +532,15 @@ export function AnalyticsPage() {
   const [rangePreset, setRangePreset] = useState<RangePreset>(DEFAULT_PRESET);
   const [customStart, setCustomStart] = useState(toDateInputValue(initialRange.start));
   const [customEnd, setCustomEnd] = useState(toDateInputValue(addDays(initialRange.endExclusive, -1)));
+  const parsedCustomStart = fromDateInputValue(customStart);
+  const parsedCustomEnd = fromDateInputValue(customEnd);
+  const customRangeError = rangePreset === "custom"
+    ? !parsedCustomStart || !parsedCustomEnd
+      ? "Choose both a start date and an end date to view custom-range analytics."
+      : parsedCustomEnd < parsedCustomStart
+        ? "End date must be on or after the start date."
+        : null
+    : null;
 
   const activeRange = useMemo(() => {
     if (rangePreset !== "custom") {
@@ -617,6 +642,17 @@ export function AnalyticsPage() {
 
   const quotesPerDay = quotesCreatedInRange.length / rangeDays;
 
+  if (loading && customers.length === 0 && quotes.length === 0) {
+    return (
+      <div className="space-y-5 sm:space-y-6">
+        <PageHeader title="Analytics" subtitle="Track response speed, quote volume, and recent activity." />
+        <Card variant="default" padding="md">
+          <div className="py-10 text-center text-sm text-slate-600" role="status">Loading workspace analytics...</div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5 sm:space-y-6">
       <PageHeader
@@ -624,7 +660,14 @@ export function AnalyticsPage() {
         subtitle="Track response speed, quote volume, and recent activity without leaving the operating workflow."
       />
 
-      {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
+      {error ? (
+        <Alert tone="error" onDismiss={() => setError(null)}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void loadAll()}>Retry</Button>
+          </div>
+        </Alert>
+      ) : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
       <Card variant="default" padding="md" className="overflow-hidden">
@@ -635,7 +678,9 @@ export function AnalyticsPage() {
             <p className="mt-1 text-sm text-slate-600">Everything below updates live as the selected window changes.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="blue" icon={<CalendarRange size={12} strokeWidth={2.1} />}>{formatRangeLabel(activeRange)}</Badge>
+            <Badge tone={customRangeError ? "orange" : "blue"} icon={<CalendarRange size={12} strokeWidth={2.1} />}>
+              {customRangeError ? "Custom range needs attention" : formatRangeLabel(activeRange)}
+            </Badge>
             <Button variant="outline" size="sm" icon={<RefreshCw size={14} />} onClick={() => void loadAll()}>
               Refresh
             </Button>
@@ -661,7 +706,7 @@ export function AnalyticsPage() {
                 type="date"
                 value={customStart}
                 onChange={(event) => setCustomStart(event.target.value)}
-                className="min-h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#2559b8] focus:outline-none focus:ring-4 focus:ring-[rgba(37,89,184,0.12)]"
+                className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#2559b8] focus:outline-none focus:ring-4 focus:ring-[rgba(37,89,184,0.12)]"
               />
             </label>
             <label className="space-y-1">
@@ -670,17 +715,27 @@ export function AnalyticsPage() {
                 type="date"
                 value={customEnd}
                 onChange={(event) => setCustomEnd(event.target.value)}
-                className="min-h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#2559b8] focus:outline-none focus:ring-4 focus:ring-[rgba(37,89,184,0.12)]"
+                className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#2559b8] focus:outline-none focus:ring-4 focus:ring-[rgba(37,89,184,0.12)]"
               />
             </label>
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              Custom range uses inclusive days. Larger windows automatically compress into weekly trend buckets.
+              {customRangeError ? (
+                <span className="font-medium text-red-700">{customRangeError}</span>
+              ) : (
+                "Custom range uses inclusive days. Larger windows automatically compress into weekly trend buckets."
+              )}
             </div>
           </div>
         ) : null}
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+      {customRangeError ? (
+        <Alert tone="error">
+          Analytics are hidden until the custom date range is corrected. {customRangeError}
+        </Alert>
+      ) : (
+        <>
+      <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <MetricCard
           label="Quotes in range"
           value={String(quotesCreatedInRange.length)}
@@ -689,16 +744,16 @@ export function AnalyticsPage() {
           tone="blue"
         />
         <MetricCard
-          label="Accepted revenue"
+          label="Won quote value"
           value={money(acceptedRevenueInRange)}
-          hint="Accepted totals closed in the selected window"
+          hint="Quote value accepted in the selected window"
           icon={<CircleDollarSign size={18} strokeWidth={2.1} />}
           tone="emerald"
         />
         <MetricCard
           label="Avg first response"
           value={describeDurationHours(averageResponseHours)}
-          hint="Time from new lead to first follow-up or quote activity"
+          hint="Time from new lead to first follow-up or quote send"
           icon={<Clock3 size={18} strokeWidth={2.1} />}
           tone="orange"
         />
@@ -735,7 +790,7 @@ export function AnalyticsPage() {
         <ChartFrame
           eyebrow="Speed trend"
           title="Lead response time"
-          subtitle={rangeDays > 31 ? "Weekly average hours from lead entry to first contact or quote activity." : "Daily average hours from lead entry to first contact or quote activity."}
+          subtitle={rangeDays > 31 ? "Weekly average hours from lead entry to first follow-up or quote send." : "Daily average hours from lead entry to first follow-up or quote send."}
           action={<Badge tone="orange" icon={<CalendarClock size={12} strokeWidth={2.1} />}>{describeDurationHint(averageResponseHours)}</Badge>}
         >
           <MinimalBarChart data={responseTimeSeries} valueFormatter={(value) => (value > 0 ? `${value.toFixed(1)}h` : "-")} />
@@ -744,31 +799,9 @@ export function AnalyticsPage() {
         <ChartFrame
           eyebrow="Snapshot"
           title="Range summary"
-          subtitle="Plan usage, lifecycle mix, and quote value for the selected window."
+          subtitle="Quote lifecycle mix and average value for the selected window."
         >
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Plan and AI usage</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge tone="blue">{session?.effectivePlanName ?? "Basic"}</Badge>
-                    {session?.isTrial ? <Badge tone="orange">Trial</Badge> : null}
-                  </div>
-                </div>
-                <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-700">
-                  <UserRoundCheck size={18} strokeWidth={2.2} />
-                </span>
-              </div>
-              {session?.usage ? (
-                <div className="mt-4 grid gap-2 text-sm text-slate-700">
-                  <p><span className="font-semibold text-slate-900">Quotes used:</span> {session.usage.monthlyQuoteCount}</p>
-                  <p><span className="font-semibold text-slate-900">AI usage:</span> {Math.round(Number(session.usage.monthlyAiSpendUsagePercent ?? 0))}% used</p>
-                  <p><span className="font-semibold text-slate-900">Est. prompts remaining:</span> {session.usage.monthlyAiEstimatedPromptsRemaining ?? "N/A"}</p>
-                </div>
-              ) : null}
-            </div>
-
             <LifecycleMix quotes={filteredQuotes} />
 
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
@@ -824,6 +857,8 @@ export function AnalyticsPage() {
           )}
         </div>
       </ChartFrame>
+        </>
+      )}
     </div>
   );
 }

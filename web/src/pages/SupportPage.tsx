@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Headphones, Mail } from "lucide-react";
 import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
+import { PUBLIC_ROUTE_SEO } from "../lib/public-seo-data";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 interface SupportPageProps {
@@ -39,7 +40,9 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
     <div className="min-h-screen bg-stone-50 text-slate-900">
       <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Support</h1>
+          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">
+            {PUBLIC_ROUTE_SEO["/support"].heading}
+          </h1>
           <p className="text-lg text-slate-600">
             When something blocks your workflow, we want the next step to be obvious.
           </p>
