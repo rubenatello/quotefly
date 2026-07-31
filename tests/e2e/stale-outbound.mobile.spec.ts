@@ -34,6 +34,7 @@ test.describe("mobile stale outbound protection", () => {
     await page.goto(`/app/quotes/${quote.id}`);
     await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
     await page.getByLabel("Quote title").fill("Mobile persisted outbound");
+    await page.getByRole("button", { name: "Show details" }).click();
     await page.getByLabel("Quote overview").fill("Mobile persisted scope before send.");
 
     const firstRow = page.getByTestId("existing-quote-line-row-1");
@@ -104,7 +105,10 @@ test.describe("mobile stale outbound protection", () => {
         return;
       }
       if (requestUrl.pathname.endsWith("/pdf")) pdfRequests += 1;
-      if (requestUrl.pathname.endsWith("/confirm-send") || requestUrl.pathname.endsWith("/outbound-events")) {
+      if (
+        route.request().method() === "POST" &&
+        (requestUrl.pathname.endsWith("/confirm-send") || requestUrl.pathname.endsWith("/outbound-events"))
+      ) {
         outboundRequests += 1;
       }
       await route.continue();

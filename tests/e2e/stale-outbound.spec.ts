@@ -124,7 +124,10 @@ test.describe("stale outbound protection", () => {
         return;
       }
       if (requestUrl.pathname.endsWith("/pdf")) pdfRequests += 1;
-      if (requestUrl.pathname.endsWith("/confirm-send") || requestUrl.pathname.endsWith("/outbound-events")) {
+      if (
+        route.request().method() === "POST" &&
+        (requestUrl.pathname.endsWith("/confirm-send") || requestUrl.pathname.endsWith("/outbound-events"))
+      ) {
         outboundRequests += 1;
       }
       await route.continue();

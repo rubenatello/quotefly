@@ -155,7 +155,7 @@ test.describe("quote builder local draft recovery", () => {
     const keys = await builderDraftKeys(page);
     const draftKey = keys[0];
     expect(draftKey).toBeTruthy();
-    await page.evaluate((key) => window.sessionStorage.setItem(key, "{not-valid-json"), draftKey!);
+    await page.addInitScript((key) => window.sessionStorage.setItem(key, "{not-valid-json"), draftKey!);
 
     await page.reload();
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 15_000 });

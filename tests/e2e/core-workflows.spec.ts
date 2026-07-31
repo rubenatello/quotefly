@@ -18,6 +18,7 @@ test.describe("controlled beta core workflow", () => {
     page,
     request,
   }) => {
+    test.setTimeout(90_000);
     const account = await signUpViaApi(request, "core");
     await addSessionCookie(context, account);
     await page.goto("/app/customers");
@@ -27,6 +28,7 @@ test.describe("controlled beta core workflow", () => {
 
     const customerLabel = uniqueRunLabel("field");
     const customerName = `Field Beta ${customerLabel}`;
+    const updatedCustomerName = `${customerName} Updated`;
     const customerPhone = "555-012-3400";
     const customerEmail = `${customerLabel}@example.com`;
 
@@ -40,6 +42,26 @@ test.describe("controlled beta core workflow", () => {
 
     await expect(customerDialog).toBeHidden();
     await expect(page.getByText(customerName).filter({ visible: true })).toBeVisible();
+
+    await page.getByText(customerName).filter({ visible: true }).first().click();
+    const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer activity history" });
+    await expect(customerWorkspaceDialog.getByText("Customer details", { exact: true })).toBeVisible();
+    await expect(customerWorkspaceDialog.getByRole("button", { name: "Save details" })).toBeDisabled();
+
+    await customerWorkspaceDialog.getByLabel("Email").fill("not-an-email");
+    await customerWorkspaceDialog.getByRole("button", { name: "Save details" }).click();
+    await expect(customerWorkspaceDialog.getByRole("alert")).toContainText(/email|invalid/i);
+
+    await customerWorkspaceDialog.getByLabel("Name").fill(updatedCustomerName);
+    await customerWorkspaceDialog.getByLabel("Email").fill(customerEmail);
+    await customerWorkspaceDialog.getByRole("button", { name: "Save details" }).click();
+    await expect(customerWorkspaceDialog.getByText("Customer details saved.", { exact: true })).toBeVisible();
+    await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
+
+    await expect(page.getByText(updatedCustomerName).filter({ visible: true })).toBeVisible();
+    await page.getByText(updatedCustomerName).filter({ visible: true }).first().click();
+    await expect(customerWorkspaceDialog.getByLabel("Name")).toHaveValue(updatedCustomerName);
+    await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
     await page.getByPlaceholder(/search customer name/i).fill(customerName);
     await expect(page.getByText(customerEmail).filter({ visible: true })).toBeVisible();
@@ -55,7 +77,7 @@ test.describe("controlled beta core workflow", () => {
     await duplicateDialog.getByRole("button", { name: "Cancel" }).click();
 
     await page.goto("/app/build");
-    await expect(page.getByTestId("quote-builder")).toBeVisible();
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 20_000 });
     await page.getByRole("textbox", { name: /find customer by name/i }).fill(customerName);
     await page
       .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") })
@@ -132,5 +154,46 @@ test.describe("controlled beta core workflow", () => {
     await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole("heading", { name: quote.title })).toBeVisible();
     await expect(page.getByTestId("existing-quote-line-row-1")).toBeVisible();
+  });
+
+  test("tablet boards do not clip and invalid analytics ranges suppress metrics", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "tablet-range");
+    const customer = await createCustomerViaApi(request, account);
+    const quote = await createQuoteViaApi(request, account, customer.id);
+    const rejectedResponse = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+      headers: { Cookie: account.cookieHeader },
+      data: { status: "REJECTED" },
+    });
+    expect(rejectedResponse.ok()).toBeTruthy();
+
+    await addSessionCookie(context, account);
+    await page.setViewportSize({ width: 1024, height: 768 });
+
+    for (const route of ["/app/customers", "/app/quotes"]) {
+      await page.goto(route);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 15_000 });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth))
+        .toBe(true);
+      if (route === "/app/customers") {
+        await expect(page.getByText("Lost", { exact: true }).filter({ visible: true }).first()).toBeVisible();
+      }
+    }
+
+    await page.goto("/app/analytics");
+    await expect(page.getByRole("heading", { level: 1, name: "Analytics" })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "Custom", exact: true }).click();
+    await page.getByLabel("Start date").fill("");
+    await expect(page.getByRole("alert")).toContainText(/analytics are hidden/i);
+    await expect(page.getByText("Quotes in range", { exact: true })).toHaveCount(0);
+
+    await page.getByLabel("Start date").fill("2026-07-30");
+    await page.getByLabel("End date").fill("2026-07-29");
+    await expect(page.getByRole("alert")).toContainText(/end date must be on or after/i);
+    await expect(page.getByText("Quotes in range", { exact: true })).toHaveCount(0);
+
+    await page.getByLabel("End date").fill("2026-07-30");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("Quotes in range", { exact: true })).toBeVisible();
   });
 });

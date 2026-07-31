@@ -1,5 +1,5 @@
-﻿import { useMemo, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FilePlus2, LifeBuoy, Search, UserPlus2, X } from "lucide-react";
+﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, LifeBuoy } from "lucide-react";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 import { CloseIcon } from "../Icons";
@@ -19,8 +19,8 @@ interface CrmSidebarProps {
   mobileOpen: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onCloseMobile: () => void;
   onNavigate: (page: string) => void;
-  onQuickAction: (action: "new-customer" | "new-quote") => void;
   operationsLinks: readonly CrmNavLink[];
   settingsLinks: readonly CrmNavLink[];
   onLogout: () => void;
@@ -46,10 +46,10 @@ function SidebarTooltip({
 export function CrmSidebar({
   currentPage,
   mobileOpen,
-  collapsed,
+  collapsed: desktopCollapsed,
   onToggleCollapse,
+  onCloseMobile,
   onNavigate,
-  onQuickAction,
   operationsLinks,
   settingsLinks,
   onLogout,
@@ -58,7 +58,10 @@ export function CrmSidebar({
   entitlements,
   usage,
 }: CrmSidebarProps) {
-  const [navQuery, setNavQuery] = useState("");
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
+  const collapsed = desktopCollapsed && !mobileOpen;
+  const isHidden = !isDesktop && !mobileOpen;
   const displayPlanName = planName ?? "Basic";
   const showTrialBadge = Boolean(isTrial);
 
@@ -70,27 +73,74 @@ export function CrmSidebar({
     (aiSpendLimitUsd && aiSpendLimitUsd > 0
       ? Math.min((aiSpendUsedUsd / aiSpendLimitUsd) * 100, 100)
       : 0);
-  const usagePercentLabel = `${Math.round(aiUsagePercent)}% used`;
+  const usagePercentLabel = useMemo(() => `${Math.round(aiUsagePercent)}% used`, [aiUsagePercent]);
   const aiRenewalLabel = formatAiRenewalDate(usage?.periodEndUtc ?? null);
   const aiPromptsRemaining = usage?.monthlyAiEstimatedPromptsRemaining ?? null;
-  const normalizedNavQuery = navQuery.trim().toLowerCase();
 
-  const filteredOperationsLinks = useMemo(
-    () => operationsLinks.filter((link) => `${link.label} ${link.path}`.toLowerCase().includes(normalizedNavQuery)),
-    [operationsLinks, normalizedNavQuery],
-  );
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 1024px)");
+    const updateViewport = () => setIsDesktop(mediaQuery.matches);
+    updateViewport();
+    mediaQuery.addEventListener("change", updateViewport);
+    return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
 
-  const filteredSettingsLinks = useMemo(
-    () => settingsLinks.filter((link) => `${link.label} ${link.path}`.toLowerCase().includes(normalizedNavQuery)),
-    [settingsLinks, normalizedNavQuery],
-  );
+  useEffect(() => {
+    if (!mobileOpen || isDesktop) return;
+    window.requestAnimationFrame(() => {
+      const sidebar = sidebarRef.current;
+      const initialFocus = sidebar?.querySelector<HTMLElement>("[data-mobile-drawer-initial-focus]");
+      (initialFocus ?? sidebar)?.focus();
+    });
+  }, [isDesktop, mobileOpen]);
 
-  const totalNavItems = filteredOperationsLinks.length + filteredSettingsLinks.length;
+  const handleDrawerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (!mobileOpen || isDesktop || event.key !== "Tab") return;
+
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+
+    const focusableElements = Array.from(
+      sidebar.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      sidebar.focus();
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    const activeElement = document.activeElement;
+
+    if (event.shiftKey && (activeElement === firstElement || !sidebar.contains(activeElement))) {
+      event.preventDefault();
+      lastElement.focus();
+      return;
+    }
+
+    if (!event.shiftKey && (activeElement === lastElement || !sidebar.contains(activeElement))) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  };
 
   return (
     <AppTooltipProvider>
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-slate-200 bg-white py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto ${sidebarWidthClass} ${
+        ref={sidebarRef}
+        id="quotefly-workspace-navigation"
+        role={!isDesktop && mobileOpen ? "dialog" : undefined}
+        aria-modal={!isDesktop && mobileOpen ? "true" : undefined}
+        aria-label="Workspace navigation"
+        aria-hidden={isHidden || undefined}
+        inert={isHidden || undefined}
+        tabIndex={-1}
+        onKeyDown={handleDrawerKeyDown}
+        className={`fixed inset-y-0 left-0 z-50 w-72 overflow-y-auto border-r border-slate-200 bg-white py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${sidebarWidthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -117,85 +167,25 @@ export function CrmSidebar({
             >
               {collapsed ? <ChevronRight size={18} strokeWidth={2.25} /> : <ChevronLeft size={18} strokeWidth={2.25} />}
             </button>
+            <button
+              type="button"
+              onClick={onCloseMobile}
+              data-mobile-drawer-initial-focus
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 lg:hidden"
+              aria-label="Close navigation"
+            >
+              <CloseIcon size={18} />
+            </button>
           </div>
-
-          {!collapsed ? (
-            <div className="space-y-3">
-              <div className="relative">
-                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-quotefly-blue" />
-                <input
-                  type="text"
-                  value={navQuery}
-                  onChange={(event) => setNavQuery(event.target.value)}
-                  placeholder="Search navigation"
-                  className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-10 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-quotefly-blue focus:bg-white focus:ring-2 focus:ring-quotefly-blue/10 sm:min-h-[36px]"
-                />
-                {navQuery ? (
-                  <button
-                    type="button"
-                    onClick={() => setNavQuery("")}
-                    aria-label="Clear navigation search"
-                    className="absolute right-1.5 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 sm:right-3 sm:h-6 sm:w-6"
-                  >
-                    <X size={13} />
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="space-y-2 border-b border-slate-200 pb-3">
-                <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Quick add</p>
-                <button
-                  type="button"
-                  onClick={() => onQuickAction("new-quote")}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-quotefly-blue bg-quotefly-blue px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-[#256fbf] sm:min-h-[40px]"
-                >
-                  <FilePlus2 size={15} />
-                  New quote
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onQuickAction("new-customer")}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white sm:min-h-[40px]"
-                >
-                  <UserPlus2 size={15} className="text-quotefly-blue" />
-                  New customer
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <SidebarTooltip label="New customer" collapsed={collapsed}>
-                <button
-                  type="button"
-                  onClick={() => onQuickAction("new-customer")}
-                  aria-label="New customer"
-                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:text-slate-900 sm:min-h-[40px]"
-                >
-                  <UserPlus2 size={16} className="text-quotefly-blue" />
-                </button>
-              </SidebarTooltip>
-              <SidebarTooltip label="New quote" collapsed={collapsed}>
-                <button
-                  type="button"
-                  onClick={() => onQuickAction("new-quote")}
-                  aria-label="New quote"
-                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-quotefly-blue bg-quotefly-blue text-white transition hover:bg-[#256fbf] sm:min-h-[40px]"
-                >
-                  <FilePlus2 size={16} />
-                </button>
-              </SidebarTooltip>
-            </div>
-          )}
 
           {!collapsed ? (
             <div className="flex items-center justify-between px-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</p>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">{totalNavItems}</span>
             </div>
           ) : null}
 
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
-            {filteredOperationsLinks.map((link) => {
+            {operationsLinks.map((link) => {
               const active = currentPage === link.path;
               const button = (
                 <button
@@ -204,6 +194,7 @@ export function CrmSidebar({
                   onClick={() => onNavigate(link.path)}
                   title={link.label}
                   aria-label={link.label}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
                     "group relative flex w-full min-h-[44px] items-center rounded-lg border text-sm font-medium transition-colors sm:min-h-[40px]",
                     active
@@ -245,7 +236,7 @@ export function CrmSidebar({
 
           {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
-            {filteredSettingsLinks.map((link) => {
+            {settingsLinks.map((link) => {
               const active = currentPage === link.path;
               const button = (
                 <button
@@ -253,6 +244,7 @@ export function CrmSidebar({
                   type="button"
                   title={link.label}
                   aria-label={link.label}
+                  aria-current={active ? "page" : undefined}
                   onClick={() => onNavigate(link.path)}
                   className={cn(
                     "group relative flex w-full min-h-[44px] items-center rounded-lg border transition-colors sm:min-h-[40px]",
@@ -292,11 +284,6 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed && navQuery && totalNavItems === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-sm text-slate-500">
-              No navigation matches for <span className="font-medium text-slate-700">{navQuery}</span>.
-            </div>
-          ) : null}
         </div>
 
         <div className={cn("mt-6 space-y-3", collapsed ? "px-2.5" : "px-3")}>

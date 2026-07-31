@@ -522,9 +522,9 @@ export function QuoteDeskView() {
       Boolean(
         newLine.title.trim() ||
           newLine.details.trim() ||
-          String(newLine.quantity) !== "1" ||
-          String(newLine.unitCost) !== "0" ||
-          String(newLine.unitPrice) !== "0",
+          Number(newLine.quantity) !== 1 ||
+          Number(newLine.unitCost) !== 0 ||
+          Number(newLine.unitPrice) !== 0,
       ),
     [newLine],
   );

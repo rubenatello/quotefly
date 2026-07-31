@@ -25,9 +25,36 @@ test.describe("mobile launch smoke", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
+    const mobileMenu = page.getByRole("button", { name: "Open navigation" });
+    await mobileMenu.click();
+    const mobileDrawer = page.getByRole("dialog", { name: "Workspace navigation" });
+    const closeMobileMenu = mobileDrawer.getByRole("button", { name: "Close navigation" });
+    await expect(closeMobileMenu).toBeFocused();
+    const firstDrawerAction = mobileDrawer.getByRole("button", { name: "Go to customers" });
+    await firstDrawerAction.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(mobileDrawer.getByRole("button", { name: "Sign out" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(firstDrawerAction).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(mobileDrawer).toHaveCount(0);
+    await expect(mobileMenu).toBeFocused();
+
+    await mobileMenu.click();
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("hidden");
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).not.toBe("hidden");
+    await page.setViewportSize({ width: 390, height: 844 });
+
     const quickQuote = page.getByTestId("mobile-quick-quote");
     await expect(quickQuote).toBeVisible();
-    await expect(quickQuote).toHaveAttribute("aria-label", "Quick quote");
+    await expect(quickQuote).toHaveAttribute("aria-label", "New quote");
+
+    await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Quotes", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
+    await expect(page.getByText("Ready to send", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Waiting on reply", { exact: true })).toBeVisible();
+
     await quickQuote.click();
     await expect(page).toHaveURL(/\/app\/build$/);
     await expect(page.getByTestId("quote-builder")).toBeVisible();

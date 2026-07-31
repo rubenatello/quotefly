@@ -1,5 +1,6 @@
 ﻿import { useMemo, useState, type ReactNode } from "react";
-import { Archive, BadgeCheck, Calculator, CircleDot, Eye, FileText, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
+import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import { Archive, BadgeCheck, CircleDot, Eye, FileText, MoreHorizontal, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
   Alert,
   Badge,
@@ -28,7 +29,7 @@ import {
   sharePdfBlobNatively,
 } from "../lib/quote-pdf-actions";
 
-type QuoteLifecycleStage = "DRAFT" | "COMPLETED" | "SENT" | "CLOSED" | "INVOICED";
+type QuoteLifecycleStage = "DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
 type QuoteRetentionAction = { type: "archive" | "delete"; quote: Quote } | null;
 type PreparedSend = {
@@ -38,9 +39,9 @@ type PreparedSend = {
   draft: { subject: string; body: string };
 };
 
-const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "COMPLETED", "SENT", "CLOSED", "INVOICED"];
+const QUOTE_STAGE_ORDER: QuoteLifecycleStage[] = ["DRAFT", "READY", "SENT", "ACCEPTED", "DECLINED", "INVOICED"];
 const QUOTE_BOARD_GRID_COLUMNS =
-  "xl:grid-cols-[128px_minmax(0,1.2fr)_100px_100px_240px_292px] 2xl:grid-cols-[138px_minmax(0,1.3fr)_108px_108px_280px_320px]";
+  "xl:grid-cols-[118px_minmax(0,1.2fr)_92px_100px_190px_150px] 2xl:grid-cols-[138px_minmax(0,1.3fr)_108px_108px_240px_170px]";
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
@@ -66,60 +67,47 @@ function quoteLifecycleStage(quote: Quote): QuoteLifecycleStage {
   );
 
   if (syncedInvoice) return "INVOICED";
-  if (quote.status === "ACCEPTED" || quote.status === "REJECTED") return "CLOSED";
+  if (quote.status === "ACCEPTED") return "ACCEPTED";
+  if (quote.status === "REJECTED") return "DECLINED";
   if (quote.status === "SENT_TO_CUSTOMER") return "SENT";
-  if (quote.status === "READY_FOR_REVIEW") return "COMPLETED";
+  if (quote.status === "READY_FOR_REVIEW") return "READY";
   return "DRAFT";
 }
 
 function lifecycleLabel(stage: QuoteLifecycleStage) {
   if (stage === "DRAFT") return "Draft";
-  if (stage === "COMPLETED") return "Completed";
+  if (stage === "READY") return "Ready to send";
   if (stage === "SENT") return "Sent";
-  if (stage === "CLOSED") return "Closed";
+  if (stage === "ACCEPTED") return "Accepted";
+  if (stage === "DECLINED") return "Declined";
   return "Invoiced";
 }
 
 function lifecycleInitial(stage: QuoteLifecycleStage) {
   if (stage === "DRAFT") return "D";
-  if (stage === "COMPLETED") return "C";
+  if (stage === "READY") return "R";
   if (stage === "SENT") return "S";
-  if (stage === "CLOSED") return "CL";
+  if (stage === "ACCEPTED") return "A";
+  if (stage === "DECLINED") return "X";
   return "I";
 }
 
 function lifecycleIcon(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
   if (stage === "DRAFT") return <CircleDot size={12} strokeWidth={2.2} />;
-  if (stage === "COMPLETED") return <FileText size={12} strokeWidth={2.2} />;
+  if (stage === "READY") return <FileText size={12} strokeWidth={2.2} />;
   if (stage === "SENT") return <Send size={12} strokeWidth={2.2} />;
-  if (stage === "CLOSED" && rawStatus === "REJECTED") return <XCircle size={12} strokeWidth={2.2} />;
-  if (stage === "CLOSED") return <BadgeCheck size={12} strokeWidth={2.2} />;
+  if (stage === "DECLINED" || rawStatus === "REJECTED") return <XCircle size={12} strokeWidth={2.2} />;
+  if (stage === "ACCEPTED") return <BadgeCheck size={12} strokeWidth={2.2} />;
   return <ReceiptText size={12} strokeWidth={2.2} />;
 }
 
 function lifecycleDarkClass(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
   if (stage === "DRAFT") return "border-slate-700 bg-slate-700 text-white";
-  if (stage === "COMPLETED") return "border-[#2559b8] bg-[#2559b8] text-white";
+  if (stage === "READY") return "border-[#2559b8] bg-[#2559b8] text-white";
   if (stage === "SENT") return "border-[#d97706] bg-[#d97706] text-white";
-  if (stage === "CLOSED" && rawStatus === "REJECTED") return "border-red-600 bg-red-600 text-white";
-  if (stage === "CLOSED") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
+  if (stage === "DECLINED" || rawStatus === "REJECTED") return "border-red-600 bg-red-600 text-white";
+  if (stage === "ACCEPTED") return "border-[#17624b] bg-[#17624b] text-white";
   return "border-emerald-600 bg-emerald-600 text-white";
-}
-
-function lifecycleStageBadgeClass(stage: QuoteLifecycleStage, quote: Quote, active: boolean, complete: boolean) {
-  if (active) {
-    return `${lifecycleDarkClass(stage, quote.status)} shadow-sm`;
-  }
-
-  if (complete) {
-    return `${lifecycleDarkClass(stage, quote.status)} shadow-sm`;
-  }
-
-  return "border-slate-200 bg-slate-50 text-slate-400";
-}
-
-function stageIndex(stage: QuoteLifecycleStage) {
-  return QUOTE_STAGE_ORDER.indexOf(stage);
 }
 
 function rawStatusHint(quote: Quote) {
@@ -131,7 +119,7 @@ function rawStatusHint(quote: Quote) {
   }
 
   if (quote.status === "ACCEPTED") return "Accepted by customer";
-  if (quote.status === "REJECTED") return "Closed as rejected";
+  if (quote.status === "REJECTED") return "Declined by customer";
   if (quote.status === "SENT_TO_CUSTOMER") return "Waiting on response";
   if (quote.status === "READY_FOR_REVIEW") return "Ready to send";
   return "Still being drafted";
@@ -176,15 +164,15 @@ function MetricCard({
           : "bg-slate-300";
 
   return (
-    <div className={`relative overflow-hidden rounded-xl border px-4 py-3 ${toneClasses}`}>
+    <div className={`relative overflow-hidden rounded-xl border px-3 py-3 sm:px-4 ${toneClasses}`}>
       <div className={`absolute bottom-0 left-0 top-0 w-1 ${barClasses}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="pl-1">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
-          <p className="mt-1.5 text-[1.65rem] font-bold tracking-tight text-white">{value}</p>
-          <p className="mt-1 text-xs text-white/70">{hint}</p>
+          <p className="mt-1.5 text-xl font-bold tracking-tight text-white sm:text-[1.65rem]">{value}</p>
+          <p className="mt-1 hidden text-xs text-white/70 sm:block">{hint}</p>
         </div>
-        <span className={`inline-flex h-10 w-10 items-center justify-center rounded-full ${iconClasses}`}>
+        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-full sm:h-10 sm:w-10 ${iconClasses}`}>
           {icon}
         </span>
       </div>
@@ -234,43 +222,49 @@ function StageCountCard({
 
 function QuoteLifecycleMini({ quote }: { quote: Quote }) {
   const stage = quoteLifecycleStage(quote);
-  const activeIndex = stageIndex(stage);
 
   return (
-    <div className="space-y-2.5">
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-        {QUOTE_STAGE_ORDER.map((item, index) => {
-          const active = index === activeIndex;
-          const complete = index < activeIndex;
-
-          return (
-            <div key={item} className="flex items-center gap-1.5">
-              <div
-                className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleStageBadgeClass(
-                  item,
-                  quote,
-                  active,
-                  complete,
-                )}`}
-                title={lifecycleLabel(item)}
-                aria-label={lifecycleLabel(item)}
-              >
-                {lifecycleInitial(item)}
-              </div>
-              {index < QUOTE_STAGE_ORDER.length - 1 ? (
-                <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-emerald-300" : "bg-slate-200"}`} />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={quoteLifecycleStage(quote) === "SENT" ? "orange" : quoteLifecycleStage(quote) === "DRAFT" ? "slate" : "emerald"} icon={lifecycleIcon(quoteLifecycleStage(quote), quote.status)}>
-          {lifecycleLabel(quoteLifecycleStage(quote))}
-        </Badge>
-        <span className="truncate text-xs text-slate-500">{rawStatusHint(quote)}</span>
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge tone={stage === "SENT" ? "orange" : stage === "DRAFT" ? "slate" : stage === "DECLINED" ? "red" : "emerald"} icon={lifecycleIcon(stage, quote.status)}>
+        {lifecycleLabel(stage)}
+      </Badge>
+      <span className="truncate text-xs text-slate-500">{rawStatusHint(quote)}</span>
     </div>
+  );
+}
+
+function QuoteActionsMenu({
+  quote,
+  onOpenPdfActions,
+  onRetentionAction,
+}: {
+  quote: Quote;
+  onOpenPdfActions: (quote: Quote) => void;
+  onRetentionAction: (action: QuoteRetentionAction) => void;
+}) {
+  const itemClass = "flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50 focus:bg-slate-50";
+
+  return (
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>
+        <Button size="sm" variant="outline" icon={<MoreHorizontal size={15} />} aria-label={`More actions for ${quoteNumber(quote.id)}`}>
+          More
+        </Button>
+      </DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content align="end" sideOffset={8} className="z-[130] min-w-[190px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_38px_rgba(15,23,42,0.16)]">
+          <DropdownMenuPrimitive.Item onSelect={() => onOpenPdfActions(quote)} className={itemClass}>
+            <FileText size={14} /> Quote PDF and sharing
+          </DropdownMenuPrimitive.Item>
+          <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "archive", quote })} className={itemClass}>
+            <Archive size={14} /> Archive quote
+          </DropdownMenuPrimitive.Item>
+          <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-red-700 hover:bg-red-50 focus:bg-red-50`}>
+            <Trash2 size={14} /> Delete quote
+          </DropdownMenuPrimitive.Item>
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
   );
 }
 
@@ -286,7 +280,7 @@ function QuoteDesktopRow({
   onRetentionAction: (action: QuoteRetentionAction) => void;
 }) {
   return (
-    <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 px-4 py-3 xl:grid xl:items-center`}>
+    <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 px-4 py-3 xl:grid xl:items-center`}>
       <div className="space-y-1">
         <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
         <p className="text-xs text-slate-500">Updated {formatDateTime(quote.updatedAt)}</p>
@@ -312,16 +306,8 @@ function QuoteDesktopRow({
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button size="sm" variant="outline" icon={<FileText size={14} />} onClick={() => onOpenPdfActions(quote)}>
-          PDF
-        </Button>
-        <Button size="sm" variant="outline" icon={<Archive size={14} />} onClick={() => onRetentionAction({ type: "archive", quote })}>
-          Archive
-        </Button>
-        <Button size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => onRetentionAction({ type: "delete", quote })}>
-          Delete
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => onOpenQuote(quote.id)}>
+        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} />
+        <Button size="sm" onClick={() => onOpenQuote(quote.id)}>
           Open
         </Button>
       </div>
@@ -348,16 +334,10 @@ function QuoteMobileCard({
           <p className="mt-1 truncate text-sm text-slate-700">{quote.customer?.fullName ?? "Customer missing"}</p>
           <p className="mt-1 truncate text-xs text-slate-500">{quote.title}</p>
         </div>
-        <Badge tone={quoteLifecycleStage(quote) === "SENT" ? "orange" : quoteLifecycleStage(quote) === "DRAFT" ? "slate" : "emerald"} icon={lifecycleIcon(quoteLifecycleStage(quote), quote.status)}>
-          {lifecycleLabel(quoteLifecycleStage(quote))}
-        </Badge>
-      </div>
-
-      <div className="rounded-xl bg-slate-50 px-3 py-3">
         <QuoteLifecycleMini quote={quote} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm">
+      <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cost</p>
           <p className="mt-1 text-slate-700">{money(quote.internalCostSubtotal)}</p>
@@ -368,21 +348,9 @@ function QuoteMobileCard({
         </div>
       </div>
 
-      <div className="flex gap-2">
-        <Button fullWidth size="sm" variant="outline" icon={<FileText size={14} />} onClick={() => onOpenPdfActions(quote)}>
-          PDF
-        </Button>
-        <Button fullWidth size="sm" variant="outline" onClick={() => onOpenQuote(quote.id)}>
-          Open
-        </Button>
-      </div>
-      <div className="flex gap-2">
-        <Button fullWidth size="sm" variant="outline" icon={<Archive size={14} />} onClick={() => onRetentionAction({ type: "archive", quote })}>
-          Archive
-        </Button>
-        <Button fullWidth size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => onRetentionAction({ type: "delete", quote })}>
-          Delete
-        </Button>
+      <div className="grid grid-cols-[1fr_auto] gap-2">
+        <Button fullWidth size="sm" onClick={() => onOpenQuote(quote.id)}>Open quote</Button>
+        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} />
       </div>
     </div>
   );
@@ -401,7 +369,6 @@ export function QuotesPage() {
     loadCustomers,
     navigateToQuote,
     navigateToBuilder,
-    selectedQuoteId,
     branding,
     canViewCommunicationLog,
   } = useDashboard();
@@ -422,7 +389,7 @@ export function QuotesPage() {
     return QUOTE_STAGE_ORDER.reduce<Record<QuoteLifecycleStage, number>>((accumulator, stage) => {
       accumulator[stage] = sortedQuotes.filter((quote) => quoteLifecycleStage(quote) === stage).length;
       return accumulator;
-    }, { DRAFT: 0, COMPLETED: 0, SENT: 0, CLOSED: 0, INVOICED: 0 });
+    }, { DRAFT: 0, READY: 0, SENT: 0, ACCEPTED: 0, DECLINED: 0, INVOICED: 0 });
   }, [sortedQuotes]);
 
   const filteredQuotes = useMemo(() => {
@@ -446,16 +413,12 @@ export function QuotesPage() {
     });
   }, [sortedQuotes, searchTerm, statusFilter]);
 
-  const awaitingResponseQuotes = useMemo(
-    () => sortedQuotes.filter((quote) => ["READY_FOR_REVIEW", "SENT_TO_CUSTOMER"].includes(quote.status)),
-    [sortedQuotes],
-  );
+  const readyToSendQuotes = useMemo(() => sortedQuotes.filter((quote) => quote.status === "READY_FOR_REVIEW"), [sortedQuotes]);
+  const awaitingResponseQuotes = useMemo(() => sortedQuotes.filter((quote) => quote.status === "SENT_TO_CUSTOMER"), [sortedQuotes]);
   const awaitingAmount = awaitingResponseQuotes.reduce((total, quote) => total + Number(quote.totalAmount), 0);
-  const averageQuoteValue = sortedQuotes.length
-    ? sortedQuotes.reduce((total, quote) => total + Number(quote.totalAmount), 0) / sortedQuotes.length
-    : 0;
-  const invoicedQuotes = sortedQuotes.filter((quote) => quoteLifecycleStage(quote) === "INVOICED");
-  const invoicedAmount = invoicedQuotes.reduce((total, quote) => total + Number(quote.totalAmount), 0);
+  const acceptedAmount = sortedQuotes
+    .filter((quote) => quote.status === "ACCEPTED")
+    .reduce((total, quote) => total + Number(quote.totalAmount), 0);
 
   async function getPdfBlob(quoteId: string, options?: { inline?: boolean }) {
     return api.quotes.downloadPdf(quoteId, { inline: options?.inline });
@@ -679,38 +642,39 @@ export function QuotesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Quotes"
-        subtitle="Review quote value, lifecycle, and invoice progress from one clean board, then open the quote desk only when work is needed."
+        subtitle="Create, send, and follow up on every quote from one clear workspace."
+        actions={<Button className="lg:hidden" onClick={() => navigateToBuilder()}>New quote</Button>}
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <MetricCard
-          label="Awaiting response"
+          label="Ready to send"
+          value={String(readyToSendQuotes.length)}
+          hint="Finished quotes waiting for you"
+          icon={<FileText size={18} strokeWidth={2.1} />}
+          tone="blue"
+        />
+        <MetricCard
+          label="Waiting on reply"
           value={String(awaitingResponseQuotes.length)}
-          hint="Quotes still waiting on the customer"
+          hint="Sent quotes awaiting the customer"
           icon={<Send size={18} strokeWidth={2.1} />}
           tone="orange"
         />
         <MetricCard
-          label="Awaiting amount"
+          label="Open quote value"
           value={money(awaitingAmount)}
-          hint="Value tied up in open decisions"
+          hint="Sent value still awaiting a decision"
           icon={<ReceiptText size={18} strokeWidth={2.1} />}
-          tone="blue"
-        />
-        <MetricCard
-          label="Avg per quote"
-          value={money(averageQuoteValue)}
-          hint="Average total across current quotes"
-          icon={<Calculator size={18} strokeWidth={2.1} />}
           tone="slate"
         />
         <MetricCard
-          label="Invoiced"
-          value={String(invoicedQuotes.length)}
-          hint={`${money(invoicedAmount)} synced to QuickBooks`}
+          label="Won quote value"
+          value={money(acceptedAmount)}
+          hint="Value accepted by customers"
           icon={<BadgeCheck size={18} strokeWidth={2.1} />}
           tone="emerald"
         />
@@ -738,16 +702,16 @@ export function QuotesPage() {
           </div>
           <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
             <div className="w-full lg:w-[300px]">
+              <label htmlFor="quote-search" className="sr-only">Search quotes</label>
               <Input
+                id="quote-search"
                 placeholder="Search quote number, customer, or title"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
-              <Button variant="outline" onClick={() => navigateToBuilder()}>New Quote</Button>
-              {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
+              <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>
             </div>
           </div>
         </div>
@@ -757,11 +721,15 @@ export function QuotesPage() {
             <div className="px-4 py-8 text-sm text-slate-600">Loading quotes...</div>
           ) : filteredQuotes.length === 0 ? (
             <div className="p-4">
-              <EmptyState title="No quotes found" description="Adjust the search or lifecycle filter, or create a new quote." />
+              <EmptyState
+                title={sortedQuotes.length ? "No matching quotes" : "Create your first quote"}
+                description={sortedQuotes.length ? "Clear the search or choose another status." : "Add a customer and build a professional quote in minutes."}
+                action={sortedQuotes.length ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); }}>Clear filters</Button> : <Button onClick={() => navigateToBuilder()}>New quote</Button>}
+              />
             </div>
           ) : (
             <>
-              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid`}>
+              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid`}>
                 <span>Quote No.</span>
                 <span>Customer</span>
                 <span>Cost</span>
@@ -808,7 +776,7 @@ export function QuotesPage() {
                 <p className="text-sm font-semibold text-slate-900">{pdfActionQuote.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  Preview first to verify the layout. Email App can share the PDF on supported phones; Text App opens Messages with the customer's number and message filled in.
+                  Preview first to verify the layout. Email quote can share the PDF on supported phones; Text quote opens Messages with the customer's number and message filled in.
                 </p>
               </div>
             </div>
@@ -821,10 +789,10 @@ export function QuotesPage() {
                 Download PDF
               </Button>
               <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "email"} onClick={() => void openQuoteInApp(pdfActionQuote, "email")}>
-                Email App
+                Email quote
               </Button>
               <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "sms"} onClick={() => void openQuoteInApp(pdfActionQuote, "sms")}>
-                Text App
+                Text quote
               </Button>
               {canUseNativeShare ? (
                 <Button className="sm:col-span-2" variant="secondary" icon={<Share2 size={14} />} loading={pdfActionLoading === "native-share"} onClick={() => void shareQuotePdfNatively(pdfActionQuote)}>

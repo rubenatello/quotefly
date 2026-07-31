@@ -95,6 +95,9 @@ export async function signUpViaApi(request: APIRequestContext, prefix = "beta"):
       companyName: `QuoteFly Beta ${label}`,
       primaryTrade: "ROOFING",
       generateLogoIfMissing: false,
+      acceptedLegalTerms: true,
+      termsVersion: "2026-07-30",
+      privacyPolicyVersion: "2026-07-30",
     },
   });
 

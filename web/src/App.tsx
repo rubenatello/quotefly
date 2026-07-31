@@ -24,6 +24,7 @@ import { Toaster } from "sonner";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
+const ServicesPage = lazy(() => import("./pages/ServicesPage").then((module) => ({ default: module.ServicesPage })));
 const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
 const AboutPage = lazy(() => import("./pages/AboutPage").then((module) => ({ default: module.AboutPage })));
 const SupportPage = lazy(() => import("./pages/SupportPage").then((module) => ({ default: module.SupportPage })));
@@ -218,7 +219,7 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-28 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
+        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-28 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto w-full max-w-[1840px]">
               <Routes>
@@ -292,11 +293,12 @@ function MarketingLayout({
         onOpenAuth={onOpenAuth}
         onLogout={onLogout}
       />
-      <main className="flex-1">
+      <main id="main-content" className="flex-1">
         <Suspense fallback={<AppLoadingScreen message="Loading page..." />}>
           <Routes>
             <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
             <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
+            <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
             <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
@@ -309,9 +311,22 @@ function MarketingLayout({
         </Suspense>
       </main>
       <Footer />
-      <CookieConsentBanner />
     </div>
   );
+}
+
+function ScrollToRoute() {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.hash) {
+      window.requestAnimationFrame(() => document.querySelector(location.hash)?.scrollIntoView());
+      return;
+    }
+    window.scrollTo({ top: 0, left: 0 });
+  }, [location.hash, location.pathname]);
+
+  return null;
 }
 
 /* ─── Root App ─── */
@@ -364,7 +379,7 @@ function AppRoutes() {
   }, [initialPath]);
 
   function navigateAfterHydration(nextSession: Session, source: SessionRecovery["source"]) {
-    if (source === "post-auth" || !initialPath.startsWith("/app")) {
+    if (source === "post-auth") {
       navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
     }
   }
@@ -390,9 +405,6 @@ function AppRoutes() {
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
         setSession(toSession(payload));
-        if (!initialPath.startsWith("/app")) {
-          navigate(payload.tenant.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
-        }
       } catch (error) {
         if (isMounted) handleSessionCheckFailure(error, "restore");
       } finally {
@@ -402,7 +414,7 @@ function AppRoutes() {
 
     void restoreSession();
     return () => { isMounted = false; };
-  }, [handleSessionCheckFailure, initialPath, navigate]);
+  }, [handleSessionCheckFailure]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
     purgeQuoteBuilderDraftStorage();
@@ -453,7 +465,9 @@ function AppRoutes() {
     }
   };
 
-  if (sessionRecovery) {
+  const isAppRoute = location.pathname === "/app" || location.pathname.startsWith("/app/");
+
+  if (sessionRecovery && (isAppRoute || sessionRecovery.source === "post-auth")) {
     return (
       <AppLoadingScreen
         message="QuoteFly couldn't verify your secure session. Your current page has not been changed."
@@ -466,7 +480,7 @@ function AppRoutes() {
     );
   }
 
-  if (isSessionChecking) {
+  if (isSessionChecking && isAppRoute) {
     return <AppLoadingScreen message="Restoring your session..." />;
   }
 
@@ -474,6 +488,13 @@ function AppRoutes() {
 
   return (
     <>
+      <a
+        href="#main-content"
+        className="sr-only z-[100] rounded-md bg-white px-4 py-3 font-semibold text-slate-900 shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        Skip to main content
+      </a>
+      <ScrollToRoute />
       <Routes>
         {isLoggedIn && session ? (
           <Route
@@ -485,11 +506,7 @@ function AppRoutes() {
         )}
         <Route
           path="/*"
-          element={
-            isLoggedIn
-              ? <Navigate to="/app" replace />
-              : <MarketingLayout onOpenAuth={() => setIsAuthModalOpen(true)} onLogout={handleLogout} isLoggedIn={isLoggedIn} />
-          }
+          element={<MarketingLayout onOpenAuth={() => setIsAuthModalOpen(true)} onLogout={handleLogout} isLoggedIn={isLoggedIn} />}
         />
       </Routes>
       <AuthModal
@@ -497,6 +514,7 @@ function AppRoutes() {
         onClose={() => setIsAuthModalOpen(false)}
         onSuccess={handleAuthSuccess}
       />
+      <CookieConsentBanner />
       <Toaster position="top-right" richColors closeButton theme="light" />
     </>
   );

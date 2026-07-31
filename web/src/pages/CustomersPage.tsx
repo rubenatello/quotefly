@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench } from "lucide-react";
+import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert, Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
@@ -8,7 +8,7 @@ import { api, type Customer, type CustomerActivityEvent, type Quote } from "../l
 import { formatUsPhoneDisplay, phoneMatchesSearch, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
-type CustomerStage = "NEW" | "CONTACTED" | "QUOTED" | "WORKING" | "SOLD";
+type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
 
 type CustomerRow = {
   customer: Customer;
@@ -20,46 +20,52 @@ type CustomerRetentionAction =
   | { type: "archive" | "delete"; row: CustomerRow }
   | null;
 
-const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "QUOTED", "WORKING", "SOLD"];
+const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
+const CUSTOMER_PROGRESS_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON"];
 const ACTIVITY_PAGE_SIZE = 5;
 
 function stageLabel(stage: CustomerStage) {
   if (stage === "NEW") return "New";
   if (stage === "CONTACTED") return "Contacted";
-  if (stage === "QUOTED") return "Quoted";
-  if (stage === "WORKING") return "Working";
-  return "Sold";
+  if (stage === "READY") return "Ready";
+  if (stage === "SENT") return "Sent";
+  if (stage === "WON") return "Won";
+  return "Lost";
 }
 
-function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald" {
+function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald" | "red" {
   if (stage === "NEW") return "slate";
   if (stage === "CONTACTED") return "blue";
-  if (stage === "QUOTED") return "orange";
+  if (stage === "READY") return "orange";
+  if (stage === "LOST") return "red";
   return "emerald";
 }
 
 function stageDarkClass(stage: CustomerStage) {
   if (stage === "NEW") return "border-slate-700 bg-slate-700 text-white";
   if (stage === "CONTACTED") return "border-[#2559b8] bg-[#2559b8] text-white";
-  if (stage === "QUOTED") return "border-[#406fc7] bg-[#406fc7] text-white";
-  if (stage === "WORKING") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
+  if (stage === "READY") return "border-[#d97706] bg-[#d97706] text-white";
+  if (stage === "SENT") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
+  if (stage === "LOST") return "border-red-600 bg-red-600 text-white";
   return "border-emerald-600 bg-emerald-600 text-white";
 }
 
 function stageInitial(stage: CustomerStage) {
   if (stage === "NEW") return "N";
   if (stage === "CONTACTED") return "C";
-  if (stage === "QUOTED") return "Q";
-  if (stage === "WORKING") return "W";
-  return "S";
+  if (stage === "READY") return "R";
+  if (stage === "SENT") return "S";
+  if (stage === "WON") return "W";
+  return "L";
 }
 
 function stageIcon(stage: CustomerStage) {
   if (stage === "NEW") return <CircleDot size={12} strokeWidth={2.2} />;
   if (stage === "CONTACTED") return <PhoneCall size={12} strokeWidth={2.2} />;
-  if (stage === "QUOTED") return <FileText size={12} strokeWidth={2.2} />;
-  if (stage === "WORKING") return <Wrench size={12} strokeWidth={2.2} />;
-  return <BadgeCheck size={12} strokeWidth={2.2} />;
+  if (stage === "READY") return <FileText size={12} strokeWidth={2.2} />;
+  if (stage === "SENT") return <Send size={12} strokeWidth={2.2} />;
+  if (stage === "WON") return <BadgeCheck size={12} strokeWidth={2.2} />;
+  return <XCircle size={12} strokeWidth={2.2} />;
 }
 
 function stageStateClasses(active: boolean, complete: boolean) {
@@ -109,17 +115,11 @@ function getLatestQuoteMap(quotes: Quote[]) {
   return map;
 }
 
-function getCustomerStage(customer: Customer, latestQuote?: Quote | null): CustomerStage {
-  if (latestQuote?.status === "ACCEPTED") {
-    if (latestQuote.jobStatus === "COMPLETED" || latestQuote.afterSaleFollowUpStatus !== "NOT_READY") {
-      return "SOLD";
-    }
-    return "WORKING";
-  }
-
-  if (latestQuote && ["SENT_TO_CUSTOMER", "READY_FOR_REVIEW"].includes(latestQuote.status)) {
-    return "QUOTED";
-  }
+function getCustomerStage(customer: Customer, customerQuotes: Quote[]): CustomerStage {
+  if (customer.followUpStatus === "WON" || customerQuotes.some((quote) => quote.status === "ACCEPTED")) return "WON";
+  if (customer.followUpStatus === "LOST" || customerQuotes.some((quote) => quote.status === "REJECTED")) return "LOST";
+  if (customerQuotes.some((quote) => quote.status === "SENT_TO_CUSTOMER")) return "SENT";
+  if (customerQuotes.some((quote) => quote.status === "READY_FOR_REVIEW")) return "READY";
 
   if (customer.followUpStatus === "FOLLOWED_UP") {
     return "CONTACTED";
@@ -128,19 +128,16 @@ function getCustomerStage(customer: Customer, latestQuote?: Quote | null): Custo
   return "NEW";
 }
 
-function stageIndex(stage: CustomerStage) {
-  return CUSTOMER_STAGE_ORDER.indexOf(stage);
-}
-
 function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
-  const activeIndex = stageIndex(stage);
+  const stageOrder = stage === "LOST" ? ["NEW", "CONTACTED", "READY", "SENT", "LOST"] satisfies CustomerStage[] : CUSTOMER_PROGRESS_ORDER;
+  const activeIndex = stageOrder.indexOf(stage);
 
   return (
     <div className="space-y-2.5">
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-        {CUSTOMER_STAGE_ORDER.map((item, index) => {
+        {stageOrder.map((item, index) => {
           const active = index === activeIndex;
-          const complete = index < activeIndex;
+          const complete = stage !== "LOST" && item !== "LOST" && index < activeIndex;
 
           return (
             <div key={item} className="flex items-center gap-1.5">
@@ -153,7 +150,7 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
               >
                 {stageInitial(item)}
               </div>
-              {index < CUSTOMER_STAGE_ORDER.length - 1 ? (
+              {index < stageOrder.length - 1 ? (
                 <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-slate-400" : "bg-slate-200"}`} />
               ) : null}
             </div>
@@ -164,7 +161,7 @@ function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
         <Badge
           tone={stageTone(stage)}
           icon={stageIcon(stage)}
-          className={stage === "QUOTED" ? "border-transparent shadow-sm" : "border-transparent bg-slate-900 text-white shadow-sm"}
+          className={stage === "READY" ? "border-transparent shadow-sm" : "border-transparent bg-slate-900 text-white shadow-sm"}
         >
           {stageLabel(stage)}
         </Badge>
@@ -274,12 +271,12 @@ function CustomerPipelineFilterStrip({
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         <StageCountCard label="All" count={totalCount} stage="ALL" active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
         <div className="hidden h-px w-6 shrink-0 bg-slate-200 sm:block" />
-        <div className="flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 px-2 py-2 sm:gap-2 sm:px-3">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {CUSTOMER_STAGE_ORDER.map((stage, index) => (
-            <div key={stage} className="flex items-center gap-1.5 sm:gap-2">
+            <div key={stage} className={`flex items-center gap-1.5 sm:gap-2 ${stage === "LOST" ? "ml-1 border-l border-slate-300 pl-3" : ""}`}>
               <StageFlowButton stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
-              {index < CUSTOMER_STAGE_ORDER.length - 1 ? (
-                <span className="inline-flex h-8 w-6 shrink-0 items-center justify-center text-slate-300">
+              {index < CUSTOMER_STAGE_ORDER.length - 2 ? (
+                <span className="hidden h-8 w-6 shrink-0 items-center justify-center text-slate-300 sm:inline-flex">
                   <ChevronRight size={16} strokeWidth={2.2} />
                 </span>
               ) : null}
@@ -287,7 +284,7 @@ function CustomerPipelineFilterStrip({
           ))}
         </div>
       </div>
-      <p className="px-1 text-xs text-slate-500">Follow the flow from new lead to sold, or tap any stage to filter the board.</p>
+      <p className="px-1 text-xs text-slate-500">Follow the flow from new lead to won or lost work, or tap a stage to filter.</p>
     </div>
   );
 }
@@ -320,7 +317,7 @@ function CustomerDesktopRow({
           onOpenActivity(customer.id);
         }
       }}
-      className="hidden cursor-pointer grid-cols-[minmax(0,1.2fr)_150px_200px_240px_178px] gap-4 px-4 py-3 xl:grid xl:items-center 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px]"
+      className="hidden cursor-pointer grid-cols-[minmax(0,1.2fr)_140px_minmax(150px,0.8fr)_220px_154px] gap-3 px-4 py-3 xl:grid xl:items-center 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_240px_170px]"
     >
       <div className="min-w-0">
         <div className="flex items-center gap-3">
@@ -439,17 +436,12 @@ function CustomerMobileCard({
         </div>
       </div>
 
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pipeline</p>
-        <div className="mt-2">
-          <CustomerPipelineMini stage={stage} />
+      <div className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Latest quote</p>
+          <p className="mt-1 truncate font-medium text-slate-900">{latestQuote ? latestQuote.title : "No quote yet"}</p>
         </div>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Latest quote</p>
-        <p className="mt-1 font-medium text-slate-900">{latestQuote ? quoteNumber(latestQuote.id) : "No quote yet"}</p>
-        <p className="mt-1 text-xs text-slate-500">{latestQuote?.title ?? "Start a quote when this customer is ready."}</p>
+        <span className="shrink-0 text-xs font-medium text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : "Ready to start"}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
@@ -533,6 +525,9 @@ export function CustomersPage() {
   const [activityTotal, setActivityTotal] = useState(0);
   const [customerNotesDraft, setCustomerNotesDraft] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
+  const [customerDetailsDraft, setCustomerDetailsDraft] = useState({ fullName: "", phone: "", email: "" });
+  const [detailsSaving, setDetailsSaving] = useState(false);
+  const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
   const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -587,12 +582,21 @@ export function CustomersPage() {
   }
 
   const latestQuoteByCustomer = useMemo(() => getLatestQuoteMap(quotes), [quotes]);
+  const quotesByCustomer = useMemo(() => {
+    const map = new Map<string, Quote[]>();
+    for (const quote of quotes) {
+      const customerQuotes = map.get(quote.customerId) ?? [];
+      customerQuotes.push(quote);
+      map.set(quote.customerId, customerQuotes);
+    }
+    return map;
+  }, [quotes]);
 
   const customerRows = useMemo(() => {
     return customers
       .map((customer) => {
         const latestQuote = latestQuoteByCustomer.get(customer.id) ?? null;
-        const stage = getCustomerStage(customer, latestQuote);
+        const stage = getCustomerStage(customer, quotesByCustomer.get(customer.id) ?? []);
         return {
           customer,
           latestQuote,
@@ -600,13 +604,13 @@ export function CustomersPage() {
         } satisfies CustomerRow;
       })
       .sort((left, right) => new Date(right.customer.updatedAt).getTime() - new Date(left.customer.updatedAt).getTime());
-  }, [customers, latestQuoteByCustomer]);
+  }, [customers, latestQuoteByCustomer, quotesByCustomer]);
 
   const stageCounts = useMemo(() => {
     return CUSTOMER_STAGE_ORDER.reduce<Record<CustomerStage, number>>((accumulator, stage) => {
       accumulator[stage] = customerRows.filter((row) => row.stage === stage).length;
       return accumulator;
-    }, { NEW: 0, CONTACTED: 0, QUOTED: 0, WORKING: 0, SOLD: 0 });
+  }, { NEW: 0, CONTACTED: 0, READY: 0, SENT: 0, WON: 0, LOST: 0 });
   }, [customerRows]);
 
   const filteredRows = useMemo(() => {
@@ -648,10 +652,55 @@ export function CustomersPage() {
   const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
   const notesChanged =
     (selectedActivityRow?.customer.notes?.trim() ?? "") !== customerNotesDraft.trim();
+  const detailsChanged = Boolean(selectedActivityRow) && (
+    selectedActivityRow?.customer.fullName !== customerDetailsDraft.fullName.trim() ||
+    selectedActivityRow?.customer.phone !== customerDetailsDraft.phone.trim() ||
+    (selectedActivityRow?.customer.email ?? "") !== customerDetailsDraft.email.trim()
+  );
 
   useEffect(() => {
     setCustomerNotesDraft(selectedActivityRow?.customer.notes ?? "");
   }, [selectedActivityRow?.customer.id, selectedActivityRow?.customer.notes]);
+
+  useEffect(() => {
+    setCustomerDetailsDraft({
+      fullName: selectedActivityRow?.customer.fullName ?? "",
+      phone: selectedActivityRow?.customer.phone ?? "",
+      email: selectedActivityRow?.customer.email ?? "",
+    });
+  }, [selectedActivityRow?.customer.email, selectedActivityRow?.customer.fullName, selectedActivityRow?.customer.id, selectedActivityRow?.customer.phone]);
+
+  useEffect(() => {
+    setDetailsFeedback(null);
+  }, [selectedActivityRow?.customer.id]);
+
+  async function saveCustomerDetails() {
+    if (!selectedActivityRow || detailsSaving) return;
+
+    const fullName = customerDetailsDraft.fullName.trim();
+    const phone = customerDetailsDraft.phone.trim();
+    if (!fullName || !phone) {
+      setDetailsFeedback({ tone: "error", message: "Customer name and phone are required." });
+      return;
+    }
+
+    setDetailsFeedback(null);
+    setDetailsSaving(true);
+    try {
+      await api.customers.update(selectedActivityRow.customer.id, {
+        fullName,
+        phone,
+        email: customerDetailsDraft.email.trim() || null,
+      });
+      await loadCustomers();
+      await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
+      setDetailsFeedback({ tone: "success", message: "Customer details saved." });
+    } catch (err) {
+      setDetailsFeedback({ tone: "error", message: err instanceof Error ? err.message : "Failed saving customer details." });
+    } finally {
+      setDetailsSaving(false);
+    }
+  }
 
   async function saveCustomerNotes() {
     if (!selectedActivityRow || notesSaving) return;
@@ -700,10 +749,7 @@ export function CustomersPage() {
         title="Customers"
         subtitle="Track customers through a simple sales pipeline, then jump into quoting when they are ready."
         actions={
-          <>
-            <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add Customer</Button>
-            <Button onClick={() => navigateToBuilder()}>New Quote</Button>
-          </>
+          <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>
         }
       />
 
@@ -724,8 +770,10 @@ export function CustomersPage() {
             <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent customers first</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">Use this as the operating table. Open quotes when they exist, or start a new one when they do not.</p>
           </div>
-          <div className="w-full xl:w-[320px]">
+          <div className="w-full lg:w-[320px]">
+            <label htmlFor="customer-search" className="sr-only">Search customers</label>
             <Input
+              id="customer-search"
               placeholder="Search customer name, phone, email, or quote"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
@@ -738,11 +786,15 @@ export function CustomersPage() {
             <div className="px-4 py-8 text-sm text-slate-600">Loading customers...</div>
           ) : filteredRows.length === 0 ? (
             <div className="p-4">
-              <EmptyState title="No customers found" description="Adjust the search or stage filter, or add a new customer from the quote builder." />
+              <EmptyState
+                title={customerRows.length ? "No matching customers" : "Add your first customer"}
+                description={customerRows.length ? "Clear the search or choose another stage." : "Create a customer here, then start their first quote."}
+                action={customerRows.length ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStageFilter("ALL"); }}>Clear filters</Button> : <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>}
+              />
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.2fr)_150px_200px_240px_178px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_260px_190px]">
+              <div className="hidden grid-cols-[minmax(0,1.2fr)_140px_minmax(150px,0.8fr)_220px_154px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_240px_170px]">
                 <span>Customer</span>
                 <span>Phone</span>
                 <span>Email</span>
@@ -825,6 +877,51 @@ export function CustomersPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quotes on record</p>
                   <p className="mt-1 text-sm font-semibold text-slate-900">{selectedActivityQuotes.length}</p>
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer details</p>
+                    <p className="mt-1 text-sm text-slate-600">Keep contact information current for calls, texts, and quote delivery.</p>
+                  </div>
+                  <Button size="sm" onClick={() => void saveCustomerDetails()} disabled={!detailsChanged || detailsSaving} loading={detailsSaving}>
+                    Save details
+                  </Button>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5 sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-700">Name</span>
+                    <Input
+                      value={customerDetailsDraft.fullName}
+                      onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, fullName: event.target.value }))}
+                      disabled={detailsSaving}
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-slate-700">Phone</span>
+                    <Input
+                      type="tel"
+                      value={customerDetailsDraft.phone}
+                      onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, phone: event.target.value }))}
+                      disabled={detailsSaving}
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-slate-700">Email</span>
+                    <Input
+                      type="email"
+                      value={customerDetailsDraft.email}
+                      onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, email: event.target.value }))}
+                      disabled={detailsSaving}
+                    />
+                  </label>
+                </div>
+                {detailsFeedback ? (
+                  <div className="mt-3">
+                    <Alert tone={detailsFeedback.tone}>{detailsFeedback.message}</Alert>
+                  </div>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">

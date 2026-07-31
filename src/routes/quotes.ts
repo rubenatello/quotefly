@@ -521,7 +521,7 @@ async function getQuoteRevisionContext(
       },
       lineItems: {
         where: tenantActiveScope(tenantId),
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         select: {
           id: true,
           description: true,
@@ -716,7 +716,7 @@ async function restoreQuoteRevision(
     },
   });
 
-  for (const lineItem of snapshot.lineItems) {
+  for (const [position, lineItem] of snapshot.lineItems.entries()) {
     await tx.quoteLineItem.create({
       data: {
         tenantId: params.tenantId,
@@ -724,6 +724,7 @@ async function restoreQuoteRevision(
         description: lineItem.description,
         sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
         sectionLabel: lineItem.sectionLabel,
+        position,
         quantity: roundCurrency(lineItem.quantity),
         unitCost: roundCurrency(lineItem.unitCost),
         unitPrice: roundCurrency(lineItem.unitPrice),
@@ -2466,7 +2467,7 @@ async function loadSimilarQuoteContext(
       updatedAt: true,
       lineItems: {
         where: { deletedAtUtc: null },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         select: {
           description: true,
           sectionType: true,
@@ -2978,7 +2979,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               },
               lineItems: {
                 where: tenantActiveScope(claims.tenantId),
-                orderBy: { createdAt: "asc" },
+                orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
                 select: {
                   id: true,
                   description: true,
@@ -4092,12 +4093,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
 
       await tx.quoteLineItem.createMany({
-        data: lineItemDrafts.map((lineItem) => ({
+        data: lineItemDrafts.map((lineItem, position) => ({
           tenantId: claims.tenantId,
           quoteId: createdQuote.id,
           description: lineItem.description,
           sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
           sectionLabel: lineItem.sectionLabel,
+          position,
           quantity: lineItem.quantity,
           unitCost: lineItem.unitCost,
           unitPrice: lineItem.unitPrice,
@@ -4145,7 +4147,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           customer: true,
           lineItems: {
             where: tenantActiveScope(claims.tenantId),
-            orderBy: { createdAt: "asc" },
+            orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
           },
         },
       });
@@ -4265,12 +4267,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       if (payload.lineItems?.length) {
         await tx.quoteLineItem.createMany({
-          data: payload.lineItems.map((lineItem) => ({
+          data: payload.lineItems.map((lineItem, position) => ({
             tenantId: claims.tenantId,
             quoteId: createdQuote.id,
             description: lineItem.description,
             sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
             sectionLabel: lineItem.sectionLabel?.trim() || null,
+            position,
             quantity: lineItem.quantity,
             unitCost: lineItem.unitCost,
             unitPrice: lineItem.unitPrice,
@@ -4404,7 +4407,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
         lineItems: {
           where: tenantActiveScope(claims.tenantId),
-          orderBy: { createdAt: "asc" },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
           select: {
             description: true,
             quantity: true,
@@ -4737,7 +4740,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           customer: true,
           lineItems: {
             where: tenantActiveScope(claims.tenantId),
-            orderBy: { createdAt: "asc" },
+            orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
           },
         },
       });
@@ -4766,7 +4769,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         customer: true,
         lineItems: {
           where: tenantActiveScope(claims.tenantId),
-          orderBy: { createdAt: "asc" },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
           select: {
             id: true,
             tenantId: true,
@@ -4805,7 +4808,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         customer: true,
         lineItems: {
           where: tenantActiveScope(claims.tenantId),
-          orderBy: { createdAt: "asc" },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         },
         tenant: {
           select: {
@@ -5005,7 +5008,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             customer: true,
             lineItems: {
               where: tenantActiveScope(claims.tenantId),
-              orderBy: { createdAt: "asc" },
+              orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
             },
           },
         });
@@ -5599,6 +5602,15 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
       if (!quote) return null;
 
+      const lastLineItem = await tx.quoteLineItem.findFirst({
+        where: {
+          quoteId: quote.id,
+          ...tenantActiveScope(claims.tenantId),
+        },
+        orderBy: [{ position: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        select: { position: true },
+      });
+
       const lineItem = await tx.quoteLineItem.create({
         data: {
           tenantId: claims.tenantId,
@@ -5606,6 +5618,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           description: payload.description,
           sectionType: normalizeQuoteLineSectionType(payload.sectionType),
           sectionLabel: payload.sectionLabel?.trim() || null,
+          position: (lastLineItem?.position ?? -1) + 1,
           quantity: payload.quantity,
           unitCost: payload.unitCost,
           unitPrice: payload.unitPrice,

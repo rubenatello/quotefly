@@ -12,6 +12,7 @@ const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
 const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const TRIAL_DAYS = 14;
+const CURRENT_LEGAL_VERSION = "2026-07-30";
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
 const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
 const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
@@ -24,6 +25,9 @@ const SignUpSchema = z.object({
   primaryTrade: z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]),
   logoUrl: z.string().trim().max(1_500_000).optional(),
   generateLogoIfMissing: z.boolean().default(true),
+  acceptedLegalTerms: z.literal(true),
+  termsVersion: z.literal(CURRENT_LEGAL_VERSION),
+  privacyPolicyVersion: z.literal(CURRENT_LEGAL_VERSION),
 });
 
 const SignInSchema = z.object({
@@ -130,6 +134,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
               email,
               fullName: payload.fullName,
               passwordHash,
+              legalAcceptedAtUtc: new Date(),
+              termsVersion: payload.termsVersion,
+              privacyPolicyVersion: payload.privacyPolicyVersion,
             },
           });
 

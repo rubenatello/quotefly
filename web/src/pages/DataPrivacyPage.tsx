@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 export function DataPrivacyPage() {
@@ -28,14 +29,18 @@ export function DataPrivacyPage() {
         "We use hosted infrastructure providers to run the application, database, and website. We continue to harden logging, access reviews, and operational controls as the product matures.",
     },
     {
+      title: "AI-assisted features",
+      text:
+        "When a user invokes AI-assisted quoting, QuoteFly may send the prompt and relevant customer, activity, pricing, saved-job, or quote context to OpenAI. AI output is a draft for human review, and prompts plus usage details may be retained in the workspace for operational and quality review.",
+    },
+    {
       title: "Retention and export",
       text:
         "Customers control the records they add to QuoteFly. The current export paths include PDF quotes and QuickBooks-compatible CSV files. Direct QuickBooks sync remains a staged integration and is not presented as a launch feature.",
     },
     {
       title: "Reporting a concern",
-      text:
-        "If you believe data has been exposed or mishandled, email support@quotefly.us with 'Security' or 'Privacy Request' in the subject line and include the affected workspace details.",
+      text: null,
     },
   ];
 
@@ -45,7 +50,7 @@ export function DataPrivacyPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Data Privacy</p>
           <h1 className="mt-2 text-4xl font-bold text-slate-900">Data handling and security posture</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: April 10, 2026</p>
+          <p className="mt-3 text-sm text-slate-500">Last updated: July 30, 2026</p>
           <p className="mt-4 text-slate-600">
             This page explains the practical controls and product design choices that protect workspace data.
           </p>
@@ -54,7 +59,15 @@ export function DataPrivacyPage() {
         {sections.map((section) => (
           <section key={section.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-2xl font-semibold text-slate-900">{section.title}</h2>
-            <p className="mt-4 text-sm leading-6 text-slate-600">{section.text}</p>
+            {section.text ? (
+              <p className="mt-4 text-sm leading-6 text-slate-600">{section.text}</p>
+            ) : (
+              <p className="mt-4 text-sm leading-6 text-slate-600">
+                If you believe data has been exposed or mishandled, email{" "}
+                <a className="font-semibold text-quotefly-blue hover:text-blue-700" href={SUPPORT_MAILTO}>{SUPPORT_EMAIL}</a>{" "}
+                with “Security” or “Privacy Request” in the subject line and include the affected workspace details.
+              </p>
+            )}
           </section>
         ))}
       </div>

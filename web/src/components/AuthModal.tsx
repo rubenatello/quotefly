@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
+import { CURRENT_LEGAL_VERSION } from "../lib/legal";
 import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from "./ui";
 
 interface AuthModalProps {
@@ -29,6 +30,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [businessName, setBusinessName] = useState("");
   const [primaryTrade, setPrimaryTrade] = useState<ServiceType>("ROOFING");
   const [logoDataUrl, setLogoDataUrl] = useState<string>("");
+  const [acceptedLegalTerms, setAcceptedLegalTerms] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +50,9 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
           primaryTrade,
           logoUrl: logoDataUrl || undefined,
           generateLogoIfMissing: true,
+          acceptedLegalTerms: true,
+          termsVersion: CURRENT_LEGAL_VERSION,
+          privacyPolicyVersion: CURRENT_LEGAL_VERSION,
         });
       } else {
         payload = await api.auth.signin({ email, password });
@@ -62,6 +67,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
       setBusinessName("");
       setPrimaryTrade("ROOFING");
       setLogoDataUrl("");
+      setAcceptedLegalTerms(false);
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
@@ -241,7 +247,46 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
             />
           </div>
 
-          <Button type="submit" disabled={isLoading} loading={isLoading} fullWidth size="lg">
+          {mode === "signup" ? (
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={acceptedLegalTerms}
+                onChange={(event) => setAcceptedLegalTerms(event.target.checked)}
+                className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-300 text-quotefly-blue focus:ring-quotefly-blue"
+                required
+              />
+              <span>
+                I agree to the{" "}
+                <Link
+                  to="/terms"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-semibold text-quotefly-blue hover:text-blue-700"
+                >
+                  Terms of Service
+                </Link>{" "}
+                and acknowledge the{" "}
+                <Link
+                  to="/privacy"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-semibold text-quotefly-blue hover:text-blue-700"
+                >
+                  Privacy Policy
+                </Link>
+                .
+              </span>
+            </label>
+          ) : null}
+
+          <Button
+            type="submit"
+            disabled={isLoading || (mode === "signup" && !acceptedLegalTerms)}
+            loading={isLoading}
+            fullWidth
+            size="lg"
+          >
             {isLoading
               ? "Please wait..."
               : mode === "signin"

@@ -41,6 +41,7 @@ export function TermsPage() {
       points: [
         "QuoteFly is provided on an as-available basis while the product continues to mature.",
         "You remain responsible for verifying quotes, pricing, customer communications, and downstream accounting imports before relying on them.",
+        "AI-assisted drafts may be incomplete or inaccurate. Review customer details, scope, line items, costs, and prices before saving or sending a quote.",
       ],
     },
   ];
@@ -51,7 +52,7 @@ export function TermsPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Terms of Service</p>
           <h1 className="mt-2 text-4xl font-bold text-slate-900">Using QuoteFly</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: April 10, 2026</p>
+          <p className="mt-3 text-sm text-slate-500">Last updated: July 30, 2026</p>
           <p className="mt-4 text-slate-600">
             These terms describe the basic rules and responsibilities for using the QuoteFly service.
           </p>
