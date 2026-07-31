@@ -156,7 +156,7 @@ function PreviewPane() {
   );
 }
 
-export function LandingProductDemo() {
+export function LandingProductDemo({ priority = true }: { priority?: boolean }) {
   const [pane, setPane] = useState<DemoPane>("editor");
 
   return (
@@ -166,8 +166,8 @@ export function LandingProductDemo() {
         alt=""
         width="1448"
         height="1086"
-        loading="eager"
-        fetchPriority="high"
+        loading={priority ? "eager" : "lazy"}
+        fetchPriority={priority ? "high" : "auto"}
         decoding="async"
         aria-hidden="true"
         className="absolute inset-0 h-full w-full object-cover"

@@ -36,6 +36,18 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await page.goto("/solutions");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/solutions"].heading })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Trade solutions" })).toBeVisible();
+  await expect(page.getByRole("img", { name: /residential construction worker framing/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /quoting headaches do not/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "HVAC", exact: true })).toBeVisible();
+
+  const fieldImage = page.getByRole("img", { name: /contractor inspecting field equipment/i });
+  await fieldImage.scrollIntoViewIfNeeded();
+  await expect(fieldImage).toBeVisible();
+  expect(await fieldImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1600);
+  await expect(page.getByRole("img", { name: /carpenter measuring and marking/i })).toBeVisible();
+
+  const solutionsOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(solutionsOverflow).toBeLessThanOrEqual(1);
 
   await page.goto("/privacy");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/privacy"].heading })).toBeVisible();

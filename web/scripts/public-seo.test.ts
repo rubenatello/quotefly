@@ -111,6 +111,20 @@ test("social and visible marketing images are valid JPEG assets with expected di
   const workflowBackground = await readFile(workflowBackgroundPath);
   assert.deepEqual(parseJpegDimensions(workflowBackground), { width: 1448, height: 1086 });
   assert.ok((await stat(workflowBackgroundPath)).size < 180_000, "Hero background should stay below 180 KB");
+
+  const solutionsAssets = [
+    ["construction-framing.jpg", { width: 1600, height: 1067 }],
+    ["electrical-service.jpg", { width: 1600, height: 1068 }],
+    ["carpentry-measurement.jpg", { width: 1400, height: 1400 }],
+    ["contractor-tools.jpg", { width: 1600, height: 1067 }],
+    ["construction-silhouette.jpg", { width: 1600, height: 1067 }],
+  ] as const;
+  for (const [asset, dimensions] of solutionsAssets) {
+    const assetPath = join(distDir, "images", "solutions", asset);
+    const image = await readFile(assetPath);
+    assert.deepEqual(parseJpegDimensions(image), dimensions);
+    assert.ok((await stat(assetPath)).size < 260_000, `${asset} should stay below 260 KB`);
+  }
 });
 
 test("private app routes have a server and client noindex boundary", async () => {

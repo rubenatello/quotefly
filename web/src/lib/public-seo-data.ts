@@ -64,12 +64,12 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
-    title: "Estimating Software for Small Contractors | QuoteFly",
+    title: "Quoting Solutions for Contractors by Trade | QuoteFly",
     description:
-      "See how QuoteFly supports practical quoting workflows for HVAC, plumbing, flooring, roofing, landscaping, and construction businesses.",
-    heading: "Estimating workflows for small contractor teams",
+      "See how QuoteFly solves customer, estimating, pricing, PDF, and follow-up problems for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",
+    heading: "Built for the work. Not the paperwork.",
     summary:
-      "Use the same customer-to-quote workflow across service trades while keeping job descriptions, quantities, prices, and PDFs clear.",
+      "Turn fresh job details into clear customer quotes with one mobile workflow for customer records, pricing, branded PDFs, and follow-up.",
     schemaType: "CollectionPage",
   },
   "/about": {
