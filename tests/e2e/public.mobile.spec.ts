@@ -8,7 +8,20 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
 
   const consent = page.getByRole("complementary", { name: "Cookie preferences" });
   await expect(consent).toBeVisible();
+  const essentialButtonBox = await consent.getByRole("button", { name: "Essential only" }).boundingBox();
+  const analyticsButtonBox = await consent.getByRole("button", { name: "Accept analytics" }).boundingBox();
+  expect(Math.abs((essentialButtonBox?.y ?? 0) - (analyticsButtonBox?.y ?? 0))).toBeLessThanOrEqual(2);
   await consent.getByRole("button", { name: "Essential only" }).click();
+
+  const demoView = page.getByRole("group", { name: "Quote demo view" });
+  await demoView.scrollIntoViewIfNeeded();
+  await demoView.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.getByText("Quote preview", { exact: true })).toBeVisible();
+  await demoView.getByRole("button", { name: "Edit quote", exact: true }).click();
+  await expect(page.getByText("Editable quote sheet", { exact: true })).toBeVisible();
+
+  const landingOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(landingOverflow).toBeLessThanOrEqual(1);
 
   const menuButton = page.locator('button[aria-controls="mobile-primary-navigation"]');
   await expect(menuButton).toHaveAttribute("aria-expanded", "false");

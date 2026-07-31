@@ -22,12 +22,12 @@ export function CookieConsentBanner() {
   return (
     <aside
       aria-label="Cookie preferences"
-      className="fixed inset-x-0 bottom-0 z-[70] max-h-[min(85dvh,36rem)] overflow-y-auto border-t border-slate-200 bg-white/98 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur"
+      className="fixed inset-x-0 bottom-0 z-[70] max-h-[min(72dvh,32rem)] overflow-y-auto border-t border-slate-200 bg-white/98 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-4"
     >
-      <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-slate-900">Cookie preferences</p>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-xs leading-5 text-slate-600 sm:text-sm">
             QuoteFly uses essential cookies and browser storage for sign-in, security, and saved preferences. Optional analytics technologies are disabled unless you opt in.
             Read our{" "}
             <Link to="/cookies" className="font-medium text-quotefly-blue hover:text-blue-700">
@@ -39,18 +39,18 @@ export function CookieConsentBanner() {
             </Link>.
           </p>
         </div>
-        <div className="grid shrink-0 gap-2 sm:grid-cols-2">
+        <div className="grid w-full shrink-0 grid-cols-2 gap-2 sm:w-auto">
           <button
             type="button"
             onClick={() => handleChoice("essential")}
-            className="min-h-11 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800"
+            className="min-h-11 rounded-lg bg-slate-800 px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800 sm:px-4 sm:text-sm"
           >
             Essential only
           </button>
           <button
             type="button"
             onClick={() => handleChoice("accepted")}
-            className="min-h-11 rounded-lg bg-quotefly-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+            className="min-h-11 rounded-lg bg-quotefly-blue px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:px-4 sm:text-sm"
           >
             Accept analytics
           </button>

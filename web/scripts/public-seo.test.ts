@@ -107,8 +107,10 @@ test("social and visible marketing images are valid JPEG assets with expected di
   assert.deepEqual(parseJpegDimensions(og), { width: 1200, height: 630 });
   assert.ok((await stat(ogPath)).size < 300_000, "OG image should stay below 300 KB");
 
-  const workflow = await readFile(join(distDir, "quote-workflow.jpg"));
-  assert.deepEqual(parseJpegDimensions(workflow), { width: 1280, height: 960 });
+  const workflowBackgroundPath = join(distDir, "contractor-workbench-hero.jpg");
+  const workflowBackground = await readFile(workflowBackgroundPath);
+  assert.deepEqual(parseJpegDimensions(workflowBackground), { width: 1448, height: 1086 });
+  assert.ok((await stat(workflowBackgroundPath)).size < 180_000, "Hero background should stay below 180 KB");
 });
 
 test("private app routes have a server and client noindex boundary", async () => {
