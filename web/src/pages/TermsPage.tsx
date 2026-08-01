@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { ScrollText } from "lucide-react";
+import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 export function TermsPage() {
@@ -47,31 +49,25 @@ export function TermsPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-stone-50 px-4 py-16 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-4xl space-y-8">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Terms of Service</p>
-          <h1 className="mt-2 text-4xl font-bold text-slate-900">Using QuoteFly</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: July 30, 2026</p>
-          <p className="mt-4 text-slate-600">
-            These terms describe the basic rules and responsibilities for using the QuoteFly service.
-          </p>
-        </div>
-
+    <PolicyPageLayout
+      eyebrow="Terms of Service"
+      title="Using QuoteFly"
+      description="These terms describe the basic rules and responsibilities for using the QuoteFly service."
+      updated="July 30, 2026"
+      icon={ScrollText}
+    >
         {sections.map((section) => (
-          <section key={section.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-semibold text-slate-900">{section.title}</h2>
-            <ul className="mt-4 space-y-3 text-sm text-slate-600">
+          <PolicySection key={section.title} title={section.title}>
+            <ul className="mt-5 space-y-3 text-sm leading-6 text-slate-600">
               {section.points.map((point) => (
                 <li key={point} className="flex gap-3">
-                  <span className="text-quotefly-blue">+</span>
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-quotefly-blue" aria-hidden="true" />
                   <span>{point}</span>
                 </li>
               ))}
             </ul>
-          </section>
+          </PolicySection>
         ))}
-      </div>
-    </div>
+    </PolicyPageLayout>
   );
 }

@@ -226,6 +226,20 @@ describe("QuoteFly API integration", () => {
     expect(signInResponse.statusCode).toBe(400);
   });
 
+  test("returns a stable unauthorized response for invalid credentials", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signin",
+      payload: {
+        email: `missing-${Date.now()}@example.com`,
+        password: "TestPassword123!",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Invalid email or password." });
+  });
+
   test("protects the core customer and quote flow by tenant", async () => {
     const alpha = await signUp("alpha");
     const beta = await signUp("beta");

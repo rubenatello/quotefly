@@ -173,6 +173,10 @@ textarea {
   animation: qf-hero-badge-enter 380ms ease-out both;
 }
 
+.qf-page-enter {
+  animation: qf-hero-product-enter 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
 .qf-demo-pane-enter {
   animation: qf-demo-pane-enter 180ms ease-out both;
 }
@@ -193,6 +197,7 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .qf-hero-product,
   .qf-hero-badge,
+  .qf-page-enter,
   .qf-demo-pane-enter,
   .qf-reveal-pending,
   .qf-reveal-pending.qf-reveal-visible {

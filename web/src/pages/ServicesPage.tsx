@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BarChart3, FileCheck2, Send, Users } from "lucide-react";
+import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 interface ServicesPageProps {
@@ -48,13 +49,12 @@ export function ServicesPage({ onOpenAuth }: ServicesPageProps) {
             <p className="mt-5 text-lg leading-8 text-slate-600">
               QuoteFly covers the practical path from a new customer request to a reviewed quote, branded PDF, and timely follow-up—on mobile or desktop.
             </p>
-            <button
-              type="button"
+            <MarketingAction
               onClick={onOpenAuth}
-              className="mt-8 min-h-11 rounded-lg bg-quotefly-blue px-6 py-3 font-semibold text-white transition hover:bg-blue-700"
+              className="mt-8"
             >
               Start free trial
-            </button>
+            </MarketingAction>
           </div>
           <figure className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
             <img
@@ -104,19 +104,12 @@ export function ServicesPage({ onOpenAuth }: ServicesPageProps) {
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl rounded-2xl bg-slate-900 p-8 text-center text-white sm:p-12">
-          <h2 className="text-3xl font-bold">Built to stay easy as the work gets busy</h2>
-          <p className="mx-auto mt-4 max-w-2xl text-slate-300">Try the complete customer-to-quote workflow with your own sample job before relying on it for live work.</p>
-          <button
-            type="button"
-            onClick={onOpenAuth}
-            className="mt-7 min-h-11 rounded-lg bg-white px-6 py-3 font-semibold text-slate-900 transition hover:bg-slate-100"
-          >
-            Start free trial
-          </button>
-        </div>
-      </section>
+      <MarketingCta
+        title="Built to stay easy as the work gets busy"
+        description="Try the complete customer-to-quote workflow with your own sample job before relying on it for live work."
+        actionLabel="Start free trial"
+        onAction={onOpenAuth}
+      />
     </div>
   );
 }

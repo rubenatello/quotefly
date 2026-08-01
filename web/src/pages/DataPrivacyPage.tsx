@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { Database } from "lucide-react";
+import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { setPublicSEOMetadata } from "../lib/seo";
 
@@ -45,32 +47,26 @@ export function DataPrivacyPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-stone-50 px-4 py-16 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-4xl space-y-8">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Data Privacy</p>
-          <h1 className="mt-2 text-4xl font-bold text-slate-900">Data handling and security posture</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: July 30, 2026</p>
-          <p className="mt-4 text-slate-600">
-            This page explains the practical controls and product design choices that protect workspace data.
-          </p>
-        </div>
-
+    <PolicyPageLayout
+      eyebrow="Data Privacy"
+      title="Data handling and security posture"
+      description="This page explains the practical controls and product design choices that protect workspace data."
+      updated="July 30, 2026"
+      icon={Database}
+    >
         {sections.map((section) => (
-          <section key={section.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-2xl font-semibold text-slate-900">{section.title}</h2>
+          <PolicySection key={section.title} title={section.title}>
             {section.text ? (
-              <p className="mt-4 text-sm leading-6 text-slate-600">{section.text}</p>
+              <p className="mt-5 text-sm leading-6 text-slate-600">{section.text}</p>
             ) : (
-              <p className="mt-4 text-sm leading-6 text-slate-600">
+              <p className="mt-5 text-sm leading-6 text-slate-600">
                 If you believe data has been exposed or mishandled, email{" "}
                 <a className="font-semibold text-quotefly-blue hover:text-blue-700" href={SUPPORT_MAILTO}>{SUPPORT_EMAIL}</a>{" "}
                 with “Security” or “Privacy Request” in the subject line and include the affected workspace details.
               </p>
             )}
-          </section>
+          </PolicySection>
         ))}
-      </div>
-    </div>
+    </PolicyPageLayout>
   );
 }
