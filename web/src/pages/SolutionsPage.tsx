@@ -19,6 +19,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { MarketingAction } from "../components/marketing/PublicPageLayout";
+import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 interface SolutionsPageProps {
@@ -166,36 +168,10 @@ const WORKFLOW_STEPS = [
 ];
 
 export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
+  useMarketingReveal();
+
   useEffect(() => {
     setPublicSEOMetadata("/solutions");
-  }, []);
-
-  useEffect(() => {
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    if (reduceMotion.matches || !("IntersectionObserver" in window)) return;
-
-    const elements = Array.from(document.querySelectorAll<HTMLElement>("[data-solutions-reveal]"));
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          entry.target.classList.add("qf-reveal-visible");
-          observer.unobserve(entry.target);
-        });
-      },
-      { rootMargin: "0px 0px -8%", threshold: 0.12 },
-    );
-
-    elements.forEach((element) => {
-      if (element.getBoundingClientRect().top <= window.innerHeight * 0.92) {
-        element.classList.add("qf-reveal-visible");
-        return;
-      }
-      element.classList.add("qf-reveal-pending");
-      observer.observe(element);
-    });
-
-    return () => observer.disconnect();
   }, []);
 
   return (
@@ -218,20 +194,18 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
-              <button
-                type="button"
+              <MarketingAction
                 onClick={onOpenAuth}
-                className="group inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-quotefly-blue px-7 py-3 font-semibold text-white shadow-[0_14px_35px_rgba(47,111,214,0.35)] transition duration-200 hover:-translate-y-0.5 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-300/40"
+                icon={<ArrowRight size={18} aria-hidden="true" />}
               >
                 Start free trial
-                <ArrowRight size={18} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-              </button>
-              <a
+              </MarketingAction>
+              <MarketingAction
                 href="#workflow"
-                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 bg-white/[0.06] px-7 py-3 font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:bg-white/[0.1] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/25"
+                variant="dark-secondary"
               >
                 See the field workflow
-              </a>
+              </MarketingAction>
             </div>
 
             <div className="mt-7 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-300 lg:justify-start">
@@ -293,7 +267,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
 
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="problems-heading">
         <div className="mx-auto max-w-7xl">
-          <div data-solutions-reveal className="mx-auto max-w-3xl text-center">
+          <div data-marketing-reveal className="mx-auto max-w-3xl text-center">
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-orange">The real problem</p>
             <h2 id="problems-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               The work changes. The quoting headaches do not.
@@ -309,7 +283,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
               return (
                 <article
                   key={item.problem}
-                  data-solutions-reveal
+                  data-marketing-reveal
                   style={{ transitionDelay: `${index * 55}ms` }}
                   className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.05)] transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/20 hover:shadow-[0_18px_42px_rgba(15,23,42,0.09)]"
                 >
@@ -332,11 +306,11 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
 
       <section id="workflow" className="scroll-mt-24 border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="workflow-heading">
         <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] lg:gap-16">
-          <div data-solutions-reveal>
+          <div data-marketing-reveal>
             <LandingProductDemo priority={false} />
           </div>
 
-          <div data-solutions-reveal>
+          <div data-marketing-reveal>
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">One clean field workflow</p>
             <h2 id="workflow-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               From job details to a quote the customer can trust
@@ -370,7 +344,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
 
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="trades-heading">
         <div className="mx-auto max-w-7xl">
-          <div data-solutions-reveal className="mx-auto max-w-3xl text-center">
+          <div data-marketing-reveal className="mx-auto max-w-3xl text-center">
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">Built around real jobs</p>
             <h2 id="trades-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               Your trade has its own details. QuoteFly gives them a clear place.
@@ -387,7 +361,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                 <article
                   key={trade.id}
                   id={trade.id}
-                  data-solutions-reveal
+                  data-marketing-reveal
                   style={{ transitionDelay: `${(index % 3) * 55}ms` }}
                   className="scroll-mt-24 rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-7"
                 >
@@ -431,7 +405,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       </section>
 
       <section className="px-4 pb-16 sm:px-6 sm:pb-20 lg:px-8" aria-labelledby="real-work-heading">
-        <div data-solutions-reveal className="mx-auto max-w-7xl overflow-hidden rounded-[30px] bg-slate-950 p-3 text-white shadow-[0_28px_70px_rgba(15,23,42,0.2)] sm:p-4">
+        <div data-marketing-reveal className="mx-auto max-w-7xl overflow-hidden rounded-[30px] bg-slate-950 p-3 text-white shadow-[0_28px_70px_rgba(15,23,42,0.2)] sm:p-4">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
             <div className="flex flex-col justify-center rounded-[24px] border border-white/10 bg-white/[0.04] p-7 sm:p-10 lg:p-12">
               <p className="text-sm font-bold uppercase tracking-[0.18em] text-blue-300">For working crews</p>
@@ -525,7 +499,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       </section>
 
       <section className="border-t border-stone-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
-        <div data-solutions-reveal className="mx-auto max-w-5xl rounded-[30px] bg-gradient-to-br from-blue-50 via-white to-orange-50 p-8 text-center ring-1 ring-slate-200 sm:p-12">
+        <div data-marketing-reveal className="mx-auto max-w-5xl rounded-[30px] bg-gradient-to-br from-blue-50 via-white to-orange-50 p-8 text-center ring-1 ring-slate-200 sm:p-12">
           <span className="mx-auto inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-quotefly-blue text-white shadow-[0_12px_26px_rgba(47,111,214,0.25)]">
             <UsersRound size={26} aria-hidden="true" />
           </span>
@@ -534,20 +508,20 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
             Start with a sample customer, price a real job, and review the customer-facing PDF during your 14-day trial. No credit card required.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <button
-              type="button"
+            <MarketingAction
               onClick={onOpenAuth}
-              className="group inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-quotefly-blue px-8 py-3 font-semibold text-white shadow-[0_12px_28px_rgba(47,111,214,0.24)] transition duration-200 hover:-translate-y-0.5 hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-blue/25"
+              className="px-8"
+              icon={<ArrowRight size={18} aria-hidden="true" />}
             >
               Start free trial
-              <ArrowRight size={18} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-            </button>
-            <a
+            </MarketingAction>
+            <MarketingAction
               href="/services"
-              className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white px-8 py-3 font-semibold text-slate-800 transition duration-200 hover:-translate-y-0.5 hover:border-slate-400 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300/60"
+              variant="secondary"
+              className="px-8"
             >
               Explore QuoteFly services
-            </a>
+            </MarketingAction>
           </div>
         </div>
       </section>

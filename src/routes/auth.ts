@@ -203,13 +203,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const user = await app.prisma.user.findUnique({
       where: { email },
-      include: {
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        passwordHash: true,
+        deletedAtUtc: true,
         tenantLink: {
           where: {
             deletedAtUtc: null,
             tenant: { deletedAtUtc: null },
           },
-          include: {
+          select: {
+            tenantId: true,
+            role: true,
             tenant: {
               select: { id: true, name: true, slug: true },
             },

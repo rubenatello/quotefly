@@ -3,6 +3,8 @@ import { ArrowRight, Check, Sparkles } from "lucide-react";
 import { setPublicSEOMetadata } from "../lib/seo";
 import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
+import { useMarketingReveal } from "../hooks/useMarketingReveal";
 
 const SEO_FAQS = [
   {
@@ -32,6 +34,8 @@ interface LandingPageProps {
 }
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
+  useMarketingReveal();
+
   useEffect(() => {
     setPublicSEOMetadata("/");
   }, []);
@@ -61,34 +65,6 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
     return () => {
       script.remove();
     };
-  }, []);
-
-  useEffect(() => {
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    if (reduceMotion.matches || !("IntersectionObserver" in window)) return;
-
-    const elements = Array.from(document.querySelectorAll<HTMLElement>("[data-landing-reveal]"));
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          entry.target.classList.add("qf-reveal-visible");
-          observer.unobserve(entry.target);
-        });
-      },
-      { rootMargin: "0px 0px -8%", threshold: 0.12 },
-    );
-
-    elements.forEach((element) => {
-      if (element.getBoundingClientRect().top <= window.innerHeight * 0.92) {
-        element.classList.add("qf-reveal-visible");
-        return;
-      }
-      element.classList.add("qf-reveal-pending");
-      observer.observe(element);
-    });
-
-    return () => observer.disconnect();
   }, []);
 
   const features = [
@@ -158,20 +134,18 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
-              <button
-                type="button"
+              <MarketingAction
                 onClick={onOpenAuth}
-                className="qf-primary-cta group inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-quotefly-blue px-7 py-3 font-semibold text-white shadow-[0_12px_28px_rgba(47,111,214,0.24)] transition duration-200 hover:-translate-y-0.5 hover:bg-blue-600 hover:shadow-[0_16px_34px_rgba(47,111,214,0.3)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-blue/25"
+                icon={<ArrowRight size={18} aria-hidden="true" />}
               >
                 Start Free Trial
-                <ArrowRight size={18} className="transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden="true" />
-              </button>
-              <a
+              </MarketingAction>
+              <MarketingAction
                 href="#workflow"
-                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white/75 px-7 py-3 font-semibold text-slate-800 transition duration-200 hover:-translate-y-0.5 hover:border-slate-400 hover:bg-white focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300/60"
+                variant="secondary"
               >
                 See how it works
-              </a>
+              </MarketingAction>
             </div>
 
             <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-600 lg:justify-start">
@@ -190,7 +164,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
         <div className="mx-auto max-w-6xl">
-          <div data-landing-reveal className="mx-auto mb-12 max-w-2xl text-center">
+          <div data-marketing-reveal className="mx-auto mb-12 max-w-2xl text-center">
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">Built for the field</p>
             <h2 className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">Everything needed to move a quote forward</h2>
             <p className="mt-4 text-slate-600">Focused tools for the work between a new customer request and a confident yes.</p>
@@ -200,7 +174,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             {features.map((feature, index) => (
               <div
                 key={feature.title}
-                data-landing-reveal
+                data-marketing-reveal
                 style={{ transitionDelay: `${index * 55}ms` }}
                 className="qf-hover-lift rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/25 hover:shadow-[0_18px_38px_rgba(15,23,42,0.09)]"
               >
@@ -214,7 +188,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       </section>
 
       <section id="workflow" className="scroll-mt-24 border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div data-landing-reveal className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+        <div data-marketing-reveal className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
           <h2 className="text-3xl font-bold text-slate-900">One platform for quoting and estimating</h2>
           <p className="mt-4 text-slate-600">
             QuoteFly combines <strong>contractor quoting software</strong> and <strong>contractor estimating software</strong> so crews can move from lead details to priced scope and customer-ready PDF in one system.
@@ -227,7 +201,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="how-it-works-heading">
         <div className="mx-auto max-w-4xl">
-          <div data-landing-reveal className="mb-12 text-center">
+          <div data-marketing-reveal className="mb-12 text-center">
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">A clean path from lead to quote</p>
             <h2 id="how-it-works-heading" className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">How it works</h2>
           </div>
@@ -237,7 +211,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             {workflow.map((item, index) => (
               <div
                 key={item.step}
-                data-landing-reveal
+                data-marketing-reveal
                 style={{ transitionDelay: `${index * 55}ms` }}
                 className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
               >
@@ -253,7 +227,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       </section>
 
       <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div data-landing-reveal className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+        <div data-marketing-reveal className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
           <h2 className="text-3xl font-bold text-slate-900">Evaluate the complete workflow during your trial</h2>
           <p className="mt-4 text-slate-600">
             Add a sample customer, build a quote from your own job scope, review the PDF, and test the phone sharing flow before deciding whether QuoteFly fits your business.
@@ -269,7 +243,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <h2 className="mb-10 text-center text-3xl font-bold text-slate-900">Contractor quoting software FAQ</h2>
           <div className="space-y-4">
             {SEO_FAQS.map((faq) => (
-              <article key={faq.q} data-landing-reveal className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <article key={faq.q} data-marketing-reveal className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-lg font-semibold text-slate-900">{faq.q}</h3>
                 <p className="mt-2 text-slate-600">{faq.a}</p>
               </article>
@@ -278,24 +252,12 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-20 sm:px-6 lg:px-8">
-        <div data-landing-reveal className="relative mx-auto max-w-4xl overflow-hidden rounded-3xl bg-slate-950 px-6 py-12 text-center shadow-[0_24px_60px_rgba(15,23,42,0.18)] sm:px-12">
-          <div aria-hidden="true" className="absolute -left-16 -top-20 h-56 w-56 rounded-full bg-quotefly-blue/30 blur-3xl" />
-          <div aria-hidden="true" className="absolute -bottom-24 -right-12 h-56 w-56 rounded-full bg-quotefly-orange/25 blur-3xl" />
-          <h2 className="relative mb-4 text-3xl font-bold text-white sm:text-4xl">Ready to stop losing time on quotes?</h2>
-          <p className="relative mx-auto mb-8 max-w-2xl text-lg text-slate-300">
-            Start your free trial today. Full access, clean setup, and a contractor-first workflow from day one.
-          </p>
-          <button
-            type="button"
-            onClick={onOpenAuth}
-            className="relative inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white px-8 py-3 text-lg font-semibold text-slate-950 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/30"
-          >
-            Start Free Trial Now
-            <ArrowRight size={18} aria-hidden="true" />
-          </button>
-        </div>
-      </section>
+      <MarketingCta
+        title="Ready to stop losing time on quotes?"
+        description="Start your free trial today. Full access, clean setup, and a contractor-first workflow from day one."
+        actionLabel="Start Free Trial Now"
+        onAction={onOpenAuth}
+      />
     </div>
   );
 }

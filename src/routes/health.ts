@@ -12,6 +12,14 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
   app.get("/ready", async (request, reply) => {
     try {
       await app.prisma.$queryRaw`SELECT 1`;
+      await app.prisma.user.findFirst({
+        select: {
+          id: true,
+          legalAcceptedAtUtc: true,
+          termsVersion: true,
+          privacyPolicyVersion: true,
+        },
+      });
 
       return {
         status: "ready",

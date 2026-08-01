@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Cookie } from "lucide-react";
+import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
 import { setPublicSEOMetadata } from "../lib/seo";
 import {
   clearStoredCookieConsent,
@@ -37,20 +39,15 @@ export function CookiePolicyPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50 px-4 py-16 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-4xl space-y-8">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wide text-quotefly-blue">Cookie Policy</p>
-          <h1 className="mt-2 text-4xl font-bold text-slate-900">How cookies work on QuoteFly</h1>
-          <p className="mt-3 text-sm text-slate-500">Last updated: July 30, 2026</p>
-          <p className="mt-4 text-slate-600">
-            QuoteFly uses a small number of cookies and browser storage items to keep the website and application working. Optional analytics technologies remain off unless you choose to enable them.
-          </p>
-        </div>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-2xl font-semibold text-slate-900">Types of cookies and storage we use</h2>
-          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+    <PolicyPageLayout
+      eyebrow="Cookie Policy"
+      title="How cookies work on QuoteFly"
+      description="QuoteFly uses a small number of cookies and browser storage items to keep the website and application working. Optional analytics technologies remain off unless you choose to enable them."
+      updated="July 30, 2026"
+      icon={Cookie}
+    >
+        <PolicySection title="Types of cookies and storage we use">
+          <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
             <table className="min-w-[42rem] w-full text-left text-sm text-slate-600">
               <thead className="bg-slate-50 text-slate-900">
                 <tr>
@@ -91,10 +88,9 @@ export function CookiePolicyPage() {
           <p className="mt-4 text-sm text-slate-600">
             An organization may configure a different session-cookie name for its deployment. Essential storage is not used for advertising.
           </p>
-        </section>
+        </PolicySection>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-2xl font-semibold text-slate-900">Your current preference</h2>
+        <PolicySection title="Your current preference" tone="accent">
           <p className="mt-3 text-sm text-slate-600">
             Current setting:{" "}
             <span className="font-semibold text-slate-900">
@@ -110,27 +106,26 @@ export function CookiePolicyPage() {
             <button
               type="button"
               onClick={() => updateChoice("essential")}
-              className="min-h-11 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800"
+              className="min-h-12 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300/60"
             >
               Use essential only
             </button>
             <button
               type="button"
               onClick={() => updateChoice("accepted")}
-              className="min-h-11 rounded-lg bg-quotefly-blue px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+              className="min-h-12 rounded-xl bg-quotefly-blue px-5 py-3 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(47,111,214,0.2)] transition hover:-translate-y-0.5 hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-blue/20"
             >
               Accept analytics
             </button>
             <button
               type="button"
               onClick={resetChoice}
-              className="min-h-11 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"
+              className="min-h-12 rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:-translate-y-0.5 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300/60"
             >
               Ask me again
             </button>
           </div>
-        </section>
-      </div>
-    </div>
+        </PolicySection>
+    </PolicyPageLayout>
   );
 }

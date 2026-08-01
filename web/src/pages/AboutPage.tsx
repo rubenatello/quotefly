@@ -1,5 +1,7 @@
 import { useEffect } from "react";
+import { HardHat } from "lucide-react";
 import { CheckIcon } from "../components/Icons";
+import { MarketingCta, MarketingHero } from "../components/marketing/PublicPageLayout";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 interface AboutPageProps {
@@ -65,37 +67,40 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-stone-50">
-      <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Built for contractors who move fast</h1>
-          <p className="text-lg text-slate-500">
+    <div className="min-h-screen bg-[#f7f4ee] text-slate-900">
+      <MarketingHero
+        eyebrow="Why QuoteFly"
+        icon={HardHat}
+        title="Built for contractors who move fast"
+        description={
+          <>
             QuoteFly exists to remove quoting drag, not add another bloated back-office tool.
-          </p>
-        </div>
-      </section>
+          </>
+        }
+      />
 
       <section className="px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl space-y-8">
-          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="mx-auto max-w-5xl space-y-8">
+          <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-10">
             <h2 className="mb-4 text-2xl font-bold text-slate-900">How QuoteFly started</h2>
-            <p className="mb-4 text-slate-600">
+            <p className="mb-4 leading-7 text-slate-600">
               QuoteFly started from a simple operational problem: good contractors were losing time and deals because quoting was slow.
             </p>
-            <p className="mb-4 text-slate-600">
+            <p className="mb-4 leading-7 text-slate-600">
               Customers would call, email, or send rough job details. The contractor still had to dig through notes, calculate labor and materials, and assemble a quote manually.
             </p>
-            <p className="mb-4 text-slate-600">
+            <p className="mb-4 leading-7 text-slate-600">
               By the time the quote was ready, the customer had already contacted other crews. The problem was not skill. It was workflow.
             </p>
-            <p className="text-slate-600">
+            <p className="leading-7 text-slate-600">
               QuoteFly is being built to fix that bottleneck with a cleaner, faster system that works well on phones and in the field.
             </p>
           </div>
 
-          <div className="rounded-lg border border-quotefly-blue/30 bg-quotefly-blue/5 p-8">
+          <div className="relative overflow-hidden rounded-3xl border border-quotefly-blue/25 bg-gradient-to-br from-blue-50 via-white to-orange-50 p-7 sm:p-10">
+            <div aria-hidden="true" className="absolute -right-12 -top-16 h-44 w-44 rounded-full bg-quotefly-orange/15 blur-3xl" />
             <h2 className="mb-4 text-2xl font-bold text-slate-900">Our mission</h2>
-            <p className="text-slate-600">
+            <p className="relative max-w-3xl text-lg leading-8 text-slate-600">
               Help contractors move from lead to quote to follow-up without wasting time on clumsy software.
             </p>
           </div>
@@ -104,15 +109,15 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
             <h2 className="mb-6 text-2xl font-bold text-slate-900">Why we're different</h2>
             <div className="grid gap-6 sm:grid-cols-2">
               {differentiators.map((item) => (
-                <div key={item.title} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <div key={item.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.045)] transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/20 hover:shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
                   <h3 className="mb-2 font-semibold text-slate-900">{item.title}</h3>
-                  <p className="text-sm text-slate-500">{item.description}</p>
+                  <p className="text-sm leading-6 text-slate-600">{item.description}</p>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-10">
             <h2 className="mb-6 text-2xl font-bold text-slate-900">Our values</h2>
             <div className="space-y-4">
               {values.map((value) => (
@@ -122,21 +127,21 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
                   </div>
                   <div>
                     <h3 className="font-semibold text-slate-900">{value.title}</h3>
-                    <p className="text-sm text-slate-500">{value.desc}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{value.desc}</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-10">
             <h2 className="text-2xl font-bold text-slate-900">Evaluate the current product</h2>
             <p className="mt-3 text-slate-600">
               QuoteFly is in controlled beta. Use sample job information to confirm that the launch workflow fits your business before relying on it in the field.
             </p>
             <ul className="mt-6 grid gap-3 sm:grid-cols-2">
               {evaluationSteps.map((step) => (
-                <li key={step} className="flex gap-3 rounded-lg bg-slate-50 p-4 text-sm text-slate-700">
+                <li key={step} className="flex gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
                   <CheckIcon size={18} className="mt-0.5 flex-none text-quotefly-blue" />
                   <span>{step}</span>
                 </li>
@@ -146,18 +151,12 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <h2 className="mb-4 text-3xl font-bold text-slate-900">See how much quoting time you can save</h2>
-          <p className="mb-8 text-lg text-slate-500">Start a trial and run the workflow against your real jobs.</p>
-          <button
-            onClick={onOpenAuth}
-            className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-blue-600"
-          >
-            Start Free Trial
-          </button>
-        </div>
-      </section>
+      <MarketingCta
+        title="See how much quoting time you can save"
+        description="Start a trial and run the workflow against a sample job from your trade."
+        actionLabel="Start Free Trial"
+        onAction={onOpenAuth}
+      />
     </div>
   );
 }

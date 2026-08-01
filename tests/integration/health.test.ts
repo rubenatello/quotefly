@@ -4,9 +4,15 @@ import { healthRoutes } from "../../src/routes/health";
 
 const openApps: Array<ReturnType<typeof Fastify>> = [];
 
-function buildHealthServer(queryRaw: () => Promise<unknown>) {
+function buildHealthServer(
+  queryRaw: () => Promise<unknown>,
+  schemaProbe: () => Promise<unknown> = async () => null,
+) {
   const app = Fastify({ logger: false });
-  app.decorate("prisma", { $queryRaw: queryRaw });
+  app.decorate("prisma", {
+    $queryRaw: queryRaw,
+    user: { findFirst: schemaProbe },
+  });
   app.register(healthRoutes, { prefix: "/v1" });
   openApps.push(app);
   return app;
@@ -32,13 +38,15 @@ describe("health and readiness routes", () => {
 
   test("returns ready only after the database probe succeeds", async () => {
     const queryRaw = vi.fn(async () => [{ value: 1 }]);
-    const app = buildHealthServer(queryRaw);
+    const schemaProbe = vi.fn(async () => null);
+    const app = buildHealthServer(queryRaw, schemaProbe);
 
     const response = await app.inject({ method: "GET", url: "/v1/ready" });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: "ready", service: "quotefly-api" });
     expect(queryRaw).toHaveBeenCalledOnce();
+    expect(schemaProbe).toHaveBeenCalledOnce();
   });
 
   test("returns a stable safe response when the database probe fails", async () => {
@@ -54,5 +62,21 @@ describe("health and readiness routes", () => {
     expect(response.body).not.toContain("secret-user");
     expect(response.body).not.toContain("private-host");
     expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
+  test("returns not ready when the deployed database schema is stale", async () => {
+    const queryRaw = vi.fn(async () => [{ value: 1 }]);
+    const schemaProbe = vi.fn(async () => {
+      throw new Error("The column User.legalAcceptedAtUtc does not exist.");
+    });
+    const app = buildHealthServer(queryRaw, schemaProbe);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("legalAcceptedAtUtc");
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(schemaProbe).toHaveBeenCalledOnce();
   });
 });

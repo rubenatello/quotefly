@@ -1,5 +1,7 @@
 import { useEffect } from "react";
+import { BadgeDollarSign } from "lucide-react";
 import { CheckIcon } from "../components/Icons";
+import { MarketingCta, MarketingHero } from "../components/marketing/PublicPageLayout";
 import { INFO_MAILTO } from "../lib/contact";
 import { PUBLIC_BASIC_PLAN } from "../lib/public-seo-data";
 import { setPublicSEOMetadata } from "../lib/seo";
@@ -100,33 +102,36 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-stone-50 text-slate-900">
-      <section className="px-4 py-16 sm:px-6 sm:py-24 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <h1 className="mb-4 text-4xl font-bold text-slate-900 sm:text-5xl">Contractor quoting software pricing</h1>
-          <p className="text-lg text-slate-600">
+    <div className="min-h-screen bg-[#f7f4ee] text-slate-900">
+      <MarketingHero
+        eyebrow="Simple, honest pricing"
+        icon={BadgeDollarSign}
+        title="Contractor quoting software pricing"
+        description={
+          <>
             QuoteFly pricing for contractor quoting software and contractor estimating software. Basic is live now, with advanced tiers staged after core workflow hardening.
-          </p>
-
-          <div className="mt-8 flex items-center justify-center gap-4">
-            <span className="text-sm text-slate-600">Billed monthly</span>
+          </>
+        }
+        actions={
+          <>
+            <span className="text-sm font-medium text-slate-600">Billed monthly</span>
             <span className="inline-flex items-center rounded-full border border-quotefly-blue/15 bg-quotefly-blue/[0.06] px-4 py-2 text-xs font-semibold text-quotefly-blue">
               Basic is live now
             </span>
-          </div>
-        </div>
-      </section>
+          </>
+        }
+      />
 
-      <section className="px-4 py-8 sm:px-6 lg:px-8">
+      <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             {plans.map((plan) => (
               <div
                 key={plan.name}
-                className={`rounded-lg border transition-colors ${
+                className={`overflow-hidden rounded-3xl border transition duration-200 ${
                   plan.highlighted
-                    ? "border-quotefly-blue bg-quotefly-blue/5"
-                    : "border-slate-200 bg-white shadow-sm hover:border-slate-300"
+                    ? "border-quotefly-blue bg-gradient-to-b from-blue-50 to-white shadow-[0_18px_46px_rgba(47,111,214,0.13)]"
+                    : "border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.05)] hover:-translate-y-1 hover:border-quotefly-blue/20 hover:shadow-[0_18px_42px_rgba(15,23,42,0.09)]"
                 }`}
               >
                 {plan.highlighted && (
@@ -152,9 +157,9 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                   <button
                     onClick={plan.availableNow ? onOpenAuth : undefined}
                     disabled={!plan.availableNow}
-                    className={`mt-6 w-full rounded-lg px-6 py-3 font-semibold transition-colors ${
+                    className={`mt-6 min-h-12 w-full rounded-xl px-6 py-3 font-semibold transition duration-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-blue/20 ${
                       plan.highlighted
-                        ? "bg-quotefly-blue text-white hover:bg-blue-600"
+                        ? "bg-quotefly-blue text-white shadow-[0_10px_24px_rgba(47,111,214,0.22)] hover:-translate-y-0.5 hover:bg-blue-600"
                         : "border border-slate-300 text-slate-900"
                     } ${
                       !plan.availableNow ? "cursor-not-allowed bg-slate-100 text-slate-400" : ""
@@ -192,7 +197,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
           <div className="space-y-6">
             {faqs.map((faq) => (
-              <div key={faq.q} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+              <div key={faq.q} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.045)]">
                 <h3 className="mb-2 font-semibold text-slate-900">{faq.q}</h3>
                 <p className="text-slate-600">{faq.a}</p>
               </div>
@@ -201,26 +206,21 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
-          <h2 className="mb-4 text-3xl font-bold text-slate-900">Start with Basic</h2>
-          <p className="mb-8 text-lg text-slate-600">No credit card required. Full access to the launch workflow for 14 days.</p>
-          <p className="mb-5 text-sm text-slate-500">AI usage applies only when you draft or revise with AI. The app shows percentage used and estimated prompts remaining.</p>
-          <button
-            onClick={onOpenAuth}
-            className="rounded-lg bg-quotefly-blue px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-blue-600"
-          >
-            Start Free Trial
-          </button>
-          <p className="mt-5 text-sm text-slate-600">
-            Have a sales or plan question?{" "}
-            <a href={INFO_MAILTO} className="font-semibold text-quotefly-blue hover:text-blue-700">
+      <MarketingCta
+        title="Start with Basic"
+        description="No credit card required. Get full access to the launch workflow for 14 days."
+        actionLabel="Start Free Trial"
+        onAction={onOpenAuth}
+        supportingText={
+          <>
+            AI usage applies only when you draft or revise with AI. Have a sales or plan question?{" "}
+            <a href={INFO_MAILTO} className="font-semibold text-blue-300 hover:text-blue-200">
               Email our team
             </a>
             .
-          </p>
-        </div>
-      </section>
+          </>
+        }
+      />
     </div>
   );
 }
