@@ -1,13 +1,21 @@
 # Dependency Health Snapshot
 
+## 2026-08-10 security refresh
+
+- Refreshed the root and web lockfiles within their existing compatible version ranges.
+- Updated React Router to 7.18.2 and removed the temporary `GHSA-qwww-vcr4-c8h2` exception.
+- Updated all installed `brace-expansion` nodes to patched releases and removed the temporary `GHSA-mh99-v99m-4gvg` exception.
+- Updated the transitive `fast-uri`, `js-yaml`, and `nanoid` nodes to patched releases.
+- Updated `tsx` and `esbuild` within their compatible ranges, eliminating the previous `GHSA-g7r4-m6w7-qqqr` disposition.
+- Pinned the Stripe SDK to 22.3.2 so this security refresh preserves QuoteFly's reviewed `2026-06-24.dahlia` payment API behavior.
+- QuoteFly currently permits no dependency-advisory exceptions; `npm run audit:all` fails on every reported advisory.
+
 ## 2026-07-27 launch gate
 
 - Root and frontend packages were refreshed within supported release lines.
 - `@fastify/static` is pinned to patched version 10.1.2 while `@fastify/swagger-ui` catches up to the new transitive release.
-- `brace-expansion` advisory `GHSA-mh99-v99m-4gvg` is explicitly accepted only for the legacy release nested under ESLint development tooling. That code is not installed in the production bundle; a forced cross-major override breaks ESLint's expected CommonJS API.
-- React Router advisory `GHSA-qwww-vcr4-c8h2` is explicitly accepted only because QuoteFly is a client-side Vite SPA and does not use React Server Components or server actions, the affected execution path. Remove this exception when a compatible patched `react-router-dom` release is available.
-- Disposition `DEP-ESBUILD-2026-01` accepts `esbuild` advisory `GHSA-g7r4-m6w7-qqqr` only for Web's exact development-only `node_modules/esbuild` 0.27.7 node installed through `tsx` 4.21.0. QuoteFly invokes `tsx` solely to transform the build-time public prerender and SEO tests; it never calls esbuild's affected Windows HTTP development-server API. There is no compatible patched esbuild release in `tsx`'s `~0.27.0` range, so forcing an override would violate the dependent package's declared compatibility. Remove this exception as soon as `tsx` supports a patched esbuild, if `tsx` is removed, or immediately if this node becomes production-installed or any QuoteFly script starts esbuild's serving API.
-- `npm run audit:all` audits both dependency trees and fails on every advisory except the three documented, unreachable paths above.
+- Three narrowly scoped advisory dispositions were temporarily accepted for development-only or unreachable paths. All three were retired in the 2026-08-10 refresh after compatible patched releases became available.
+- `npm run audit:all` audits both dependency trees and fails on every advisory that is not explicitly dispositioned.
 
 Date: 2026-04-07
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
 import { CURRENT_LEGAL_VERSION } from "../lib/legal";
@@ -8,7 +8,11 @@ interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (payload: AuthPayload) => void;
+  initialMode?: AuthEntryMode;
 }
+
+export type AuthEntryMode = "signin" | "signup";
+type AuthMode = AuthEntryMode | "forgot";
 
 const TRADE_OPTIONS: { value: ServiceType; label: string }[] = [
   { value: "HVAC", label: "HVAC" },
@@ -22,8 +26,8 @@ const TRADE_OPTIONS: { value: ServiceType; label: string }[] = [
 const inputClass =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-2 focus:ring-quotefly-blue/20";
 
-export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
+export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }: AuthModalProps) {
+  const [mode, setMode] = useState<AuthMode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -33,13 +37,28 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [acceptedLegalTerms, setAcceptedLegalTerms] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode(initialMode);
+    setError(null);
+    setSuccess(null);
+  }, [initialMode, isOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
     setIsLoading(true);
 
     try {
+      if (mode === "forgot") {
+        const response = await api.auth.forgotPassword({ email });
+        setSuccess(response.message);
+        return;
+      }
+
       let payload: AuthPayload;
       if (mode === "signup") {
         payload = await api.auth.signup({
@@ -76,9 +95,11 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
     }
   };
 
-  const switchMode = (next: "signin" | "signup") => {
+  const switchMode = (next: AuthMode) => {
     setMode(next);
     setError(null);
+    setSuccess(null);
+    setPassword("");
   };
 
   if (!isOpen) return null;
@@ -99,13 +120,20 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   };
 
   return (
-    <Modal open={isOpen} onClose={onClose} size="md" ariaLabel={mode === "signin" ? "Sign in" : "Start free trial"}>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="md"
+      ariaLabel={mode === "signin" ? "Sign in" : mode === "forgot" ? "Reset password" : "Start free trial"}
+    >
       <ModalHeader
-        title={mode === "signin" ? "Welcome Back" : "Start Your Free Trial"}
+        title={mode === "signin" ? "Welcome Back" : mode === "forgot" ? "Reset Your Password" : "Start Your Free Trial"}
         description={
           mode === "signin"
             ? "Sign in to your QuoteFly workspace."
-            : "Set up your account in under a minute."
+            : mode === "forgot"
+              ? "Enter your account email and we’ll send you a secure reset link."
+              : "Set up your account in under a minute."
         }
         onClose={onClose}
       />
@@ -118,6 +146,12 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
                 <path fillRule="evenodd" d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14zm.75-9.25a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 0 1.5 0v-2.5zM8 11a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" clipRule="evenodd" />
               </svg>
               <span>{error}</span>
+            </div>
+          )}
+
+          {success && (
+            <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+              {success} Check your spam folder if it does not arrive within a few minutes.
             </div>
           )}
 
@@ -221,31 +255,44 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@company.com"
-              autoComplete={mode === "signin" ? "email" : "username"}
+              autoComplete={mode === "signup" ? "username" : "email"}
               className={inputClass}
               required
             />
           </div>
 
-          <div>
-            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-slate-700">
-              Password{" "}
-              {mode === "signup" && (
-                <span className="font-normal text-slate-400">(min 8 characters)</span>
-              )}
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
-              autoComplete={mode === "signin" ? "current-password" : "new-password"}
-              minLength={mode === "signup" ? 8 : 1}
-              className={inputClass}
-              required
-            />
-          </div>
+          {mode !== "forgot" ? (
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+                  Password{" "}
+                  {mode === "signup" && (
+                    <span className="font-normal text-slate-400">(min 8 characters)</span>
+                  )}
+                </label>
+                {mode === "signin" ? (
+                  <button
+                    type="button"
+                    onClick={() => switchMode("forgot")}
+                    className="min-h-11 text-sm font-semibold text-quotefly-blue transition-colors hover:text-blue-700 sm:min-h-0"
+                  >
+                    Forgot password?
+                  </button>
+                ) : null}
+              </div>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                minLength={mode === "signup" ? 8 : 1}
+                className={inputClass}
+                required
+              />
+            </div>
+          ) : null}
 
           {mode === "signup" ? (
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
@@ -282,7 +329,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
 
           <Button
             type="submit"
-            disabled={isLoading || (mode === "signup" && !acceptedLegalTerms)}
+            disabled={isLoading || Boolean(success) || (mode === "signup" && !acceptedLegalTerms)}
             loading={isLoading}
             fullWidth
             size="lg"
@@ -291,11 +338,26 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
               ? "Please wait..."
               : mode === "signin"
                 ? "Sign In"
-                : "Create Account"}
+                : mode === "forgot"
+                  ? success
+                    ? "Reset Link Sent"
+                    : "Send Reset Link"
+                  : "Create Account"}
           </Button>
 
           <p className="text-center text-sm text-slate-500">
-            {mode === "signin" ? (
+            {mode === "forgot" ? (
+              <>
+                Remember your password?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("signin")}
+                  className="min-h-11 font-medium text-quotefly-blue transition-colors hover:text-blue-700 sm:min-h-0"
+                >
+                  Back to sign in
+                </button>
+              </>
+            ) : mode === "signin" ? (
               <>
                 Don&apos;t have an account?{" "}
                 <button

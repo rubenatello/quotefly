@@ -1,35 +1,4 @@
-export const acceptedAdvisories = [
-  {
-    workspace: "Web",
-    packageName: "react-router",
-    advisoryId: "GHSA-qwww-vcr4-c8h2",
-    nodes: [{ path: "node_modules/react-router", version: "7.18.1", devOnly: false }],
-    reason:
-      "QuoteFly uses React Router only as a client-side Vite SPA and does not enable React Server Components or server actions.",
-  },
-  {
-    workspace: "Web",
-    packageName: "brace-expansion",
-    advisoryId: "GHSA-mh99-v99m-4gvg",
-    nodes: [
-      {
-        path: "node_modules/minimatch/node_modules/brace-expansion",
-        version: "1.1.16",
-        devOnly: true,
-      },
-    ],
-    reason:
-      "This exact vulnerable node is reachable only through ESLint development tooling and is not installed in the production bundle.",
-  },
-  {
-    workspace: "Web",
-    packageName: "esbuild",
-    advisoryId: "GHSA-g7r4-m6w7-qqqr",
-    nodes: [{ path: "node_modules/esbuild", version: "0.27.7", devOnly: true }],
-    reason:
-      "This exact node is used only by tsx for build, prerender, and SEO test transformation; QuoteFly never starts esbuild's affected Windows HTTP development server.",
-  },
-];
+export const acceptedAdvisories = [];
 
 export function advisoryId(via) {
   if (typeof via?.url !== "string") return null;

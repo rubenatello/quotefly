@@ -111,6 +111,9 @@ Use Tailwind utility classes directly in React components.
 - `APP_URL`: frontend URL (e.g. `http://localhost:5173`, `https://quotefly.us`)
 - `API_URL`: API URL (e.g. `http://localhost:4000`, `https://api.quotefly.us`)
 - `CORS_ALLOWED_ORIGINS`: comma-separated browser origins allowed to call the API in production (defaults to `APP_URL`; e.g. `https://quotefly.us,https://www.quotefly.us`)
+- `RESEND_API_KEY`: backend-only Resend API key for transactional account email
+- `PASSWORD_RESET_EMAIL_FROM`: verified sender identity for password recovery (for example `QuoteFly <support@quotefly.us>`)
+- `PASSWORD_RESET_TOKEN_TTL_MINUTES`: single-use reset-link lifetime from 10 to 60 minutes (default `30`)
 - `QUICKBOOKS_CLIENT_ID`: Intuit app client id for QuickBooks OAuth
 - `QUICKBOOKS_CLIENT_SECRET`: Intuit app client secret
 - `QUICKBOOKS_ENVIRONMENT`: `sandbox` or `production`
@@ -120,6 +123,9 @@ Use Tailwind utility classes directly in React components.
 - `TWILIO_ACCOUNT_SID`: optional for SMS features
 - `TWILIO_AUTH_TOKEN`: optional for SMS features
 - `TWILIO_WEBHOOK_AUTH_TOKEN`: optional webhook verification token
+
+Password recovery provider and production smoke-test setup is documented in
+[`docs/password-recovery-setup.md`](docs/password-recovery-setup.md).
 
 ### Frontend (web/.env)
 

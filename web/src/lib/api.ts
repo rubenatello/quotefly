@@ -840,6 +840,18 @@ export const api = {
     signin: (body: { email: string; password: string }) =>
       request<AuthPayload>("/v1/auth/signin", { method: "POST", body: JSON.stringify(body) }),
 
+    forgotPassword: (body: { email: string }) =>
+      request<{ message: string }>("/v1/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    resetPassword: (body: { token: string; password: string }) =>
+      request<{ message: string }>("/v1/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
     logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
 
     me: () => request<AuthSessionPayload>("/v1/auth/me"),

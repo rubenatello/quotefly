@@ -2,11 +2,17 @@ import { Prisma } from "@prisma/client";
 import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "node:crypto";
 import { getJwtClaims } from "../lib/auth";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
 import { isSuperuserEmail } from "../lib/superuser";
 import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
+import {
+  isTransactionalEmailConfigured,
+  sendPasswordChangedEmail,
+  sendPasswordResetEmail,
+} from "../services/transactional-email";
 
 const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
@@ -16,6 +22,12 @@ const CURRENT_LEGAL_VERSION = "2026-07-30";
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
 const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
 const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
+const ForgotPasswordRateLimit = { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } } as const;
+const ResetPasswordRateLimit = { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } } as const;
+const PASSWORD_RESET_COOLDOWN_MS = 10 * 60 * 1000;
+const PASSWORD_RESET_MIN_RESPONSE_MS = 750;
+const PASSWORD_RESET_REQUEST_MESSAGE =
+  "If an active QuoteFly account exists for that email, a password reset link is on its way.";
 
 const SignUpSchema = z.object({
   email: z.string().trim().email(),
@@ -34,6 +46,28 @@ const SignInSchema = z.object({
   email: z.string().trim().email(),
   password: z.string().min(1).max(120),
 });
+
+const ForgotPasswordSchema = z.object({
+  email: z.string().trim().email(),
+});
+
+const ResetPasswordSchema = z.object({
+  token: z.string().trim().min(43).max(200).regex(/^[A-Za-z0-9_-]+$/),
+  password: z.string().min(8).max(120),
+});
+
+class PasswordResetRejectedError extends Error {}
+
+function hashPasswordResetToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+async function waitForMinimumResponseTime(startedAt: number): Promise<void> {
+  const remainingMs = PASSWORD_RESET_MIN_RESPONSE_MS - (Date.now() - startedAt);
+  if (remainingMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remainingMs));
+  }
+}
 
 function slugifyCompanyName(companyName: string): string {
   const slug = companyName
@@ -166,7 +200,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         });
 
         const token = app.jwt.sign(
-          { userId: user.id, tenantId: tenant.id, email: user.email, role: "owner" },
+          {
+            userId: user.id,
+            tenantId: tenant.id,
+            email: user.email,
+            role: "owner",
+            authVersion: user.authVersion,
+          },
           { expiresIn: JWT_TTL },
         );
 
@@ -208,6 +248,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         email: true,
         fullName: true,
         passwordHash: true,
+        authVersion: true,
         deletedAtUtc: true,
         tenantLink: {
           where: {
@@ -246,6 +287,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         tenantId: tenantLink.tenantId,
         email: user.email,
         role: tenantLink.role,
+        authVersion: user.authVersion,
       },
       { expiresIn: JWT_TTL },
     );
@@ -256,6 +298,172 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       user: { id: user.id, email: user.email, fullName: user.fullName },
       tenant: { id: tenantLink.tenant.id, name: tenantLink.tenant.name, slug: tenantLink.tenant.slug },
     });
+  });
+
+  // POST /v1/auth/forgot-password
+  app.post("/auth/forgot-password", ForgotPasswordRateLimit, async (request, reply) => {
+    const startedAt = Date.now();
+    const payload = ForgotPasswordSchema.parse(request.body);
+    const email = payload.email.toLowerCase();
+
+    if (!isTransactionalEmailConfigured(app.env)) {
+      await waitForMinimumResponseTime(startedAt);
+      return reply.code(503).send({
+        error: "Password recovery is temporarily unavailable. Please contact QuoteFly support.",
+      });
+    }
+
+    const user = await app.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, deletedAtUtc: true },
+    });
+
+    if (user && !user.deletedAtUtc) {
+      const cooldownStartedAt = new Date(Date.now() - PASSWORD_RESET_COOLDOWN_MS);
+      const recentToken = await app.prisma.passwordResetToken.findFirst({
+        where: {
+          userId: user.id,
+          usedAtUtc: null,
+          expiresAtUtc: { gt: new Date() },
+          createdAt: { gte: cooldownStartedAt },
+        },
+        select: { id: true },
+      });
+
+      if (!recentToken) {
+        const rawToken = randomBytes(32).toString("base64url");
+        const tokenHash = hashPasswordResetToken(rawToken);
+        const expiresAtUtc = new Date(
+          Date.now() + app.env.PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000,
+        );
+        const resetUrl = new URL("/reset-password", app.env.APP_URL);
+        resetUrl.hash = new URLSearchParams({ token: rawToken }).toString();
+
+        const resetToken = await app.prisma.passwordResetToken.create({
+          data: { userId: user.id, tokenHash, expiresAtUtc },
+          select: { id: true },
+        });
+
+        try {
+          await sendPasswordResetEmail(app.env, {
+            to: user.email,
+            resetUrl: resetUrl.toString(),
+          });
+
+          await app.prisma.passwordResetToken.updateMany({
+            where: {
+              userId: user.id,
+              id: { not: resetToken.id },
+              usedAtUtc: null,
+            },
+            data: { usedAtUtc: new Date() },
+          });
+        } catch (error) {
+          await app.prisma.passwordResetToken.deleteMany({ where: { id: resetToken.id } });
+          request.log.error(
+            {
+              provider: "resend",
+              reason: error instanceof Error ? error.message : "unknown provider error",
+            },
+            "Password reset email delivery failed.",
+          );
+        }
+      }
+    }
+
+    await waitForMinimumResponseTime(startedAt);
+    return reply.code(202).send({ message: PASSWORD_RESET_REQUEST_MESSAGE });
+  });
+
+  // POST /v1/auth/reset-password
+  app.post("/auth/reset-password", ResetPasswordRateLimit, async (request, reply) => {
+    const payload = ResetPasswordSchema.parse(request.body);
+    const tokenHash = hashPasswordResetToken(payload.token);
+    const passwordHash = await bcrypt.hash(payload.password, BCRYPT_ROUNDS);
+    const now = new Date();
+
+    let resetUserEmail: string | null;
+    try {
+      resetUserEmail = await app.prisma.$transaction(async (tx) => {
+        const resetToken = await tx.passwordResetToken.findUnique({
+          where: { tokenHash },
+          select: {
+            id: true,
+            userId: true,
+            usedAtUtc: true,
+            expiresAtUtc: true,
+            user: { select: { email: true, deletedAtUtc: true } },
+          },
+        });
+
+        if (
+          !resetToken ||
+          resetToken.usedAtUtc ||
+          resetToken.expiresAtUtc <= now ||
+          resetToken.user.deletedAtUtc
+        ) {
+          return null;
+        }
+
+        const claimed = await tx.passwordResetToken.updateMany({
+          where: {
+            id: resetToken.id,
+            usedAtUtc: null,
+            expiresAtUtc: { gt: now },
+          },
+          data: { usedAtUtc: now },
+        });
+
+        if (claimed.count !== 1) return null;
+
+        const updatedUser = await tx.user.updateMany({
+          where: { id: resetToken.userId, deletedAtUtc: null },
+          data: {
+            passwordHash,
+            authVersion: { increment: 1 },
+          },
+        });
+
+        if (updatedUser.count !== 1) {
+          throw new PasswordResetRejectedError();
+        }
+
+        await tx.passwordResetToken.updateMany({
+          where: { userId: resetToken.userId, usedAtUtc: null },
+          data: { usedAtUtc: now },
+        });
+
+        return resetToken.user.email;
+      });
+    } catch (error) {
+      if (error instanceof PasswordResetRejectedError) {
+        resetUserEmail = null;
+      } else {
+        throw error;
+      }
+    }
+
+    if (!resetUserEmail) {
+      return reply.code(400).send({
+        error: "This reset link is invalid or has expired. Request a new one.",
+      });
+    }
+
+    clearSessionCookie(app, reply);
+
+    try {
+      await sendPasswordChangedEmail(app.env, resetUserEmail);
+    } catch (error) {
+      request.log.error(
+        {
+          provider: "resend",
+          reason: error instanceof Error ? error.message : "unknown provider error",
+        },
+        "Password change notification delivery failed.",
+      );
+    }
+
+    return reply.send({ message: "Password updated. You can now sign in." });
   });
 
   // POST /v1/auth/logout

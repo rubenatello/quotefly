@@ -146,6 +146,19 @@ appShell = removeCanonical(appShell);
 appShell = replaceStructuredData(appShell, null);
 await writeFile(join(distDir, "app-shell.html"), appShell, "utf8");
 
+let resetPasswordShell = replaceTitle(baseHtml, "Reset your password | QuoteFly");
+resetPasswordShell = replaceNamedMeta(
+  resetPasswordShell,
+  "description",
+  "Securely choose a new password for your QuoteFly account.",
+);
+resetPasswordShell = replaceNamedMeta(resetPasswordShell, "robots", "noindex,nofollow,noarchive");
+resetPasswordShell = replaceNamedMeta(resetPasswordShell, "referrer", "no-referrer");
+resetPasswordShell = removeCanonical(resetPasswordShell);
+resetPasswordShell = replaceStructuredData(resetPasswordShell, null);
+await mkdir(join(distDir, "reset-password"), { recursive: true });
+await writeFile(join(distDir, "reset-password", "index.html"), resetPasswordShell, "utf8");
+
 let notFound = replaceTitle(baseHtml, "Page Not Found | QuoteFly");
 notFound = replaceNamedMeta(notFound, "description", "The requested QuoteFly page could not be found.");
 notFound = replaceNamedMeta(notFound, "robots", "noindex,nofollow");

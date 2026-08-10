@@ -1,0 +1,4 @@
+interface:
+  display_name: "QuoteFly Security Review"
+  short_description: "Threat-aware security and compliance reviews"
+  default_prompt: "Use $quotefly-security-review to audit this change for exploitable security, privacy, dependency, and compliance risks."

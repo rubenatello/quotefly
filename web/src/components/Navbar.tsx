@@ -7,10 +7,11 @@ interface NavbarProps {
   onNavigate: (page: string) => void;
   isLoggedIn?: boolean;
   onOpenAuth?: () => void;
+  onOpenSignIn?: () => void;
   onLogout?: () => void;
 }
 
-export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onLogout }: NavbarProps) {
+export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLogout }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navLinks = [
@@ -79,7 +80,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onLogout }: Navbar
             <>
               <button
                 type="button"
-                onClick={onOpenAuth}
+                onClick={onOpenSignIn ?? onOpenAuth}
                 className="min-h-11 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"
               >
                 Sign In
@@ -151,7 +152,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onLogout }: Navbar
                   <button
                     type="button"
                     onClick={() => {
-                      onOpenAuth?.();
+                      (onOpenSignIn ?? onOpenAuth)?.();
                       setMobileMenuOpen(false);
                     }}
                     className="min-h-11 w-full px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"

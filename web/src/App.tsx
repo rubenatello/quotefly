@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import "./App.css";
 import { Navbar } from "./components/Navbar";
 import { CrmShell } from "./components/CrmShell";
-import { AuthModal } from "./components/AuthModal";
+import { AuthModal, type AuthEntryMode } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
@@ -32,6 +32,7 @@ const PrivacyPage = lazy(() => import("./pages/PrivacyPage").then((module) => ({
 const DataPrivacyPage = lazy(() => import("./pages/DataPrivacyPage").then((module) => ({ default: module.DataPrivacyPage })));
 const TermsPage = lazy(() => import("./pages/TermsPage").then((module) => ({ default: module.TermsPage })));
 const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((module) => ({ default: module.CookiePolicyPage })));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
 const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
@@ -268,10 +269,12 @@ function CrmLayout({
 
 function MarketingLayout({
   onOpenAuth,
+  onOpenSignIn,
   onLogout,
   isLoggedIn,
 }: {
   onOpenAuth: () => void;
+  onOpenSignIn: () => void;
   onLogout: () => void;
   isLoggedIn: boolean;
 }) {
@@ -291,6 +294,7 @@ function MarketingLayout({
         onNavigate={handleNavigate}
         isLoggedIn={isLoggedIn}
         onOpenAuth={onOpenAuth}
+        onOpenSignIn={onOpenSignIn}
         onLogout={onLogout}
       />
       <main id="main-content" className="flex-1">
@@ -306,6 +310,7 @@ function MarketingLayout({
             <Route path="data-privacy" element={<DataPrivacyPage />} />
             <Route path="terms" element={<TermsPage />} />
             <Route path="cookies" element={<CookiePolicyPage />} />
+            <Route path="reset-password" element={<ResetPasswordPage onOpenSignIn={onOpenSignIn} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
@@ -333,6 +338,7 @@ function ScrollToRoute() {
 
 function AppRoutes() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authEntryMode, setAuthEntryMode] = useState<AuthEntryMode>("signup");
   const [session, setSession] = useState<Session | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const [sessionRecovery, setSessionRecovery] = useState<SessionRecovery | null>(null);
@@ -340,6 +346,11 @@ function AppRoutes() {
   const navigate = useNavigate();
   const location = useLocation();
   const [initialPath] = useState(() => location.pathname);
+
+  const openAuth = (mode: AuthEntryMode) => {
+    setAuthEntryMode(mode);
+    setIsAuthModalOpen(true);
+  };
 
   async function hydrateSessionState(): Promise<Session> {
     try {
@@ -506,13 +517,21 @@ function AppRoutes() {
         )}
         <Route
           path="/*"
-          element={<MarketingLayout onOpenAuth={() => setIsAuthModalOpen(true)} onLogout={handleLogout} isLoggedIn={isLoggedIn} />}
+          element={
+            <MarketingLayout
+              onOpenAuth={() => openAuth("signup")}
+              onOpenSignIn={() => openAuth("signin")}
+              onLogout={handleLogout}
+              isLoggedIn={isLoggedIn}
+            />
+          }
         />
       </Routes>
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         onSuccess={handleAuthSuccess}
+        initialMode={authEntryMode}
       />
       <CookieConsentBanner />
       <Toaster position="top-right" richColors closeButton theme="light" />
