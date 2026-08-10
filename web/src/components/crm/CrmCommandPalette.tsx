@@ -12,10 +12,12 @@ import {
   Settings,
   UserPlus2,
   UserRoundCog,
+  Clock3,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import type { WorkspaceNavigationId } from "./workspace-navigation";
 
-type CommandPage = "customers" | "quotes" | "analytics" | "branding" | "settings" | "settings-users";
+type CommandPage = WorkspaceNavigationId;
 type CommandAction = "new-customer" | "new-quote";
 
 interface CrmCommandPaletteProps {
@@ -61,6 +63,13 @@ const COMMAND_ITEMS: CommandItem[] = [
     description: "See quote KPIs and open the quote desk when a quote needs work.",
     page: "quotes",
     icon: <FileText size={16} />,
+    group: "Workflow",
+  },
+  {
+    label: "Follow-up",
+    description: "Work leads, active jobs, and after-sale check-ins in priority order.",
+    page: "follow-up",
+    icon: <Clock3 size={16} />,
     group: "Workflow",
   },
   {

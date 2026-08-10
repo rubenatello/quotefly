@@ -7,20 +7,25 @@ import { cn } from "../../lib/utils";
 import { formatAiRenewalDate } from "../../lib/ai-credits";
 import { AppTooltip, AppTooltipProvider } from "../ui/tooltip";
 import { ProgressBar } from "../ui";
+import {
+  isWorkspaceNavigationActive,
+  type WorkspaceNavigationId,
+  type WorkspacePage,
+} from "./workspace-navigation";
 
 export interface CrmNavLink {
   label: string;
-  path: string;
+  path: WorkspaceNavigationId;
   icon: ReactNode;
 }
 
 interface CrmSidebarProps {
-  currentPage: string;
+  currentPage: WorkspacePage;
   mobileOpen: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onCloseMobile: () => void;
-  onNavigate: (page: string) => void;
+  onNavigate: (page: WorkspaceNavigationId) => void;
   operationsLinks: readonly CrmNavLink[];
   settingsLinks: readonly CrmNavLink[];
   onLogout: () => void;
@@ -186,7 +191,7 @@ export function CrmSidebar({
 
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
             {operationsLinks.map((link) => {
-              const active = currentPage === link.path;
+              const active = isWorkspaceNavigationActive(link.path, currentPage);
               const button = (
                 <button
                   key={link.path}
@@ -237,7 +242,7 @@ export function CrmSidebar({
           {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
             {settingsLinks.map((link) => {
-              const active = currentPage === link.path;
+              const active = isWorkspaceNavigationActive(link.path, currentPage);
               const button = (
                 <button
                   key={link.path}
@@ -272,7 +277,6 @@ export function CrmSidebar({
                       </span>
                     ) : null}
                   </span>
-                  {collapsed ? <span className={cn("ml-1 h-2.5 w-2.5 rounded-full", active ? "bg-quotefly-blue" : "bg-slate-300")} /> : null}
                 </button>
               );
 
@@ -291,7 +295,7 @@ export function CrmSidebar({
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {showTrialBadge ? `Trial · ${displayPlanName}` : displayPlanName}
+                  {showTrialBadge ? "Full trial access" : displayPlanName}
                 </p>
                 <span className="text-xs font-semibold text-slate-900">
                   {usagePercentLabel}

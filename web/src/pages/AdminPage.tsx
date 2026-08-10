@@ -223,6 +223,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
   const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Basic";
+  const displayPlanName = session?.isTrial ? "Full trial" : effectivePlanName;
   const seatLimitReached = teamMembersLimit !== null && teamMembersUsed >= teamMembersLimit;
   const hasPortalAccess =
     activeSubscriptionPlan !== null ||
@@ -462,7 +463,7 @@ export function AdminPage({ session }: AdminPageProps) {
             description="Billing, accounting, and team settings should be obvious and fast to scan on mobile or desktop."
           >
             <div className="flex flex-wrap gap-2">
-              <Badge tone={planTone(effectivePlanCode)}>{effectivePlanName} access</Badge>
+              <Badge tone={planTone(effectivePlanCode)}>{displayPlanName} access</Badge>
               {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
               <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
                 {sentenceCaseStatus(session?.subscriptionStatus)}
@@ -475,7 +476,7 @@ export function AdminPage({ session }: AdminPageProps) {
               <AdminMetricCard
                 icon={<PriceIcon size={16} />}
                 label="Current access"
-                value={effectivePlanName}
+                value={displayPlanName}
                 hint={session?.isTrial ? "Trial access" : "Live plan access"}
               />
               <AdminMetricCard
@@ -596,7 +597,7 @@ export function AdminPage({ session }: AdminPageProps) {
             <AdminMetricCard
               icon={<PriceIcon size={16} />}
               label="Current access"
-              value={effectivePlanName}
+              value={displayPlanName}
               hint={session?.isTrial ? "Trial access" : "Live plan access"}
             />
             <AdminMetricCard
@@ -643,7 +644,7 @@ export function AdminPage({ session }: AdminPageProps) {
         <div className="grid gap-4 xl:grid-cols-3">
           {PLAN_CARDS.map((plan) => {
             const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
-            const isCurrentAccessPlan = effectivePlanCode === plan.code;
+            const isCurrentAccessPlan = !session?.isTrial && effectivePlanCode === plan.code;
             const isComingSoon = plan.launchState === "coming-soon";
 
             return (

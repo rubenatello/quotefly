@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useId } from "react";
+import { forwardRef, useId } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, HTMLAttributes } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
@@ -65,7 +66,8 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ label, error, icon, className = "", id, ...rest }, ref) => {
-    const inputId = id ?? label?.toLowerCase().replace(/\s+/g, "-");
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
     return (
       <div className="space-y-1">
         {label && (
@@ -109,7 +111,8 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ label, error, options, placeholder, className = "", id, ...rest }, ref) => {
-    const selectId = id ?? label?.toLowerCase().replace(/\s+/g, "-");
+    const generatedId = useId();
+    const selectId = id ?? generatedId;
     return (
       <div className="space-y-1">
         {label && (
@@ -148,7 +151,8 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ label, error, className = "", id, ...rest }, ref) => {
-    const areaId = id ?? label?.toLowerCase().replace(/\s+/g, "-");
+    const generatedId = useId();
+    const areaId = id ?? generatedId;
     return (
       <div className="space-y-1">
         {label && (
@@ -217,7 +221,7 @@ export function CardHeader({ title, subtitle, actions }: { title: string; subtit
         <h2 className="text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{title}</h2>
         {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
+      {actions ? <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end [&>*]:w-full sm:[&>*]:w-auto">{actions}</div> : null}
     </div>
   );
 }
@@ -350,54 +354,30 @@ export function Modal({
   panelClassName = "",
   ariaLabel,
 }: ModalProps) {
-  const titleId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/65 p-3 backdrop-blur-sm sm:p-4"
-      onClick={(event) => {
-        if (closeOnBackdrop && event.target === event.currentTarget) {
-          onClose();
-        }
+    <DialogPrimitive.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={ariaLabel ? undefined : titleId}
-        aria-label={ariaLabel}
-      className={cn(
-        "flex max-h-[90vh] w-full flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_24px_56px_rgba(15,23,42,0.18)]",
-        MODAL_SIZES[size],
-        panelClassName,
-      )}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div id={titleId} className="sr-only">
-          {ariaLabel ?? "Modal"}
-        </div>
-        {children}
-      </div>
-    </div>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-slate-950/65 backdrop-blur-sm" />
+        <DialogPrimitive.Content
+          onPointerDownOutside={(event) => {
+            if (!closeOnBackdrop) event.preventDefault();
+          }}
+          className={cn(
+            "fixed left-1/2 top-1/2 z-[110] flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_24px_56px_rgba(15,23,42,0.18)] outline-none sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]",
+            MODAL_SIZES[size],
+            panelClassName,
+          )}
+        >
+          <DialogPrimitive.Title className="sr-only">{ariaLabel ?? "QuoteFly dialog"}</DialogPrimitive.Title>
+          {children}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
@@ -540,7 +520,11 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
         <h1 className="font-display text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900 sm:text-[2.15rem]">{title}</h1>
         {subtitle && <p className="mt-1 max-w-3xl text-sm text-slate-600">{subtitle}</p>}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
+      {actions ? (
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end [&>*]:w-full sm:[&>*]:w-auto">
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1084,6 +1084,7 @@ export function QuoteDeskView() {
               key={pane.id}
               type="button"
               onClick={() => setMobilePane(pane.id)}
+              aria-pressed={mobilePane === pane.id}
               className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
                 mobilePane === pane.id
                   ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
@@ -1102,6 +1103,7 @@ export function QuoteDeskView() {
             key={tab.id}
             type="button"
             onClick={() => tab.id === "send" ? requestOutboundAction("send-tab") : setActiveTab(tab.id)}
+            aria-pressed={activeTab === tab.id}
             className={`rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
               activeTab === tab.id
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
@@ -1369,7 +1371,7 @@ export function QuoteDeskView() {
               />
             </div>
 
-            <Card variant="blue" padding="md" className={mobilePane === "editor" ? "hidden xl:block" : ""}>
+            <Card variant="blue" padding="md" className="hidden xl:block">
               <CardHeader
                 title="Quote actions"
                 subtitle="Use the same control rail whether you are opening, reviewing, or editing a quote."

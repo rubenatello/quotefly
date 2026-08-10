@@ -4,6 +4,7 @@ import type { Ref } from "react";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { SUPPORT_MAILTO } from "../../lib/contact";
+import type { WorkspaceNavigationId } from "./workspace-navigation";
 
 interface CrmMobileHeaderProps {
   mobileOpen: boolean;
@@ -11,7 +12,7 @@ interface CrmMobileHeaderProps {
   menuButtonRef: Ref<HTMLButtonElement>;
   onToggleMobile: () => void;
   onOpenCommand: () => void;
-  onNavigate: (page: string) => void;
+  onNavigate: (page: WorkspaceNavigationId) => void;
   onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   currentLabel: string;

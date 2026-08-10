@@ -9,6 +9,11 @@ import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
 import { BillingRequiredScreen } from "./components/billing/BillingRequiredScreen";
 import { BottomTabBar } from "./components/crm/BottomTabBar";
+import {
+  workspacePageFromPath,
+  workspacePathForNavigation,
+  type WorkspaceNavigationId,
+} from "./components/crm/workspace-navigation";
 import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
 import {
   api,
@@ -42,6 +47,7 @@ const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ d
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
 const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
+const PipelineView = lazy(() => import("./views/PipelineView").then((module) => ({ default: module.PipelineView })));
 
 type Session = {
   userId: string;
@@ -168,29 +174,10 @@ function CrmLayout({
     );
   }
 
-  const currentPage = (() => {
-    if (location.pathname.startsWith("/app/analytics")) return "analytics";
-    if (location.pathname.startsWith("/app/customers")) return "customers";
-    if (location.pathname.startsWith("/app/quotes")) return "quotes";
-    if (location.pathname.startsWith("/app/build")) return "quotes";
-    if (location.pathname.startsWith("/app/history")) return "analytics";
-    if (location.pathname.startsWith("/app/settings/users")) return "settings-users";
-    if (location.pathname.startsWith("/app/settings")) return "settings";
-    if (location.pathname.startsWith("/app/setup")) return "settings";
-    if (location.pathname.startsWith("/app/branding")) return "branding";
-    if (location.pathname.startsWith("/app/internal/admin")) return "settings";
-    if (location.pathname.startsWith("/app/admin")) return "settings";
-    return "customers";
-  })();
+  const currentPage = workspacePageFromPath(location.pathname);
 
-  const handleNavigate = (page: string) => {
-    if (page === "customers") navigate("/app/customers");
-    else if (page === "analytics") navigate("/app/analytics");
-    else if (page === "quotes") navigate("/app/quotes");
-    else if (page === "branding") navigate("/app/branding");
-    else if (page === "settings") navigate("/app/settings");
-    else if (page === "settings-users") navigate("/app/settings/users");
-    else navigate("/app/customers");
+  const handleNavigate = (page: WorkspaceNavigationId) => {
+    navigate(workspacePathForNavigation(page));
   };
 
   const handleQuickAction = (action: "new-customer" | "new-quote") => {
@@ -226,6 +213,7 @@ function CrmLayout({
               <Routes>
                 <Route index element={<Navigate to="/app/customers" replace />} />
                 <Route path="customers" element={<CustomersPage />} />
+                <Route path="follow-up" element={<PipelineView />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
                 <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
                 <Route path="build" element={<QuoteBuilderView />} />

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { FilePlus2, MoreHorizontal, Search } from "lucide-react";
+import { Clock3, FilePlus2, MoreHorizontal, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import {
@@ -15,10 +15,17 @@ import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmCommandPalette } from "./crm/CrmCommandPalette";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
+import {
+  WORKSPACE_OPERATIONS_LINKS,
+  WORKSPACE_PAGE_META,
+  WORKSPACE_SETTINGS_LINKS,
+  type WorkspaceNavigationId,
+  type WorkspacePage,
+} from "./crm/workspace-navigation";
 
 interface CrmShellProps {
-  currentPage: string;
-  onNavigate: (page: string) => void;
+  currentPage: WorkspacePage;
+  onNavigate: (page: WorkspaceNavigationId) => void;
   onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   children: ReactNode;
@@ -30,48 +37,26 @@ interface CrmShellProps {
   usage?: TenantUsageSnapshot;
 }
 
-const OPERATIONS_LINKS: readonly CrmNavLink[] = [
-  { label: "Customers", path: "customers", icon: <CustomerIcon size={15} /> },
-  { label: "Quotes", path: "quotes", icon: <QuoteIcon size={15} /> },
-  { label: "Analytics", path: "analytics", icon: <AnalyticsIcon size={15} /> },
-] as const;
+function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
+  if (icon === "customers" || icon === "team") return <CustomerIcon size={15} />;
+  if (icon === "quotes") return <QuoteIcon size={15} />;
+  if (icon === "follow-up") return <Clock3 size={15} />;
+  if (icon === "analytics") return <AnalyticsIcon size={15} />;
+  if (icon === "branding") return <InvoiceIcon size={14} />;
+  return <SettingsIcon size={14} />;
+}
 
-const SETTINGS_LINKS: readonly CrmNavLink[] = [
-  { label: "Business", path: "settings", icon: <SettingsIcon size={14} /> },
-  { label: "Team", path: "settings-users", icon: <CustomerIcon size={14} /> },
-  { label: "Branding", path: "branding", icon: <InvoiceIcon size={14} /> },
-];
+const OPERATIONS_LINKS: readonly CrmNavLink[] = WORKSPACE_OPERATIONS_LINKS.map((item) => ({
+  label: item.label,
+  path: item.id,
+  icon: navigationIcon(item.icon),
+}));
 
-const PAGE_META: Record<string, { label: string; hint: string }> = {
-  customers: {
-    label: "Customers",
-    hint: "Track customer progress from new to sold in one board.",
-  },
-  analytics: {
-    label: "Analytics",
-    hint: "See quote and pipeline performance at a glance.",
-  },
-  quotes: {
-    label: "Quotes",
-    hint: "Watch quote volume, status, value, and open the desk when needed.",
-  },
-  setup: {
-    label: "Setup",
-    hint: "Configure trades, starter jobs, and onboarding defaults.",
-  },
-  branding: {
-    label: "Branding",
-    hint: "Control templates, sender details, and PDF styling.",
-  },
-  settings: {
-    label: "Settings",
-    hint: "Handle organization billing, launch-plan access, and workspace controls.",
-  },
-  "settings-users": {
-    label: "Team",
-    hint: "Manage roles, seats, and member access.",
-  },
-};
+const SETTINGS_LINKS: readonly CrmNavLink[] = WORKSPACE_SETTINGS_LINKS.map((item) => ({
+  label: item.label,
+  path: item.id,
+  icon: navigationIcon(item.icon),
+}));
 
 export function CrmShell({
   currentPage,
@@ -138,7 +123,7 @@ export function CrmShell({
     window.requestAnimationFrame(() => mobileMenuTriggerRef.current?.focus());
   }, [mobileOpen]);
 
-  const handleNavigate = (page: string) => {
+  const handleNavigate = (page: WorkspaceNavigationId) => {
     onNavigate(page);
     setMobileOpen(false);
     setCommandOpen(false);
@@ -154,7 +139,11 @@ export function CrmShell({
     setMobileOpen((open) => !open);
   };
 
-  const pageMeta = PAGE_META[currentPage] ?? PAGE_META.customers;
+  const pageMeta = WORKSPACE_PAGE_META[currentPage];
+
+  useEffect(() => {
+    document.title = `${pageMeta.label} | QuoteFly`;
+  }, [pageMeta.label]);
   return (
     <div className="min-h-screen bg-slate-50">
       <CrmMobileHeader
@@ -274,11 +263,11 @@ export function CrmShell({
                         <p className="text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</p>
                       </div>
                       <div className="mt-2 space-y-1">
-                        {[
+                        {([
                           { label: "Open customers", page: "customers" },
                           { label: "Open settings", page: "settings" },
                           { label: "Open branding", page: "branding" },
-                        ].map((item) => (
+                        ] as const).map((item) => (
                           <DropdownMenuPrimitive.Item
                             key={item.page}
                             onSelect={() => handleNavigate(item.page)}

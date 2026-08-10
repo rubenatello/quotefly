@@ -339,34 +339,56 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         const resetUrl = new URL("/reset-password", app.env.APP_URL);
         resetUrl.hash = new URLSearchParams({ token: rawToken }).toString();
 
-        const resetToken = await app.prisma.passwordResetToken.create({
-          data: { userId: user.id, tokenHash, expiresAtUtc },
-          select: { id: true },
-        });
+        const resetToken = await app.prisma.$transaction(async (tx) => {
+          // Serialize reset issuance per user. Without this lock, two requests can both
+          // pass the cooldown check, send different links, and invalidate each other.
+          await tx.$queryRaw`
+            SELECT pg_advisory_xact_lock(hashtext(${`password-reset:${user.id}`}))
+          `;
 
-        try {
-          await sendPasswordResetEmail(app.env, {
-            to: user.email,
-            resetUrl: resetUrl.toString(),
-          });
-
-          await app.prisma.passwordResetToken.updateMany({
+          const tokenIssuedByConcurrentRequest = await tx.passwordResetToken.findFirst({
             where: {
               userId: user.id,
-              id: { not: resetToken.id },
               usedAtUtc: null,
+              expiresAtUtc: { gt: new Date() },
+              createdAt: { gte: cooldownStartedAt },
             },
-            data: { usedAtUtc: new Date() },
+            select: { id: true },
           });
-        } catch (error) {
-          await app.prisma.passwordResetToken.deleteMany({ where: { id: resetToken.id } });
-          request.log.error(
-            {
-              provider: "resend",
-              reason: error instanceof Error ? error.message : "unknown provider error",
-            },
-            "Password reset email delivery failed.",
-          );
+
+          if (tokenIssuedByConcurrentRequest) return null;
+
+          return tx.passwordResetToken.create({
+            data: { userId: user.id, tokenHash, expiresAtUtc },
+            select: { id: true },
+          });
+        });
+
+        if (resetToken) {
+          try {
+            await sendPasswordResetEmail(app.env, {
+              to: user.email,
+              resetUrl: resetUrl.toString(),
+            });
+
+            await app.prisma.passwordResetToken.updateMany({
+              where: {
+                userId: user.id,
+                id: { not: resetToken.id },
+                usedAtUtc: null,
+              },
+              data: { usedAtUtc: new Date() },
+            });
+          } catch (error) {
+            await app.prisma.passwordResetToken.deleteMany({ where: { id: resetToken.id } });
+            request.log.error(
+              {
+                provider: "resend",
+                reason: error instanceof Error ? error.message : "unknown provider error",
+              },
+              "Password reset email delivery failed.",
+            );
+          }
         }
       }
     }

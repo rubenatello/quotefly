@@ -33,6 +33,9 @@ type TradeSolution = {
   icon: LucideIcon;
   iconClass: string;
   iconBackground: string;
+  accentClass: string;
+  panelClass: string;
+  outcome: string;
   problem: string;
   response: string;
   quoteItems: string[];
@@ -78,6 +81,9 @@ const TRADES: TradeSolution[] = [
     icon: AirVent,
     iconClass: "text-blue-700",
     iconBackground: "bg-blue-50",
+    accentClass: "from-blue-600 via-sky-500 to-cyan-400",
+    panelClass: "border-blue-100 bg-blue-50/70",
+    outcome: "Approve options",
     problem: "Replacement options should not wait for the office.",
     response: "Build the base system scope, separate startup work, and give upgrades or ductwork their own clear option.",
     quoteItems: ["Equipment and installation", "Startup and testing", "Ductwork alternate"],
@@ -89,6 +95,9 @@ const TRADES: TradeSolution[] = [
     icon: Wrench,
     iconClass: "text-cyan-700",
     iconBackground: "bg-cyan-50",
+    accentClass: "from-cyan-600 via-teal-500 to-emerald-400",
+    panelClass: "border-cyan-100 bg-cyan-50/70",
+    outcome: "Decide repairs",
     problem: "Diagnosis can change the job in a hurry.",
     response: "Keep the service call, likely repair, and possible add-on separate so the customer can understand the path forward.",
     quoteItems: ["Diagnostic visit", "Primary repair", "Replacement option"],
@@ -100,6 +109,9 @@ const TRADES: TradeSolution[] = [
     icon: PanelsTopLeft,
     iconClass: "text-amber-700",
     iconBackground: "bg-amber-50",
+    accentClass: "from-amber-500 via-orange-400 to-yellow-300",
+    panelClass: "border-amber-100 bg-amber-50/70",
+    outcome: "Protect margin",
     problem: "Prep and finish work are where margins disappear.",
     response: "Price the square footage, then keep demolition, leveling, waste, transitions, and finish work visible.",
     quoteItems: ["Floor preparation", "Material by square foot", "Transitions and finish"],
@@ -111,6 +123,9 @@ const TRADES: TradeSolution[] = [
     icon: House,
     iconClass: "text-rose-700",
     iconBackground: "bg-rose-50",
+    accentClass: "from-rose-600 via-red-500 to-orange-400",
+    panelClass: "border-rose-100 bg-rose-50/70",
+    outcome: "Trust the scope",
     problem: "One lump sum hides the work that protects the job.",
     response: "Spell out tear-off, disposal, flashing, underlayment, and allowances without making the quote hard to read.",
     quoteItems: ["Tear-off and disposal", "Roofing system", "Deck repair allowance"],
@@ -122,6 +137,9 @@ const TRADES: TradeSolution[] = [
     icon: Leaf,
     iconClass: "text-emerald-700",
     iconBackground: "bg-emerald-50",
+    accentClass: "from-emerald-600 via-green-500 to-lime-400",
+    panelClass: "border-emerald-100 bg-emerald-50/70",
+    outcome: "Price flexibly",
     problem: "Recurring work and one-off installs price differently.",
     response: "Mix area, hourly, and flat-quantity work in one quote while keeping materials and optional services easy to scan.",
     quoteItems: ["Site preparation", "Labor and materials", "Ongoing service option"],
@@ -133,6 +151,9 @@ const TRADES: TradeSolution[] = [
     icon: HardHat,
     iconClass: "text-slate-700",
     iconBackground: "bg-slate-100",
+    accentClass: "from-slate-800 via-slate-600 to-blue-500",
+    panelClass: "border-slate-200 bg-slate-50",
+    outcome: "Choose clearly",
     problem: "Complex work still needs a simple customer decision.",
     response: "Organize multi-step labor, material, cleanup, and upgrade alternates into a quote the customer can actually follow.",
     quoteItems: ["Demolition and prep", "Labor and materials", "Upgrade alternate"],
@@ -363,39 +384,56 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                   id={trade.id}
                   data-marketing-reveal
                   style={{ transitionDelay: `${(index % 3) * 55}ms` }}
-                  className="scroll-mt-24 rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-7"
+                  className="group relative flex scroll-mt-24 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_12px_34px_rgba(15,23,42,0.055)] transition duration-300 hover:-translate-y-1 hover:border-slate-300 hover:shadow-[0_24px_52px_rgba(15,23,42,0.11)]"
                 >
-                  <div className="flex items-center gap-3">
-                    <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${trade.iconBackground} ${trade.iconClass}`}>
-                      <TradeIcon size={24} aria-hidden="true" />
-                    </span>
-                    <h3 className="text-2xl font-bold text-slate-950">{trade.name}</h3>
-                  </div>
+                  <div aria-hidden="true" className={`h-1.5 w-full bg-gradient-to-r ${trade.accentClass}`} />
 
-                  <p className="mt-5 text-lg font-bold leading-7 text-slate-900">{trade.problem}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{trade.response}</p>
-
-                  <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-bold uppercase tracking-[0.15em] text-slate-500">A typical quote</p>
-                    <ul className="mt-3 space-y-2.5">
-                      {trade.quoteItems.map((item) => (
-                        <li key={item} className="flex items-center justify-between gap-3 text-sm font-medium text-slate-700">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <Check size={15} className="shrink-0 text-quotefly-blue" aria-hidden="true" />
-                            <span>{item}</span>
-                          </span>
-                          <span aria-hidden="true" className="w-10 shrink-0 border-b border-dashed border-slate-300" />
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-2" aria-label={`${trade.name} QuoteFly capabilities`}>
-                    {trade.capabilities.map((capability) => (
-                      <span key={capability} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
-                        {capability}
+                  <div className="flex flex-1 flex-col p-6 sm:p-7">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl shadow-sm ring-1 ring-black/[0.03] ${trade.iconBackground} ${trade.iconClass}`}>
+                          <TradeIcon size={24} strokeWidth={2.2} aria-hidden="true" />
+                        </span>
+                        <h3 className="text-2xl font-bold tracking-tight text-slate-950">{trade.name}</h3>
+                      </div>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                        {trade.outcome}
                       </span>
-                    ))}
+                    </div>
+
+                    <div className="mt-6">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">The quoting problem</p>
+                      <p className="mt-2 text-lg font-bold leading-7 text-slate-950">{trade.problem}</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">{trade.response}</p>
+                    </div>
+
+                    <div className={`mt-6 rounded-2xl border p-4 sm:p-5 ${trade.panelClass}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-bold uppercase tracking-[0.15em] text-slate-600">Quote blueprint</p>
+                        <FileCheck2 size={18} className={trade.iconClass} aria-hidden="true" />
+                      </div>
+                      <ol className="mt-4 space-y-3">
+                        {trade.quoteItems.map((item, itemIndex) => (
+                          <li key={item} className="flex items-center gap-3 text-sm font-semibold text-slate-700">
+                            <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold shadow-sm ${trade.iconClass}`}>
+                              {itemIndex + 1}
+                            </span>
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+
+                    <div className="mt-auto pt-6">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">QuoteFly advantage</p>
+                      <div className="mt-3 flex flex-wrap gap-2" aria-label={`${trade.name} QuoteFly capabilities`}>
+                        {trade.capabilities.map((capability) => (
+                          <span key={capability} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                            {capability}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </article>
               );

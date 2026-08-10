@@ -26,7 +26,7 @@ const PAID_STATUS_WITH_PORTAL = new Set(["active", "past_due", "unpaid", "cancel
 const BASIC_FEATURES = ["Draft AI-assisted quotes", "Manage customer records", "Export customer-ready PDFs"];
 const BASIC_LIMITS = [
   "600 quotes per month",
-  "30 AI quote prompts per month",
+  "AI assistance with in-app usage tracking",
   "Up to 7 team members",
   "30-day quote history",
 ];

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { BadgeCheck, ChevronRight, CircleDot, ClipboardList, FilePlus2, FileText, MessageSquare, Phone, PhoneCall, Send, Wrench, XCircle } from "lucide-react";
+import { BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { Alert, Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
+import { Alert, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
@@ -21,7 +21,6 @@ type CustomerRetentionAction =
   | null;
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
-const CUSTOMER_PROGRESS_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON"];
 const ACTIVITY_PAGE_SIZE = 5;
 
 function stageLabel(stage: CustomerStage) {
@@ -33,14 +32,6 @@ function stageLabel(stage: CustomerStage) {
   return "Lost";
 }
 
-function stageTone(stage: CustomerStage): "slate" | "blue" | "orange" | "emerald" | "red" {
-  if (stage === "NEW") return "slate";
-  if (stage === "CONTACTED") return "blue";
-  if (stage === "READY") return "orange";
-  if (stage === "LOST") return "red";
-  return "emerald";
-}
-
 function stageDarkClass(stage: CustomerStage) {
   if (stage === "NEW") return "border-slate-700 bg-slate-700 text-white";
   if (stage === "CONTACTED") return "border-[#2559b8] bg-[#2559b8] text-white";
@@ -48,6 +39,15 @@ function stageDarkClass(stage: CustomerStage) {
   if (stage === "SENT") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
   if (stage === "LOST") return "border-red-600 bg-red-600 text-white";
   return "border-emerald-600 bg-emerald-600 text-white";
+}
+
+function stageSoftClass(stage: CustomerStage) {
+  if (stage === "NEW") return "border-slate-200 bg-slate-100 text-slate-700";
+  if (stage === "CONTACTED") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (stage === "READY") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (stage === "SENT") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (stage === "LOST") return "border-red-200 bg-red-50 text-red-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
 function stageInitial(stage: CustomerStage) {
@@ -68,20 +68,28 @@ function stageIcon(stage: CustomerStage) {
   return <XCircle size={12} strokeWidth={2.2} />;
 }
 
-function stageStateClasses(active: boolean, complete: boolean) {
-  if (active) {
-    return "";
-  }
-
-  if (complete) {
-    return "";
-  }
-
-  return "border-slate-200 bg-white text-slate-300";
-}
-
 function quoteNumber(quoteId: string) {
   return `QF-${quoteId.slice(0, 8).toUpperCase()}`;
+}
+
+function customerUpdatedLabel(updatedAt: string) {
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return formatDateTime(updatedAt);
+
+  return `Updated ${new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  }).format(date)}`;
+}
+
+function stageGuidance(stage: CustomerStage, hasQuote: boolean) {
+  if (stage === "NEW") return hasQuote ? "Quote started" : "Needs first quote";
+  if (stage === "CONTACTED") return "Follow-up in progress";
+  if (stage === "READY") return "Ready to review";
+  if (stage === "SENT") return "Waiting on customer";
+  if (stage === "WON") return "Work won";
+  return "Closed lost";
 }
 
 function customerInitials(fullName: string) {
@@ -128,128 +136,47 @@ function getCustomerStage(customer: Customer, customerQuotes: Quote[]): Customer
   return "NEW";
 }
 
-function CustomerPipelineMini({ stage }: { stage: CustomerStage }) {
-  const stageOrder = stage === "LOST" ? ["NEW", "CONTACTED", "READY", "SENT", "LOST"] satisfies CustomerStage[] : CUSTOMER_PROGRESS_ORDER;
-  const activeIndex = stageOrder.indexOf(stage);
-
-  return (
-    <div className="space-y-2.5">
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-        {stageOrder.map((item, index) => {
-          const active = index === activeIndex;
-          const complete = stage !== "LOST" && item !== "LOST" && index < activeIndex;
-
-          return (
-            <div key={item} className="flex items-center gap-1.5">
-              <div
-                className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border text-[10px] font-bold ${
-                  active || complete ? stageDarkClass(item) : stageStateClasses(active, complete)
-                }`}
-                title={stageLabel(item)}
-                aria-label={stageLabel(item)}
-              >
-                {stageInitial(item)}
-              </div>
-              {index < stageOrder.length - 1 ? (
-                <span className={`h-px w-4 rounded-full ${index < activeIndex ? "bg-slate-400" : "bg-slate-200"}`} />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          tone={stageTone(stage)}
-          icon={stageIcon(stage)}
-          className={stage === "READY" ? "border-transparent shadow-sm" : "border-transparent bg-slate-900 text-white shadow-sm"}
-        >
-          {stageLabel(stage)}
-        </Badge>
-        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          <span className="text-slate-700">{stageInitial(stage)}</span>
-          Current
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function StageCountCard({
-  label,
-  count,
+function StageFilterButton({
   stage,
+  count,
   active,
   onClick,
 }: {
-  label: string;
-  count: number;
   stage: CustomerStage | "ALL";
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`min-h-[44px] min-w-fit rounded-full border px-3 py-2 text-left transition sm:min-h-[36px] sm:py-1.5 ${
-        active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-        {stage === "ALL" ? (
-          <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1 text-[10px] font-bold text-slate-500">
-            All
-          </span>
-        ) : (
-          <span
-            className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(stage)}`}
-          >
-            {stageInitial(stage)}
-          </span>
-        )}
-        <span className="text-sm font-semibold text-slate-900">{count}</span>
-      </div>
-    </button>
-  );
-}
-
-function StageFlowButton({
-  stage,
-  count,
-  active,
-  onClick,
-}: {
-  stage: CustomerStage;
   count: number;
   active: boolean;
   onClick: () => void;
 }) {
+  const label = stage === "ALL" ? "All customers" : stageLabel(stage);
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group min-h-[44px] min-w-fit rounded-2xl border px-3 py-2.5 text-left transition sm:min-h-[36px] sm:px-4 sm:py-2 ${
+      className={`group flex min-h-[48px] min-w-[126px] shrink-0 snap-start items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition sm:min-h-[44px] ${
         active
-          ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+          ? "border-quotefly-blue bg-quotefly-blue text-white shadow-sm"
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
       }`}
       aria-pressed={active}
+      aria-label={`Filter customers: ${label} (${count})`}
     >
-      <div className="flex items-center gap-2.5">
-        <span
-          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold ${
-            active ? "border-white/20 bg-white/10 text-white" : stageDarkClass(stage)
-          }`}
-        >
-          {stageInitial(stage)}
-        </span>
-        <div className="min-w-0">
-          <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${active ? "text-white/75" : "text-slate-500"}`}>
-            {stageLabel(stage)}
-          </p>
-          <p className={`mt-0.5 text-sm font-semibold ${active ? "text-white" : "text-slate-900"}`}>{count}</p>
-        </div>
+      <span
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${
+          active
+            ? "border-white/20 bg-white/10 text-white"
+            : stage === "ALL"
+              ? "border-slate-200 bg-slate-100 text-slate-600"
+              : stageDarkClass(stage)
+        }`}
+      >
+        {stage === "ALL" ? "A" : stageInitial(stage)}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${active ? "text-white/80" : "text-slate-500"}`}>
+          {label}
+        </p>
+        <p className={`mt-0.5 text-sm font-bold ${active ? "text-white" : "text-slate-950"}`}>{count}</p>
       </div>
     </button>
   );
@@ -268,23 +195,13 @@ function CustomerPipelineFilterStrip({
 }) {
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        <StageCountCard label="All" count={totalCount} stage="ALL" active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
-        <div className="hidden h-px w-6 shrink-0 bg-slate-200 sm:block" />
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {CUSTOMER_STAGE_ORDER.map((stage, index) => (
-            <div key={stage} className={`flex items-center gap-1.5 sm:gap-2 ${stage === "LOST" ? "ml-1 border-l border-slate-300 pl-3" : ""}`}>
-              <StageFlowButton stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
-              {index < CUSTOMER_STAGE_ORDER.length - 2 ? (
-                <span className="hidden h-8 w-6 shrink-0 items-center justify-center text-slate-300 sm:inline-flex">
-                  <ChevronRight size={16} strokeWidth={2.2} />
-                </span>
-              ) : null}
-            </div>
-          ))}
-        </div>
+      <div className="flex snap-x snap-mandatory items-center gap-2 overflow-x-auto pb-2" role="group" aria-label="Customer stage filters">
+        <StageFilterButton stage="ALL" count={totalCount} active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
+        {CUSTOMER_STAGE_ORDER.map((stage) => (
+          <StageFilterButton key={stage} stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
+        ))}
       </div>
-      <p className="px-1 text-xs text-slate-500">Follow the flow from new lead to won or lost work, or tap a stage to filter.</p>
+      <p className="px-1 text-xs text-slate-500">Filter the customer list by the next stage in the quoting workflow.</p>
     </div>
   );
 }
@@ -307,62 +224,71 @@ function CustomerDesktopRow({
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpenActivity(customer.id)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpenActivity(customer.id);
-        }
-      }}
-      className="hidden cursor-pointer grid-cols-[minmax(0,1.2fr)_140px_minmax(150px,0.8fr)_220px_154px] gap-3 px-4 py-3 xl:grid xl:items-center 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_240px_170px]"
-    >
-      <div className="min-w-0">
+    <div className="hidden min-h-[86px] grid-cols-[minmax(220px,1.25fr)_minmax(220px,1fr)_minmax(190px,0.9fr)_150px_190px] items-center gap-5 border-l-2 border-transparent px-5 py-3 transition xl:grid hover:border-quotefly-blue hover:bg-slate-50/80 2xl:grid-cols-[minmax(260px,1.35fr)_minmax(250px,1fr)_minmax(220px,0.9fr)_160px_200px]">
+      <button
+        type="button"
+        onClick={() => onOpenActivity(customer.id)}
+        className="group/customer min-w-0 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+        aria-label={`Open ${customer.fullName} details`}
+      >
         <div className="flex items-center gap-3">
-          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-bold text-slate-700 ring-1 ring-slate-200 transition group-hover/customer:bg-white group-hover/customer:text-quotefly-blue">
             {customerInitials(customer.fullName)}
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
-            <p className="mt-1 truncate text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
+            <p className="truncate text-sm font-bold text-slate-950 group-hover/customer:text-quotefly-blue">{customer.fullName}</p>
+            <p className="mt-1 truncate text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt)} · View details</p>
           </div>
+        </div>
+      </button>
+
+      <div className="min-w-0 space-y-1.5 text-sm">
+        <div className="flex min-w-0 items-center gap-2 text-slate-700">
+          <Phone size={14} className="shrink-0 text-slate-400" aria-hidden="true" />
+          <span className="truncate font-medium">{formatUsPhoneDisplay(customer.phone)}</span>
+        </div>
+        <div className="flex min-w-0 items-center gap-2 text-slate-600">
+          <Mail size={14} className="shrink-0 text-slate-400" aria-hidden="true" />
+          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? "No email added"}</span>
         </div>
       </div>
 
-      <div className="truncate text-sm text-slate-700">{formatUsPhoneDisplay(customer.phone)}</div>
-
       <div className="min-w-0">
-        {customer.email ? (
-          <p className="truncate text-sm text-slate-600">{customer.email}</p>
+        {latestQuote ? (
+          <button
+            type="button"
+            onClick={() => onOpenQuote(latestQuote.id)}
+            className="block min-w-0 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+            aria-label={`Open quote ${latestQuote.title}`}
+          >
+            <span className="block truncate text-sm font-semibold text-slate-900 hover:text-quotefly-blue">{latestQuote.title}</span>
+            <span className="mt-1 block truncate text-xs font-medium text-slate-500">{quoteNumber(latestQuote.id)}</span>
+          </button>
         ) : (
-          <p className="text-sm text-slate-400">No email</p>
+          <div>
+            <p className="text-sm font-semibold text-slate-700">No quote yet</p>
+            <p className="mt-1 text-xs text-slate-500">Ready for a first estimate</p>
+          </div>
         )}
       </div>
 
-      <div className="min-w-0 space-y-2">
-        <CustomerPipelineMini stage={stage} />
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          {latestQuote ? (
-            <span className="truncate">
-              {quoteNumber(latestQuote.id)} - {latestQuote.title}
-            </span>
-          ) : (
-            <span>No quote yet</span>
-          )}
-        </div>
+      <div className="min-w-0">
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${stageSoftClass(stage)}`}>
+          {stageIcon(stage)}
+          {stageLabel(stage)}
+        </span>
+        <p className="mt-1.5 truncate text-xs text-slate-500">{stageGuidance(stage, Boolean(latestQuote))}</p>
       </div>
 
       <div className="flex justify-end gap-1.5">
-        <Button size="sm" variant="ghost" icon={<Phone size={14} />} onClick={(event) => { event.stopPropagation(); onCallCustomer(customer.phone); }} aria-label="Call customer" />
-        <Button size="sm" variant="ghost" icon={<MessageSquare size={14} />} onClick={(event) => { event.stopPropagation(); onTextCustomer(customer.phone); }} aria-label="Text customer" />
+        <Button size="sm" variant="ghost" icon={<Phone size={15} />} onClick={() => onCallCustomer(customer.phone)} aria-label={`Call ${customer.fullName}`} title={`Call ${customer.fullName}`} />
+        <Button size="sm" variant="ghost" icon={<MessageSquare size={15} />} onClick={() => onTextCustomer(customer.phone)} aria-label={`Text ${customer.fullName}`} title={`Text ${customer.fullName}`} />
         <Button
           size="sm"
-          variant={latestQuote ? "outline" : "primary"}
+          variant="primary"
           icon={<FilePlus2 size={14} />}
-          onClick={(event) => {
-            event.stopPropagation();
+          className="whitespace-nowrap"
+          onClick={() => {
             if (latestQuote) {
               onOpenQuote(latestQuote.id);
             } else {
@@ -370,7 +296,7 @@ function CustomerDesktopRow({
             }
           }}
         >
-          {latestQuote ? "Open" : "Quote"}
+          {latestQuote ? "Open" : "Start"}
         </Button>
       </div>
     </div>
@@ -395,69 +321,62 @@ function CustomerMobileCard({
   const { customer, latestQuote, stage } = row;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpenActivity(customer.id)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpenActivity(customer.id);
-        }
-      }}
-      className="space-y-3 px-4 py-4 xl:hidden"
-    >
+    <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.045)] xl:hidden">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+        <button
+          type="button"
+          onClick={() => onOpenActivity(customer.id)}
+          className="flex min-h-[44px] min-w-0 items-center gap-3 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+          aria-label={`Open ${customer.fullName} details`}
+        >
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-bold text-slate-700 ring-1 ring-slate-200">
             {customerInitials(customer.fullName)}
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
-            <p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(customer.updatedAt)}</p>
+            <p className="truncate text-base font-bold text-slate-950">{customer.fullName}</p>
+            <p className="mt-1 text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt)} · View details</p>
           </div>
-        </div>
-        <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-          <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(stage)}`}>
-            {stageInitial(stage)}
-          </span>
+        </button>
+        <div className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${stageSoftClass(stage)}`}>
+          {stageIcon(stage)}
           {stageLabel(stage)}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Phone</p>
-          <p className="mt-1 truncate">{formatUsPhoneDisplay(customer.phone)}</p>
+      <div className="space-y-2 rounded-xl bg-slate-50 px-3.5 py-3 text-sm">
+        <div className="flex min-w-0 items-center gap-2.5 text-slate-700">
+          <Phone size={15} className="shrink-0 text-slate-400" aria-hidden="true" />
+          <span className="truncate font-medium">{formatUsPhoneDisplay(customer.phone)}</span>
         </div>
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</p>
-          <p className="mt-1 truncate text-slate-600">{customer.email ?? "No email"}</p>
+        <div className="flex min-w-0 items-center gap-2.5 text-slate-600">
+          <Mail size={15} className="shrink-0 text-slate-400" aria-hidden="true" />
+          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? "No email added"}</span>
         </div>
       </div>
 
-      <div className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+      <div className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-700">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Latest quote</p>
-          <p className="mt-1 truncate font-medium text-slate-900">{latestQuote ? latestQuote.title : "No quote yet"}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Latest quote</p>
+          <p className="mt-1 truncate font-semibold text-slate-900">{latestQuote ? latestQuote.title : "No quote yet"}</p>
+          <p className="mt-1 text-xs text-slate-500">{stageGuidance(stage, Boolean(latestQuote))}</p>
         </div>
-        <span className="shrink-0 text-xs font-medium text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : "Ready to start"}</span>
+        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : "Ready to start"}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={(event) => { event.stopPropagation(); onCallCustomer(customer.phone); }}>
+        <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)}>
           Call
         </Button>
-        <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={(event) => { event.stopPropagation(); onTextCustomer(customer.phone); }}>
+        <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)}>
           Text
         </Button>
         {latestQuote ? (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={(event) => { event.stopPropagation(); onOpenQuote(latestQuote.id); }}>Open</Button>
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
         ) : (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={(event) => { event.stopPropagation(); onStartQuote(customer.id); }}>Quote</Button>
+          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onStartQuote(customer.id)}>Quote</Button>
         )}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -763,29 +682,35 @@ export function CustomersPage() {
         onChange={setStageFilter}
       />
 
-      <Card variant="default" padding="md">
-        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-end lg:justify-between">
+      <Card variant="elevated" padding="md" className="overflow-hidden">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer board</p>
-            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Most recent customers first</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-600">Use this as the operating table. Open quotes when they exist, or start a new one when they do not.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer workspace</p>
+              <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                {filteredRows.length} {filteredRows.length === 1 ? "customer" : "customers"}
+              </span>
+            </div>
+            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Customer list</h2>
+            <p className="mt-1 max-w-3xl text-sm text-slate-600">Contact a customer, review their latest quote, or open the full relationship history.</p>
           </div>
-          <div className="w-full lg:w-[320px]">
+          <div className="w-full lg:w-[360px]">
             <label htmlFor="customer-search" className="sr-only">Search customers</label>
             <Input
               id="customer-search"
-              placeholder="Search customer name, phone, email, or quote"
+              icon={<Search size={16} aria-hidden="true" />}
+              placeholder="Search name, phone, email, or quote"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
             />
           </div>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="-mx-4 -mb-4 mt-4 border-t border-slate-200 sm:-mx-5 sm:-mb-5">
           {loading ? (
-            <div className="px-4 py-8 text-sm text-slate-600">Loading customers...</div>
+            <div className="px-5 py-8 text-sm text-slate-600">Loading customers...</div>
           ) : filteredRows.length === 0 ? (
-            <div className="p-4">
+            <div className="p-5">
               <EmptyState
                 title={customerRows.length ? "No matching customers" : "Add your first customer"}
                 description={customerRows.length ? "Clear the search or choose another stage." : "Create a customer here, then start their first quote."}
@@ -794,16 +719,16 @@ export function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="hidden grid-cols-[minmax(0,1.2fr)_140px_minmax(150px,0.8fr)_220px_154px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,1.35fr)_156px_220px_240px_170px]">
+              <div className="hidden grid-cols-[minmax(220px,1.25fr)_minmax(220px,1fr)_minmax(190px,0.9fr)_150px_190px] gap-5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500 xl:grid 2xl:grid-cols-[minmax(260px,1.35fr)_minmax(250px,1fr)_minmax(220px,0.9fr)_160px_200px]">
                 <span>Customer</span>
-                <span>Phone</span>
-                <span>Email</span>
-                <span>Status</span>
+                <span>Contact</span>
+                <span>Latest quote</span>
+                <span>Stage</span>
                 <span className="text-right">Actions</span>
               </div>
-              <div className="divide-y divide-slate-200">
+              <div className="grid gap-3 bg-slate-50/70 p-3 md:grid-cols-2 xl:block xl:bg-white xl:p-0">
                 {filteredRows.map((row) => (
-                  <div key={row.customer.id} className="transition-colors hover:bg-slate-50/80">
+                  <div key={row.customer.id} className="xl:border-b xl:border-slate-200 xl:last:border-b-0">
                     <CustomerDesktopRow
                       row={row}
                       onOpenQuote={navigateToQuote}

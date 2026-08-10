@@ -58,12 +58,35 @@ const EnvSchema = z.object({
   }
 
   for (const key of ["APP_URL", "API_URL"] as const) {
-    const hostname = new URL(value[key]).hostname;
+    const url = new URL(value[key]);
+    const hostname = url.hostname;
     if (hostname === "localhost" || hostname === "127.0.0.1") {
       ctx.addIssue({
         code: "custom",
         path: [key],
         message: `${key} must be a production URL when NODE_ENV=production.`,
+      });
+    }
+
+    if (url.protocol !== "https:") {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} must use HTTPS when NODE_ENV=production.`,
+      });
+    }
+
+    if (
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.pathname !== "/" && url.pathname !== "")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} must be a bare production origin without credentials, a path, query, or fragment.`,
       });
     }
   }

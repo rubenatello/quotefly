@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
 import { CURRENT_LEGAL_VERSION } from "../lib/legal";
@@ -30,6 +31,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [fullName, setFullName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [primaryTrade, setPrimaryTrade] = useState<ServiceType>("ROOFING");
@@ -44,6 +46,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
     setMode(initialMode);
     setError(null);
     setSuccess(null);
+    setPasswordVisible(false);
   }, [initialMode, isOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,6 +103,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
     setError(null);
     setSuccess(null);
     setPassword("");
+    setPasswordVisible(false);
   };
 
   if (!isOpen) return null;
@@ -280,17 +284,28 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                   </button>
                 ) : null}
               </div>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
-                autoComplete={mode === "signin" ? "current-password" : "new-password"}
-                minLength={mode === "signup" ? 8 : 1}
-                className={inputClass}
-                required
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={passwordVisible ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
+                  autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                  minLength={mode === "signup" ? 8 : 1}
+                  className={`${inputClass} pr-12`}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setPasswordVisible((current) => !current)}
+                  className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center rounded-r-lg text-slate-500 transition hover:text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue"
+                  aria-label={passwordVisible ? "Hide password" : "Show password"}
+                  aria-pressed={passwordVisible}
+                >
+                  {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
           ) : null}
 

@@ -39,6 +39,56 @@ describe("security boundary helpers", () => {
     ).toThrow(/until sender authorization is implemented/i);
   });
 
+  it("requires HTTPS for production app and API URLs", () => {
+    expect(() =>
+      parseEnv({
+        ...process.env,
+        NODE_ENV: "production",
+        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+        APP_URL: "http://app.quotefly.example",
+        API_URL: "https://api.quotefly.example",
+        SESSION_COOKIE_SAME_SITE: "lax",
+        ENABLE_TWILIO_SMS: "false",
+      }),
+    ).toThrow(/APP_URL must use HTTPS/i);
+
+    expect(() =>
+      parseEnv({
+        ...process.env,
+        NODE_ENV: "production",
+        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+        APP_URL: "https://app.quotefly.example",
+        API_URL: "http://api.quotefly.example",
+        SESSION_COOKIE_SAME_SITE: "lax",
+        ENABLE_TWILIO_SMS: "false",
+      }),
+    ).toThrow(/API_URL must use HTTPS/i);
+  });
+
+  it("requires production URLs to be bare trusted origins", () => {
+    for (const APP_URL of [
+      "https://user:secret@app.quotefly.example",
+      "https://app.quotefly.example/reset-password",
+      "https://app.quotefly.example?redirect=attacker",
+      "https://app.quotefly.example#fragment",
+    ]) {
+      expect(() =>
+        parseEnv({
+          ...process.env,
+          NODE_ENV: "production",
+          DATABASE_URL: "postgresql://example.invalid/quotefly",
+          JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+          APP_URL,
+          API_URL: "https://api.quotefly.example",
+          SESSION_COOKIE_SAME_SITE: "lax",
+          ENABLE_TWILIO_SMS: "false",
+        }),
+      ).toThrow(/bare production origin/i);
+    }
+  });
+
   it("neutralizes spreadsheet formulas in tenant-controlled QuickBooks CSV cells", () => {
     const csv = buildQuickBooksInvoiceCsv(
       [

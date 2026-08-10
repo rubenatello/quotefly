@@ -67,7 +67,14 @@ test.describe("public site and session auth", () => {
 
     await page.goto("/");
     await page.getByRole("button", { name: /start free trial/i }).first().click();
-    await expect(page.getByRole("dialog", { name: /start free trial/i })).toBeVisible();
+    const authDialog = page.getByRole("dialog", { name: /start free trial/i });
+    await expect(authDialog).toBeVisible();
+    const passwordInput = authDialog.getByLabel("Password");
+    await passwordInput.fill("VisiblePassword123!");
+    await authDialog.getByRole("button", { name: "Show password" }).click();
+    await expect(passwordInput).toHaveAttribute("type", "text");
+    await authDialog.getByRole("button", { name: "Hide password" }).click();
+    await expect(passwordInput).toHaveAttribute("type", "password");
   });
 
   test("signup creates an HttpOnly cookie session, restores on reload, and logs out cleanly", async ({

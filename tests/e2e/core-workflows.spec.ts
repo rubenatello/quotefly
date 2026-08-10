@@ -156,6 +156,26 @@ test.describe("controlled beta core workflow", () => {
     await expect(page.getByTestId("existing-quote-line-row-1")).toBeVisible();
   });
 
+  test("desktop navigation stays consistent across collapse and secondary routes", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "desktop-navigation");
+    await addSessionCookie(context, account);
+
+    await page.goto("/app/customers");
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+
+    await page.goto("/app/follow-up");
+    await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Follow-up", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page).toHaveTitle("Follow-up | QuoteFly");
+
+    await page.goto("/app/setup");
+    await expect(page).toHaveTitle("Setup | QuoteFly");
+    await expect(page.getByRole("button", { name: "Business", exact: true })).toHaveAttribute("aria-current", "page");
+  });
+
   test("tablet boards do not clip and invalid analytics ranges suppress metrics", async ({ context, page, request }) => {
     const account = await signUpViaApi(request, "tablet-range");
     const customer = await createCustomerViaApi(request, account);

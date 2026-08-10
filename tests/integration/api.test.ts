@@ -334,6 +334,57 @@ describe("QuoteFly API integration", () => {
     expect(updatedPassword.statusCode).toBe(200);
   });
 
+  test("serializes concurrent password reset requests per account", async () => {
+    const account = await signUp("password-recovery-race");
+    let resetUrl = "";
+    let releaseDelivery!: () => void;
+    let deliveryStarted!: () => void;
+    const deliveryGate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
+    const deliveryStartedGate = new Promise<void>((resolve) => { deliveryStarted = resolve; });
+
+    transactionalEmailMocks.sendPasswordReset.mockImplementationOnce(async (_runtimeEnv, input) => {
+      resetUrl = (input as { resetUrl: string }).resetUrl;
+      deliveryStarted();
+      await deliveryGate;
+    });
+
+    const firstRequest = app.inject({
+      method: "POST",
+      url: "/v1/auth/forgot-password",
+      payload: { email: account.user.email },
+    });
+    await deliveryStartedGate;
+
+    const secondRequest = await app.inject({
+      method: "POST",
+      url: "/v1/auth/forgot-password",
+      payload: { email: account.user.email },
+    });
+    releaseDelivery();
+    const firstResponse = await firstRequest;
+
+    expect(firstResponse.statusCode).toBe(202);
+    expect(secondRequest.statusCode).toBe(202);
+    expect(transactionalEmailMocks.sendPasswordReset).toHaveBeenCalledTimes(1);
+
+    const activeTokens = await prisma.passwordResetToken.findMany({
+      where: { userId: account.user.id, usedAtUtc: null, expiresAtUtc: { gt: new Date() } },
+      select: { id: true },
+    });
+    expect(activeTokens).toHaveLength(1);
+
+    const resetToken = new URLSearchParams(new URL(resetUrl).hash.replace(/^#/, "")).get("token");
+    expect(resetToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    if (!resetToken) throw new Error("Expected the delivered reset URL to contain a token.");
+
+    const reset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/reset-password",
+      payload: { token: resetToken, password: "ConcurrentReset456!" },
+    });
+    expect(reset.statusCode).toBe(200);
+  });
+
   test("protects the core customer and quote flow by tenant", async () => {
     const alpha = await signUp("alpha");
     const beta = await signUp("beta");

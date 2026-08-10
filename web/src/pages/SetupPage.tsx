@@ -293,7 +293,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     setPresetDrafts((current) => current.filter((preset) => preset.id !== presetId));
   }
 
-  async function saveSetup() {
+  async function saveSetup(nextPath?: "/app/customers" | "/app/branding") {
     setSaving(true);
     setError(null);
     try {
@@ -327,6 +327,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
       await onSetupSaved?.();
       setExistingPresets(refreshedSetup.presets);
       setNotice(`Setup saved for ${TRADE_LABELS[trade]}. Pricing defaults and presets are ready.`);
+      if (nextPath) navigate(nextPath);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed saving setup.");
     } finally {
@@ -337,17 +338,57 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Workspace Setup"
-        subtitle="Set the trade, pricing model, and starter presets your crew will use to quote quickly."
+        title={session?.onboardingCompletedAtUtc ? "Workspace setup" : "Get ready to quote"}
+        subtitle={
+          session?.onboardingCompletedAtUtc
+            ? "Update the trade, pricing model, and reusable jobs your crew uses for quotes."
+            : "Use QuoteFly's recommended jobs now, then adjust pricing whenever you are ready."
+        }
         actions={
-          <Button variant="outline" onClick={() => navigate("/app/branding")}>
-            Branding
-          </Button>
+          session?.onboardingCompletedAtUtc ? (
+            <Button variant="outline" onClick={() => navigate("/app/branding")}>
+              Branding
+            </Button>
+          ) : null
         }
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+
+      {!session?.onboardingCompletedAtUtc ? (
+        <Card variant="blue" padding="lg" className="overflow-hidden">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-quotefly-blue">Fast setup</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Start with proven defaults</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                We prepared {recommendedPresets.length || "your"} starter jobs for {TRADE_LABELS[trade]}. Use them now to reach your customer list, or customize the details below first.
+              </p>
+              {!canSaveSetup && !loading ? (
+                <p className="mt-2 text-xs font-medium text-amber-700">Preparing your starter jobs…</p>
+              ) : null}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[360px]">
+              <Button
+                size="lg"
+                loading={saving}
+                disabled={loading || !canSaveSetup}
+                onClick={() => void saveSetup("/app/customers")}
+              >
+                Use defaults &amp; continue
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => document.getElementById("setup-defaults")?.scrollIntoView({ behavior: "smooth" })}
+              >
+                Customize first
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">

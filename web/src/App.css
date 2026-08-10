@@ -12,6 +12,13 @@
   padding-right: max(0.75rem, env(safe-area-inset-right));
 }
 
+@media (max-width: 420px) {
+  .qf-mobile-bottom-nav {
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
+}
+
 .qf-mobile-action-dock {
   bottom: var(--qf-mobile-nav-clearance);
   left: max(1rem, env(safe-area-inset-left));
@@ -29,5 +36,9 @@
 @media (min-width: 1024px) {
   .qf-workspace-main {
     min-height: calc(100vh - 3.5rem);
+  }
+
+  .qf-mobile-action-dock {
+    bottom: 1rem;
   }
 }

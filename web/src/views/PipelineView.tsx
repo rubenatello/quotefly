@@ -142,7 +142,7 @@ function QueueTabs({
             key={tab.key}
             type="button"
             onClick={() => onChange(tab.key)}
-            className={`shrink-0 snap-start inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+            className={`inline-flex min-h-[44px] shrink-0 snap-start items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition sm:min-h-[36px] sm:py-1.5 ${
               active
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
                 : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
@@ -368,12 +368,12 @@ export function PipelineView() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Pipeline"
-        subtitle="Work the queue in order: untouched leads first, quoted jobs next, active work after that, then reviews and referrals."
+        title="Follow-up"
+        subtitle="Keep leads and jobs moving: new customers first, quoted work next, then completed-job check-ins."
         actions={
           <>
-            <Button variant="outline" onClick={() => navigateToBuilder()}>
-              Build Quote
+            <Button variant={selectedQuoteId ? "outline" : "primary"} onClick={() => navigateToBuilder()}>
+              New quote
             </Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
           </>

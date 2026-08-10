@@ -1065,6 +1065,7 @@ export function QuoteBuilderView() {
             key={pane.id}
             type="button"
             onClick={() => setMobilePane(pane.id)}
+            aria-pressed={mobilePane === pane.id}
             className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
               mobilePane === pane.id
                 ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
@@ -1370,6 +1371,7 @@ export function QuoteBuilderView() {
       <div className="xl:hidden">
         <div className="h-24" />
         <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+          {error ? <p role="alert" className="mb-2 line-clamp-2 text-xs font-medium text-red-700">{error}</p> : null}
           <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
             <span>{filteredDraftLines.length} line{filteredDraftLines.length === 1 ? "" : "s"}</span>
             <span>Total {money(totalAmount)}</span>
@@ -1597,12 +1599,15 @@ function DraftLineEditorRow({
     <div className="px-3 py-2.5 xl:hover:bg-[var(--qf-panel-muted)]/60" data-testid={`quote-line-row-${index + 1}`}>
       <div className="xl:hidden">
         <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
-          <button
-            type="button"
-            onClick={() => setExpanded((current) => !current)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
-          >
-            <div className="min-w-0">
+          <div className="flex items-center gap-2 px-3 py-3">
+            <button
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
+              className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-3 text-left"
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Collapse" : "Expand"} line ${index + 1}`}
+            >
+              <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
                 <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
@@ -1615,14 +1620,15 @@ function DraftLineEditorRow({
                 <span>Price {money(line.unitPrice)}</span>
                 <span>Total {money(lineTotal)}</span>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
+              </div>
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500">
+                {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </span>
+            </button>
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onInsertBelow(line.id);
-                }}
+                onClick={() => onInsertBelow(line.id)}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-[var(--qf-border-strong)] hover:text-quotefly-blue"
                 aria-label="Add line below"
               >
@@ -1630,20 +1636,14 @@ function DraftLineEditorRow({
               </button>
               <button
                 type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onRemove(line.id);
-                }}
+                onClick={() => onRemove(line.id)}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
                 aria-label="Remove line"
               >
                 <X size={14} />
               </button>
-              <span className="rounded-lg border border-[var(--qf-border)] bg-white p-2 text-slate-500">
-                {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              </span>
             </div>
-          </button>
+          </div>
 
           <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
             <div className="space-y-3">

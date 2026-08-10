@@ -39,7 +39,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Professional",
       price: "$59",
       period: "/month",
-      description: "Planned for the next release once advanced analytics, history, and accounting workflows are fully hardened.",
+      description: "For growing teams that need deeper reporting, quote history, and accounting workflows.",
       features: [
         "Everything in Basic, plus:",
         "Est. AI prompts: ~6,800/month",
@@ -58,7 +58,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Enterprise",
       price: "$249",
       period: "/month",
-      description: "Planned after Professional for larger operations that need deeper automation and integration control.",
+      description: "For larger operations that need deeper automation, integration controls, and rollout support.",
       features: [
         "Everything in Professional, plus:",
         "Est. AI prompts: ~34,600/month",
@@ -89,7 +89,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Do you support QuickBooks?",
-      a: "Not as a sellable launch feature. Basic is focused on customer management, quoting, and PDF workflow first. Accounting integrations are planned after launch.",
+      a: "QuickBooks integration is planned for a future plan. Basic currently focuses on customer management, quoting, branded PDFs, and follow-up.",
     },
     {
       q: "How does AI usage work?",
@@ -109,7 +109,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         title="Contractor quoting software pricing"
         description={
           <>
-            QuoteFly pricing for contractor quoting software and contractor estimating software. Basic is live now, with advanced tiers staged after core workflow hardening.
+            Start with QuoteFly Basic today. Additional plans will open as advanced reporting, team, and accounting features become available.
           </>
         }
         actions={
