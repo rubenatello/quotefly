@@ -191,6 +191,7 @@ model User {
   email                String         @unique
   fullName             String
   passwordHash         String
+  authVersion          Int            @default(0)
   legalAcceptedAtUtc   DateTime?      @db.Timestamptz(3)
   termsVersion         String?
   privacyPolicyVersion String?
@@ -199,8 +200,22 @@ model User {
   deletedAtUtc         DateTime?      @db.Timestamptz(3)
   tenantLink           TenantUser[]
   aiUsageEvents        AiUsageEvent[]
+  passwordResetTokens  PasswordResetToken[]
 
   @@index([deletedAtUtc])
+}
+
+model PasswordResetToken {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique @db.VarChar(64)
+  expiresAtUtc DateTime  @db.Timestamptz(3)
+  usedAtUtc    DateTime? @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAtUtc])
 }
 
 model TenantUser {

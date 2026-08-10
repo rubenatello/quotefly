@@ -7,11 +7,13 @@ const openApps: Array<ReturnType<typeof Fastify>> = [];
 function buildHealthServer(
   queryRaw: () => Promise<unknown>,
   schemaProbe: () => Promise<unknown> = async () => null,
+  passwordResetSchemaProbe: () => Promise<unknown> = async () => null,
 ) {
   const app = Fastify({ logger: false });
   app.decorate("prisma", {
     $queryRaw: queryRaw,
     user: { findFirst: schemaProbe },
+    passwordResetToken: { findFirst: passwordResetSchemaProbe },
   });
   app.register(healthRoutes, { prefix: "/v1" });
   openApps.push(app);
@@ -39,7 +41,8 @@ describe("health and readiness routes", () => {
   test("returns ready only after the database probe succeeds", async () => {
     const queryRaw = vi.fn(async () => [{ value: 1 }]);
     const schemaProbe = vi.fn(async () => null);
-    const app = buildHealthServer(queryRaw, schemaProbe);
+    const passwordResetSchemaProbe = vi.fn(async () => null);
+    const app = buildHealthServer(queryRaw, schemaProbe, passwordResetSchemaProbe);
 
     const response = await app.inject({ method: "GET", url: "/v1/ready" });
 
@@ -47,6 +50,7 @@ describe("health and readiness routes", () => {
     expect(response.json()).toMatchObject({ status: "ready", service: "quotefly-api" });
     expect(queryRaw).toHaveBeenCalledOnce();
     expect(schemaProbe).toHaveBeenCalledOnce();
+    expect(passwordResetSchemaProbe).toHaveBeenCalledOnce();
   });
 
   test("returns a stable safe response when the database probe fails", async () => {
@@ -78,5 +82,23 @@ describe("health and readiness routes", () => {
     expect(response.body).not.toContain("legalAcceptedAtUtc");
     expect(queryRaw).toHaveBeenCalledOnce();
     expect(schemaProbe).toHaveBeenCalledOnce();
+  });
+
+  test("returns not ready when the password recovery migration is missing", async () => {
+    const queryRaw = vi.fn(async () => [{ value: 1 }]);
+    const schemaProbe = vi.fn(async () => null);
+    const passwordResetSchemaProbe = vi.fn(async () => {
+      throw new Error("The table PasswordResetToken does not exist.");
+    });
+    const app = buildHealthServer(queryRaw, schemaProbe, passwordResetSchemaProbe);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("PasswordResetToken");
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(schemaProbe).toHaveBeenCalledOnce();
+    expect(passwordResetSchemaProbe).toHaveBeenCalledOnce();
   });
 });

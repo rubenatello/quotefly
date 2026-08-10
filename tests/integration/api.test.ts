@@ -24,6 +24,12 @@ const stripeProviderMocks = vi.hoisted(() => ({
   createCheckoutSession: vi.fn(),
 }));
 
+const transactionalEmailMocks = vi.hoisted(() => ({
+  isConfigured: vi.fn(),
+  sendPasswordReset: vi.fn(),
+  sendPasswordChanged: vi.fn(),
+}));
+
 vi.mock("stripe", async () => {
   const actual = await vi.importActual<typeof import("stripe")>("stripe");
   class TestStripe extends actual.default {
@@ -47,6 +53,12 @@ vi.mock("../../src/services/quickbooks", async () => {
     fetchQuickBooksCompanyInfo: quickBooksProviderMocks.fetchCompanyInfo,
   };
 });
+
+vi.mock("../../src/services/transactional-email", () => ({
+  isTransactionalEmailConfigured: transactionalEmailMocks.isConfigured,
+  sendPasswordResetEmail: transactionalEmailMocks.sendPasswordReset,
+  sendPasswordChangedEmail: transactionalEmailMocks.sendPasswordChanged,
+}));
 
 type AuthSession = {
   cookie: string;
@@ -189,6 +201,9 @@ describe("QuoteFly API integration", () => {
     stripeProviderMocks.retrieveSubscription.mockReset();
     stripeProviderMocks.createCustomer.mockReset();
     stripeProviderMocks.createCheckoutSession.mockReset();
+    transactionalEmailMocks.isConfigured.mockReset().mockReturnValue(true);
+    transactionalEmailMocks.sendPasswordReset.mockReset().mockResolvedValue(undefined);
+    transactionalEmailMocks.sendPasswordChanged.mockReset().mockResolvedValue(undefined);
   });
 
   beforeAll(async () => {
@@ -238,6 +253,85 @@ describe("QuoteFly API integration", () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: "Invalid email or password." });
+  });
+
+  test("resets a password with a single-use token and revokes existing sessions", async () => {
+    const account = await signUp("password-recovery");
+    let resetUrl = "";
+    transactionalEmailMocks.sendPasswordReset.mockImplementation(async (_runtimeEnv, input) => {
+      resetUrl = (input as { resetUrl: string }).resetUrl;
+    });
+
+    const requestReset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/forgot-password",
+      payload: { email: account.user.email.toUpperCase() },
+    });
+    expect(requestReset.statusCode).toBe(202);
+    expect(requestReset.json()).toEqual({
+      message: "If an active QuoteFly account exists for that email, a password reset link is on its way.",
+    });
+    expect(transactionalEmailMocks.sendPasswordReset).toHaveBeenCalledTimes(1);
+
+    const missingAccountReset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/forgot-password",
+      payload: { email: `missing-password-recovery-${Date.now()}@example.com` },
+    });
+    expect(missingAccountReset.statusCode).toBe(202);
+    expect(missingAccountReset.json()).toEqual(requestReset.json());
+    expect(transactionalEmailMocks.sendPasswordReset).toHaveBeenCalledTimes(1);
+
+    const resetToken = new URLSearchParams(new URL(resetUrl).hash.replace(/^#/, "")).get("token");
+    expect(resetToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    if (!resetToken) throw new Error("Expected password reset email to include a token.");
+
+    const invalidReset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/reset-password",
+      payload: { token: "A".repeat(43), password: "UpdatedPassword456!" },
+    });
+    expect(invalidReset.statusCode).toBe(400);
+
+    const reset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/reset-password",
+      payload: { token: resetToken, password: "UpdatedPassword456!" },
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json()).toEqual({ message: "Password updated. You can now sign in." });
+    expect(transactionalEmailMocks.sendPasswordChanged).toHaveBeenCalledWith(
+      expect.anything(),
+      account.user.email,
+    );
+
+    const reusedReset = await app.inject({
+      method: "POST",
+      url: "/v1/auth/reset-password",
+      payload: { token: resetToken, password: "AnotherPassword789!" },
+    });
+    expect(reusedReset.statusCode).toBe(400);
+
+    const priorSession = await app.inject({
+      method: "GET",
+      url: "/v1/auth/me",
+      headers: authHeaders(account.cookie),
+    });
+    expect(priorSession.statusCode).toBe(401);
+
+    const priorPassword = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signin",
+      payload: { email: account.user.email, password: "TestPassword123!" },
+    });
+    expect(priorPassword.statusCode).toBe(401);
+
+    const updatedPassword = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signin",
+      payload: { email: account.user.email, password: "UpdatedPassword456!" },
+    });
+    expect(updatedPassword.statusCode).toBe(200);
   });
 
   test("protects the core customer and quote flow by tenant", async () => {

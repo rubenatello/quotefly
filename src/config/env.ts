@@ -31,6 +31,9 @@ const EnvSchema = z.object({
   APP_URL: z.string().url().default("http://localhost:5173"),
   API_URL: z.string().url().default("http://localhost:4000"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
+  RESEND_API_KEY: z.string().default(""),
+  PASSWORD_RESET_EMAIL_FROM: z.string().default(""),
+  PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(10).max(60).default(30),
   SESSION_COOKIE_NAME: z.string().min(1).default("qf_session"),
   SESSION_COOKIE_DOMAIN: z.string().default(""),
   SESSION_COOKIE_SAME_SITE: z.enum(["lax", "strict", "none"]).default("lax"),
@@ -70,6 +73,14 @@ const EnvSchema = z.object({
       code: "custom",
       path: ["SESSION_COOKIE_SAME_SITE"],
       message: "SESSION_COOKIE_SAME_SITE=none is not allowed until explicit CSRF protection is implemented.",
+    });
+  }
+
+  if (Boolean(value.RESEND_API_KEY) !== Boolean(value.PASSWORD_RESET_EMAIL_FROM.trim())) {
+    ctx.addIssue({
+      code: "custom",
+      path: [value.RESEND_API_KEY ? "PASSWORD_RESET_EMAIL_FROM" : "RESEND_API_KEY"],
+      message: "RESEND_API_KEY and PASSWORD_RESET_EMAIL_FROM must be configured together.",
     });
   }
 

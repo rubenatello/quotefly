@@ -220,6 +220,11 @@ export function buildServer() {
       return;
     }
 
+    if (membership.user.authVersion !== claims.authVersion) {
+      reply.code(401).send({ error: "Session is no longer valid." });
+      return;
+    }
+
     // Roles and email-based superuser entitlements must reflect the live
     // database state rather than the potentially stale JWT payload.
     Object.assign(request.user as object, {

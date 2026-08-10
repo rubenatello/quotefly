@@ -18,8 +18,10 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           legalAcceptedAtUtc: true,
           termsVersion: true,
           privacyPolicyVersion: true,
+          authVersion: true,
         },
       });
+      await app.prisma.passwordResetToken.findFirst({ select: { id: true } });
 
       return {
         status: "ready",

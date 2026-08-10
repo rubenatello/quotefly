@@ -69,7 +69,7 @@ Project-scoped custom agents live in `.codex/agents`; their reusable workflows l
 - `sweep`: public SEO, crawlability, structured data, and search performance.
 - `renford`: API latency, Prisma/PostgreSQL, backend architecture, and infrastructure integrity.
 - `goldface`: responsive mobile/desktop UX, accessibility, and frontend reliability.
-- `sentinel`: tenant isolation, auth, privacy, payments, providers, webhooks, and dependencies.
+- `sentinel`: independent security and compliance-readiness reviewer for tenant isolation, auth, privacy, payments, providers, webhooks, dependencies, CI/CD, and production posture. Use `$quotefly-security-review` for its repeatable audit workflow.
 - `harbor`: CI, release evidence, migrations, observability, rollback, and launch operations.
 - `rook`: bounded junior remediation with explicit acceptance criteria.
 - `opera`: independent senior review and the final engineering verdict.

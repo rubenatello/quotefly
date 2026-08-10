@@ -133,6 +133,12 @@ test("private app routes have a server and client noindex boundary", async () =>
   assert.doesNotMatch(appShell, /rel="canonical"/i);
   assert.match(appShell, /<script\s+type="module"/i);
 
+  const resetPasswordShell = await readFile(join(distDir, "reset-password", "index.html"), "utf8");
+  assert.match(resetPasswordShell, /<meta\s+name="robots"\s+content="noindex,nofollow,noarchive"/i);
+  assert.match(resetPasswordShell, /<meta\s+name="referrer"\s+content="no-referrer"/i);
+  assert.doesNotMatch(resetPasswordShell, /rel="canonical"/i);
+  assert.match(resetPasswordShell, /<script\s+type="module"/i);
+
   const vercel = JSON.parse(await readFile(join(webRoot, "vercel.json"), "utf8")) as {
     rewrites: Array<{ source: string; destination: string }>;
     headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }>;
@@ -148,6 +154,10 @@ test("private app routes have a server and client noindex boundary", async () =>
     const header = vercel.headers.find((entry) => entry.source === source)?.headers.find((entry) => entry.key === "X-Robots-Tag");
     assert.equal(header?.value, "noindex, nofollow, noarchive");
   }
+
+  const resetHeaders = vercel.headers.find((entry) => entry.source === "/reset-password")?.headers;
+  assert.equal(resetHeaders?.find((entry) => entry.key === "X-Robots-Tag")?.value, "noindex, nofollow, noarchive");
+  assert.equal(resetHeaders?.find((entry) => entry.key === "Referrer-Policy")?.value, "no-referrer");
 });
 
 test("Vercel applies browser security headers to every route", async () => {

@@ -9,6 +9,7 @@ export const LiveAuthMembershipSelect = Prisma.validator<Prisma.TenantUserSelect
       id: true,
       email: true,
       fullName: true,
+      authVersion: true,
       createdAt: true,
     },
   },
@@ -43,6 +44,7 @@ const JwtClaimsSchema = z.object({
   tenantId: z.string().min(1),
   email: z.string().email(),
   role: z.string().min(1),
+  authVersion: z.number().int().nonnegative().default(0),
 });
 
 export type JwtClaims = z.infer<typeof JwtClaimsSchema>;

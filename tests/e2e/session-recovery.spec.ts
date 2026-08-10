@@ -131,8 +131,8 @@ test.describe("session recovery", () => {
 
     await page.goto("/");
     await page.getByRole("button", { name: "Sign In", exact: true }).first().click();
-    const signInDialog = page.getByRole("dialog");
-    await signInDialog.getByRole("button", { name: "Sign in", exact: true }).click();
+    const signInDialog = page.getByRole("dialog", { name: "Sign in" });
+    await expect(signInDialog).toBeVisible();
     await signInDialog.getByLabel("Email Address").fill(account.email);
     await signInDialog.getByLabel("Password").fill(account.password);
     await signInDialog.getByRole("button", { name: "Sign In", exact: true }).click();
