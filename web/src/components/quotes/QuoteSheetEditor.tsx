@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, FileText, UserRound } from "lucide-react";
 import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
+import { isSupportedBrandLogoDataUrl } from "../../lib/brand-logo";
 import { Badge } from "../ui";
 import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
@@ -56,7 +57,7 @@ export function QuoteSheetEditor({
   readOnly?: boolean;
   children: ReactNode;
 }) {
-  const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+  const logo = isSupportedBrandLogoDataUrl(logoUrl) ? <BrandLogo logoUrl={logoUrl} /> : null;
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const template = getQuoteTemplateOption(templateId);
   const sectionLabelColor = componentColors?.sectionTitleColor ?? "#64748b";

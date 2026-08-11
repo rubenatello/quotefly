@@ -1,6 +1,7 @@
 export type WorkspacePage =
   | "customers"
   | "quotes"
+  | "products"
   | "build"
   | "quote-desk"
   | "follow-up"
@@ -14,6 +15,7 @@ export type WorkspacePage =
 export type WorkspaceNavigationId =
   | "customers"
   | "quotes"
+  | "products"
   | "follow-up"
   | "analytics"
   | "settings"
@@ -23,6 +25,7 @@ export type WorkspaceNavigationId =
 export type WorkspaceIconKey =
   | "customers"
   | "quotes"
+  | "products"
   | "follow-up"
   | "analytics"
   | "settings"
@@ -39,6 +42,7 @@ export interface WorkspaceNavigationItem {
 export const WORKSPACE_OPERATIONS_LINKS: readonly WorkspaceNavigationItem[] = [
   { id: "customers", label: "Customers", path: "/app/customers", icon: "customers" },
   { id: "quotes", label: "Quotes", path: "/app/quotes", icon: "quotes" },
+  { id: "products", label: "Products", path: "/app/products", icon: "products" },
   { id: "follow-up", label: "Follow-up", path: "/app/follow-up", icon: "follow-up" },
   { id: "analytics", label: "Analytics", path: "/app/analytics", icon: "analytics" },
 ] as const;
@@ -62,6 +66,11 @@ export const WORKSPACE_PAGE_META: Record<
     label: "Quotes",
     hint: "Review quote status, value, and the work that needs attention.",
     activeNavigation: "quotes",
+  },
+  products: {
+    label: "Products & services",
+    hint: "Manage reusable work, pricing, costs, and quote-ready descriptions.",
+    activeNavigation: "products",
   },
   build: {
     label: "New quote",
@@ -116,6 +125,7 @@ export function workspacePageFromPath(pathname: string): WorkspacePage {
   if (pathname.startsWith("/app/customers")) return "customers";
   if (pathname === "/app/quotes" || pathname === "/app/quotes/") return "quotes";
   if (pathname.startsWith("/app/quotes/")) return "quote-desk";
+  if (pathname.startsWith("/app/products")) return "products";
   if (pathname.startsWith("/app/build")) return "build";
   if (pathname.startsWith("/app/follow-up")) return "follow-up";
   if (pathname.startsWith("/app/settings/users")) return "settings-users";

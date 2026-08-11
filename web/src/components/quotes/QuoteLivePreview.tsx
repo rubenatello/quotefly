@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
+import { isSupportedBrandLogoDataUrl } from "../../lib/brand-logo";
 import { money } from "../dashboard/DashboardContext";
 import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
@@ -62,7 +63,7 @@ export function QuoteLivePreview({
   quoteReferenceLabel?: string;
   subtitle?: string;
 }) {
-  const logo = logoUrl ? <BrandLogo logoUrl={logoUrl} /> : null;
+  const logo = isSupportedBrandLogoDataUrl(logoUrl) ? <BrandLogo logoUrl={logoUrl} /> : null;
   const template = getQuoteTemplateOption(templateId);
   const sectionLabelColor = componentColors?.sectionTitleColor ?? "#64748b";
   const tableHeaderBgColor = componentColors?.tableHeaderBgColor ?? accentColor;
@@ -239,6 +240,7 @@ export function QuoteLivePreview({
           <QuoteAttributionFooter
             footerText={footerText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
+            textColor={componentColors?.footerTextColor}
           />
         </div>
       </div>
@@ -265,6 +267,13 @@ function PreviewHeaderCard({
   subtitle: string;
   templateId: "modern" | "professional" | "minimal";
 }) {
+  const alignmentClass =
+    logoPosition === "center"
+      ? "items-center text-center"
+      : logoPosition === "right"
+        ? "items-end text-right"
+        : "items-start text-left";
+
   return (
     <section className="overflow-hidden rounded-[24px] border border-[var(--qf-border)] bg-white shadow-[var(--qf-shadow-sm)]">
       {templateId === "modern" ? (
@@ -279,21 +288,12 @@ function PreviewHeaderCard({
           />
         ) : null}
 
-        {logoPosition === "center" && logo ? <div className="mb-4 flex justify-center">{logo}</div> : null}
-
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
-              {logoPosition === "left" ? logo : null}
-              <div className="min-w-0 flex-1">
-                <h3 className="text-[1.3rem] font-semibold tracking-tight text-slate-950 sm:text-[1.45rem]">
-                  {quoteTitle.trim() || "Untitled quote"}
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
-              </div>
-            </div>
-          </div>
-          {logoPosition === "right" ? logo : null}
+        <div className={`flex min-w-0 flex-col ${alignmentClass}`}>
+          {logo ? <div className="mb-3 flex max-w-full">{logo}</div> : null}
+          <h3 className="max-w-full break-words text-[1.3rem] font-semibold tracking-tight text-slate-950 sm:text-[1.45rem]">
+            {quoteTitle.trim() || "Untitled quote"}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
         </div>
 
         <div className="mt-4 flex flex-col items-start gap-1 border-t border-[var(--qf-border)] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
@@ -330,7 +330,7 @@ function PreviewInfoCard({
         {label}
       </p>
       <p className="mt-3 break-words text-[15px] font-semibold text-slate-900">{value}</p>
-      {hint ? <p className="mt-2 break-words text-sm leading-6 text-slate-500">{hint}</p> : null}
+      {hint ? <p className="mt-2 whitespace-pre-line break-words text-sm leading-6 text-slate-500">{hint}</p> : null}
     </div>
   );
 }

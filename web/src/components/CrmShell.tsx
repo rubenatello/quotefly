@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Clock3, FilePlus2, Lightbulb, MoreHorizontal, Search } from "lucide-react";
+import { Clock3, FilePlus2, Lightbulb, MoreHorizontal, PackageSearch, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
 import { FeatureRequestForm } from "./feedback/FeatureRequestForm";
@@ -43,6 +43,7 @@ interface CrmShellProps {
 function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
   if (icon === "customers" || icon === "team") return <CustomerIcon size={15} />;
   if (icon === "quotes") return <QuoteIcon size={15} />;
+  if (icon === "products") return <PackageSearch size={15} />;
   if (icon === "follow-up") return <Clock3 size={15} />;
   if (icon === "analytics") return <AnalyticsIcon size={15} />;
   if (icon === "branding") return <InvoiceIcon size={14} />;
@@ -277,6 +278,7 @@ export function CrmShell({
                       <div className="mt-2 space-y-1">
                         {([
                           { label: "Open customers", page: "customers" },
+                          { label: "Open products", page: "products" },
                           { label: "Open settings", page: "settings" },
                           { label: "Open branding", page: "branding" },
                         ] as const).map((item) => (

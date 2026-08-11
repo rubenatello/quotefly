@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
+import { CURRENT_PRIVACY_POLICY_UPDATED_LABEL } from "../lib/legal";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { setPublicSEOMetadata } from "../lib/seo";
 
@@ -63,7 +64,7 @@ export function PrivacyPage() {
       eyebrow="Privacy Policy"
       title="How QuoteFly handles personal data"
       description="This policy describes how QuoteFly collects, uses, stores, and discloses information when you use the service."
-      updated="August 10, 2026"
+      updated={CURRENT_PRIVACY_POLICY_UPDATED_LABEL}
       icon={ShieldCheck}
     >
         {sections.map((section) => (

@@ -12,6 +12,7 @@ import {
   tenantActiveScope,
 } from "../lib/query-scope";
 import {
+  buildTenantEntitlements,
   loadTenantEntitlements,
   startOfCurrentUtcMonth,
   startOfNextUtcMonth,
@@ -23,7 +24,17 @@ import {
   createAiTelemetryAccumulator,
   getAiQuoteRuntimeInfo,
 } from "../services/ai-quote";
-import { generateQuotePdfBuffer } from "../services/quote-pdf";
+import {
+  generateQuotePdfBuffer,
+  type QuoteComponentColors,
+  type QuotePdfData,
+} from "../services/quote-pdf";
+import {
+  persistQuoteBrandAsset,
+  QuoteBrandAssetUnavailableError,
+  resolveQuoteBrandingLogoDataUrl,
+  type QuoteBrandAssetReference,
+} from "../services/quote-brand-asset";
 import {
   applyQuoteSheetLineMutations,
   QuoteSheetLineNotFoundError,
@@ -258,7 +269,7 @@ const SuggestQuoteWithAiSchema = z.object({
 });
 
 
-const QuoteRevisionSelect = {
+const QuoteRevisionListSelect = {
   id: true,
   quoteId: true,
   customerId: true,
@@ -273,7 +284,6 @@ const QuoteRevisionSelect = {
   customerPriceSubtotal: true,
   totalAmount: true,
   createdAt: true,
-  snapshot: true,
   quote: {
     select: {
       id: true,
@@ -459,7 +469,53 @@ interface RevisionSnapshot {
     phone: string;
   };
   lineItems: RevisionSnapshotLineItem[];
+  document?: {
+    tenant: QuotePdfData["tenant"];
+    branding: Omit<QuotePdfData["branding"], "logoUrl"> & {
+      logoUrl?: string | null;
+      logoAsset?: QuoteBrandAssetReference | null;
+    };
+  };
 }
+
+const QuoteBrandAssetReferenceSchema = z.object({
+  id: z.string().min(1),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+const RevisionDocumentSnapshotSchema = z.object({
+  tenant: z.object({
+    name: z.string().min(1),
+    timezone: z.string().min(1),
+  }),
+  branding: z.object({
+    templateId: z.string().min(1),
+    primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    logoUrl: z.string().nullable().optional(),
+    logoAsset: QuoteBrandAssetReferenceSchema.nullable().optional(),
+    logoPosition: z.enum(["left", "center", "right"]).nullable().optional(),
+    showQuoteFlyAttribution: z.boolean(),
+    businessEmail: z.string().nullable().optional(),
+    businessPhone: z.string().nullable().optional(),
+    addressLine1: z.string().nullable().optional(),
+    addressLine2: z.string().nullable().optional(),
+    city: z.string().nullable().optional(),
+    state: z.string().nullable().optional(),
+    postalCode: z.string().nullable().optional(),
+    componentColors: z
+      .object({
+        headerBgColor: z.string().optional(),
+        headerTextColor: z.string().optional(),
+        sectionTitleColor: z.string().optional(),
+        tableHeaderBgColor: z.string().optional(),
+        tableHeaderTextColor: z.string().optional(),
+        totalsColor: z.string().optional(),
+        footerTextColor: z.string().optional(),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
 
 const RevisionSnapshotLineItemSchema = z.object({
   id: z.string().min(1),
@@ -498,6 +554,7 @@ const RevisionSnapshotSchema = z.object({
     phone: z.string().min(1),
   }),
   lineItems: z.array(RevisionSnapshotLineItemSchema),
+  document: RevisionDocumentSnapshotSchema.optional(),
 });
 
 async function getQuoteRevisionContext(
@@ -511,6 +568,34 @@ async function getQuoteRevisionContext(
       ...tenantActiveQuoteScope(tenantId),
     },
     include: {
+      tenant: {
+        select: {
+          name: true,
+          timezone: true,
+          subscriptionStatus: true,
+          subscriptionPlanCode: true,
+          trialStartsAtUtc: true,
+          trialEndsAtUtc: true,
+          subscriptionCurrentPeriodEndUtc: true,
+          branding: {
+            select: {
+              templateId: true,
+              primaryColor: true,
+              logoUrl: true,
+              logoPosition: true,
+              hideQuoteFlyAttribution: true,
+              businessEmail: true,
+              businessPhone: true,
+              addressLine1: true,
+              addressLine2: true,
+              city: true,
+              state: true,
+              postalCode: true,
+              componentColors: true,
+            },
+          },
+        },
+      },
       customer: {
         select: {
           id: true,
@@ -538,7 +623,14 @@ async function getQuoteRevisionContext(
 
 function buildQuoteRevisionSnapshot(
   context: NonNullable<Awaited<ReturnType<typeof getQuoteRevisionContext>>>,
+  options?: { captureDocument?: boolean; actorEmail?: string | null },
 ): RevisionSnapshot {
+  const entitlements = buildTenantEntitlements(context.tenant, new Date(), {
+    userEmail: options?.actorEmail,
+  });
+  const componentColors =
+    (context.tenant.branding?.componentColors as QuoteComponentColors | null | undefined) ?? null;
+
   return {
     quote: {
       id: context.id,
@@ -578,6 +670,76 @@ function buildQuoteRevisionSnapshot(
         lineTotal: roundCurrency(quantity * unitPrice),
       };
     }),
+    ...(options?.captureDocument
+      ? {
+          document: {
+            tenant: {
+              name: context.tenant.name,
+              timezone: context.tenant.timezone,
+            },
+            branding: {
+              templateId: context.tenant.branding?.templateId ?? "modern",
+              primaryColor: context.tenant.branding?.primaryColor ?? "#5B85AA",
+              logoUrl: context.tenant.branding?.logoUrl ?? null,
+              logoPosition:
+                context.tenant.branding?.logoPosition === "center" ||
+                context.tenant.branding?.logoPosition === "right"
+                  ? context.tenant.branding.logoPosition
+                  : "left",
+              showQuoteFlyAttribution:
+                entitlements.planCode === "starter"
+                  ? true
+                  : !Boolean(context.tenant.branding?.hideQuoteFlyAttribution),
+              businessEmail: context.tenant.branding?.businessEmail ?? null,
+              businessPhone: context.tenant.branding?.businessPhone ?? null,
+              addressLine1: context.tenant.branding?.addressLine1 ?? null,
+              addressLine2: context.tenant.branding?.addressLine2 ?? null,
+              city: context.tenant.branding?.city ?? null,
+              state: context.tenant.branding?.state ?? null,
+              postalCode: context.tenant.branding?.postalCode ?? null,
+              componentColors,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+async function externalizeRevisionDocumentLogo(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  document: NonNullable<RevisionSnapshot["document"]>,
+): Promise<NonNullable<RevisionSnapshot["document"]>> {
+  const { logoUrl, logoAsset, ...branding } = document.branding;
+  if (logoAsset) {
+    return {
+      ...document,
+      branding: {
+        ...branding,
+        logoAsset,
+      },
+    };
+  }
+
+  const persistedAsset = await persistQuoteBrandAsset(tx, tenantId, logoUrl);
+  return {
+    ...document,
+    branding: {
+      ...branding,
+      ...(persistedAsset ? { logoAsset: persistedAsset } : {}),
+    },
+  };
+}
+
+async function resolveRevisionDocumentBranding(
+  prisma: PrismaClient,
+  tenantId: string,
+  document: NonNullable<RevisionSnapshot["document"]>,
+): Promise<QuotePdfData["branding"]> {
+  const { logoAsset, logoUrl, ...branding } = document.branding;
+  return {
+    ...branding,
+    logoUrl: await resolveQuoteBrandingLogoDataUrl(prisma, tenantId, { logoAsset, logoUrl }),
   };
 }
 
@@ -589,6 +751,7 @@ async function createQuoteRevision(
     eventType: QuoteRevisionEventType;
     changedFields?: string[];
     actor?: ActivityActor;
+    documentSnapshot?: RevisionSnapshot["document"];
   },
 ) {
   const context = await getQuoteRevisionContext(tx, params.quoteId, params.tenantId);
@@ -600,11 +763,26 @@ async function createQuoteRevision(
       ...tenantActiveScope(params.tenantId),
     },
     orderBy: { version: "desc" },
-    select: { version: true },
+    select: { version: true, status: true },
   });
 
-  const snapshot = buildQuoteRevisionSnapshot(context);
+  const captureCurrentDocument =
+    context.status === "SENT_TO_CUSTOMER" && lastRevision?.status !== "SENT_TO_CUSTOMER";
+  const snapshot = buildQuoteRevisionSnapshot(context, {
+    captureDocument: captureCurrentDocument,
+    actorEmail: params.actor?.actorEmail,
+  });
+  if (params.documentSnapshot) {
+    snapshot.document = params.documentSnapshot;
+  }
+  if (snapshot.document) {
+    snapshot.document = await externalizeRevisionDocumentLogo(tx, params.tenantId, snapshot.document);
+  }
+  const hasDocumentSnapshot = Boolean(snapshot.document);
   const version = (lastRevision?.version ?? 0) + 1;
+  const changedFields = Array.from(
+    new Set([...(params.changedFields ?? []), ...(hasDocumentSnapshot ? ["documentSnapshot"] : [])]),
+  );
 
   return tx.quoteRevision.create({
     data: {
@@ -613,7 +791,7 @@ async function createQuoteRevision(
       customerId: context.customer.id,
       version,
       eventType: params.eventType,
-      changedFields: params.changedFields ?? [],
+      changedFields,
       actorUserId: params.actor?.actorUserId,
       actorEmail: params.actor?.actorEmail,
       actorName: params.actor?.actorName,
@@ -754,6 +932,7 @@ async function restoreQuoteRevision(
     quoteId: finalizedQuote.id,
     eventType: "UPDATED",
     actor: params.actor,
+    documentSnapshot: snapshot.document,
     changedFields: [
       "restoredFromRevision",
       `restoredFromRevisionId:${revision.id}`,
@@ -4539,7 +4718,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const [revisions, total] = await app.prisma.$transaction([
       app.prisma.quoteRevision.findMany({
         where,
-        select: QuoteRevisionSelect,
+        select: QuoteRevisionListSelect,
         orderBy: [{ createdAt: "desc" }, { version: "desc" }],
         take: query.limit,
         skip: query.offset,
@@ -4608,7 +4787,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const [revisions, total] = await app.prisma.$transaction([
       app.prisma.quoteRevision.findMany({
         where,
-        select: QuoteRevisionSelect,
+        select: QuoteRevisionListSelect,
         orderBy: [{ version: "desc" }, { createdAt: "desc" }],
         take: query.limit,
         skip: query.offset,
@@ -4810,11 +4989,20 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           where: tenantActiveScope(claims.tenantId),
           orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         },
+        revisions: {
+          where: {
+            ...tenantActiveScope(claims.tenantId),
+            status: "SENT_TO_CUSTOMER",
+            changedFields: { has: "documentSnapshot" },
+          },
+          orderBy: { version: "desc" },
+          take: 1,
+          select: { snapshot: true },
+        },
         tenant: {
           select: {
             name: true,
             timezone: true,
-            subscriptionPlanCode: true,
             branding: {
               select: {
                 templateId: true,
@@ -4841,60 +5029,86 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Quote not found for tenant." });
     }
 
+    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    });
+    const parsedSentSnapshot = quote.revisions[0]
+      ? RevisionSnapshotSchema.safeParse(quote.revisions[0].snapshot)
+      : null;
+    const sentSnapshot =
+      quote.sentAt &&
+      quote.status !== "DRAFT" &&
+      quote.status !== "READY_FOR_REVIEW" &&
+      parsedSentSnapshot?.success &&
+      parsedSentSnapshot.data.document
+        ? parsedSentSnapshot.data
+        : null;
+    const currentComponentColors =
+      (quote.tenant.branding?.componentColors as QuoteComponentColors | null | undefined) ?? null;
+    const currentBranding: QuotePdfData["branding"] = {
+      templateId: quote.tenant.branding?.templateId ?? "modern",
+      primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
+      logoUrl: quote.tenant.branding?.logoUrl ?? null,
+      logoPosition:
+        quote.tenant.branding?.logoPosition === "center" || quote.tenant.branding?.logoPosition === "right"
+          ? quote.tenant.branding.logoPosition
+          : "left",
+      showQuoteFlyAttribution:
+        (entitlements?.planCode ?? "starter") === "starter"
+          ? true
+          : !Boolean(quote.tenant.branding?.hideQuoteFlyAttribution),
+      businessEmail: quote.tenant.branding?.businessEmail ?? null,
+      businessPhone: quote.tenant.branding?.businessPhone ?? null,
+      addressLine1: quote.tenant.branding?.addressLine1 ?? null,
+      addressLine2: quote.tenant.branding?.addressLine2 ?? null,
+      city: quote.tenant.branding?.city ?? null,
+      state: quote.tenant.branding?.state ?? null,
+      postalCode: quote.tenant.branding?.postalCode ?? null,
+      componentColors: currentComponentColors,
+    };
+    const pdfQuote = sentSnapshot?.quote;
+    const pdfCustomer = sentSnapshot?.customer;
+    const pdfLineItems = sentSnapshot?.lineItems;
+    let sentSnapshotBranding: QuotePdfData["branding"] | undefined;
+    if (sentSnapshot?.document) {
+      try {
+        sentSnapshotBranding = await resolveRevisionDocumentBranding(
+          app.prisma,
+          claims.tenantId,
+          sentSnapshot.document,
+        );
+      } catch (error) {
+        if (!(error instanceof QuoteBrandAssetUnavailableError)) throw error;
+        request.log.error(
+          { quoteId: quote.id, tenantId: claims.tenantId },
+          "Stored quote branding asset could not be resolved",
+        );
+        return reply.code(500).send({ error: "Stored quote branding asset is unavailable." });
+      }
+    }
+
     const pdfBuffer = await generateQuotePdfBuffer({
       quoteId: quote.id,
-      serviceType: quote.serviceType,
-      status: quote.status,
-      title: quote.title,
-      scopeText: quote.scopeText,
+      serviceType: pdfQuote?.serviceType ?? quote.serviceType,
+      status: pdfQuote?.status ?? quote.status,
+      title: pdfQuote?.title ?? quote.title,
+      scopeText: pdfQuote?.scopeText ?? quote.scopeText,
       createdAt: quote.createdAt,
-      sentAt: quote.sentAt,
-      customerPriceSubtotal: Number(quote.customerPriceSubtotal),
-      taxAmount: Number(quote.taxAmount),
-      totalAmount: Number(quote.totalAmount),
+      sentAt: pdfQuote?.sentAtUtc ? new Date(pdfQuote.sentAtUtc) : quote.sentAt,
+      customerPriceSubtotal: pdfQuote?.customerPriceSubtotal ?? Number(quote.customerPriceSubtotal),
+      taxAmount: pdfQuote?.taxAmount ?? Number(quote.taxAmount),
+      totalAmount: pdfQuote?.totalAmount ?? Number(quote.totalAmount),
       customer: {
-        fullName: quote.customer.fullName,
-        email: quote.customer.email,
-        phone: quote.customer.phone,
+        fullName: pdfCustomer?.fullName ?? quote.customer.fullName,
+        email: pdfCustomer?.email ?? quote.customer.email,
+        phone: pdfCustomer?.phone ?? quote.customer.phone,
       },
-      tenant: {
+      tenant: sentSnapshot?.document?.tenant ?? {
         name: quote.tenant.name,
         timezone: quote.tenant.timezone,
       },
-      branding: {
-        templateId: quote.tenant.branding?.templateId ?? "modern",
-        primaryColor: quote.tenant.branding?.primaryColor ?? "#5B85AA",
-        logoUrl: quote.tenant.branding?.logoUrl ?? null,
-        logoPosition:
-          quote.tenant.branding?.logoPosition === "center" || quote.tenant.branding?.logoPosition === "right"
-            ? quote.tenant.branding.logoPosition
-            : "left",
-        showQuoteFlyAttribution:
-          (quote.tenant.subscriptionPlanCode ?? "starter") === "starter"
-            ? true
-            : !Boolean(quote.tenant.branding?.hideQuoteFlyAttribution),
-        businessEmail: quote.tenant.branding?.businessEmail ?? null,
-        businessPhone: quote.tenant.branding?.businessPhone ?? null,
-        addressLine1: quote.tenant.branding?.addressLine1 ?? null,
-        addressLine2: quote.tenant.branding?.addressLine2 ?? null,
-        city: quote.tenant.branding?.city ?? null,
-        state: quote.tenant.branding?.state ?? null,
-        postalCode: quote.tenant.branding?.postalCode ?? null,
-        componentColors:
-          (quote.tenant.branding?.componentColors as
-            | {
-                headerBgColor?: string;
-                headerTextColor?: string;
-                sectionTitleColor?: string;
-                tableHeaderBgColor?: string;
-                tableHeaderTextColor?: string;
-                totalsColor?: string;
-                footerTextColor?: string;
-              }
-            | null
-            | undefined) ?? null,
-      },
-      lineItems: quote.lineItems.map((lineItem) => ({
+      branding: sentSnapshotBranding ?? currentBranding,
+      lineItems: (pdfLineItems ?? quote.lineItems).map((lineItem) => ({
         description: lineItem.description,
         sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
         sectionLabel: lineItem.sectionLabel,

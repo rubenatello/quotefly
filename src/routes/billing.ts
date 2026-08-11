@@ -16,8 +16,17 @@ const BLOCKING_SUBSCRIPTION_STATUSES = new Set([
   "incomplete",
   "paused",
 ]);
+const CHECKOUT_ELIGIBLE_SUBSCRIPTION_WHERE: Prisma.TenantWhereInput = {
+  OR: [
+    { subscriptionStatus: { notIn: [...BLOCKING_SUBSCRIPTION_STATUSES] } },
+    // QuoteFly's signup trial is tracked locally until a Stripe subscription
+    // exists. Those tenants must remain able to start checkout.
+    { subscriptionStatus: "trialing", stripeSubscriptionId: null },
+  ],
+};
 const STRIPE_CHECKOUT_EXPIRATION_MS = 60 * 60 * 1000;
 const STRIPE_CHECKOUT_MINIMUM_REMAINING_MS = 30 * 60 * 1000;
+const STRIPE_MINIMUM_TRIAL_LEAD_MS = 48 * 60 * 60 * 1000 + 5 * 60 * 1000;
 const WEBHOOK_PROCESSING_LEASE_MS = 5 * 60 * 1000;
 
 const CreateCheckoutSessionSchema = z.object({
@@ -291,7 +300,6 @@ async function applyPreparedStripeEvent(
         stripeSubscriptionId: null,
       },
       data: {
-        subscriptionStatus: "checkout_expired",
         stripeCheckoutSessionId: null,
         stripeCheckoutSessionExpiresAtUtc: null,
         stripeCheckoutAttemptId: null,
@@ -330,6 +338,11 @@ function buildAppUrl(baseUrl: string, path: string): string {
 
 function isUniqueConflict(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+function hasBlockingStripeSubscription(subscriptionStatus: string, stripeSubscriptionId: string | null): boolean {
+  if (subscriptionStatus.toLowerCase() === "trialing" && !stripeSubscriptionId) return false;
+  return BLOCKING_SUBSCRIPTION_STATUSES.has(subscriptionStatus.toLowerCase());
 }
 
 function safeWebhookError(error: unknown): string {
@@ -417,6 +430,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
         stripeCheckoutSessionExpiresAtUtc: true,
         stripeCheckoutAttemptId: true,
         stripeCheckoutAttemptExpiresAtUtc: true,
+        trialEndsAtUtc: true,
       },
     });
     if (!tenant) return reply.code(403).send({ error: "Only an active workspace owner can manage billing." });
@@ -427,11 +441,42 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const now = new Date();
-    if (BLOCKING_SUBSCRIPTION_STATUSES.has(tenant.subscriptionStatus.toLowerCase())) {
+    const stripe = createStripeClient(app.env.STRIPE_SECRET_KEY);
+    if (hasBlockingStripeSubscription(tenant.subscriptionStatus, tenant.stripeSubscriptionId)) {
       return reply.code(409).send({ error: "A subscription already exists. Use billing management to change it." });
     }
     if (tenant.stripeCheckoutSessionId && tenant.stripeCheckoutSessionExpiresAtUtc && tenant.stripeCheckoutSessionExpiresAtUtc > now) {
-      return reply.code(409).send({ error: "A checkout is already in progress." });
+      try {
+        const existingCheckout = await stripe.checkout.sessions.retrieve(tenant.stripeCheckoutSessionId);
+        if (existingCheckout.status === "open" && existingCheckout.url) {
+          return { sessionId: existingCheckout.id, checkoutUrl: existingCheckout.url, reused: true };
+        }
+        if (existingCheckout.status === "complete") {
+          return reply.code(409).send({ error: "Checkout completed. Refresh billing status to continue." });
+        }
+
+        await app.prisma.tenant.updateMany({
+          where: {
+            id: tenant.id,
+            stripeCheckoutSessionId: tenant.stripeCheckoutSessionId,
+            stripeSubscriptionId: null,
+          },
+          data: {
+            stripeCheckoutSessionId: null,
+            stripeCheckoutSessionExpiresAtUtc: null,
+          },
+        });
+      } catch (error) {
+        request.log.warn(
+          {
+            errorType: safeWebhookError(error),
+            tenantId: tenant.id,
+            checkoutSessionId: tenant.stripeCheckoutSessionId,
+          },
+          "Unable to resume Stripe checkout session.",
+        );
+        return reply.code(503).send({ error: "Billing checkout could not be resumed. Please try again shortly." });
+      }
     }
 
     let attemptId =
@@ -449,8 +494,8 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       const reserved = await app.prisma.tenant.updateMany({
         where: {
           id: tenant.id,
-          subscriptionStatus: { notIn: [...BLOCKING_SUBSCRIPTION_STATUSES] },
           AND: [
+            CHECKOUT_ELIGIBLE_SUBSCRIPTION_WHERE,
             { OR: [{ stripeCheckoutSessionId: null }, { stripeCheckoutSessionExpiresAtUtc: { lte: now } }] },
             { OR: [{ stripeCheckoutAttemptId: null }, { stripeCheckoutAttemptExpiresAtUtc: { lte: now } }] },
           ],
@@ -477,7 +522,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
             stripeCheckoutAttemptExpiresAtUtc: true,
           },
         });
-        if (BLOCKING_SUBSCRIPTION_STATUSES.has(current.subscriptionStatus.toLowerCase())) {
+        if (hasBlockingStripeSubscription(current.subscriptionStatus, current.stripeSubscriptionId)) {
           return reply.code(409).send({ error: "A subscription already exists. Use billing management to change it." });
         }
         if (current.stripeCheckoutSessionId && current.stripeCheckoutSessionExpiresAtUtc && current.stripeCheckoutSessionExpiresAtUtc > now) {
@@ -494,7 +539,6 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ error: "Billing checkout is expiring. Please retry shortly." });
     }
 
-    const stripe = createStripeClient(app.env.STRIPE_SECRET_KEY);
     let stripeCustomerId = tenant.stripeCustomerId;
     if (!stripeCustomerId) {
       const customer = await stripe.customers.create(
@@ -513,18 +557,36 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!stripeCustomerId) throw new Error("Stripe customer reservation failed.");
 
+    const remainingInternalTrialEnd =
+      tenant.subscriptionStatus.toLowerCase() === "trialing" &&
+      !tenant.stripeSubscriptionId &&
+      tenant.trialEndsAtUtc &&
+      tenant.trialEndsAtUtc > now
+        ? Math.ceil(
+            Math.max(
+              tenant.trialEndsAtUtc.getTime(),
+              now.getTime() + STRIPE_MINIMUM_TRIAL_LEAD_MS,
+            ) / 1000,
+          )
+        : undefined;
     const checkoutSession = await stripe.checkout.sessions.create(
       {
         mode: "subscription",
         customer: stripeCustomerId,
         line_items: [{ price: priceId, quantity: 1 }],
         client_reference_id: tenant.id,
-        success_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=success"),
-        cancel_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=cancel"),
+        success_url: buildAppUrl(
+          app.env.APP_URL,
+          "/app/settings?billing=success&session_id={CHECKOUT_SESSION_ID}",
+        ),
+        cancel_url: buildAppUrl(app.env.APP_URL, "/app/settings?billing=cancel"),
         allow_promotion_codes: true,
         expires_at: Math.floor(attemptExpiresAt.getTime() / 1000),
         metadata: { tenantId: tenant.id, planCode: payload.planCode },
-        subscription_data: { metadata: { tenantId: tenant.id, planCode: payload.planCode } },
+        subscription_data: {
+          metadata: { tenantId: tenant.id, planCode: payload.planCode },
+          ...(remainingInternalTrialEnd ? { trial_end: remainingInternalTrialEnd } : {}),
+        },
       },
       { idempotencyKey: `quotefly:tenant:${tenant.id}:checkout:${attemptId}` },
     );
@@ -533,7 +595,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: tenant.id,
         stripeCheckoutAttemptId: attemptId,
-        subscriptionStatus: { notIn: [...BLOCKING_SUBSCRIPTION_STATUSES] },
+        AND: [CHECKOUT_ELIGIBLE_SUBSCRIPTION_WHERE],
       },
       data: {
         stripeCheckoutSessionId: checkoutSession.id,
@@ -579,7 +641,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const stripe = createStripeClient(app.env.STRIPE_SECRET_KEY);
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: tenant.stripeCustomerId,
-      return_url: buildAppUrl(app.env.APP_URL, "/app/admin?billing=portal"),
+      return_url: buildAppUrl(app.env.APP_URL, "/app/settings?billing=portal"),
     });
     return { url: portalSession.url };
   });

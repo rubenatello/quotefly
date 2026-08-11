@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
-import { CURRENT_LEGAL_VERSION } from "../lib/legal";
+import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
+import { BASIC_PLAN } from "../lib/plans";
 import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from "./ui";
 
 interface AuthModalProps {
@@ -35,7 +36,6 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
   const [fullName, setFullName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [primaryTrade, setPrimaryTrade] = useState<ServiceType>("ROOFING");
-  const [logoDataUrl, setLogoDataUrl] = useState<string>("");
   const [acceptedLegalTerms, setAcceptedLegalTerms] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +70,9 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
           fullName,
           companyName: businessName,
           primaryTrade,
-          logoUrl: logoDataUrl || undefined,
-          generateLogoIfMissing: true,
           acceptedLegalTerms: true,
-          termsVersion: CURRENT_LEGAL_VERSION,
-          privacyPolicyVersion: CURRENT_LEGAL_VERSION,
+          termsVersion: CURRENT_TERMS_VERSION,
+          privacyPolicyVersion: CURRENT_PRIVACY_POLICY_VERSION,
         });
       } else {
         payload = await api.auth.signin({ email, password });
@@ -88,7 +86,6 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
       setFullName("");
       setBusinessName("");
       setPrimaryTrade("ROOFING");
-      setLogoDataUrl("");
       setAcceptedLegalTerms(false);
       onClose();
     } catch (err) {
@@ -107,21 +104,6 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
   };
 
   if (!isOpen) return null;
-
-  const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      setLogoDataUrl("");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = typeof reader.result === "string" ? reader.result : "";
-      setLogoDataUrl(value);
-    };
-    reader.readAsDataURL(file);
-  };
 
   return (
     <Modal
@@ -212,39 +194,11 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                 </select>
               </div>
 
-              <div>
-                <label htmlFor="logoUpload" className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Logo <span className="text-slate-400">(optional)</span>
-                </label>
-                <div className="flex items-center gap-3">
-                  {logoDataUrl ? (
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-1">
-                      <img src={logoDataUrl} alt="Logo preview" className="max-h-full max-w-full object-contain" />
-                    </div>
-                  ) : (
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-400">
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
-                      </svg>
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <input
-                      id="logoUpload"
-                      type="file"
-                      accept="image/*"
-                      onChange={handleLogoUpload}
-                      className="w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-                    />
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      We&apos;ll generate one if you skip this.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               <div className="border-t border-slate-100 pt-4">
                 <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">Account Credentials</p>
+                <p className="-mt-1 text-xs leading-5 text-slate-500">
+                  Add your logo, quote preset, and brand color after account creation in Branding.
+                </p>
               </div>
             </>
           )}
@@ -300,7 +254,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                   type="button"
                   onClick={() => setPasswordVisible((current) => !current)}
                   className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center rounded-r-lg text-slate-500 transition hover:text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue"
-                  aria-label={passwordVisible ? "Hide password" : "Show password"}
+                  aria-label={passwordVisible ? "Hide entered characters" : "Show entered characters"}
                   aria-pressed={passwordVisible}
                 >
                   {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -344,7 +298,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
           <Button
             type="submit"
-            disabled={isLoading || Boolean(success) || (mode === "signup" && !acceptedLegalTerms)}
+          disabled={isLoading || Boolean(success) || (mode === "signup" && !acceptedLegalTerms)}
             loading={isLoading}
             fullWidth
             size="lg"
@@ -401,7 +355,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
       <ModalFooter className="justify-center bg-slate-50 text-center text-xs text-slate-400">
         <p>
-          14-day free trial &middot; No credit card required &middot;{" "}
+          {BASIC_PLAN.trialDays}-day free trial &middot; No credit card required &middot;{" "}
           <Link to="/terms" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
             Terms
           </Link>{" "}

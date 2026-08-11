@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { CheckIcon, LockIcon, PriceIcon } from "../Icons";
 import { Alert, Badge, Button, Card } from "../ui";
 import {
@@ -6,6 +7,7 @@ import {
   ApiError,
   type TenantEntitlements,
 } from "../../lib/api";
+import { BASIC_PLAN, basicMonthlyPriceLabel } from "../../lib/plans";
 
 type BillingAction = "checkout" | "portal" | "refresh" | null;
 
@@ -22,13 +24,13 @@ type BillingRequiredScreenProps = {
   onRefreshSession: () => Promise<void>;
 };
 
-const PAID_STATUS_WITH_PORTAL = new Set(["active", "past_due", "unpaid", "canceled", "incomplete"]);
+const PAID_STATUS_WITH_PORTAL = new Set(["active", "past_due", "unpaid", "canceled", "incomplete", "paused"]);
 const BASIC_FEATURES = ["Draft AI-assisted quotes", "Manage customer records", "Export customer-ready PDFs"];
 const BASIC_LIMITS = [
-  "600 quotes per month",
+  `${BASIC_PLAN.quotesPerMonth} quotes per month`,
   "AI assistance with in-app usage tracking",
-  "Up to 7 team members",
-  "30-day quote history",
+  `Up to ${BASIC_PLAN.teamMembers} team members`,
+  `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
 ];
 
 function normalizeSessionRole(role: string): "owner" | "admin" | "member" {
@@ -39,7 +41,10 @@ function normalizeSessionRole(role: string): "owner" | "admin" | "member" {
 
 function billingReasonText(session: BillingRequiredSession): string {
   const reason = session.entitlements?.accessReason;
-  if (reason === "past_due") return "Payment needs attention before the workspace can create quotes or edit customer records.";
+  if (reason === "past_due") return "Update payment details to restore quote and customer actions.";
+  if (PAID_STATUS_WITH_PORTAL.has((session.subscriptionStatus ?? "").toLowerCase())) {
+    return "Open billing management to restore this workspace subscription.";
+  }
   if (reason === "inactive") return "The previous subscription is no longer active. Start Basic to restore workspace actions.";
   return "Start Basic to keep drafting quotes, managing customers, and sending PDFs.";
 }
@@ -51,6 +56,8 @@ export function BillingRequiredScreen({
 }: BillingRequiredScreenProps) {
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const location = useLocation();
+  const confirmingCheckout = new URLSearchParams(location.search).get("billing") === "success";
   const ownerView = normalizeSessionRole(session.role) === "owner";
   const status = (session.subscriptionStatus ?? "not_started").replace(/[_-]/g, " ");
   const canOpenPortal =
@@ -117,6 +124,11 @@ export function BillingRequiredScreen({
             {error}
           </Alert>
         ) : null}
+        {confirmingCheckout ? (
+          <Alert tone="info">
+            Checkout completed. QuoteFly is confirming the subscription with Stripe; this screen refreshes automatically.
+          </Alert>
+        ) : null}
 
         <main className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1.05fr)_360px] lg:items-center">
           <section className="space-y-4">
@@ -128,7 +140,7 @@ export function BillingRequiredScreen({
                 <div className="min-w-0">
                   <Badge tone="amber">Billing required</Badge>
                   <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
-                    Start Basic to unlock your workspace.
+                    {canOpenPortal ? "Update billing to unlock your workspace." : "Start Basic to unlock your workspace."}
                   </h2>
                   <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">{billingReasonText(session)}</p>
                 </div>
@@ -150,7 +162,7 @@ export function BillingRequiredScreen({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Basic</p>
-                  <p className="mt-2 text-3xl font-bold text-slate-950">$19/mo</p>
+                  <p className="mt-2 text-3xl font-bold text-slate-950">{basicMonthlyPriceLabel()}</p>
                 </div>
                 <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-quotefly-blue shadow-sm">
                   <PriceIcon size={20} />
@@ -164,27 +176,27 @@ export function BillingRequiredScreen({
               </div>
 
               <div className="mt-5 hidden gap-2 sm:grid">
-                <Button
-                  type="button"
-                  fullWidth
-                  onClick={() => void startBasicCheckout()}
-                  disabled={!ownerView || billingAction !== null}
-                  loading={billingAction === "checkout"}
-                >
-                  Start Basic - $19/mo
-                </Button>
                 {canOpenPortal ? (
                   <Button
                     type="button"
-                    variant="outline"
                     fullWidth
                     onClick={() => void openBillingPortal()}
                     disabled={billingAction !== null}
                     loading={billingAction === "portal"}
                   >
-                    Manage Billing
+                    Update Billing
                   </Button>
-                ) : null}
+                ) : (
+                  <Button
+                    type="button"
+                    fullWidth
+                    onClick={() => void startBasicCheckout()}
+                    disabled={!ownerView || billingAction !== null}
+                    loading={billingAction === "checkout"}
+                  >
+                    Start Basic - {basicMonthlyPriceLabel()}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
@@ -211,15 +223,27 @@ export function BillingRequiredScreen({
 
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-3 shadow-[0_-12px_28px_rgba(15,23,42,0.08)] sm:hidden">
         <div className="mx-auto grid max-w-md gap-2">
-          <Button
-            type="button"
-            fullWidth
-            onClick={() => void startBasicCheckout()}
-            disabled={!ownerView || billingAction !== null}
-            loading={billingAction === "checkout"}
-          >
-            Start Basic - $19/mo
-          </Button>
+          {canOpenPortal ? (
+            <Button
+              type="button"
+              fullWidth
+              onClick={() => void openBillingPortal()}
+              disabled={billingAction !== null}
+              loading={billingAction === "portal"}
+            >
+              Update Billing
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              fullWidth
+              onClick={() => void startBasicCheckout()}
+              disabled={!ownerView || billingAction !== null}
+              loading={billingAction === "checkout"}
+            >
+              Start Basic - {basicMonthlyPriceLabel()}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"

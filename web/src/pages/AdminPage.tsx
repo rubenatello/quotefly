@@ -12,6 +12,7 @@ import {
   type TenantUsageSnapshot,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
+import { BASIC_PLAN, basicMonthlyPriceLabel } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
@@ -67,15 +68,15 @@ const PLAN_CARDS: readonly PlanCard[] = [
   {
     code: "starter",
     name: "Basic",
-    price: "$19/mo",
+    price: basicMonthlyPriceLabel(),
     launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
-    seatText: "Up to 7 users",
-    aiQuoteText: "Est. AI prompts: ~370 / month",
-    historyText: "30-day quote history",
+    seatText: `Up to ${BASIC_PLAN.teamMembers} users`,
+    aiQuoteText: `Est. AI prompts: ~${BASIC_PLAN.estimatedAiPromptsPerMonth} / month`,
+    historyText: `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
-      "600 quotes per month",
+      `${BASIC_PLAN.quotesPerMonth} quotes per month`,
       "Quick customer intake and pipeline tracking",
       "PDF quote generation",
       "Fast customer and quote tracking",
@@ -160,8 +161,12 @@ function sentenceCaseStatus(value: string | null | undefined): string {
     .join(" ");
 }
 
-function billingNoticeText(code: string | null): string | null {
-  if (code === "success") return "Billing updated. Stripe checkout completed successfully.";
+function billingNoticeText(code: string | null, subscriptionConfirmed: boolean): string | null {
+  if (code === "success") {
+    return subscriptionConfirmed
+      ? "Basic billing is active. Your workspace subscription is confirmed."
+      : "Checkout completed. Confirming your subscription with Stripe...";
+  }
   if (code === "cancel") return "Stripe checkout was canceled. No billing changes were made.";
   if (code === "portal") return "Returned from the Stripe billing portal.";
   return null;
@@ -227,7 +232,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const seatLimitReached = teamMembersLimit !== null && teamMembersUsed >= teamMembersLimit;
   const hasPortalAccess =
     activeSubscriptionPlan !== null ||
-    ["active", "past_due", "unpaid", "canceled", "incomplete"].includes(
+    ["active", "past_due", "unpaid", "canceled", "incomplete", "paused"].includes(
       (session?.subscriptionStatus ?? "").toLowerCase(),
     );
 
@@ -242,7 +247,10 @@ export function AdminPage({ session }: AdminPageProps) {
 
   useEffect(() => {
     const billingState = new URLSearchParams(location.search).get("billing");
-    const nextNotice = billingNoticeText(billingState);
+    const billingSubscriptionConfirmed =
+      activeSubscriptionPlan !== null &&
+      ["active", "trialing"].includes((session?.subscriptionStatus ?? "").toLowerCase());
+    const nextNotice = billingNoticeText(billingState, billingSubscriptionConfirmed);
     const integrationsState = new URLSearchParams(location.search).get("integrations");
     const nextIntegrationNotice = integrationNoticeText(integrationsState);
 
@@ -250,8 +258,16 @@ export function AdminPage({ session }: AdminPageProps) {
 
     setNotice(nextNotice ?? nextIntegrationNotice);
     setError(null);
-    navigate(settingsMode === "users" ? "/app/settings/users" : "/app/settings", { replace: true });
-  }, [location.search, navigate, settingsMode]);
+    if (billingState !== "success" || billingSubscriptionConfirmed) {
+      navigate(settingsMode === "users" ? "/app/settings/users" : "/app/settings", { replace: true });
+    }
+  }, [
+    activeSubscriptionPlan,
+    location.search,
+    navigate,
+    session?.subscriptionStatus,
+    settingsMode,
+  ]);
 
   async function loadMembers() {
     setLoading(true);

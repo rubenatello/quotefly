@@ -1,27 +1,28 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
-import { api, type Customer, type CustomerActivityEvent, type Quote } from "../lib/api";
-import { formatUsPhoneDisplay, phoneMatchesSearch, toPhoneHrefValue } from "../lib/phone";
+import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary } from "../lib/api";
+import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
 type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
 
 type CustomerRow = {
   customer: Customer;
-  latestQuote: Quote | null;
+  latestQuote: CustomerQuoteSummary | null;
   stage: CustomerStage;
 };
 
 type CustomerRetentionAction =
-  | { type: "archive" | "delete"; row: CustomerRow }
+  | { type: "archive" | "delete" | "restore"; row: CustomerRow }
   | null;
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
 const ACTIVITY_PAGE_SIZE = 5;
+const CUSTOMER_PAGE_SIZE = 25;
 
 function stageLabel(stage: CustomerStage) {
   if (stage === "NEW") return "New";
@@ -72,6 +73,14 @@ function quoteNumber(quoteId: string) {
   return `QF-${quoteId.slice(0, 8).toUpperCase()}`;
 }
 
+function formatQuoteTotal(value: number | string) {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(value));
+}
+
+function formatQuoteStatus(status: CustomerQuoteSummary["status"]) {
+  return status.replaceAll("_", " ").toLowerCase().replace(/^./, (character) => character.toUpperCase());
+}
+
 function customerUpdatedLabel(updatedAt: string) {
   const date = new Date(updatedAt);
   if (Number.isNaN(date.getTime())) return formatDateTime(updatedAt);
@@ -107,33 +116,6 @@ function openDialer(phone: string) {
 
 function openTextComposer(phone: string) {
   window.location.assign(`sms:${toPhoneHrefValue(phone)}`);
-}
-
-function getLatestQuoteMap(quotes: Quote[]) {
-  const sorted = [...quotes].sort((left, right) => {
-    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
-  });
-
-  const map = new Map<string, Quote>();
-  for (const quote of sorted) {
-    if (!map.has(quote.customerId)) {
-      map.set(quote.customerId, quote);
-    }
-  }
-  return map;
-}
-
-function getCustomerStage(customer: Customer, customerQuotes: Quote[]): CustomerStage {
-  if (customer.followUpStatus === "WON" || customerQuotes.some((quote) => quote.status === "ACCEPTED")) return "WON";
-  if (customer.followUpStatus === "LOST" || customerQuotes.some((quote) => quote.status === "REJECTED")) return "LOST";
-  if (customerQuotes.some((quote) => quote.status === "SENT_TO_CUSTOMER")) return "SENT";
-  if (customerQuotes.some((quote) => quote.status === "READY_FOR_REVIEW")) return "READY";
-
-  if (customer.followUpStatus === "FOLLOWED_UP") {
-    return "CONTACTED";
-  }
-
-  return "NEW";
 }
 
 function StageFilterButton({
@@ -222,6 +204,7 @@ function CustomerDesktopRow({
   onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
+  const canQuote = !customer.archivedAtUtc && !customer.deletedAtUtc;
 
   return (
     <div className="hidden min-h-[86px] grid-cols-[minmax(220px,1.25fr)_minmax(220px,1fr)_minmax(190px,0.9fr)_150px_190px] items-center gap-5 border-l-2 border-transparent px-5 py-3 transition xl:grid hover:border-quotefly-blue hover:bg-slate-50/80 2xl:grid-cols-[minmax(260px,1.35fr)_minmax(250px,1fr)_minmax(220px,0.9fr)_160px_200px]">
@@ -288,15 +271,11 @@ function CustomerDesktopRow({
           variant="primary"
           icon={<FilePlus2 size={14} />}
           className="whitespace-nowrap"
-          onClick={() => {
-            if (latestQuote) {
-              onOpenQuote(latestQuote.id);
-            } else {
-              onStartQuote(customer.id);
-            }
-          }}
+          onClick={() => onStartQuote(customer.id)}
+          disabled={!canQuote}
+          title={canQuote ? `Start a new quote for ${customer.fullName}` : "Restore this customer before starting a quote"}
         >
-          {latestQuote ? "Open" : "Start"}
+          New quote
         </Button>
       </div>
     </div>
@@ -319,6 +298,7 @@ function CustomerMobileCard({
   onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
+  const canQuote = !customer.archivedAtUtc && !customer.deletedAtUtc;
 
   return (
     <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.045)] xl:hidden">
@@ -357,7 +337,17 @@ function CustomerMobileCard({
       <div className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-700">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Latest quote</p>
-          <p className="mt-1 truncate font-semibold text-slate-900">{latestQuote ? latestQuote.title : "No quote yet"}</p>
+          {latestQuote ? (
+            <button
+              type="button"
+              className="mt-1 block max-w-full truncate rounded text-left font-semibold text-slate-900 hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+              onClick={() => onOpenQuote(latestQuote.id)}
+            >
+              {latestQuote.title}
+            </button>
+          ) : (
+            <p className="mt-1 truncate font-semibold text-slate-900">No quote yet</p>
+          )}
           <p className="mt-1 text-xs text-slate-500">{stageGuidance(stage, Boolean(latestQuote))}</p>
         </div>
         <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : "Ready to start"}</span>
@@ -370,11 +360,17 @@ function CustomerMobileCard({
         <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)}>
           Text
         </Button>
-        {latestQuote ? (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onOpenQuote(latestQuote.id)}>Open</Button>
-        ) : (
-          <Button fullWidth size="sm" variant="primary" icon={<FilePlus2 size={14} />} onClick={() => onStartQuote(customer.id)}>Quote</Button>
-        )}
+        <Button
+          fullWidth
+          size="sm"
+          variant="primary"
+          icon={<FilePlus2 size={14} />}
+          onClick={() => onStartQuote(customer.id)}
+          disabled={!canQuote}
+          title={canQuote ? `Start a new quote for ${customer.fullName}` : "Restore this customer before starting a quote"}
+        >
+          New quote
+        </Button>
       </div>
     </article>
   );
@@ -422,9 +418,6 @@ function activityActorLabel(item: CustomerActivityEvent): string {
 export function CustomersPage() {
   usePageView("customers");
   const {
-    customers,
-    quotes,
-    loading,
     error,
     notice,
     setError,
@@ -435,7 +428,15 @@ export function CustomersPage() {
     navigateToBuilder,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
+  const [lifecycleFilter, setLifecycleFilter] = useState<CustomerLifecycle>("active");
+  const [customerPage, setCustomerPage] = useState(1);
+  const [customerItems, setCustomerItems] = useState<Customer[]>([]);
+  const [customerTotal, setCustomerTotal] = useState(0);
+  const [customerLoading, setCustomerLoading] = useState(true);
+  const [lifecycleCounts, setLifecycleCounts] = useState({ active: 0, archived: 0, deleted: 0 });
+  const [serverStageCounts, setServerStageCounts] = useState<Record<CustomerStage, number>>({ NEW: 0, CONTACTED: 0, READY: 0, SENT: 0, WON: 0, LOST: 0 });
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<CustomerActivityEvent[]>([]);
@@ -449,7 +450,12 @@ export function CustomersPage() {
   const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
   const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
+  const [selectedCustomerDetail, setSelectedCustomerDetail] = useState<Customer | null>(null);
+  const [selectedActivityQuotes, setSelectedActivityQuotes] = useState<CustomerQuoteSummary[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const customerRequestIdRef = useRef(0);
+  const activityRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (searchParams.get("compose") === "customer") {
@@ -461,20 +467,59 @@ export function CustomersPage() {
     setActivityPage(1);
   }, [activityCustomerId]);
 
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+      setCustomerPage(1);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  const loadCustomerPage = useCallback(async () => {
+    const requestId = ++customerRequestIdRef.current;
+    setCustomerLoading(true);
+    try {
+      const result = await api.customers.list({
+        limit: CUSTOMER_PAGE_SIZE,
+        offset: (customerPage - 1) * CUSTOMER_PAGE_SIZE,
+        search: debouncedSearchTerm || undefined,
+        lifecycle: lifecycleFilter,
+        stage: stageFilter === "ALL" ? undefined : stageFilter,
+      });
+      if (requestId !== customerRequestIdRef.current) return;
+      setCustomerItems(result.customers);
+      setCustomerTotal(result.pagination.total);
+      setLifecycleCounts(result.summary.lifecycleCounts);
+      setServerStageCounts(result.summary.stageCounts);
+    } catch (err) {
+      if (requestId !== customerRequestIdRef.current) return;
+      setError(err instanceof Error ? err.message : "Failed loading customers.");
+    } finally {
+      if (requestId === customerRequestIdRef.current) setCustomerLoading(false);
+    }
+  }, [customerPage, debouncedSearchTerm, lifecycleFilter, setError, stageFilter]);
+
+  useEffect(() => {
+    void loadCustomerPage();
+  }, [loadCustomerPage]);
+
   const loadCustomerActivity = useCallback(
     async (customerId: string, page: number) => {
+      const requestId = ++activityRequestIdRef.current;
       setActivityLoading(true);
       try {
         const result = await api.customers.activity(customerId, {
           limit: ACTIVITY_PAGE_SIZE,
           offset: (page - 1) * ACTIVITY_PAGE_SIZE,
         });
+        if (requestId !== activityRequestIdRef.current) return;
         setActivityItems(result.items);
         setActivityTotal(result.pagination.total);
       } catch (err) {
+        if (requestId !== activityRequestIdRef.current) return;
         setError(err instanceof Error ? err.message : "Failed loading customer activity.");
       } finally {
-        setActivityLoading(false);
+        if (requestId === activityRequestIdRef.current) setActivityLoading(false);
       }
     },
     [setError],
@@ -482,14 +527,35 @@ export function CustomersPage() {
 
   useEffect(() => {
     if (!activityCustomerId) {
+      activityRequestIdRef.current += 1;
+      detailRequestIdRef.current += 1;
       setActivityItems([]);
       setActivityLoading(false);
       setActivityTotal(0);
+      setSelectedCustomerDetail(null);
+      setSelectedActivityQuotes([]);
       return;
     }
 
     void loadCustomerActivity(activityCustomerId, activityPage);
   }, [activityCustomerId, activityPage, loadCustomerActivity]);
+
+  const loadCustomerDetail = useCallback(async (customerId: string) => {
+    const requestId = ++detailRequestIdRef.current;
+    try {
+      const result = await api.customers.get(customerId);
+      if (requestId !== detailRequestIdRef.current) return;
+      setSelectedCustomerDetail(result.customer);
+      setSelectedActivityQuotes(result.quotes);
+    } catch (err) {
+      if (requestId !== detailRequestIdRef.current) return;
+      setError(err instanceof Error ? err.message : "Failed loading customer details.");
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    if (activityCustomerId) void loadCustomerDetail(activityCustomerId);
+  }, [activityCustomerId, loadCustomerDetail]);
 
   function closeQuickCustomerModal() {
     setQuickCustomerOpen(false);
@@ -500,22 +566,11 @@ export function CustomersPage() {
     }
   }
 
-  const latestQuoteByCustomer = useMemo(() => getLatestQuoteMap(quotes), [quotes]);
-  const quotesByCustomer = useMemo(() => {
-    const map = new Map<string, Quote[]>();
-    for (const quote of quotes) {
-      const customerQuotes = map.get(quote.customerId) ?? [];
-      customerQuotes.push(quote);
-      map.set(quote.customerId, customerQuotes);
-    }
-    return map;
-  }, [quotes]);
-
   const customerRows = useMemo(() => {
-    return customers
+    return customerItems
       .map((customer) => {
-        const latestQuote = latestQuoteByCustomer.get(customer.id) ?? null;
-        const stage = getCustomerStage(customer, quotesByCustomer.get(customer.id) ?? []);
+        const latestQuote = customer.summary?.latestQuote ?? null;
+        const stage = customer.summary?.stage ?? "NEW";
         return {
           customer,
           latestQuote,
@@ -523,52 +578,36 @@ export function CustomersPage() {
         } satisfies CustomerRow;
       })
       .sort((left, right) => new Date(right.customer.updatedAt).getTime() - new Date(left.customer.updatedAt).getTime());
-  }, [customers, latestQuoteByCustomer, quotesByCustomer]);
+  }, [customerItems]);
 
-  const stageCounts = useMemo(() => {
-    return CUSTOMER_STAGE_ORDER.reduce<Record<CustomerStage, number>>((accumulator, stage) => {
-      accumulator[stage] = customerRows.filter((row) => row.stage === stage).length;
-      return accumulator;
-  }, { NEW: 0, CONTACTED: 0, READY: 0, SENT: 0, WON: 0, LOST: 0 });
-  }, [customerRows]);
+  const selectedActivityRow = useMemo(() => {
+    if (!activityCustomerId) return null;
+    if (selectedCustomerDetail?.id === activityCustomerId) {
+      return {
+        customer: selectedCustomerDetail,
+        latestQuote: selectedCustomerDetail.summary?.latestQuote ?? null,
+        stage: selectedCustomerDetail.summary?.stage ?? "NEW",
+      } satisfies CustomerRow;
+    }
+    return customerRows.find((row) => row.customer.id === activityCustomerId) ?? null;
+  }, [activityCustomerId, customerRows, selectedCustomerDetail]);
 
-  const filteredRows = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-
-    return customerRows.filter((row) => {
-      const matchesStage = stageFilter === "ALL" || row.stage === stageFilter;
-      if (!matchesStage) return false;
-      if (!normalizedSearch) return true;
-
-      const haystack = [
-        row.customer.fullName,
-        row.customer.email ?? "",
-        row.latestQuote?.title ?? "",
-        row.latestQuote ? quoteNumber(row.latestQuote.id) : "",
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(normalizedSearch) || phoneMatchesSearch(row.customer.phone, searchTerm);
-    });
-  }, [customerRows, searchTerm, stageFilter]);
-
-  const selectedActivityRow = useMemo(
-    () => (activityCustomerId ? customerRows.find((row) => row.customer.id === activityCustomerId) ?? null : null),
-    [activityCustomerId, customerRows],
-  );
-
-  const selectedActivityQuotes = useMemo(
-    () =>
-      selectedActivityRow
-        ? quotes
-            .filter((quote) => quote.customerId === selectedActivityRow.customer.id)
-            .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
-        : [],
-    [quotes, selectedActivityRow],
-  );
+  function openCustomerDetail(customerId: string) {
+    const snapshot = customerItems.find((customer) => customer.id === customerId) ?? null;
+    activityRequestIdRef.current += 1;
+    detailRequestIdRef.current += 1;
+    setSelectedCustomerDetail(snapshot);
+    setSelectedActivityQuotes([]);
+    setActivityCustomerId(customerId);
+  }
 
   const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
+  const totalCustomerPages = Math.max(1, Math.ceil(customerTotal / CUSTOMER_PAGE_SIZE));
+  const selectedCustomerInactive = Boolean(selectedActivityRow?.customer.archivedAtUtc || selectedActivityRow?.customer.deletedAtUtc);
+
+  useEffect(() => {
+    if (customerPage > totalCustomerPages) setCustomerPage(totalCustomerPages);
+  }, [customerPage, totalCustomerPages]);
   const notesChanged =
     (selectedActivityRow?.customer.notes?.trim() ?? "") !== customerNotesDraft.trim();
   const detailsChanged = Boolean(selectedActivityRow) && (
@@ -602,6 +641,10 @@ export function CustomersPage() {
       setDetailsFeedback({ tone: "error", message: "Customer name and phone are required." });
       return;
     }
+    if (!normalizeUsPhoneDigits(phone)) {
+      setDetailsFeedback({ tone: "error", message: "Enter a valid 10-digit US phone number." });
+      return;
+    }
 
     setDetailsFeedback(null);
     setDetailsSaving(true);
@@ -611,7 +654,7 @@ export function CustomersPage() {
         phone,
         email: customerDetailsDraft.email.trim() || null,
       });
-      await loadCustomers();
+      await Promise.all([loadCustomerPage(), loadCustomers(), loadCustomerDetail(selectedActivityRow.customer.id)]);
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
       setDetailsFeedback({ tone: "success", message: "Customer details saved." });
     } catch (err) {
@@ -630,7 +673,7 @@ export function CustomersPage() {
       await api.customers.update(selectedActivityRow.customer.id, {
         notes: nextNotes || null,
       });
-      await loadCustomers();
+      await Promise.all([loadCustomerPage(), loadCustomers(), loadCustomerDetail(selectedActivityRow.customer.id)]);
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
       setNotice(nextNotes ? "Customer notes saved." : "Customer notes cleared.");
     } catch (err) {
@@ -648,11 +691,16 @@ export function CustomersPage() {
       if (customerRetentionAction.type === "archive") {
         await api.customers.archive(customerRetentionAction.row.customer.id);
         setNotice("Customer archived.");
-      } else {
+      } else if (customerRetentionAction.type === "delete") {
         await api.customers.delete(customerRetentionAction.row.customer.id);
         setNotice("Customer deleted from the active workspace.");
+      } else {
+        await api.customers.restore(customerRetentionAction.row.customer.id);
+        setNotice("Customer restored. Retained quotes were not restored automatically.");
       }
-      await Promise.all([loadCustomers(), loadQuotes()]);
+      await Promise.all([loadCustomerPage(), loadCustomers(), loadQuotes()]);
+      activityRequestIdRef.current += 1;
+      detailRequestIdRef.current += 1;
       setActivityCustomerId(null);
       setCustomerRetentionAction(null);
     } catch (err) {
@@ -660,6 +708,14 @@ export function CustomersPage() {
     } finally {
       setCustomerRetentionSaving(false);
     }
+  }
+
+  function closeActivityModal() {
+    if ((detailsChanged || notesChanged) && !window.confirm("Discard unsaved customer changes?")) return false;
+    activityRequestIdRef.current += 1;
+    detailRequestIdRef.current += 1;
+    setActivityCustomerId(null);
+    return true;
   }
 
   return (
@@ -675,11 +731,31 @@ export function CustomersPage() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Customer lifecycle filters">
+        {(["active", "archived", "deleted"] as const).map((lifecycle) => (
+          <Button
+            key={lifecycle}
+            size="sm"
+            variant={lifecycleFilter === lifecycle ? "primary" : "outline"}
+            onClick={() => {
+              setLifecycleFilter(lifecycle);
+              setCustomerPage(1);
+              setStageFilter("ALL");
+            }}
+          >
+            {lifecycle === "active" ? "Active" : lifecycle === "archived" ? "Archived" : "Deleted"} ({lifecycleCounts[lifecycle]})
+          </Button>
+        ))}
+      </div>
+
       <CustomerPipelineFilterStrip
-        totalCount={customerRows.length}
-        stageCounts={stageCounts}
+        totalCount={lifecycleCounts[lifecycleFilter]}
+        stageCounts={serverStageCounts}
         stageFilter={stageFilter}
-        onChange={setStageFilter}
+        onChange={(stage) => {
+          setStageFilter(stage);
+          setCustomerPage(1);
+        }}
       />
 
       <Card variant="elevated" padding="md" className="overflow-hidden">
@@ -688,7 +764,7 @@ export function CustomersPage() {
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer workspace</p>
               <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                {filteredRows.length} {filteredRows.length === 1 ? "customer" : "customers"}
+                {customerTotal} {customerTotal === 1 ? "customer" : "customers"}
               </span>
             </div>
             <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Customer list</h2>
@@ -707,14 +783,14 @@ export function CustomersPage() {
         </div>
 
         <div className="-mx-4 -mb-4 mt-4 border-t border-slate-200 sm:-mx-5 sm:-mb-5">
-          {loading ? (
+          {customerLoading ? (
             <div className="px-5 py-8 text-sm text-slate-600">Loading customers...</div>
-          ) : filteredRows.length === 0 ? (
+          ) : customerRows.length === 0 ? (
             <div className="p-5">
               <EmptyState
-                title={customerRows.length ? "No matching customers" : "Add your first customer"}
-                description={customerRows.length ? "Clear the search or choose another stage." : "Create a customer here, then start their first quote."}
-                action={customerRows.length ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStageFilter("ALL"); }}>Clear filters</Button> : <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>}
+                title={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? "No matching customers" : "Add your first customer"}
+                description={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? "Clear the search or choose another stage or lifecycle." : "Create a customer here, then start their first quote."}
+                action={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStageFilter("ALL"); setLifecycleFilter("active"); setCustomerPage(1); }}>Clear filters</Button> : <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>}
               />
             </div>
           ) : (
@@ -727,7 +803,7 @@ export function CustomersPage() {
                 <span className="text-right">Actions</span>
               </div>
               <div className="grid gap-3 bg-slate-50/70 p-3 md:grid-cols-2 xl:block xl:bg-white xl:p-0">
-                {filteredRows.map((row) => (
+                {customerRows.map((row) => (
                   <div key={row.customer.id} className="xl:border-b xl:border-slate-200 xl:last:border-b-0">
                     <CustomerDesktopRow
                       row={row}
@@ -735,7 +811,7 @@ export function CustomersPage() {
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
                       onTextCustomer={openTextComposer}
-                      onOpenActivity={setActivityCustomerId}
+                      onOpenActivity={openCustomerDetail}
                     />
                     <CustomerMobileCard
                       row={row}
@@ -743,7 +819,7 @@ export function CustomersPage() {
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
                       onTextCustomer={openTextComposer}
-                      onOpenActivity={setActivityCustomerId}
+                      onOpenActivity={openCustomerDetail}
                     />
                   </div>
                 ))}
@@ -753,11 +829,38 @@ export function CustomersPage() {
         </div>
       </Card>
 
+      {customerTotal > CUSTOMER_PAGE_SIZE ? (
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-600">
+            Showing {(customerPage - 1) * CUSTOMER_PAGE_SIZE + 1}-{Math.min(customerPage * CUSTOMER_PAGE_SIZE, customerTotal)} of {customerTotal}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={customerPage === 1 || customerLoading}
+              onClick={() => setCustomerPage((current) => Math.max(1, current - 1))}
+            >
+              Previous
+            </Button>
+            <span className="text-xs font-medium text-slate-600">Page {customerPage} of {totalCustomerPages}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={customerPage >= totalCustomerPages || customerLoading}
+              onClick={() => setCustomerPage((current) => Math.min(totalCustomerPages, current + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={closeQuickCustomerModal}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
-          void loadCustomers();
+          void Promise.all([loadCustomerPage(), loadCustomers()]);
           setNotice(
             reusedExisting
               ? "Using existing customer record."
@@ -775,11 +878,11 @@ export function CustomersPage() {
         }}
       />
 
-      <Modal open={Boolean(selectedActivityRow)} onClose={() => setActivityCustomerId(null)} size="lg" ariaLabel="Customer activity history">
+      <Modal open={Boolean(selectedActivityRow)} onClose={closeActivityModal} size="lg" ariaLabel="Customer details and activity">
         <ModalHeader
           title={selectedActivityRow ? `${selectedActivityRow.customer.fullName} activity` : "Customer activity"}
           description={selectedActivityRow ? "Timeline of customer entry, contact, quotes, and work progress." : undefined}
-          onClose={() => setActivityCustomerId(null)}
+          onClose={closeActivityModal}
         />
         <ModalBody className="space-y-5">
           {selectedActivityRow ? (
@@ -804,13 +907,19 @@ export function CustomersPage() {
                 </div>
               </div>
 
+              {selectedCustomerInactive ? (
+                <Alert tone="info">
+                  This customer is inactive. Restore the customer to edit details or start a new quote. Retained archived or deleted quotes will not be restored automatically.
+                </Alert>
+              ) : null}
+
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer details</p>
                     <p className="mt-1 text-sm text-slate-600">Keep contact information current for calls, texts, and quote delivery.</p>
                   </div>
-                  <Button size="sm" onClick={() => void saveCustomerDetails()} disabled={!detailsChanged || detailsSaving} loading={detailsSaving}>
+                  <Button size="sm" onClick={() => void saveCustomerDetails()} disabled={!detailsChanged || detailsSaving || selectedCustomerInactive} loading={detailsSaving}>
                     Save details
                   </Button>
                 </div>
@@ -820,7 +929,7 @@ export function CustomersPage() {
                     <Input
                       value={customerDetailsDraft.fullName}
                       onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, fullName: event.target.value }))}
-                      disabled={detailsSaving}
+                      disabled={detailsSaving || selectedCustomerInactive}
                     />
                   </label>
                   <label className="space-y-1.5">
@@ -828,8 +937,8 @@ export function CustomersPage() {
                     <Input
                       type="tel"
                       value={customerDetailsDraft.phone}
-                      onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, phone: event.target.value }))}
-                      disabled={detailsSaving}
+                      onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, phone: formatUsPhoneInput(event.target.value) }))}
+                      disabled={detailsSaving || selectedCustomerInactive}
                     />
                   </label>
                   <label className="space-y-1.5">
@@ -838,7 +947,7 @@ export function CustomersPage() {
                       type="email"
                       value={customerDetailsDraft.email}
                       onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, email: event.target.value }))}
-                      disabled={detailsSaving}
+                      disabled={detailsSaving || selectedCustomerInactive}
                     />
                   </label>
                 </div>
@@ -860,7 +969,7 @@ export function CustomersPage() {
                   <Button
                     size="sm"
                     onClick={() => void saveCustomerNotes()}
-                    disabled={!notesChanged || notesSaving}
+                    disabled={!notesChanged || notesSaving || selectedCustomerInactive}
                     loading={notesSaving}
                   >
                     Save Notes
@@ -872,9 +981,52 @@ export function CustomersPage() {
                     placeholder="Add customer notes, callback context, property details, or anything your team and AI should know."
                     value={customerNotesDraft}
                     onChange={(event) => setCustomerNotesDraft(event.target.value)}
-                    disabled={notesSaving}
+                    disabled={notesSaving || selectedCustomerInactive}
                   />
                 </div>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quotes</p>
+                    <p className="mt-1 text-sm text-slate-600">Open any active quote for this customer or start another.</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    icon={<FilePlus2 size={14} />}
+                    disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
+                    onClick={() => {
+                      if (!closeActivityModal()) return;
+                      navigateToBuilder(selectedActivityRow.customer.id);
+                    }}
+                  >
+                    New Quote
+                  </Button>
+                </div>
+                {selectedActivityQuotes.length ? (
+                  selectedActivityQuotes.map((quote, index) => (
+                    <button
+                      key={quote.id}
+                      type="button"
+                      onClick={() => {
+                        if (!closeActivityModal()) return;
+                        navigateToQuote(quote.id);
+                      }}
+                      className={`flex min-h-[64px] w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue ${index > 0 ? "border-t border-slate-200" : ""}`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold text-slate-900">{quote.title}</span>
+                        <span className="mt-1 block text-xs text-slate-500">{quoteNumber(quote.id)} · {formatQuoteStatus(quote.status)} · Updated {formatDateTime(quote.updatedAt)}</span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold text-slate-900">{formatQuoteTotal(quote.totalAmount)}</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="px-4 py-5 text-sm text-slate-600">
+                    No active quotes. Archived or deleted quotes remain retained but are not reopened automatically when a customer is restored.
+                  </div>
+                )}
               </div>
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -903,11 +1055,36 @@ export function CustomersPage() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                          {item.quoteId ? (
+                            <button
+                              type="button"
+                              className="rounded text-left text-sm font-semibold text-slate-900 hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+                              onClick={() => {
+                                if (!closeActivityModal()) return;
+                                navigateToQuote(item.quoteId!);
+                              }}
+                            >
+                              {item.title}
+                            </button>
+                          ) : (
+                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                          )}
                           <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
                         </div>
                         <p className="mt-1 text-sm text-slate-600">{item.detail || "No additional detail captured."}</p>
-                        <div className="mt-2 flex items-center justify-end">
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          {item.quoteId ? (
+                            <button
+                              type="button"
+                              className="text-xs font-semibold text-quotefly-blue hover:underline"
+                              onClick={() => {
+                                if (!closeActivityModal()) return;
+                                navigateToQuote(item.quoteId!);
+                              }}
+                            >
+                              Open quote
+                            </button>
+                          ) : <span />}
                           <span className="text-[11px] font-medium text-slate-500">By {activityActorLabel(item)}</span>
                         </div>
                       </div>
@@ -956,28 +1133,38 @@ export function CustomersPage() {
         {selectedActivityRow ? (
           <ModalFooter className="justify-between">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setCustomerRetentionAction({ type: "archive", row: selectedActivityRow })}>
-                Archive
-              </Button>
-              <Button variant="danger" onClick={() => setCustomerRetentionAction({ type: "delete", row: selectedActivityRow })}>
-                Delete
-              </Button>
+              {selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? (
+                <Button
+                  variant="outline"
+                  icon={<ArchiveRestore size={15} />}
+                  onClick={() => setCustomerRetentionAction({ type: "restore", row: selectedActivityRow })}
+                >
+                  Restore customer
+                </Button>
+              ) : (
+                <>
+                  <Button variant="outline" onClick={() => setCustomerRetentionAction({ type: "archive", row: selectedActivityRow })}>
+                    Archive
+                  </Button>
+                  <Button variant="danger" onClick={() => setCustomerRetentionAction({ type: "delete", row: selectedActivityRow })}>
+                    Delete
+                  </Button>
+                </>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setActivityCustomerId(null)}>
+              <Button variant="outline" onClick={closeActivityModal}>
                 Close
               </Button>
               <Button
                 onClick={() => {
-                  setActivityCustomerId(null);
-                  if (selectedActivityRow.latestQuote) {
-                    navigateToQuote(selectedActivityRow.latestQuote.id);
-                  } else {
-                    navigateToBuilder(selectedActivityRow.customer.id);
-                  }
+                  if (!closeActivityModal()) return;
+                  navigateToBuilder(selectedActivityRow.customer.id);
                 }}
+                disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
+                title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? "Restore this customer before starting a quote" : undefined}
               >
-                {selectedActivityRow.latestQuote ? "Open Quote" : "Start Quote"}
+                New Quote
               </Button>
             </div>
           </ModalFooter>
@@ -993,16 +1180,20 @@ export function CustomersPage() {
         title={
           customerRetentionAction?.type === "archive"
             ? "Archive customer?"
-            : "Delete customer?"
+            : customerRetentionAction?.type === "delete"
+              ? "Delete customer?"
+              : "Restore customer?"
         }
         description={
           customerRetentionAction?.type === "archive"
             ? "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be archived too."
-            : "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be deleted too."
+            : customerRetentionAction?.type === "delete"
+              ? "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be deleted too."
+              : "The customer will return to the active workspace. Retained archived or deleted quotes will remain inactive and will not be restored automatically."
         }
-        confirmLabel={customerRetentionAction?.type === "archive" ? "Archive customer" : "Delete customer"}
+        confirmLabel={customerRetentionAction?.type === "archive" ? "Archive customer" : customerRetentionAction?.type === "delete" ? "Delete customer" : "Restore customer"}
         loading={customerRetentionSaving}
-        confirmVariant={customerRetentionAction?.type === "archive" ? "primary" : "danger"}
+        confirmVariant={customerRetentionAction?.type === "delete" ? "danger" : "primary"}
       />
     </div>
   );

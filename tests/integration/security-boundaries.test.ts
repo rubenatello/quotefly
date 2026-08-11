@@ -1,13 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseEnv } from "../../src/config/env.js";
+import {
+  CURRENT_PRIVACY_POLICY_VERSION as API_PRIVACY_POLICY_VERSION,
+  CURRENT_TERMS_VERSION as API_TERMS_VERSION,
+} from "../../src/lib/legal.js";
 import { generateQuotePdfBuffer } from "../../src/services/quote-pdf.js";
 import { buildQuickBooksInvoiceCsv } from "../../src/services/quickbooks-csv.js";
+import {
+  CURRENT_PRIVACY_POLICY_VERSION as WEB_PRIVACY_POLICY_VERSION,
+  CURRENT_TERMS_VERSION as WEB_TERMS_VERSION,
+} from "../../web/src/lib/legal.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("security boundary helpers", () => {
+  it("keeps browser and API legal acceptance versions synchronized", () => {
+    expect(WEB_TERMS_VERSION).toBe(API_TERMS_VERSION);
+    expect(WEB_PRIVACY_POLICY_VERSION).toBe(API_PRIVACY_POLICY_VERSION);
+  });
+
   it("rejects production cross-site session cookies until CSRF protection exists", () => {
     expect(() =>
       parseEnv({
@@ -87,6 +100,40 @@ describe("security boundary helpers", () => {
         }),
       ).toThrow(/bare production origin/i);
     }
+  });
+
+  it("fails production startup when paid billing or password recovery is not configured", () => {
+    const productionEnv = {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://example.invalid/quotefly",
+      JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+      APP_URL: "https://app.quotefly.example",
+      API_URL: "https://api.quotefly.example",
+      SESSION_COOKIE_SAME_SITE: "lax",
+      ENABLE_TWILIO_SMS: "false",
+      STRIPE_SECRET_KEY: "sk_live_quotefly_test_value",
+      STRIPE_WEBHOOK_SECRET: "whsec_quotefly_test_value",
+      STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
+      STRIPE_PRICE_ID_PROFESSIONAL: "",
+      STRIPE_PRICE_ID_ENTERPRISE: "",
+      RESEND_API_KEY: "re_quotefly_test_value",
+      PASSWORD_RESET_EMAIL_FROM: "QuoteFly <support@quotefly.example>",
+    } satisfies NodeJS.ProcessEnv;
+
+    expect(() => parseEnv(productionEnv)).not.toThrow();
+    expect(() => parseEnv({ ...productionEnv, STRIPE_WEBHOOK_SECRET: "" })).toThrow(
+      /STRIPE_WEBHOOK_SECRET must be configured for a paid production launch/i,
+    );
+    expect(() => parseEnv({ ...productionEnv, RESEND_API_KEY: "", PASSWORD_RESET_EMAIL_FROM: "" })).toThrow(
+      /RESEND_API_KEY must be configured for a paid production launch/i,
+    );
+    expect(() =>
+      parseEnv({
+        ...productionEnv,
+        STRIPE_PRICE_ID_PROFESSIONAL: productionEnv.STRIPE_PRICE_ID_STARTER,
+      }),
+    ).toThrow(/Stripe plan price ids must be unique/i);
   });
 
   it("neutralizes spreadsheet formulas in tenant-controlled QuickBooks CSV cells", () => {

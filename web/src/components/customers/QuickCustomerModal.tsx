@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Alert, Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
 import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
-import { formatUsPhoneDisplay, formatUsPhoneInput } from "../../lib/phone";
+import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits } from "../../lib/phone";
 
 type QuickCustomerIntent = "save" | "quote";
 
@@ -81,9 +81,19 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
     [matches, selectedMatchId],
   );
   const selectedMatchInactive = Boolean(selectedMatch && isInactiveDuplicateMatch(selectedMatch));
+  const dirty = Object.values(form).some((value) => value.trim().length > 0);
 
   function updateForm(updater: (current: QuickCustomerForm) => QuickCustomerForm) {
     const next = updater(form);
+    if (
+      next.fullName !== form.fullName ||
+      next.phone !== form.phone ||
+      next.email !== form.email
+    ) {
+      setMatches([]);
+      setSelectedMatchId(null);
+      setError(null);
+    }
     if (draftValue === undefined) setInternalForm(next);
     onDraftChange?.(next);
   }
@@ -98,9 +108,14 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
     setSelectedMatchId(null);
   }
 
-  function closeModal() {
+  function completeAndCloseModal() {
     resetState();
     onClose();
+  }
+
+  function closeModal() {
+    if (dirty && !window.confirm("Discard this unsaved customer?")) return;
+    completeAndCloseModal();
   }
 
   async function createCustomer(
@@ -110,6 +125,10 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
     const payload = normalizePayload(form);
     if (!payload.fullName || !payload.phone) {
       setError("Full name and phone are required.");
+      return;
+    }
+    if (!normalizeUsPhoneDigits(payload.phone)) {
+      setError("Enter a valid 10-digit US phone number.");
       return;
     }
 
@@ -133,16 +152,23 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
         reusedExisting: result.reusedExisting,
         intent: mode,
       };
-      closeModal();
+      completeAndCloseModal();
       void Promise.resolve(onCreated(createdResult)).catch((callbackError) => {
         console.error("[quick-customer-modal] onCreated callback failed", callbackError);
       });
     } catch (err) {
       if (err instanceof ApiError) {
         const details = err.details as { code?: string; matches?: CustomerDuplicateMatch[] } | undefined;
-        if (details?.code === "DUPLICATE_CANDIDATE" && Array.isArray(details.matches) && details.matches.length > 0) {
+        if (
+          (details?.code === "DUPLICATE_CANDIDATE" || details?.code === "STALE_DUPLICATE_TARGET") &&
+          Array.isArray(details.matches) &&
+          details.matches.length > 0
+        ) {
           setMatches(details.matches);
           setSelectedMatchId(preferredDuplicateMatchId(details.matches));
+          if (details.code === "STALE_DUPLICATE_TARGET") {
+            setError("Customer details changed after the duplicate warning. Review the refreshed matches before continuing.");
+          }
           setSaving(false);
           return;
         }
@@ -175,6 +201,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
           />
           <Input
             label="Phone"
+            type="tel"
             placeholder="(818) 233-4333"
             value={form.phone}
             onChange={(event) =>
@@ -186,6 +213,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
 
         <Input
           label="Email"
+          type="email"
           placeholder="Optional"
           value={form.email}
           onChange={(event) => updateForm((prev) => ({ ...prev, email: event.target.value }))}
@@ -250,7 +278,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
             </div>
             {selectedMatchInactive ? (
               <p className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700">
-                Selected record is inactive. Choose <span className="font-semibold">Merge Selected</span> to restore it.
+                Selected record is inactive. Choose <span className="font-semibold">Merge Selected</span> to restore the customer. Retained quotes stay archived or deleted and are not restored automatically.
               </p>
             ) : null}
           </div>

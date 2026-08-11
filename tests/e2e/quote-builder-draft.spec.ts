@@ -6,18 +6,22 @@ import {
   signUpViaApi,
 } from "./helpers";
 
-const DRAFT_PREFIX = "qf:quote-builder-draft:v2:";
+const DRAFT_PREFIX = "qf:quote-draft:v1:";
 
 function visibleField(row: Locator, accessibleName: string) {
   return row.locator(`[aria-label="${accessibleName}"]:visible`);
 }
 
 async function builderDraftKeys(page: Page) {
-  return page.evaluate((prefix) => Object.keys(window.sessionStorage).filter((key) => key.startsWith(prefix)), DRAFT_PREFIX);
+  return page.evaluate((prefix) => Object.keys(window.localStorage).filter((key) => key.startsWith(prefix)), DRAFT_PREFIX);
 }
 
 async function persistentBuilderDraftKeys(page: Page) {
-  return page.evaluate(() => Object.keys(window.localStorage).filter((key) => key.startsWith("qf:quote-builder-draft:")));
+  return page.evaluate(() =>
+    Object.keys(window.localStorage).filter(
+      (key) => key.startsWith("qf:quote-draft:") || key.startsWith("qf:quote-builder-draft:"),
+    ),
+  );
 }
 
 async function selectCustomer(page: Page, customerName: string) {
@@ -100,7 +104,7 @@ test.describe("quote builder local draft recovery", () => {
     await expect.poll(async () => (await builderDraftKeys(page)).length).toBe(0);
   });
 
-  test("a new tab does not inherit a quote draft from another tab", async ({ context, page, request }) => {
+  test("a new tab restores the same fresh device draft", async ({ context, page, request }) => {
     const account = await signUpViaApi(request, "builder-draft-tab-close");
     await addSessionCookie(context, account);
     await page.goto("/app/build");
@@ -111,10 +115,11 @@ test.describe("quote builder local draft recovery", () => {
     const freshTab = await context.newPage();
     await freshTab.goto("/app/build");
     await expect(freshTab.getByTestId("quote-builder")).toBeVisible({ timeout: 15_000 });
-    await expect(freshTab.getByLabel("Quote title")).toHaveValue("");
-    await expect.poll(async () => (await builderDraftKeys(freshTab)).length).toBe(0);
+    await expect(freshTab.getByLabel("Quote title")).toHaveValue("Only available in the original tab");
+    await expect(freshTab.getByTestId("quote-builder-draft-status")).toContainText("Draft restored");
+    await expect.poll(async () => (await builderDraftKeys(freshTab)).length).toBe(1);
     await page.close();
-    await expect.poll(async () => (await builderDraftKeys(freshTab)).length).toBe(0);
+    await expect.poll(async () => (await builderDraftKeys(freshTab)).length).toBe(1);
   });
 
   test("explicit sign out purges the draft without unmount recreating it", async ({ context, page, request }) => {
@@ -132,7 +137,7 @@ test.describe("quote builder local draft recovery", () => {
 
   test("a definitive session 401 purges all builder drafts", async ({ page }) => {
     await page.addInitScript((prefix) => {
-      sessionStorage.setItem(`${prefix}stale-tenant:stale-user`, JSON.stringify({ privateDraft: true }));
+      localStorage.setItem(`${prefix}stale-tenant:stale-user:new`, JSON.stringify({ privateDraft: true }));
       localStorage.setItem("qf:quote-builder-draft:v1:legacy-tenant:legacy-email", JSON.stringify({ privateDraft: true }));
     }, DRAFT_PREFIX);
     await page.route("**/v1/auth/me", (route) =>
@@ -155,11 +160,10 @@ test.describe("quote builder local draft recovery", () => {
     const keys = await builderDraftKeys(page);
     const draftKey = keys[0];
     expect(draftKey).toBeTruthy();
-    await page.addInitScript((key) => window.sessionStorage.setItem(key, "{not-valid-json"), draftKey!);
+    await page.addInitScript((key) => window.localStorage.setItem(key, "{not-valid-json"), draftKey!);
 
     await page.reload();
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/saved draft could not be read and was cleared safely/i)).toBeVisible();
     await expect(page.getByLabel("Quote title")).toHaveValue("");
     await expect.poll(async () => (await builderDraftKeys(page)).length).toBe(0);
   });

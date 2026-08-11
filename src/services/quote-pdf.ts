@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import PDFDocument from "pdfkit";
+import { decodeValidatedBrandLogoDataUrl } from "../lib/brand-logo";
 
 export type QuotePdfTemplateId = "modern" | "professional" | "minimal";
 export type QuotePdfLogoPosition = "left" | "center" | "right";
@@ -59,6 +60,10 @@ export interface QuotePdfData {
     componentColors?: QuoteComponentColors | null;
   };
   lineItems: QuotePdfLineItem[];
+}
+
+export interface QuotePdfRenderOptions {
+  compress?: boolean;
 }
 
 interface ResolvedComponentColors {
@@ -184,7 +189,7 @@ function buildFooterText(data: QuotePdfData): string {
   return `Questions about this quote? Contact ${data.tenant.name}.`;
 }
 
-function safeTemplateId(templateId: string): QuotePdfTemplateId {
+export function normalizeQuotePdfTemplateId(templateId?: string | null): QuotePdfTemplateId {
   if (templateId === "minimal") {
     return "minimal";
   }
@@ -236,21 +241,8 @@ function resolveComponentColors(
   };
 }
 
-async function loadLogoBuffer(logoUrl: string | null): Promise<Buffer | null> {
-  if (!logoUrl) return null;
-
-  const dataUrlMatch = logoUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
-  if (dataUrlMatch) {
-    try {
-      return Buffer.from(dataUrlMatch[1], "base64");
-    } catch {
-      return null;
-    }
-  }
-
-  // Branding is tenant-controlled. Never fetch remote URLs from the API/PDF
-  // runtime because that would turn PDF generation into an SSRF primitive.
-  return null;
+export function decodeSupportedLogoDataUrl(logoUrl?: string | null): Buffer | null {
+  return decodeValidatedBrandLogoDataUrl(logoUrl);
 }
 
 async function loadQuoteFlyMarkBuffer(): Promise<Buffer | null> {
@@ -283,44 +275,48 @@ function writeHeader(
   const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
   const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
   const logoPosition = safeLogoPosition(data.branding.logoPosition);
-
-  const drawFrame = (): HeaderFrame => {
-    if (theme.headerStyle === "bar") {
-      doc.roundedRect(left, 28, width, 124, 16).fillAndStroke("#ffffff", "#dbe3ef");
-      doc.save();
-      doc.roundedRect(left, 28, width, 124, 16).clip();
-      doc.rect(left, 28, width, 6).fill(colors.headerBgColor);
-      doc.restore();
-      return { top: 28, height: 124, textColor: theme.textDark, metaColor: "#475569" };
-    }
-
-    if (theme.headerStyle === "block") {
-      doc.roundedRect(left, 28, width, 126, 16).fill(colors.headerBgColor);
-      return {
-        top: 28,
-        height: 126,
-        textColor: colors.headerTextColor,
-        metaColor: colors.headerTextColor === "#ffffff" ? "#e2e8f0" : "#334155",
-      };
-    }
-
-    if (theme.headerStyle === "card") {
-      doc.roundedRect(left, 28, width, 124, 16).fillAndStroke(theme.secondaryColor, "#dbe3ef");
-      doc.roundedRect(left + 18, 46, 4, 78, 2).fill(colors.headerBgColor);
-      return { top: 28, height: 124, textColor: theme.textDark, metaColor: "#475569" };
-    }
-
-    doc.roundedRect(left, 28, width, 124, 16).fillAndStroke("#ffffff", "#dbe3ef");
-    return { top: 28, height: 124, textColor: theme.textDark, metaColor: "#64748b" };
-  };
-
-  const frame = drawFrame();
-  const innerLeft = left + 18;
+  const innerLeft = left + 18 + (theme.headerStyle === "card" ? 12 : 0);
   const innerRight = right - 18;
   const contentWidth = innerRight - innerLeft;
   const logoFit: [number, number] = theme.headerStyle === "minimal" ? [80, 42] : [92, 48];
-  const logoTop = frame.top + 18;
-  let logoBottom = logoTop;
+  const titleFontSize = theme.headerStyle === "minimal" ? 20 : 21;
+  const rawTitle = data.title.trim() || "Untitled quote";
+  const title = rawTitle.length > 500 ? `${rawTitle.slice(0, 497)}...` : rawTitle;
+  const frameTop = 28;
+  const contentTop = frameTop + 18;
+  const logoTop = contentTop;
+  const headingTop = contentTop + (logoBuffer ? logoFit[1] + 8 : 0);
+
+  doc.font("Helvetica-Bold").fontSize(titleFontSize);
+  const titleHeight = Math.max(
+    titleFontSize + 2,
+    Math.ceil(doc.heightOfString(title, { width: contentWidth, align: logoPosition })),
+  );
+  const subtitleTop = headingTop + titleHeight + 3;
+  const metaTop = subtitleTop + 24;
+  const frameHeight = Math.max(124, metaTop - frameTop + 24);
+
+  const drawFrame = (): HeaderFrame => {
+    if (theme.headerStyle === "bar") {
+      doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke("#ffffff", "#dbe3ef");
+      doc.save();
+      doc.roundedRect(left, frameTop, width, frameHeight, 16).clip();
+      doc.rect(left, frameTop, width, 6).fill(colors.headerBgColor);
+      doc.restore();
+      return { top: frameTop, height: frameHeight, textColor: theme.textDark, metaColor: "#475569" };
+    }
+
+    if (theme.headerStyle === "card") {
+      doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke(theme.secondaryColor, "#dbe3ef");
+      doc.roundedRect(left + 18, frameTop + 18, 4, frameHeight - 36, 2).fill(colors.headerBgColor);
+      return { top: frameTop, height: frameHeight, textColor: theme.textDark, metaColor: "#475569" };
+    }
+
+    doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke("#ffffff", "#dbe3ef");
+    return { top: frameTop, height: frameHeight, textColor: theme.textDark, metaColor: "#64748b" };
+  };
+
+  const frame = drawFrame();
 
   if (logoBuffer) {
     let logoX = innerLeft;
@@ -332,28 +328,24 @@ function writeHeader(
 
     try {
       doc.image(logoBuffer, logoX, logoTop, { fit: logoFit });
-      logoBottom = logoTop + logoFit[1];
     } catch {
       // Ignore bad image payloads and continue without logo rendering.
     }
   }
 
-  const hasLogo = Boolean(logoBuffer);
   const headingAlign = logoPosition === "center" ? "center" : logoPosition === "right" ? "right" : "left";
-  const headingTop = hasLogo ? logoBottom + 8 : frame.top + 24;
   const headingX = innerLeft;
   const headingWidth = contentWidth;
   const subtitle = "Customer quote";
-  const metaTop = Math.min(frame.top + frame.height - 28, headingTop + 42);
 
-  doc.fillColor(frame.textColor).font("Helvetica-Bold").fontSize(theme.headerStyle === "minimal" ? 20 : 21);
-  doc.text(data.title, headingX, headingTop, {
+  doc.fillColor(frame.textColor).font("Helvetica-Bold").fontSize(titleFontSize);
+  doc.text(title, headingX, headingTop, {
     width: headingWidth,
     align: headingAlign,
   });
 
   doc.fillColor(frame.metaColor).font("Helvetica").fontSize(10);
-  doc.text(subtitle, headingX, headingTop + 22, {
+  doc.text(subtitle, headingX, subtitleTop, {
     width: headingWidth,
     align: headingAlign,
   });
@@ -372,9 +364,13 @@ function writeHeader(
 }
 
 function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, sectionTitleColor: string): number {
-  doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(12).text(title, 48, y);
-  doc.moveTo(48, y + 16).lineTo(564, y + 16).stroke("#e2e8f0");
-  return y + 24;
+  y = ensureSpace(doc, y, 44);
+  doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(12);
+  const titleHeight = Math.max(14, Math.ceil(doc.heightOfString(title, { width: 516 })));
+  doc.text(title, 48, y, { width: 516 });
+  const ruleY = y + titleHeight + 4;
+  doc.moveTo(48, ruleY).lineTo(564, ruleY).stroke("#e2e8f0");
+  return ruleY + 8;
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, y: number, minSpace: number): number {
@@ -382,6 +378,16 @@ function ensureSpace(doc: PDFKit.PDFDocument, y: number, minSpace: number): numb
   if (y + minSpace <= bottomLimit) return y;
   doc.addPage();
   return 56;
+}
+
+function measurePartyCardHeight(doc: PDFKit.PDFDocument, width: number, lines: string[]): number {
+  const contentLines = lines.filter((line) => line.trim().length > 0);
+  doc.font("Helvetica").fontSize(10);
+  const contentHeight = contentLines.reduce(
+    (height, line) => height + Math.max(12, Math.ceil(doc.heightOfString(line, { width: width - 28 }))) + 3,
+    0,
+  );
+  return Math.max(86, 40 + contentHeight);
 }
 
 function drawPartyCard(
@@ -394,7 +400,7 @@ function drawPartyCard(
   sectionTitleColor: string,
 ): number {
   const contentLines = lines.filter((line) => line.trim().length > 0);
-  const height = Math.max(86, 42 + contentLines.length * 14);
+  const height = measurePartyCardHeight(doc, width, contentLines);
 
   doc.roundedRect(x, y, width, height, 10).fillAndStroke("#ffffff", "#d7dde5");
   doc.fillColor(sectionTitleColor).font("Helvetica-Bold").fontSize(11).text(title, x + 14, y + 12);
@@ -403,10 +409,42 @@ function drawPartyCard(
   doc.fillColor("#222222").font("Helvetica").fontSize(10);
   for (const line of contentLines) {
     doc.text(line, x + 14, textY, { width: width - 28 });
-    textY += 14;
+    textY += Math.max(12, Math.ceil(doc.heightOfString(line, { width: width - 28 }))) + 3;
   }
 
   return y + height;
+}
+
+function takeTextChunkForHeight(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  width: number,
+  maxHeight: number,
+): [chunk: string, remainder: string] {
+  if (doc.heightOfString(text, { width }) <= maxHeight) return [text, ""];
+
+  let low = 1;
+  let high = text.length;
+  let best = 1;
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = text.slice(0, middle);
+    if (doc.heightOfString(candidate, { width }) <= maxHeight) {
+      best = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  const candidate = text.slice(0, best);
+  const wordBoundary = Math.max(candidate.lastIndexOf(" "), candidate.lastIndexOf("\n"));
+  const splitAt = wordBoundary >= Math.floor(best * 0.6) ? wordBoundary + 1 : best;
+  const chunk = text.slice(0, splitAt).trimEnd();
+  const remainder = text.slice(splitAt).trimStart();
+
+  return [chunk || text.slice(0, best), remainder];
 }
 
 function drawLineItemsTable(
@@ -440,35 +478,67 @@ function drawLineItemsTable(
   drawTableHeader(y);
   y += 24;
 
-  normalizedItems.forEach((item, index) => {
-    doc.font("Helvetica").fontSize(10);
-    const descriptionHeight = doc.heightOfString(item.description, {
-      width: 280,
-      align: "left",
-    });
-    const rowHeight = Math.max(28, Math.ceil(descriptionHeight) + 12);
+  for (const [index, item] of normalizedItems.entries()) {
+    let remainingDescription = item.description;
+    let isFirstChunk = true;
 
-    if (y + rowHeight > doc.page.height - 72) {
-      doc.addPage();
-      y = 56;
-      drawTableHeader(y);
-      y += 24;
-    }
+    do {
+      doc.font("Helvetica").fontSize(10);
+      const bottomLimit = doc.page.height - 72;
+      const maximumPageTextHeight = bottomLimit - 56 - 24 - 12;
+      const fullDescriptionHeight = Math.ceil(
+        doc.heightOfString(remainingDescription, { width: 280, align: "left" }),
+      );
+      const fullRowHeight = Math.max(28, fullDescriptionHeight + 12);
+      const currentPageSpace = bottomLimit - y;
 
-    if (index % 2 === 0) {
-      doc.rect(48, y, 516, rowHeight).fill("#f8fafc");
-    }
+      if (fullRowHeight > currentPageSpace && fullDescriptionHeight <= maximumPageTextHeight) {
+        doc.addPage();
+        y = 56;
+        drawTableHeader(y);
+        y += 24;
+      }
 
-    doc.fillColor("#222222").font("Helvetica").fontSize(10);
-    const textY = y + 7;
-    const total = item.quantity * item.unitPrice;
-    doc.text(item.description, xDescription + 8, textY, { width: 280 });
-    doc.text(formatQuantity(item.quantity), xQty + 8, textY, { width: 42, align: "right" });
-    doc.text(formatMoney(item.unitPrice), xUnit + 8, textY, { width: 66, align: "right" });
-    doc.text(formatMoney(total), xTotal + 8, textY, { width: 58, align: "right" });
-    doc.moveTo(48, y + rowHeight).lineTo(564, y + rowHeight).stroke("#e2e8f0");
-    y += rowHeight;
-  });
+      const availableTextHeight = Math.max(16, bottomLimit - y - 12);
+      const [descriptionChunk, remainder] = takeTextChunkForHeight(
+        doc,
+        remainingDescription,
+        280,
+        availableTextHeight,
+      );
+      const descriptionHeight = Math.ceil(
+        doc.heightOfString(descriptionChunk || " ", { width: 280, align: "left" }),
+      );
+      const rowHeight = Math.max(28, descriptionHeight + 12);
+
+      if (index % 2 === 0) {
+        doc.rect(48, y, 516, rowHeight).fill("#f8fafc");
+      }
+
+      doc.fillColor("#222222").font("Helvetica").fontSize(10);
+      const textY = y + 7;
+      const total = item.quantity * item.unitPrice;
+      doc.text(descriptionChunk, xDescription + 8, textY, { width: 280 });
+
+      if (isFirstChunk) {
+        doc.text(formatQuantity(item.quantity), xQty + 8, textY, { width: 42, align: "right" });
+        doc.text(formatMoney(item.unitPrice), xUnit + 8, textY, { width: 66, align: "right" });
+        doc.text(formatMoney(total), xTotal + 8, textY, { width: 58, align: "right" });
+      }
+
+      doc.moveTo(48, y + rowHeight).lineTo(564, y + rowHeight).stroke("#e2e8f0");
+      y += rowHeight;
+      remainingDescription = remainder;
+      isFirstChunk = false;
+
+      if (remainingDescription) {
+        doc.addPage();
+        y = 56;
+        drawTableHeader(y);
+        y += 24;
+      }
+    } while (remainingDescription);
+  }
 
   return y + 12;
 }
@@ -513,12 +583,15 @@ function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, tota
   return y + boxHeight + 10;
 }
 
-export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer> {
-  const templateId = safeTemplateId(data.branding.templateId);
+export async function generateQuotePdfBuffer(
+  data: QuotePdfData,
+  options: QuotePdfRenderOptions = {},
+): Promise<Buffer> {
+  const templateId = normalizeQuotePdfTemplateId(data.branding.templateId);
   const theme = TEMPLATE_THEMES[templateId];
   const accentColor = safeHexColor(data.branding.primaryColor, theme.accentColor);
   const componentColors = resolveComponentColors(data.branding.componentColors, accentColor);
-  const logoBuffer = await loadLogoBuffer(data.branding.logoUrl);
+  const logoBuffer = decodeSupportedLogoDataUrl(data.branding.logoUrl);
   const quoteFlyMarkBuffer = data.branding.showQuoteFlyAttribution ? await loadQuoteFlyMarkBuffer() : null;
   const includedLineItems = data.lineItems.filter((lineItem) => lineItem.sectionType !== "ALTERNATE");
   const alternateSections = groupAlternateLineItems(data.lineItems);
@@ -526,11 +599,13 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
+      compress: options.compress ?? true,
       margins: { top: 48, left: 48, right: 48, bottom: 48 },
       info: {
-        Title: `${data.title} - ${data.tenant.name}`,
+        Title: `${data.title.slice(0, 500)} - ${data.tenant.name.slice(0, 200)}`,
         Author: "QuoteFly",
         Subject: "Customer Quote",
+        CreationDate: data.sentAt ?? data.createdAt,
       },
     });
 
@@ -541,9 +616,13 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
 
     let y = writeHeader(doc, data, theme, componentColors, logoBuffer);
 
-    y = ensureSpace(doc, y, 130);
     const senderLines = buildSenderLines(data);
     const customerLines = [data.customer.fullName, data.customer.phone, data.customer.email ?? ""];
+    const partyCardHeight = Math.max(
+      measurePartyCardHeight(doc, 250, senderLines),
+      measurePartyCardHeight(doc, 250, customerLines),
+    );
+    y = ensureSpace(doc, y, partyCardHeight + 20);
     const partyCardBottom = Math.max(
       drawPartyCard(doc, 48, y, 250, "Business", senderLines, componentColors.sectionTitleColor),
       drawPartyCard(doc, 314, y, 250, "Customer", customerLines, componentColors.sectionTitleColor),
@@ -569,6 +648,7 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
     doc.text(data.scopeText, 48, y, { width: 516 });
     y = doc.y + 16;
 
+    y = ensureSpace(doc, y, 100);
     y = drawSectionTitle(doc, y, "Included Work", componentColors.sectionTitleColor);
     y = drawLineItemsTable(
       doc,
@@ -603,11 +683,14 @@ export async function generateQuotePdfBuffer(data: QuotePdfData): Promise<Buffer
 
     y = drawTotals(doc, y, data, componentColors.totalsColor);
 
-    y = ensureSpace(doc, y, data.branding.showQuoteFlyAttribution ? 66 : 48);
+    const footerText = buildFooterText(data);
+    doc.font("Helvetica").fontSize(9);
+    const footerTextHeight = Math.ceil(doc.heightOfString(footerText, { width: 516, align: "center" }));
+    y = ensureSpace(doc, y, footerTextHeight + (data.branding.showQuoteFlyAttribution ? 42 : 24));
     doc.moveTo(48, y).lineTo(564, y).stroke("#d8d8d8");
     y += 8;
     doc.font("Helvetica").fontSize(9).fillColor(componentColors.footerTextColor);
-    doc.text(buildFooterText(data), 48, y, { width: 516, align: "center" });
+    doc.text(footerText, 48, y, { width: 516, align: "center" });
     y = doc.y + 4;
 
     if (data.branding.showQuoteFlyAttribution) {

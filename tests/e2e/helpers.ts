@@ -97,7 +97,7 @@ export async function signUpViaApi(request: APIRequestContext, prefix = "beta"):
       generateLogoIfMissing: false,
       acceptedLegalTerms: true,
       termsVersion: "2026-07-30",
-      privacyPolicyVersion: "2026-07-30",
+      privacyPolicyVersion: "2026-08-10",
     },
   });
 
@@ -160,7 +160,7 @@ export async function createCustomerViaApi(
     headers: { Cookie: account.cookieHeader },
     data: {
       fullName: overrides.fullName ?? `Beta Customer ${label}`,
-      phone: overrides.phone ?? `555-01${Math.floor(1000 + Math.random() * 8999)}`,
+      phone: overrides.phone ?? `555-010-${Math.floor(1000 + Math.random() * 9000)}`,
       email: overrides.email ?? `${label}@example.com`,
       notes: "Seeded by Playwright launch smoke.",
     },

@@ -2,6 +2,7 @@ import { PresetCategory, PresetUnitType } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import {
   applyOnboardingSetup,
   parseServiceCategory,
@@ -47,9 +48,8 @@ const OnboardingPresetSchema = z.object({
 
 const SaveOnboardingSchema = z.object({
   primaryTrade: ServiceTypeEnum,
-  logoUrl: z.string().trim().max(1_500_000).optional(),
+  logoUrl: BrandLogoDataUrlSchema.optional(),
   primaryColor: z.string().trim().regex(/^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/).optional(),
-  generateLogoIfMissing: z.boolean().default(true),
   chargeBySquareFoot: z.boolean().default(false),
   sqFtUnitCost: z.number().positive().max(10000).optional(),
   sqFtUnitPrice: z.number().positive().max(10000).optional(),
@@ -150,18 +150,19 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const result = await applyOnboardingSetup(app.prisma, {
-      tenantId: tenant.id,
-      companyName: tenant.name,
-      primaryTrade: payload.primaryTrade,
-      logoUrl: payload.logoUrl,
-      primaryColor: payload.primaryColor,
-      generateLogoIfMissing: payload.generateLogoIfMissing,
-      chargeBySquareFoot: payload.chargeBySquareFoot,
-      sqFtUnitCost: payload.sqFtUnitCost,
-      sqFtUnitPrice: payload.sqFtUnitPrice,
-      customPresets: payload.presets,
-    });
+    const result = await app.prisma.$transaction((transaction) =>
+      applyOnboardingSetup(transaction, {
+        tenantId: tenant.id,
+        companyName: tenant.name,
+        primaryTrade: payload.primaryTrade,
+        logoUrl: payload.logoUrl,
+        primaryColor: payload.primaryColor,
+        chargeBySquareFoot: payload.chargeBySquareFoot,
+        sqFtUnitCost: payload.sqFtUnitCost,
+        sqFtUnitPrice: payload.sqFtUnitPrice,
+        customPresets: payload.presets,
+      }),
+    );
 
     return reply.send({
       message: "Onboarding setup saved.",

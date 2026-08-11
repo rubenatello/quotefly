@@ -5,8 +5,9 @@ import {
   PrismaClient,
   ServiceCategory,
 } from "@prisma/client";
-import { generateMinimalLogoDataUrl } from "./logo-generator";
+import { sanitizeBrandLogoDataUrl } from "../lib/brand-logo";
 import {
+  STANDARD_SQ_FT_BASE_CATALOG_KEY,
   buildSquareFootBaselinePreset,
   getStandardWorkPresetCatalog,
   getStandardWorkPresetDefinition,
@@ -29,9 +30,8 @@ export interface OnboardingSetupInput {
   tenantId: string;
   companyName: string;
   primaryTrade: ServiceCategory;
-  logoUrl?: string | null;
+  logoUrl?: string;
   primaryColor?: string;
-  generateLogoIfMissing?: boolean;
   chargeBySquareFoot?: boolean;
   sqFtUnitCost?: number;
   sqFtUnitPrice?: number;
@@ -98,16 +98,20 @@ function clampMoney(value: number | undefined, fallback: number): number {
   return Number(value.toFixed(2));
 }
 
-function resolveLogoUrl(
-  companyName: string,
-  suppliedLogoUrl?: string | null,
-  primaryColor?: string,
-  generateLogoIfMissing = true,
-): string | null {
-  const normalizedSupplied = suppliedLogoUrl?.trim();
-  if (normalizedSupplied) return normalizedSupplied;
-  if (!generateLogoIfMissing) return null;
-  return generateMinimalLogoDataUrl(companyName, primaryColor ?? "#1e6fd8");
+function resolveLogoUrl(suppliedLogoUrl: string): string {
+  const logoUrl = sanitizeBrandLogoDataUrl(suppliedLogoUrl);
+  if (!logoUrl) {
+    throw new Error("Logo must be a valid supported PNG or JPEG.");
+  }
+  return logoUrl;
+}
+
+function resolvePrimaryColor(suppliedPrimaryColor: string): string {
+  const primaryColor = suppliedPrimaryColor.trim();
+  if (!/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(primaryColor)) {
+    throw new Error("Primary color must be a valid hex color.");
+  }
+  return primaryColor;
 }
 
 export async function applyOnboardingSetup(
@@ -128,26 +132,26 @@ export async function applyOnboardingSetup(
     (input.sqFtUnitCost ?? 0) > 0
       ? Number(Math.max((input.sqFtUnitPrice! / input.sqFtUnitCost!) - 1, 0.05).toFixed(4))
       : defaults.materialMarkup;
+  const hasExplicitSquareFootPricing =
+    input.chargeBySquareFoot === true &&
+    Number.isFinite(input.sqFtUnitCost) &&
+    Number.isFinite(input.sqFtUnitPrice);
 
-  const normalizedPrimaryColor = input.primaryColor?.trim() || "#1e6fd8";
-  const logoUrl = resolveLogoUrl(
-    input.companyName,
-    input.logoUrl,
-    normalizedPrimaryColor,
-    input.generateLogoIfMissing ?? true,
-  );
+  // PDF and browser rendering intentionally accept only bounded PNG/JPEG data URLs.
+  // Auto-generated SVG logos are no longer persisted because they cannot be rendered
+  // consistently by the PDF pipeline. Users can upload a supported logo in Branding.
+  const logoUrl = input.logoUrl === undefined ? undefined : resolveLogoUrl(input.logoUrl);
+  const primaryColor = input.primaryColor === undefined ? undefined : resolvePrimaryColor(input.primaryColor);
 
-  const submittedPresets = input.customPresets?.length
-    ? input.customPresets
-    : recommendedPresetsForTrade(input.primaryTrade);
+  // Omission means the caller is saving setup preferences, not reconciling the
+  // tenant's product catalog. An explicit array (including []) opts into the
+  // reconciliation and pruning behavior below.
+  const presetsWereProvided = input.customPresets !== undefined;
+  const submittedPresets = input.customPresets ?? [];
 
   const standardPresets = recommendedPresetsForTrade(input.primaryTrade);
   const presetsToApply = [...standardPresets];
-  if (
-    input.chargeBySquareFoot &&
-    Number.isFinite(input.sqFtUnitCost) &&
-    Number.isFinite(input.sqFtUnitPrice)
-  ) {
+  if (hasExplicitSquareFootPricing) {
     presetsToApply.unshift(
       sqFtPreset(
         input.primaryTrade,
@@ -173,6 +177,8 @@ export async function applyOnboardingSetup(
     const catalogPreset = presetItem.catalogKey
       ? getStandardWorkPresetDefinition(input.primaryTrade, presetItem.catalogKey) ?? presetItem
       : presetItem;
+    const hasAuthoritativeSquareFootPricing =
+      hasExplicitSquareFootPricing && presetItem.catalogKey === STANDARD_SQ_FT_BASE_CATALOG_KEY;
 
     return {
       id: matchedPreset?.id,
@@ -182,8 +188,12 @@ export async function applyOnboardingSetup(
       category: catalogPreset.category,
       unitType: catalogPreset.unitType,
       defaultQuantity: clampMoney(matchedPreset?.defaultQuantity, catalogPreset.defaultQuantity),
-      unitCost: clampMoney(matchedPreset?.unitCost, catalogPreset.unitCost),
-      unitPrice: clampMoney(matchedPreset?.unitPrice, catalogPreset.unitPrice),
+      unitCost: hasAuthoritativeSquareFootPricing
+        ? catalogPreset.unitCost
+        : clampMoney(matchedPreset?.unitCost, catalogPreset.unitCost),
+      unitPrice: hasAuthoritativeSquareFootPricing
+        ? catalogPreset.unitPrice
+        : clampMoney(matchedPreset?.unitPrice, catalogPreset.unitPrice),
       isDefault: matchedPreset?.isDefault ?? catalogPreset.isDefault ?? true,
     } satisfies OnboardingPresetInput;
   });
@@ -216,13 +226,13 @@ export async function applyOnboardingSetup(
     where: { tenantId: input.tenantId },
     create: {
       tenantId: input.tenantId,
-      logoUrl,
-      primaryColor: normalizedPrimaryColor,
+      logoUrl: logoUrl ?? null,
+      primaryColor: primaryColor ?? "#1e6fd8",
       templateId: "modern",
     },
     update: {
-      logoUrl,
-      primaryColor: normalizedPrimaryColor,
+      ...(logoUrl !== undefined ? { logoUrl } : {}),
+      ...(primaryColor !== undefined ? { primaryColor } : {}),
     },
   });
 
@@ -261,12 +271,18 @@ export async function applyOnboardingSetup(
     where: {
       tenantId: input.tenantId,
       serviceType: input.primaryTrade,
-      deletedAtUtc: null,
+      OR: [
+        { deletedAtUtc: null },
+        // Managed catalog keys are unique across soft deletion. Include deleted
+        // rows so recommendations can restore them instead of creating duplicates.
+        { catalogKey: { not: null } },
+      ],
     },
     select: {
       id: true,
       name: true,
       catalogKey: true,
+      deletedAtUtc: true,
     },
   });
 
@@ -284,6 +300,20 @@ export async function applyOnboardingSetup(
       const targetPreset = catalogMatch ?? legacyMatch;
 
       if (targetPreset) {
+        const hasAuthoritativeSquareFootPricing =
+          hasExplicitSquareFootPricing && presetItem.catalogKey === STANDARD_SQ_FT_BASE_CATALOG_KEY;
+        if (
+          !presetsWereProvided &&
+          catalogMatch &&
+          catalogMatch.deletedAtUtc === null &&
+          !hasAuthoritativeSquareFootPricing
+        ) {
+          // Preserve any tenant customization already attached to a canonical
+          // catalog key. Omitted presets only backfill missing recommendations.
+          keptPresetIds.add(catalogMatch.id);
+          continue;
+        }
+
         const updated = await prisma.workPreset.update({
           where: { id: targetPreset.id },
           data: {
@@ -376,6 +406,7 @@ export async function applyOnboardingSetup(
 
   const presetIdsToDelete = existingPresets
     .filter((presetItem) => !keptPresetIds.has(presetItem.id))
+    .filter((presetItem) => presetsWereProvided || presetItem.catalogKey !== null)
     .map((presetItem) => presetItem.id);
 
   if (presetIdsToDelete.length > 0) {

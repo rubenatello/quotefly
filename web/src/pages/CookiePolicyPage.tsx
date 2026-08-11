@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Cookie } from "lucide-react";
 import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
+import { CURRENT_PRIVACY_POLICY_UPDATED_LABEL } from "../lib/legal";
 import { setPublicSEOMetadata } from "../lib/seo";
 import {
   clearStoredCookieConsent,
@@ -43,7 +44,7 @@ export function CookiePolicyPage() {
       eyebrow="Cookie Policy"
       title="How cookies work on QuoteFly"
       description="QuoteFly uses a small number of cookies and browser storage items to keep the website and application working. Optional analytics technologies remain off unless you choose to enable them."
-      updated="July 30, 2026"
+      updated={CURRENT_PRIVACY_POLICY_UPDATED_LABEL}
       icon={Cookie}
     >
         <PolicySection title="Types of cookies and storage we use">
@@ -72,9 +73,9 @@ export function CookiePolicyPage() {
                 </tr>
                 <tr>
                   <td className="px-4 py-3 font-medium text-slate-900">Quote draft and UI preferences</td>
-                  <td className="px-4 py-3">Essential local/session storage</td>
-                  <td className="px-4 py-3">Recovers in-progress quote work and remembers workspace display preferences.</td>
-                  <td className="px-4 py-3">Drafts: current tab; preferences: until cleared</td>
+                  <td className="px-4 py-3">Essential local storage</td>
+                  <td className="px-4 py-3">Recovers in-progress quote and customer work on this device and remembers workspace display preferences.</td>
+                  <td className="px-4 py-3">Drafts: up to 12 hours; preferences: until cleared</td>
                 </tr>
                 <tr>
                   <td className="px-4 py-3 font-medium text-slate-900">Optional analytics</td>

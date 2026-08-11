@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
@@ -16,6 +17,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmModal,
   Input,
   Modal,
   ModalBody,
@@ -28,10 +30,12 @@ import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, ty
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import {
   quoteBuilderDraftStorageKey,
+  isQuoteDraftTimestampFresh,
   readQuoteBuilderDraft,
   removeQuoteBuilderDraft,
   writeQuoteBuilderDraft,
 } from "../lib/quote-builder-draft-storage";
+import { QUOTE_LINE_CHANGE_LIMIT, validateQuoteHeading, validateQuoteLine } from "../lib/quote-form-validation";
 import {
   applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
@@ -43,6 +47,7 @@ import {
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 
 function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   if (unitType === "SQ_FT") return "SQ FT";
@@ -168,8 +173,8 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
   const value: unknown = JSON.parse(raw);
   if (!isRecord(value) || value.version !== 1 || !isDraftString(value.savedAtUtc, 64)) return null;
   const savedAt = Date.parse(value.savedAtUtc);
-  if (!Number.isFinite(savedAt) || savedAt > Date.now() + 60_000) return null;
-  if (!isRecord(value.quote) || !Array.isArray(value.lines) || value.lines.length === 0 || value.lines.length > 100) return null;
+  if (!Number.isFinite(savedAt) || !isQuoteDraftTimestampFresh(value.savedAtUtc)) return null;
+  if (!isRecord(value.quote) || !Array.isArray(value.lines) || value.lines.length === 0 || value.lines.length > QUOTE_LINE_CHANGE_LIMIT) return null;
   if (
     !isDraftString(value.quote.customerId, 200) ||
     !isDraftString(value.quote.serviceType, 32) ||
@@ -269,6 +274,7 @@ const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 
 export function QuoteBuilderView() {
   usePageView("quote_builder");
+  const navigate = useNavigate();
   const track = useTrack();
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickCustomerForm, setQuickCustomerForm] = useState<QuickCustomerForm>(EMPTY_QUICK_CUSTOMER_FORM);
@@ -375,6 +381,14 @@ export function QuoteBuilderView() {
     [draftLines, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteForm],
   );
   const hasMeaningfulDraft = useMemo(() => hasMeaningfulBuilderDraft(currentBuilderDraft), [currentBuilderDraft]);
+  const {
+    navigationPromptOpen,
+    requestNavigation,
+    cancelNavigation,
+    continueNavigation,
+  } = useUnsavedChangesGuard(
+    hasMeaningfulDraft && hydratedDraftStorageKey === draftStorageKey && !saving && !quoteCreationCompletedRef.current,
+  );
   latestDraftRef.current = currentBuilderDraft;
   selectedCustomerIdRef.current = quoteForm.customerId;
 
@@ -467,15 +481,15 @@ export function QuoteBuilderView() {
     setPresetsLoading(true);
     setPresetLoadError(null);
 
-    api.onboarding
-      .getSetup()
+    api.products
+      .list()
       .then((result) => {
         if (!mounted) return;
-        setPresetLibrary(result.presets);
+        setPresetLibrary(result.products);
       })
       .catch(() => {
         if (!mounted) return;
-        setPresetLoadError("Common work names could not be loaded.");
+        setPresetLoadError("Products and services could not be loaded.");
       })
       .finally(() => {
         if (mounted) setPresetsLoading(false);
@@ -883,17 +897,30 @@ export function QuoteBuilderView() {
       return;
     }
 
-    if (!quoteForm.title.trim()) {
-      setError("Add a quote title before creating the quote.");
-      return;
-    }
-
     if (filteredDraftLines.length === 0) {
       setError("Add at least one quote line before creating the quote.");
       return;
     }
 
+    if (filteredDraftLines.length > QUOTE_LINE_CHANGE_LIMIT) {
+      setError(`A quote can include at most ${QUOTE_LINE_CHANGE_LIMIT} lines.`);
+      return;
+    }
+
     const linesToCreate = filteredDraftLines;
+    const scopeText =
+      quoteForm.scopeText.trim() ||
+      linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n");
+    const headingError = validateQuoteHeading(quoteForm.title, scopeText, quoteForm.taxAmount);
+    if (headingError) {
+      setError(headingError);
+      return;
+    }
+    const invalidLineIndex = linesToCreate.findIndex((line) => validateQuoteLine(line) !== null);
+    if (invalidLineIndex >= 0) {
+      setError(validateQuoteLine(linesToCreate[invalidLineIndex], `Line ${invalidLineIndex + 1}`));
+      return;
+    }
     const promptCandidate =
       [...linesToCreate]
         .reverse()
@@ -910,9 +937,7 @@ export function QuoteBuilderView() {
     track("builder_quote_create");
     const createdQuote = await createQuoteDraftFromForm({
       quoteOverride: {
-        scopeText:
-          quoteForm.scopeText.trim() ||
-          linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n"),
+        scopeText,
         internalCostSubtotal: internalSubtotal.toFixed(2),
         customerPriceSubtotal: customerSubtotal.toFixed(2),
       },
@@ -948,7 +973,9 @@ export function QuoteBuilderView() {
         subtitle="Choose the customer, add the work, then review the quote."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
+            {selectedQuoteId ? (
+              <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>Open Active Quote</Button>
+            ) : null}
           </div>
         }
       />
@@ -1179,7 +1206,7 @@ export function QuoteBuilderView() {
                   AI Prompt
                 </Button>
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                  Preview
+                  Draft preview
                 </Button>
               </div>
             }
@@ -1210,8 +1237,8 @@ export function QuoteBuilderView() {
                 ]}
               />
               <Button variant="outline" onClick={() => setPresetPickerOpen(true)}>
-                <span className="sm:hidden">Jobs</span>
-                <span className="hidden sm:inline">Saved jobs</span>
+                <span className="sm:hidden">Products</span>
+                <span className="hidden sm:inline">Products &amp; services</span>
               </Button>
               <Button
                 variant="outline"
@@ -1228,8 +1255,8 @@ export function QuoteBuilderView() {
             <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:block">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Common work names</p>
-                  <p className="mt-1 text-sm text-slate-600">Load standard jobs or your saved work names into the quote sheet.</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Products &amp; services</p>
+                  <p className="mt-1 text-sm text-slate-600">Load standard or custom catalog items into the quote sheet.</p>
                 </div>
                 {selectedPreset ? (
                   <div className="hidden flex-col gap-2 sm:flex-row sm:items-end xl:flex">
@@ -1276,9 +1303,14 @@ export function QuoteBuilderView() {
                   })
                 ) : (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-                    No saved jobs for this trade yet. Add them in Setup.
+                    No products for this trade yet. Add them in Products.
                   </div>
                 )}
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button size="sm" variant="ghost" onClick={() => setPresetPickerOpen(true)}>
+                  Browse all products
+                </Button>
               </div>
             </div>
 
@@ -1412,11 +1444,15 @@ export function QuoteBuilderView() {
         onSelectPreset={setSelectedPresetId}
         quantity={selectedPresetQuantity}
         onQuantityChange={setSelectedPresetQuantity}
-        primaryActionLabel="Load selected job"
+        primaryActionLabel="Load selected product"
         onPrimaryAction={() => {
           if (!selectedPreset) return;
           applyPresetToDraft(selectedPreset);
           setPresetPickerOpen(false);
+        }}
+        onManageProducts={() => {
+          setPresetPickerOpen(false);
+          requestNavigation(() => navigate("/app/products"));
         }}
       />
 
@@ -1458,10 +1494,10 @@ export function QuoteBuilderView() {
         submitLabel="Apply AI Suggestion"
       />
 
-      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Draft quote preview">
         <ModalHeader
-          title="Quote preview"
-          description="This is the customer-facing view of the quote as you build it."
+          title="Draft preview"
+          description="This is an in-app preview of the unsaved quote. Create the quote to generate its PDF."
           onClose={() => setPreviewOpen(false)}
         />
         <ModalBody className="bg-slate-50">
@@ -1489,6 +1525,16 @@ export function QuoteBuilderView() {
           />
         </ModalBody>
       </Modal>
+
+      <ConfirmModal
+        open={navigationPromptOpen}
+        onClose={cancelNavigation}
+        onConfirm={continueNavigation}
+        title="Leave this quote draft?"
+        description="Your draft is saved in this browser for up to 12 hours and can be restored when you return."
+        confirmLabel="Keep draft and leave"
+        confirmVariant="warning"
+      />
     </div>
   );
 }

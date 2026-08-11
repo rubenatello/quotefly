@@ -6,6 +6,7 @@ import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activi
 import {
   normalizeCustomerPhone,
   normalizePhoneSearchDigits,
+  normalizeUsPhoneDigits,
   phoneNumbersEquivalent,
 } from "../lib/phone";
 import {
@@ -23,9 +24,15 @@ const LeadFollowUpStatusSchema = z.enum([
   "LOST",
 ]);
 
+const CustomerStageSchema = z.enum(["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"]);
+const CustomerLifecycleSchema = z.enum(["active", "archived", "deleted"]);
+const CustomerPhoneSchema = z.string().trim().refine((phone) => normalizeUsPhoneDigits(phone) !== null, {
+  message: "Enter a valid 10-digit US phone number.",
+});
+
 const CreateCustomerSchema = z.object({
   fullName: z.string().trim().min(2),
-  phone: z.string().trim().min(7),
+  phone: CustomerPhoneSchema,
   email: z.string().trim().email().nullable().optional(),
   notes: z.string().max(5_000).nullable().optional(),
   followUpStatus: LeadFollowUpStatusSchema.optional(),
@@ -46,6 +53,8 @@ const DuplicateMatchSummarySchema = z.object({
 
 const ListCustomersQuerySchema = PaginationQuerySchema.extend({
   search: z.string().trim().min(1).max(120).optional(),
+  lifecycle: CustomerLifecycleSchema.default("active"),
+  stage: CustomerStageSchema.optional(),
 });
 
 const CustomerParamsSchema = z.object({
@@ -57,7 +66,7 @@ const CustomerActivityQuerySchema = PaginationQuerySchema;
 const UpdateCustomerSchema = z
   .object({
     fullName: z.string().trim().min(2).optional(),
-    phone: z.string().trim().min(7).optional(),
+    phone: CustomerPhoneSchema.optional(),
     email: z.string().trim().email().nullable().optional(),
     notes: z.string().max(5_000).nullable().optional(),
     followUpStatus: LeadFollowUpStatusSchema.optional(),
@@ -186,28 +195,142 @@ async function loadPhoneMatchCandidates(
   });
 }
 
-async function loadPhoneSearchMatchIds(
-  prisma: PrismaClient | Prisma.TransactionClient,
-  tenantId: string,
-  normalizedSearchDigits: string,
-) {
-  const searchFilter =
-    normalizedSearchDigits.length >= 7
-      ? { startsWith: normalizedSearchDigits }
-      : { contains: normalizedSearchDigits };
-  const rows = await prisma.customer.findMany({
-    where: {
-      ...tenantActiveCustomerScope(tenantId),
-      phoneDigits: searchFilter,
-    },
-    orderBy: { createdAt: "desc" },
-    take: 200,
-    select: { id: true },
-  });
-  return rows.map((row) => row.id);
+function deriveCustomerStage(
+  followUpStatus: z.infer<typeof LeadFollowUpStatusSchema>,
+  latestQuoteStatus?: string,
+): z.infer<typeof CustomerStageSchema> {
+  // Explicit customer outcomes override quote state. Otherwise the latest active quote
+  // is the sole workflow signal so an older accepted/rejected quote cannot pin the customer.
+  if (followUpStatus === "WON") return "WON";
+  if (followUpStatus === "LOST") return "LOST";
+  if (latestQuoteStatus === "ACCEPTED") return "WON";
+  if (latestQuoteStatus === "REJECTED") return "LOST";
+  if (latestQuoteStatus === "SENT_TO_CUSTOMER") return "SENT";
+  if (latestQuoteStatus === "READY_FOR_REVIEW") return "READY";
+  if (followUpStatus === "FOLLOWED_UP") return "CONTACTED";
+  return "NEW";
 }
 
+function escapeLikePattern(value: string) {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function customerLifecycleSql(lifecycle: z.infer<typeof CustomerLifecycleSchema>): Prisma.Sql {
+  if (lifecycle === "archived") {
+    return Prisma.sql`customer."archivedAtUtc" IS NOT NULL AND customer."deletedAtUtc" IS NULL`;
+  }
+  if (lifecycle === "deleted") {
+    return Prisma.sql`customer."deletedAtUtc" IS NOT NULL`;
+  }
+  return Prisma.sql`customer."archivedAtUtc" IS NULL AND customer."deletedAtUtc" IS NULL`;
+}
+
+function customerSearchSql(input: {
+  tenantId: string;
+  searchTerm?: string;
+  normalizedSearchDigits?: string | null;
+}): Prisma.Sql {
+  if (!input.searchTerm) return Prisma.empty;
+
+  const searchPattern = `%${escapeLikePattern(input.searchTerm)}%`;
+  const phonePattern = input.normalizedSearchDigits && input.normalizedSearchDigits.length >= 2
+    ? `%${input.normalizedSearchDigits}%`
+    : null;
+  return Prisma.sql`
+    AND (
+      customer."fullName" ILIKE ${searchPattern} ESCAPE E'\\\\'
+      OR customer."email" ILIKE ${searchPattern} ESCAPE E'\\\\'
+      OR customer."phone" ILIKE ${searchPattern} ESCAPE E'\\\\'
+      ${phonePattern ? Prisma.sql`OR customer."phoneDigits" LIKE ${phonePattern}` : Prisma.empty}
+      OR EXISTS (
+        SELECT 1
+        FROM "Quote" search_quote
+        WHERE search_quote."tenantId" = ${input.tenantId}
+          AND search_quote."customerId" = customer."id"
+          AND search_quote."archivedAtUtc" IS NULL
+          AND search_quote."deletedAtUtc" IS NULL
+          AND search_quote."title" ILIKE ${searchPattern} ESCAPE E'\\\\'
+      )
+    )`;
+}
+
+function customerStageScopeSql(input: {
+  tenantId: string;
+  lifecycle: z.infer<typeof CustomerLifecycleSchema>;
+  searchTerm?: string;
+  normalizedSearchDigits?: string | null;
+}): Prisma.Sql {
+  const searchSql = customerSearchSql(input);
+
+  return Prisma.sql`
+    WITH scoped_customers AS (
+      SELECT
+        customer."id",
+        customer."updatedAt",
+        CASE
+          WHEN customer."followUpStatus"::text = 'WON' THEN 'WON'
+          WHEN customer."followUpStatus"::text = 'LOST' THEN 'LOST'
+          WHEN latest_quote."status"::text = 'ACCEPTED' THEN 'WON'
+          WHEN latest_quote."status"::text = 'REJECTED' THEN 'LOST'
+          WHEN latest_quote."status"::text = 'SENT_TO_CUSTOMER' THEN 'SENT'
+          WHEN latest_quote."status"::text = 'READY_FOR_REVIEW' THEN 'READY'
+          WHEN customer."followUpStatus"::text = 'FOLLOWED_UP' THEN 'CONTACTED'
+          ELSE 'NEW'
+        END AS stage
+      FROM "Customer" customer
+      LEFT JOIN LATERAL (
+        SELECT quote."status"
+        FROM "Quote" quote
+        WHERE quote."tenantId" = ${input.tenantId}
+          AND quote."customerId" = customer."id"
+          AND quote."archivedAtUtc" IS NULL
+          AND quote."deletedAtUtc" IS NULL
+        ORDER BY quote."updatedAt" DESC, quote."id" DESC
+        LIMIT 1
+      ) latest_quote ON TRUE
+      WHERE customer."tenantId" = ${input.tenantId}
+        AND ${customerLifecycleSql(input.lifecycle)}
+        ${searchSql}
+    )`;
+}
+
+type CustomerStagePageRow = { id: string };
+type CustomerStageAggregateRow = {
+  total: bigint;
+  newCount: bigint;
+  contactedCount: bigint;
+  readyCount: bigint;
+  sentCount: bigint;
+  wonCount: bigint;
+  lostCount: bigint;
+};
+type CustomerLifecycleAggregateRow = {
+  activeCount: bigint;
+  archivedCount: bigint;
+  deletedCount: bigint;
+};
+
 export const customerRoutes: FastifyPluginAsync = async (app) => {
+  async function runSerializableCustomerWrite<T>(
+    operation: (transaction: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    let lastSerializationError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await app.prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+          lastSerializationError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastSerializationError;
+  }
+
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
@@ -293,7 +416,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         createdAt: candidate.createdAt.toISOString(),
         matchReasons,
       };
-    });
+    }).filter((match) => match.matchReasons.length > 0);
     const sortedDuplicateMatches = [...duplicateMatches].sort((left, right) => {
       const leftHasPhone = left.matchReasons.includes("phone") ? 0 : 1;
       const rightHasPhone = right.matchReasons.includes("phone") ? 0 : 1;
@@ -324,23 +447,46 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "Choose a customer record to merge into." });
       }
 
-      const target = await app.prisma.customer.findFirst({
-        where: { id: targetId, ...tenantScope(claims.tenantId) },
-      });
-
-      if (!target) {
-        return reply.code(404).send({ error: "Customer selected for merge was not found." });
+      const selectedCurrentMatch = sortedDuplicateMatches.find((match) => match.id === targetId);
+      if (!selectedCurrentMatch) {
+        return reply.code(409).send({
+          code: "STALE_DUPLICATE_TARGET",
+          error: "The selected record no longer matches this customer. Review the latest duplicate results.",
+          matches: DuplicateMatchSummarySchema.array().parse(sortedDuplicateMatches),
+        });
       }
+
       const actor = await resolveActivityActor(app.prisma, claims);
 
-      const customer = await app.prisma.$transaction(async (tx) => {
+      const mergeOutcome = await runSerializableCustomerWrite(async (tx) => {
+        const target = await tx.customer.findFirst({
+          where: { id: targetId, ...tenantScope(claims.tenantId) },
+        });
+        if (!target) return { kind: "not_found" as const };
+
+        const targetEmail = target.email?.trim().toLowerCase() ?? null;
+        const stillMatchesPhone = phoneNumbersEquivalent(target.phone, normalizedPhone);
+        const stillMatchesEmail = Boolean(normalizedEmail && targetEmail === normalizedEmail);
+        if (!stillMatchesPhone && !stillMatchesEmail) {
+          return { kind: "stale" as const };
+        }
+        if (
+          !stillMatchesPhone ||
+          (targetEmail && normalizedEmail && targetEmail !== normalizedEmail)
+        ) {
+          return { kind: "contact_conflict" as const };
+        }
+
+        const wasInactive = retainedCustomerWasInactive(target);
         const mergedName = payload.fullName.trim() || target.fullName;
-        const mergedEmail = normalizedEmail || target.email;
+        const mergedEmail = targetEmail || normalizedEmail;
         const mergedNotes = payload.notes?.trim() ? payload.notes.trim() : target.notes;
         const mergedCustomer = await tx.customer.update({
-          where: { id: target.id },
+          where: { id_tenantId: { id: target.id, tenantId: claims.tenantId } },
           data: {
             fullName: mergedName,
+            phone: normalizeCustomerPhone(target.phone),
+            phoneDigits: normalizePhoneSearchDigits(target.phone),
             email: mergedEmail,
             notes: mergedNotes,
             ...(payload.followUpStatus
@@ -381,13 +527,29 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         }
         await tx.customerActivityEvent.createMany({ data: activityEvents });
 
-        return mergedCustomer;
+        return { kind: "merged" as const, customer: mergedCustomer, restored: wasInactive };
       });
 
+      if (mergeOutcome.kind === "not_found") {
+        return reply.code(404).send({ error: "Customer selected for merge was not found." });
+      }
+      if (mergeOutcome.kind === "stale") {
+        return reply.code(409).send({
+          code: "STALE_DUPLICATE_TARGET",
+          error: "The selected record changed and no longer matches this customer. Review duplicates again.",
+        });
+      }
+      if (mergeOutcome.kind === "contact_conflict") {
+        return reply.code(409).send({
+          code: "MERGE_CONTACT_CONFLICT",
+          error: "Merge stopped because both records contain different contact details. Use the existing record or save this customer separately.",
+        });
+      }
+
       return reply.send({
-        customer: formatCustomerPhoneResponse(customer),
+        customer: formatCustomerPhoneResponse(mergeOutcome.customer),
         merged: true,
-        restored: retainedCustomerWasInactive(target),
+        restored: mergeOutcome.restored,
       });
     }
 
@@ -395,6 +557,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       const targetId = payload.duplicateCustomerId ?? sortedDuplicateMatches[0]?.id;
       if (!targetId) {
         return reply.code(400).send({ error: "Choose a customer record to continue with." });
+      }
+
+      const selectedCurrentMatch = sortedDuplicateMatches.find((match) => match.id === targetId);
+      if (!selectedCurrentMatch) {
+        return reply.code(409).send({
+          code: "STALE_DUPLICATE_TARGET",
+          error: "The selected record no longer matches this customer. Review the latest duplicate results.",
+          matches: DuplicateMatchSummarySchema.array().parse(sortedDuplicateMatches),
+        });
       }
 
       const existingCustomer = await app.prisma.customer.findFirst({
@@ -498,41 +669,155 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const query = ListCustomersQuerySchema.parse(request.query);
     const searchTerm = query.search?.trim();
     const normalizedSearchDigits = normalizePhoneSearchDigits(searchTerm);
-    const phoneSearchMatchIds =
-      searchTerm && normalizedSearchDigits && normalizedSearchDigits.length >= 2
-        ? await loadPhoneSearchMatchIds(app.prisma, claims.tenantId, normalizedSearchDigits)
+    const stageScopeSql = customerStageScopeSql({
+      tenantId: claims.tenantId,
+      lifecycle: query.lifecycle,
+      searchTerm,
+      normalizedSearchDigits,
+    });
+    const lifecycleSearchSql = customerSearchSql({
+      tenantId: claims.tenantId,
+      searchTerm,
+      normalizedSearchDigits,
+    });
+    const selectedStageWhere = query.stage
+      ? Prisma.sql`WHERE stage = ${query.stage}`
+      : Prisma.empty;
+    const selectedStageAggregateFilter = query.stage
+      ? Prisma.sql`stage = ${query.stage}`
+      : Prisma.sql`TRUE`;
+
+    const listResult = await app.prisma.$transaction(async (tx) => {
+      const pageRows = await tx.$queryRaw<CustomerStagePageRow[]>(Prisma.sql`
+        ${stageScopeSql}
+        SELECT id
+        FROM scoped_customers
+        ${selectedStageWhere}
+        ORDER BY "updatedAt" DESC, id DESC
+        LIMIT ${query.limit}
+        OFFSET ${query.offset}
+      `);
+      const aggregateRows = await tx.$queryRaw<CustomerStageAggregateRow[]>(Prisma.sql`
+        ${stageScopeSql}
+        SELECT
+          COUNT(*) FILTER (WHERE ${selectedStageAggregateFilter})::bigint AS "total",
+          COUNT(*) FILTER (WHERE stage = 'NEW')::bigint AS "newCount",
+          COUNT(*) FILTER (WHERE stage = 'CONTACTED')::bigint AS "contactedCount",
+          COUNT(*) FILTER (WHERE stage = 'READY')::bigint AS "readyCount",
+          COUNT(*) FILTER (WHERE stage = 'SENT')::bigint AS "sentCount",
+          COUNT(*) FILTER (WHERE stage = 'WON')::bigint AS "wonCount",
+          COUNT(*) FILTER (WHERE stage = 'LOST')::bigint AS "lostCount"
+        FROM scoped_customers
+      `);
+      const lifecycleAggregateRows = await tx.$queryRaw<CustomerLifecycleAggregateRow[]>(Prisma.sql`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE customer."archivedAtUtc" IS NULL AND customer."deletedAtUtc" IS NULL
+          )::bigint AS "activeCount",
+          COUNT(*) FILTER (
+            WHERE customer."archivedAtUtc" IS NOT NULL AND customer."deletedAtUtc" IS NULL
+          )::bigint AS "archivedCount",
+          COUNT(*) FILTER (
+            WHERE customer."deletedAtUtc" IS NOT NULL
+          )::bigint AS "deletedCount"
+        FROM "Customer" customer
+        WHERE customer."tenantId" = ${claims.tenantId}
+          ${lifecycleSearchSql}
+      `);
+      const lifecycleAggregates = lifecycleAggregateRows[0] ?? {
+        activeCount: 0n,
+        archivedCount: 0n,
+        deletedCount: 0n,
+      };
+      const pageIds = pageRows.map((row) => row.id);
+      const customerRecords = pageIds.length
+        ? await tx.customer.findMany({
+          where: {
+            id: { in: pageIds },
+            ...tenantScope(claims.tenantId),
+          },
+          include: {
+            _count: {
+              select: {
+                quotes: { where: tenantActiveQuoteScope(claims.tenantId) },
+              },
+            },
+            quotes: {
+              where: tenantActiveQuoteScope(claims.tenantId),
+              orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+              take: 1,
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                jobStatus: true,
+                totalAmount: true,
+                updatedAt: true,
+                archivedAtUtc: true,
+                deletedAtUtc: true,
+              },
+            },
+          },
+        })
         : [];
 
-    const where: Prisma.CustomerWhereInput = {
-      ...tenantActiveCustomerScope(claims.tenantId),
-      ...(searchTerm
-        ? {
-            OR: [
-              { fullName: { contains: searchTerm, mode: "insensitive" } },
-              { email: { contains: searchTerm, mode: "insensitive" } },
-              { phone: { contains: searchTerm, mode: "insensitive" } },
-              ...(phoneSearchMatchIds.length ? [{ id: { in: phoneSearchMatchIds } }] : []),
-            ],
-          }
-        : {}),
-    };
+      return {
+        pageIds,
+        customerRecords,
+        aggregates: aggregateRows[0] ?? {
+          total: 0n,
+          newCount: 0n,
+          contactedCount: 0n,
+          readyCount: 0n,
+          sentCount: 0n,
+          wonCount: 0n,
+          lostCount: 0n,
+        },
+        lifecycleCounts: lifecycleAggregates,
+      };
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      timeout: 10_000,
+    });
 
-    const [customers, total] = await app.prisma.$transaction([
-      app.prisma.customer.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take: query.limit,
-        skip: query.offset,
-      }),
-      app.prisma.customer.count({ where }),
-    ]);
+    const { pageIds, customerRecords, aggregates } = listResult;
+    const { activeCount, archivedCount, deletedCount } = listResult.lifecycleCounts;
+    const total = Number(aggregates.total);
+    const stageCounts: Record<z.infer<typeof CustomerStageSchema>, number> = {
+      NEW: Number(aggregates.newCount),
+      CONTACTED: Number(aggregates.contactedCount),
+      READY: Number(aggregates.readyCount),
+      SENT: Number(aggregates.sentCount),
+      WON: Number(aggregates.wonCount),
+      LOST: Number(aggregates.lostCount),
+    };
+    const customerById = new Map(customerRecords.map((customer) => [customer.id, customer]));
+    const customers = pageIds.flatMap((id) => {
+      const customer = customerById.get(id);
+      return customer ? [customer] : [];
+    });
 
     return {
-      customers: customers.map((customer) => formatCustomerPhoneResponse(customer)),
+      customers: customers.map(({ quotes, _count, ...customer }) => ({
+        ...formatCustomerPhoneResponse(customer),
+        summary: {
+          quoteCount: _count.quotes,
+          latestQuote: quotes[0] ?? null,
+          stage: deriveCustomerStage(customer.followUpStatus, quotes[0]?.status),
+        },
+      })),
       pagination: {
         limit: query.limit,
         offset: query.offset,
         total,
+      },
+      summary: {
+        lifecycleCounts: {
+          active: Number(activeCount),
+          archived: Number(archivedCount),
+          deleted: Number(deletedCount),
+        },
+        stageCounts,
       },
     };
   });
@@ -544,7 +829,23 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
-        ...tenantActiveCustomerScope(claims.tenantId),
+        ...tenantScope(claims.tenantId),
+      },
+      include: {
+        quotes: {
+          where: tenantActiveQuoteScope(claims.tenantId),
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            jobStatus: true,
+            totalAmount: true,
+            updatedAt: true,
+            archivedAtUtc: true,
+            deletedAtUtc: true,
+          },
+        },
       },
     });
 
@@ -552,7 +853,18 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    return { customer: formatCustomerPhoneResponse(customer) };
+    const { quotes, ...customerRecord } = customer;
+    return {
+      customer: {
+        ...formatCustomerPhoneResponse(customerRecord),
+        summary: {
+          quoteCount: quotes.length,
+          latestQuote: quotes[0] ?? null,
+          stage: deriveCustomerStage(customerRecord.followUpStatus, quotes[0]?.status),
+        },
+      },
+      quotes,
+    };
   });
 
   app.get("/customers/:customerId/activity", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -563,7 +875,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
-        ...tenantActiveCustomerScope(claims.tenantId),
+        ...tenantScope(claims.tenantId),
       },
       select: { id: true, fullName: true },
     });
@@ -572,7 +884,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    const take = Math.min(query.limit + query.offset + 10, 120);
+    const take = query.limit + query.offset;
 
     const [customerEvents, revisions, outboundEvents, customerEventCount, revisionCount, outboundCount] = await Promise.all([
       app.prisma.customerActivityEvent.findMany({
@@ -606,6 +918,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             select: {
               id: true,
               title: true,
+              archivedAtUtc: true,
+              deletedAtUtc: true,
             },
           },
         },
@@ -632,6 +946,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             select: {
               id: true,
               title: true,
+              archivedAtUtc: true,
+              deletedAtUtc: true,
             },
           },
         },
@@ -682,7 +998,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         actorUserId: revision.actorUserId,
         actorEmail: revision.actorEmail,
         actorName: revision.actorName,
-        quoteId: revision.quote.id,
+        quoteId: revision.quote.archivedAtUtc || revision.quote.deletedAtUtc ? null : revision.quote.id,
         quoteTitle: revision.quote.title,
         version: revision.version,
         channel: null,
@@ -699,7 +1015,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         actorUserId: event.actorUserId,
         actorEmail: event.actorEmail,
         actorName: event.actorName,
-        quoteId: event.quote.id,
+        quoteId: event.quote.archivedAtUtc || event.quote.deletedAtUtc ? null : event.quote.id,
         quoteTitle: event.quote.title,
         version: null,
         channel: event.channel,
@@ -847,6 +1163,52 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return { customer: formatCustomerPhoneResponse(customer) };
+  });
+
+  app.post("/customers/:customerId/restore", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const { customerId } = CustomerParamsSchema.parse(request.params);
+    const actor = await resolveActivityActor(app.prisma, claims);
+
+    const restored = await app.prisma.$transaction(async (tx) => {
+      const existing = await tx.customer.findFirst({
+        where: {
+          id: customerId,
+          ...tenantScope(claims.tenantId),
+        },
+      });
+
+      if (!existing) return null;
+      if (!retainedCustomerWasInactive(existing)) return existing;
+
+      const customer = await tx.customer.update({
+        where: { id_tenantId: { id: existing.id, tenantId: claims.tenantId } },
+        data: {
+          archivedAtUtc: null,
+          deletedAtUtc: null,
+        },
+      });
+
+      await createCustomerActivityEvent(tx, {
+        tenantId: claims.tenantId,
+        customerId: customer.id,
+        actor,
+        eventType: "RESTORED",
+        title: "Customer restored",
+        detail: "Customer was restored to the active workspace. Retained quotes were not restored automatically.",
+      });
+
+      return customer;
+    });
+
+    if (!restored) {
+      return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
+
+    return {
+      customer: formatCustomerPhoneResponse(restored),
+      restoredQuoteCount: 0,
+    };
   });
 
   app.post("/customers/:customerId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {

@@ -108,6 +108,36 @@ const EnvSchema = z.object({
     });
   }
 
+  const requiredPaidLaunchValues = [
+    ["STRIPE_SECRET_KEY", value.STRIPE_SECRET_KEY, /^(?:sk|rk)_(?:test|live)_/],
+    ["STRIPE_WEBHOOK_SECRET", value.STRIPE_WEBHOOK_SECRET, /^whsec_/],
+    ["STRIPE_PRICE_ID_STARTER", value.STRIPE_PRICE_ID_STARTER, /^price_/],
+    ["RESEND_API_KEY", value.RESEND_API_KEY, /\S/],
+    ["PASSWORD_RESET_EMAIL_FROM", value.PASSWORD_RESET_EMAIL_FROM, /\S/],
+  ] as const;
+  for (const [key, configuredValue, expectedPattern] of requiredPaidLaunchValues) {
+    if (!configuredValue.trim() || !expectedPattern.test(configuredValue.trim())) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} must be configured for a paid production launch.`,
+      });
+    }
+  }
+
+  const configuredPriceIds = [
+    value.STRIPE_PRICE_ID_STARTER,
+    value.STRIPE_PRICE_ID_PROFESSIONAL,
+    value.STRIPE_PRICE_ID_ENTERPRISE,
+  ].filter(Boolean);
+  if (new Set(configuredPriceIds).size !== configuredPriceIds.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["STRIPE_PRICE_ID_STARTER"],
+      message: "Configured Stripe plan price ids must be unique.",
+    });
+  }
+
   if (value.ENABLE_TWILIO_SMS) {
     ctx.addIssue({
       code: "custom",

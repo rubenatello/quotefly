@@ -316,7 +316,6 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
       await api.onboarding.saveSetup({
         primaryTrade: trade,
-        generateLogoIfMissing: true,
         chargeBySquareFoot,
         sqFtUnitCost: nextSqFtCost,
         sqFtUnitPrice: nextSqFtPrice,
