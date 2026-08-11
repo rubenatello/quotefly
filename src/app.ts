@@ -21,9 +21,11 @@ import { authRoutes } from "./routes/auth";
 import { brandingRoutes } from "./routes/branding";
 import { billingRoutes } from "./routes/billing";
 import { onboardingRoutes } from "./routes/onboarding";
+import { productRoutes } from "./routes/products";
 import { orgUserRoutes } from "./routes/org-users";
 import { quickBooksRoutes } from "./routes/quickbooks";
 import { internalAdminRoutes } from "./routes/internal-admin";
+import { feedbackRoutes } from "./routes/feedback";
 import { swaggerPlugin } from "./plugins/swagger";
 
 type CorsOriginCallback = (error: Error | null, origin: boolean) => void;
@@ -61,6 +63,7 @@ function buildCorsOrigin(): CorsOriginFunction {
 const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
   "/v1/customers",
   "/v1/quotes",
+  "/v1/products",
   "/v1/onboarding",
   "/v1/tenants",
   "/v1/org",
@@ -267,11 +270,13 @@ export function buildServer() {
 
   app.register(healthRoutes, { prefix: "/v1" });
   app.register(authRoutes, { prefix: "/v1" });
+  app.register(feedbackRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
   app.register(billingRoutes, { prefix: "/v1" });
   app.register(onboardingRoutes, { prefix: "/v1" });
+  app.register(productRoutes, { prefix: "/v1" });
   app.register(orgUserRoutes, { prefix: "/v1" });
   app.register(quickBooksRoutes, { prefix: "/v1" });
   app.register(internalAdminRoutes, { prefix: "/v1" });

@@ -37,9 +37,11 @@ export const QUOTE_TEMPLATE_OPTIONS: QuoteTemplateOption[] = [
 ];
 
 export function normalizeQuoteTemplateId(templateId?: string | null): StandardQuoteTemplateId {
-  if (templateId === "modern") return "modern";
   if (templateId === "minimal") return "minimal";
-  return "professional";
+  if (templateId === "professional" || templateId === "bold" || templateId === "classic") {
+    return "professional";
+  }
+  return "modern";
 }
 
 export function getQuoteTemplateOption(templateId?: string | null): QuoteTemplateOption {

@@ -267,7 +267,7 @@ export type QuoteOutboundChannel = "EMAIL_APP" | "SMS_APP" | "COPY" | "NATIVE_SH
 export type LeadFollowUpStatus = "NEEDS_FOLLOW_UP" | "FOLLOWED_UP" | "WON" | "LOST";
 
 export type ServiceType = "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION";
-export type BrandingTemplateId = "modern" | "professional" | "bold" | "minimal" | "classic";
+export type BrandingTemplateId = "modern" | "professional" | "minimal";
 export type BrandingLogoPosition = "left" | "center" | "right";
 export type BrandingComponentColors = {
   headerBgColor?: string;
@@ -309,6 +309,20 @@ export type TenantBranding = {
 
 type DecimalLike = number | string;
 
+export type CustomerLifecycle = "active" | "archived" | "deleted";
+export type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
+
+export type CustomerQuoteSummary = {
+  id: string;
+  title: string;
+  status: QuoteStatus;
+  jobStatus: QuoteJobStatus;
+  totalAmount: DecimalLike;
+  updatedAt: string;
+  archivedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
+};
+
 export type Customer = {
   id: string;
   tenantId: string;
@@ -322,6 +336,11 @@ export type Customer = {
   deletedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
+  summary?: {
+    quoteCount: number;
+    latestQuote: CustomerQuoteSummary | null;
+    stage: CustomerStage;
+  };
 };
 
 export type CustomerDuplicateMatch = {
@@ -410,43 +429,6 @@ export type Quote = {
   }>;
 };
 
-export type QuoteRevisionSnapshot = {
-  quote: {
-    id: string;
-    title: string;
-    serviceType: ServiceType;
-    status: QuoteStatus;
-    jobStatus?: QuoteJobStatus;
-    afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
-    scopeText: string;
-    internalCostSubtotal: number;
-    customerPriceSubtotal: number;
-    taxAmount: number;
-    totalAmount: number;
-    sentAtUtc?: string | null;
-    closedAtUtc?: string | null;
-    jobCompletedAtUtc?: string | null;
-    afterSaleFollowUpDueAtUtc?: string | null;
-    afterSaleFollowUpCompletedAtUtc?: string | null;
-  };
-  customer: {
-    id: string;
-    fullName: string;
-    email?: string | null;
-    phone: string;
-  };
-  lineItems: Array<{
-    id: string;
-    description: string;
-    sectionType: "INCLUDED" | "ALTERNATE";
-    sectionLabel?: string | null;
-    quantity: number;
-    unitCost: number;
-    unitPrice: number;
-    lineTotal: number;
-  }>;
-};
-
 export type QuoteRevision = {
   id: string;
   quoteId: string;
@@ -462,7 +444,6 @@ export type QuoteRevision = {
   customerPriceSubtotal: DecimalLike;
   totalAmount: DecimalLike;
   createdAt: string;
-  snapshot: QuoteRevisionSnapshot;
   quote: {
     id: string;
     title: string;
@@ -684,6 +665,18 @@ export type WorkPreset = {
   updatedAt: string;
 };
 
+export type ProductInput = {
+  serviceType: ServiceType;
+  name: string;
+  description?: string | null;
+  category: WorkPresetCategory;
+  unitType: WorkPresetUnitType;
+  defaultQuantity: number;
+  unitCost: number;
+  unitPrice: number;
+  isDefault?: boolean;
+};
+
 export type OrgUserRole = "owner" | "admin" | "member";
 
 export type OrganizationUser = {
@@ -822,7 +815,28 @@ export type QuickBooksPushInvoiceResult = {
   createdItems: number;
 };
 
+export type FeatureRequestInput = {
+  requestId: string;
+  name: string;
+  email: string;
+  company?: string;
+  category: "QUOTING" | "CUSTOMERS" | "MOBILE" | "REPORTING" | "INTEGRATIONS" | "OTHER";
+  priority: "NICE_TO_HAVE" | "IMPORTANT" | "BLOCKING";
+  title: string;
+  details: string;
+  source: "PUBLIC" | "WORKSPACE";
+  website?: string;
+};
+
 export const api = {
+  feedback: {
+    submitFeatureRequest: (body: FeatureRequestInput) =>
+      request<{ message: string }>("/v1/feedback/feature-requests", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
   auth: {
     signup: (body: {
       email: string;
@@ -831,7 +845,6 @@ export const api = {
       companyName: string;
       primaryTrade: ServiceType;
       logoUrl?: string;
-      generateLogoIfMissing?: boolean;
       acceptedLegalTerms: true;
       termsVersion: string;
       privacyPolicyVersion: string;
@@ -934,6 +947,9 @@ export const api = {
           timezone: string;
         };
         branding: TenantBranding | null;
+        permissions: {
+          canEditBusinessName: boolean;
+        };
       }>(
         `/v1/tenants/${tenantId}/branding`,
       ),
@@ -941,6 +957,7 @@ export const api = {
     save: (
       tenantId: string,
       body: {
+        businessName?: string;
         logoUrl?: string | null;
         logoPosition: BrandingLogoPosition;
         hideQuoteFlyAttribution?: boolean;
@@ -1009,7 +1026,6 @@ export const api = {
       primaryTrade: ServiceType;
       logoUrl?: string;
       primaryColor?: string;
-      generateLogoIfMissing?: boolean;
       chargeBySquareFoot?: boolean;
       sqFtUnitCost?: number;
       sqFtUnitPrice?: number;
@@ -1050,6 +1066,32 @@ export const api = {
       ),
   },
 
+  products: {
+    list: (serviceType?: ServiceType) =>
+      request<{
+        primaryTrade?: ServiceType | null;
+        supportedTrades: ServiceType[];
+        products: WorkPreset[];
+      }>(`/v1/products${toQueryString({ serviceType })}`),
+
+    create: (body: ProductInput) =>
+      request<{ message: string; product: WorkPreset }>(`/v1/products`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    update: (productId: string, body: Partial<ProductInput>) =>
+      request<{ message: string; product: WorkPreset }>(`/v1/products/${productId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+    archive: (productId: string) =>
+      request<{ message: string }>(`/v1/products/${productId}`, {
+        method: "DELETE",
+      }),
+  },
+
   org: {
     users: {
       list: () =>
@@ -1088,14 +1130,32 @@ export const api = {
   },
 
   customers: {
-    list: (query?: { limit?: number; offset?: number; search?: string }) =>
-      request<{ customers: Customer[]; pagination: Pagination }>(
+    list: (query?: {
+      limit?: number;
+      offset?: number;
+      search?: string;
+      lifecycle?: CustomerLifecycle;
+      stage?: CustomerStage;
+    }) =>
+      request<{
+        customers: Customer[];
+        pagination: Pagination;
+        summary: {
+          lifecycleCounts: Record<CustomerLifecycle, number>;
+          stageCounts: Record<CustomerStage, number>;
+        };
+      }>(
         `/v1/customers${toQueryString({
           limit: query?.limit,
           offset: query?.offset,
           search: query?.search,
+          lifecycle: query?.lifecycle,
+          stage: query?.stage,
         })}`,
       ),
+
+    get: (customerId: string) =>
+      request<{ customer: Customer; quotes: CustomerQuoteSummary[] }>(`/v1/customers/${customerId}`),
 
     create: (body: {
       fullName: string;
@@ -1133,6 +1193,11 @@ export const api = {
 
     archive: (customerId: string) =>
       request<void>(`/v1/customers/${customerId}/archive`, {
+        method: "POST",
+      }),
+
+    restore: (customerId: string) =>
+      request<{ customer: Customer; restoredQuoteCount: number }>(`/v1/customers/${customerId}/restore`, {
         method: "POST",
       }),
 

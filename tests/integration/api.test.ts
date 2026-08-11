@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createHmac } from "crypto";
+import { readFile } from "node:fs/promises";
 import Stripe from "stripe";
 import twilio from "twilio";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -20,6 +21,7 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
 
 const stripeProviderMocks = vi.hoisted(() => ({
   retrieveSubscription: vi.fn(),
+  retrieveCheckoutSession: vi.fn(),
   createCustomer: vi.fn(),
   createCheckoutSession: vi.fn(),
 }));
@@ -36,6 +38,7 @@ vi.mock("stripe", async () => {
     constructor(...args: ConstructorParameters<typeof actual.default>) {
       super(...args);
       this.subscriptions.retrieve = stripeProviderMocks.retrieveSubscription as typeof this.subscriptions.retrieve;
+      this.checkout.sessions.retrieve = stripeProviderMocks.retrieveCheckoutSession as typeof this.checkout.sessions.retrieve;
       this.customers.create = stripeProviderMocks.createCustomer as typeof this.customers.create;
       this.checkout.sessions.create = stripeProviderMocks.createCheckoutSession as typeof this.checkout.sessions.create;
     }
@@ -142,7 +145,7 @@ async function signUp(label: string): Promise<AuthSession> {
       generateLogoIfMissing: false,
       acceptedLegalTerms: true,
       termsVersion: "2026-07-30",
-      privacyPolicyVersion: "2026-07-30",
+      privacyPolicyVersion: "2026-08-10",
     },
   });
 
@@ -199,6 +202,7 @@ async function injectSignedStripeEvent(event: Record<string, unknown>) {
 describe("QuoteFly API integration", () => {
   beforeEach(() => {
     stripeProviderMocks.retrieveSubscription.mockReset();
+    stripeProviderMocks.retrieveCheckoutSession.mockReset();
     stripeProviderMocks.createCustomer.mockReset();
     stripeProviderMocks.createCheckoutSession.mockReset();
     transactionalEmailMocks.isConfigured.mockReset().mockReturnValue(true);
@@ -493,6 +497,374 @@ describe("QuoteFly API integration", () => {
     expect(betaCannotUseAlphaCustomer.statusCode).toBe(404);
   });
 
+  test("manages products with tenant isolation and soft archive semantics", async () => {
+    const alpha = await signUp("product-alpha");
+    const beta = await signUp("product-beta");
+
+    const unauthenticatedProducts = await app.inject({
+      method: "GET",
+      url: "/v1/products",
+    });
+    expect(unauthenticatedProducts.statusCode).toBe(401);
+
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(alpha.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: "Seasonal gutter tune-up",
+        description: "Clear debris, flush downspouts, and confirm drainage.",
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 85,
+        unitPrice: 225,
+      },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    const createdProduct = parseJson<{
+      product: { id: string; tenantId: string; name: string; unitPrice: number | string };
+    }>(createResponse).product;
+    expect(createdProduct.tenantId).toBe(alpha.tenant.id);
+    expect(Number(createdProduct.unitPrice)).toBe(225);
+
+    const duplicateResponse = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(alpha.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: "seasonal gutter tune-up",
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 90,
+        unitPrice: 240,
+      },
+    });
+    expect(duplicateResponse.statusCode).toBe(409);
+
+    const alphaProducts = await app.inject({
+      method: "GET",
+      url: "/v1/products?serviceType=ROOFING",
+      headers: authHeaders(alpha.cookie),
+    });
+    expect(alphaProducts.statusCode).toBe(200);
+    expect(
+      parseJson<{ products: Array<{ id: string }> }>(alphaProducts).products.some(
+        (product) => product.id === createdProduct.id,
+      ),
+    ).toBe(true);
+
+    const betaProducts = await app.inject({
+      method: "GET",
+      url: "/v1/products?serviceType=ROOFING",
+      headers: authHeaders(beta.cookie),
+    });
+    expect(betaProducts.statusCode).toBe(200);
+    expect(
+      parseJson<{ products: Array<{ id: string }> }>(betaProducts).products.some(
+        (product) => product.id === createdProduct.id,
+      ),
+    ).toBe(false);
+
+    const betaCannotUpdate = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${createdProduct.id}`,
+      headers: authHeaders(beta.cookie),
+      payload: { unitPrice: 1 },
+    });
+    expect(betaCannotUpdate.statusCode).toBe(404);
+
+    const updateResponse = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${createdProduct.id}`,
+      headers: authHeaders(alpha.cookie),
+      payload: {
+        name: "Seasonal gutter service",
+        unitCost: 95,
+        unitPrice: 250,
+      },
+    });
+    expect(updateResponse.statusCode).toBe(200);
+    const updatedProduct = parseJson<{
+      product: { name: string; unitCost: number | string; unitPrice: number | string };
+    }>(updateResponse).product;
+    expect(updatedProduct.name).toBe("Seasonal gutter service");
+    expect(Number(updatedProduct.unitCost)).toBe(95);
+    expect(Number(updatedProduct.unitPrice)).toBe(250);
+
+    const betaCannotArchive = await app.inject({
+      method: "DELETE",
+      url: `/v1/products/${createdProduct.id}`,
+      headers: authHeaders(beta.cookie),
+    });
+    expect(betaCannotArchive.statusCode).toBe(404);
+
+    const archiveResponse = await app.inject({
+      method: "DELETE",
+      url: `/v1/products/${createdProduct.id}`,
+      headers: authHeaders(alpha.cookie),
+    });
+    expect(archiveResponse.statusCode).toBe(200);
+
+    const archivedProduct = await prisma.workPreset.findFirst({
+      where: { id: createdProduct.id, tenantId: alpha.tenant.id },
+      select: { deletedAtUtc: true },
+    });
+    expect(archivedProduct?.deletedAtUtc).toBeInstanceOf(Date);
+
+    const alphaProductsAfterArchive = await app.inject({
+      method: "GET",
+      url: "/v1/products?serviceType=ROOFING",
+      headers: authHeaders(alpha.cookie),
+    });
+    expect(
+      parseJson<{ products: Array<{ id: string }> }>(alphaProductsAfterArchive).products.some(
+        (product) => product.id === createdProduct.id,
+      ),
+    ).toBe(false);
+
+    const standardProduct = await prisma.workPreset.findFirstOrThrow({
+      where: {
+        tenantId: alpha.tenant.id,
+        catalogKey: { not: null },
+        deletedAtUtc: null,
+      },
+      select: { id: true },
+    });
+    const standardArchiveResponse = await app.inject({
+      method: "DELETE",
+      url: `/v1/products/${standardProduct.id}`,
+      headers: authHeaders(alpha.cookie),
+    });
+    expect(standardArchiveResponse.statusCode).toBe(400);
+    expect(parseJson<{ code: string }>(standardArchiveResponse).code).toBe(
+      "STANDARD_PRODUCT_ARCHIVE_FORBIDDEN",
+    );
+    await expect(
+      prisma.workPreset.findFirstOrThrow({
+        where: { id: standardProduct.id, tenantId: alpha.tenant.id },
+        select: { deletedAtUtc: true },
+      }),
+    ).resolves.toEqual({ deletedAtUtc: null });
+  });
+
+  test("blocks product mutations when workspace billing access is unavailable", async () => {
+    const session = await signUp("product-billing-lock");
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(session.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: "Billing lock fixture",
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 40,
+        unitPrice: 100,
+      },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    const productId = parseJson<{ product: { id: string } }>(createResponse).product.id;
+
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        subscriptionStatus: "inactive",
+        subscriptionPlanCode: null,
+        subscriptionCurrentPeriodEndUtc: null,
+        trialStartsAtUtc: null,
+        trialEndsAtUtc: null,
+      },
+    });
+
+    const productBefore = await prisma.workPreset.findFirstOrThrow({
+      where: { id: productId, tenantId: session.tenant.id },
+      select: { name: true, unitPrice: true, deletedAtUtc: true },
+    });
+    const productCountBefore = await prisma.workPreset.count({
+      where: { tenantId: session.tenant.id, deletedAtUtc: null },
+    });
+
+    const blockedCreate = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(session.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: "Blocked billing product",
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 1,
+        unitPrice: 2,
+      },
+    });
+    const blockedUpdate = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${productId}`,
+      headers: authHeaders(session.cookie),
+      payload: { unitPrice: 1 },
+    });
+    const blockedArchive = await app.inject({
+      method: "DELETE",
+      url: `/v1/products/${productId}`,
+      headers: authHeaders(session.cookie),
+    });
+
+    for (const response of [blockedCreate, blockedUpdate, blockedArchive]) {
+      expect(response.statusCode).toBe(402);
+      expect(parseJson<{ code: string }>(response).code).toBe("BILLING_REQUIRED");
+    }
+
+    await expect(
+      prisma.workPreset.count({ where: { tenantId: session.tenant.id, deletedAtUtc: null } }),
+    ).resolves.toBe(productCountBefore);
+    await expect(
+      prisma.workPreset.findFirstOrThrow({
+        where: { id: productId, tenantId: session.tenant.id },
+        select: { name: true, unitPrice: true, deletedAtUtc: true },
+      }),
+    ).resolves.toEqual(productBefore);
+  });
+
+  test("serializes concurrent product name and catalog-limit decisions", async () => {
+    const session = await signUp("product-concurrency");
+    const duplicatePayload = {
+      serviceType: "ROOFING",
+      name: "Concurrent roof tune-up",
+      category: "SERVICE",
+      unitType: "FLAT",
+      defaultQuantity: 1,
+      unitCost: 50,
+      unitPrice: 125,
+    };
+
+    const duplicateResponses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/products",
+        headers: authHeaders(session.cookie),
+        payload: duplicatePayload,
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/products",
+        headers: authHeaders(session.cookie),
+        payload: duplicatePayload,
+      }),
+    ]);
+    expect(duplicateResponses.map((response) => response.statusCode).sort()).toEqual([201, 409]);
+    await expect(
+      prisma.workPreset.count({
+        where: {
+          tenantId: session.tenant.id,
+          serviceType: "ROOFING",
+          deletedAtUtc: null,
+          name: { equals: duplicatePayload.name, mode: "insensitive" },
+        },
+      }),
+    ).resolves.toBe(1);
+
+    const currentProductCount = await prisma.workPreset.count({
+      where: { tenantId: session.tenant.id, deletedAtUtc: null },
+    });
+    const fillerCount = Math.max(0, 199 - currentProductCount);
+    if (fillerCount > 0) {
+      await prisma.workPreset.createMany({
+        data: Array.from({ length: fillerCount }, (_, index) => ({
+          tenantId: session.tenant.id,
+          serviceType: "ROOFING",
+          category: "SERVICE",
+          unitType: "FLAT",
+          name: `Catalog limit filler ${index}`,
+          defaultQuantity: 1,
+          unitCost: 1,
+          unitPrice: 2,
+          isDefault: true,
+        })),
+      });
+    }
+
+    const limitResponses = await Promise.all(
+      ["Catalog limit final A", "Catalog limit final B"].map((name) =>
+        app.inject({
+          method: "POST",
+          url: "/v1/products",
+          headers: authHeaders(session.cookie),
+          payload: { ...duplicatePayload, name },
+        }),
+      ),
+    );
+    expect(limitResponses.map((response) => response.statusCode).sort()).toEqual([201, 409]);
+    await expect(
+      prisma.workPreset.count({ where: { tenantId: session.tenant.id, deletedAtUtc: null } }),
+    ).resolves.toBe(200);
+
+    const productsToRestore = await prisma.workPreset.findMany({
+      where: {
+        tenantId: session.tenant.id,
+        catalogKey: null,
+        deletedAtUtc: null,
+      },
+      orderBy: { createdAt: "asc" },
+      take: 2,
+    });
+    expect(productsToRestore).toHaveLength(2);
+    await prisma.workPreset.updateMany({
+      where: {
+        tenantId: session.tenant.id,
+        id: { in: productsToRestore.map((product) => product.id) },
+      },
+      data: { deletedAtUtc: new Date() },
+    });
+
+    const refillResponse = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(session.cookie),
+      payload: { ...duplicatePayload, name: "Restoration capacity filler" },
+    });
+    expect(refillResponse.statusCode).toBe(201);
+
+    const restoreResponses = await Promise.all(
+      productsToRestore.map((product) =>
+        app.inject({
+          method: "POST",
+          url: "/v1/products",
+          headers: authHeaders(session.cookie),
+          payload: {
+            serviceType: product.serviceType,
+            name: product.name,
+            description: product.description,
+            category: product.category,
+            unitType: product.unitType,
+            defaultQuantity: Number(product.defaultQuantity),
+            unitCost: Number(product.unitCost),
+            unitPrice: Number(product.unitPrice),
+            isDefault: product.isDefault,
+          },
+        }),
+      ),
+    );
+    expect(restoreResponses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    await expect(
+      prisma.workPreset.count({ where: { tenantId: session.tenant.id, deletedAtUtc: null } }),
+    ).resolves.toBe(200);
+    await expect(
+      prisma.workPreset.count({
+        where: {
+          tenantId: session.tenant.id,
+          id: { in: productsToRestore.map((product) => product.id) },
+          deletedAtUtc: null,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   test("rolls back atomic quote-sheet saves at every later write stage", async () => {
     const alpha = await signUp("atomic-sheet-alpha");
     const beta = await signUp("atomic-sheet-beta");
@@ -655,6 +1027,24 @@ describe("QuoteFly API integration", () => {
 
   test("confirms a customer send atomically and deduplicates retries", async () => {
     const session = await signUp("confirm-send");
+    const logoData = await readFile("web/public/favicon.png");
+    const logoUrl = `data:image/png;base64,${logoData.toString("base64")}`;
+    await prisma.tenantBranding.upsert({
+      where: { tenantId: session.tenant.id },
+      create: {
+        tenantId: session.tenant.id,
+        primaryColor: "#1D4ED8",
+        businessEmail: "original-brand@example.com",
+        hideQuoteFlyAttribution: true,
+        logoUrl,
+      },
+      update: {
+        primaryColor: "#1D4ED8",
+        businessEmail: "original-brand@example.com",
+        hideQuoteFlyAttribution: true,
+        logoUrl,
+      },
+    });
     const customerResponse = await app.inject({
       method: "POST",
       url: "/v1/customers",
@@ -732,6 +1122,132 @@ describe("QuoteFly API integration", () => {
     });
     expect(storedQuote.status).toBe("SENT_TO_CUSTOMER");
     expect(storedQuote.sentAt).not.toBeNull();
+
+    const sentRevision = await prisma.quoteRevision.findFirstOrThrow({
+      where: {
+        tenantId: session.tenant.id,
+        quoteId: quote.id,
+        status: "SENT_TO_CUSTOMER",
+        changedFields: { has: "documentSnapshot" },
+      },
+      select: { id: true, snapshot: true },
+    });
+    const sentSnapshot = sentRevision.snapshot as {
+      document?: {
+        branding?: {
+          primaryColor?: string;
+          businessEmail?: string | null;
+          showQuoteFlyAttribution?: boolean;
+          logoUrl?: string | null;
+          logoAsset?: { id: string; sha256: string };
+        };
+      };
+    };
+    expect(sentSnapshot.document?.branding).toMatchObject({
+      primaryColor: "#1D4ED8",
+      businessEmail: "original-brand@example.com",
+      showQuoteFlyAttribution: false,
+    });
+    expect(sentSnapshot.document?.branding?.logoUrl).toBeUndefined();
+    expect(sentSnapshot.document?.branding?.logoAsset).toMatchObject({
+      id: expect.any(String),
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+
+    const returnToDraft = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: authHeaders(session.cookie),
+      payload: { status: "DRAFT" },
+    });
+    expect(returnToDraft.statusCode).toBe(200);
+
+    const secondConfirmation = await app.inject({
+      method: "POST",
+      url: `/v1/quotes/${quote.id}/confirm-send`,
+      headers: authHeaders(session.cookie),
+      payload: {
+        ...payload,
+        idempotencyKey: `${idempotencyKey}-second`,
+      },
+    });
+    expect(secondConfirmation.statusCode).toBe(200);
+
+    const sentRevisions = await prisma.quoteRevision.findMany({
+      where: {
+        tenantId: session.tenant.id,
+        quoteId: quote.id,
+        status: "SENT_TO_CUSTOMER",
+        changedFields: { has: "documentSnapshot" },
+      },
+      orderBy: { version: "asc" },
+      select: { snapshot: true },
+    });
+    expect(sentRevisions).toHaveLength(2);
+    const sentLogoReferences = sentRevisions.map((revision) => {
+      const snapshot = revision.snapshot as {
+        document?: { branding?: { logoUrl?: string | null; logoAsset?: { id: string; sha256: string } } };
+      };
+      expect(snapshot.document?.branding?.logoUrl).toBeUndefined();
+      return snapshot.document?.branding?.logoAsset;
+    });
+    expect(sentLogoReferences[0]).toEqual(sentLogoReferences[1]);
+    await expect(
+      prisma.tenantBrandAsset.count({ where: { tenantId: session.tenant.id } }),
+    ).resolves.toBe(1);
+
+    const [workspaceHistoryResponse, quoteHistoryResponse] = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: `/v1/quotes/history?quoteId=${quote.id}`,
+        headers: authHeaders(session.cookie),
+      }),
+      app.inject({
+        method: "GET",
+        url: `/v1/quotes/${quote.id}/history`,
+        headers: authHeaders(session.cookie),
+      }),
+    ]);
+    expect(workspaceHistoryResponse.statusCode).toBe(200);
+    expect(quoteHistoryResponse.statusCode).toBe(200);
+    for (const response of [workspaceHistoryResponse, quoteHistoryResponse]) {
+      const history = parseJson<{ revisions: Array<Record<string, unknown>> }>(response);
+      expect(history.revisions.length).toBeGreaterThan(0);
+      for (const revision of history.revisions) {
+        expect(revision).not.toHaveProperty("snapshot");
+      }
+    }
+
+    const originalPdfResponse = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${quote.id}/pdf?download=false`,
+      headers: authHeaders(session.cookie),
+    });
+    expect(originalPdfResponse.statusCode).toBe(200);
+
+    await prisma.tenantBranding.update({
+      where: { tenantId: session.tenant.id },
+      data: {
+        primaryColor: "#B91C1C",
+        businessEmail: "replacement-brand@example.com",
+        logoUrl: null,
+      },
+    });
+
+    const pdfResponse = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${quote.id}/pdf?download=false`,
+      headers: authHeaders(session.cookie),
+    });
+    expect(pdfResponse.statusCode).toBe(200);
+    expect(pdfResponse.headers["content-type"]).toContain("application/pdf");
+    expect(pdfResponse.rawPayload).toEqual(originalPdfResponse.rawPayload);
+
+    const preservedRevision = await prisma.quoteRevision.findUniqueOrThrow({
+      where: { id: sentRevision.id },
+      select: { snapshot: true },
+    });
+    expect(preservedRevision.snapshot).toEqual(sentRevision.snapshot);
   });
 
   test("verifies and deduplicates Stripe billing webhooks", async () => {
@@ -782,9 +1298,17 @@ describe("QuoteFly API integration", () => {
 
     const tenantAfterWebhook = await prisma.tenant.findUniqueOrThrow({
       where: { id: session.tenant.id },
-      select: { subscriptionStatus: true },
+      select: {
+        subscriptionStatus: true,
+        stripeCheckoutSessionId: true,
+        stripeCheckoutSessionExpiresAtUtc: true,
+      },
     });
-    expect(tenantAfterWebhook.subscriptionStatus).toBe("checkout_expired");
+    expect(tenantAfterWebhook).toMatchObject({
+      subscriptionStatus: "trialing",
+      stripeCheckoutSessionId: null,
+      stripeCheckoutSessionExpiresAtUtc: null,
+    });
 
     const duplicateWebhookResponse = await app.inject({
       method: "POST",
@@ -1414,6 +1938,16 @@ describe("QuoteFly API integration", () => {
     });
     expect(entitlements.hasWorkspaceAccess).toBe(false);
     expect(entitlements.billingRequired).toBe(true);
+
+    const activeBasicEntitlements = buildTenantEntitlements({
+      subscriptionStatus: "active",
+      subscriptionPlanCode: "starter",
+      trialStartsAtUtc: null,
+      trialEndsAtUtc: null,
+      subscriptionCurrentPeriodEndUtc: new Date(Date.now() + 86_400_000),
+    });
+    expect(activeBasicEntitlements.features.quoteVersionHistory).toBe(true);
+    expect(activeBasicEntitlements.limits.quoteHistoryDays).toBe(30);
   });
 
   test("rejects reconciliation when Stripe customer or tenant metadata bindings mismatch", () => {
@@ -1514,7 +2048,79 @@ describe("QuoteFly API integration", () => {
     );
   });
 
-  test("refuses duplicate checkout for active subscriptions and live checkout sessions", async () => {
+  test("lets active and expired internal trials start checkout without duplicating a Stripe subscription", async () => {
+    const activeTrial = await signUp("billing-active-internal-trial");
+    const activeTrialTenant = await prisma.tenant.findUniqueOrThrow({
+      where: { id: activeTrial.tenant.id },
+      select: { trialEndsAtUtc: true },
+    });
+    stripeProviderMocks.createCustomer.mockResolvedValueOnce({ id: `cus_internal_active_${Date.now()}` });
+    stripeProviderMocks.createCheckoutSession.mockImplementationOnce(async (params: Stripe.Checkout.SessionCreateParams) => ({
+      id: `cs_internal_active_${Date.now()}`,
+      url: "https://checkout.stripe.test/internal-active",
+      expires_at: params.expires_at,
+    }));
+
+    const activeResponse = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(activeTrial.cookie),
+      payload: { planCode: "starter" },
+    });
+    expect(activeResponse.statusCode).toBe(200);
+    const activeParams = stripeProviderMocks.createCheckoutSession.mock.calls[0]?.[0] as Stripe.Checkout.SessionCreateParams;
+    expect(activeParams.success_url).toContain("/app/settings?billing=success&session_id={CHECKOUT_SESSION_ID}");
+    expect(activeParams.cancel_url).toContain("/app/settings?billing=cancel");
+    expect(activeParams.subscription_data?.trial_end).toBeGreaterThanOrEqual(
+      Math.ceil(activeTrialTenant.trialEndsAtUtc!.getTime() / 1000),
+    );
+    expect(activeParams.subscription_data?.trial_end).toBeGreaterThan(
+      Math.floor(Date.now() / 1000) + 48 * 60 * 60,
+    );
+
+    stripeProviderMocks.createCustomer.mockReset();
+    stripeProviderMocks.createCheckoutSession.mockReset();
+    const expiredTrial = await signUp("billing-expired-internal-trial");
+    await prisma.tenant.update({
+      where: { id: expiredTrial.tenant.id },
+      data: { trialEndsAtUtc: new Date(Date.now() - 60_000) },
+    });
+    stripeProviderMocks.createCustomer.mockResolvedValueOnce({ id: `cus_internal_expired_${Date.now()}` });
+    stripeProviderMocks.createCheckoutSession.mockImplementationOnce(async (params: Stripe.Checkout.SessionCreateParams) => ({
+      id: `cs_internal_expired_${Date.now()}`,
+      url: "https://checkout.stripe.test/internal-expired",
+      expires_at: params.expires_at,
+    }));
+
+    const expiredResponse = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(expiredTrial.cookie),
+      payload: { planCode: "starter" },
+    });
+    expect(expiredResponse.statusCode).toBe(200);
+    const expiredParams = stripeProviderMocks.createCheckoutSession.mock.calls[0]?.[0] as Stripe.Checkout.SessionCreateParams;
+    expect(expiredParams.subscription_data?.trial_end).toBeUndefined();
+
+    const stripeTrial = await signUp("billing-real-stripe-trial");
+    await prisma.tenant.update({
+      where: { id: stripeTrial.tenant.id },
+      data: {
+        stripeCustomerId: `cus_real_trial_${Date.now()}`,
+        stripeSubscriptionId: `sub_real_trial_${Date.now()}`,
+        subscriptionStatus: "trialing",
+      },
+    });
+    const stripeTrialResponse = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(stripeTrial.cookie),
+      payload: { planCode: "starter" },
+    });
+    expect(stripeTrialResponse.statusCode).toBe(409);
+  });
+
+  test("refuses duplicate paid subscriptions and resumes the canonical open checkout", async () => {
     const active = await signUp("billing-active-checkout");
     await prisma.tenant.update({
       where: { id: active.tenant.id },
@@ -1539,13 +2145,26 @@ describe("QuoteFly API integration", () => {
         stripeCheckoutSessionExpiresAtUtc: new Date(Date.now() + 60_000),
       },
     });
+    stripeProviderMocks.retrieveCheckoutSession.mockResolvedValueOnce({
+      id: (await prisma.tenant.findUniqueOrThrow({
+        where: { id: pending.tenant.id },
+        select: { stripeCheckoutSessionId: true },
+      })).stripeCheckoutSessionId,
+      status: "open",
+      url: "https://checkout.stripe.test/resume",
+    });
     const pendingResponse = await app.inject({
       method: "POST",
       url: "/v1/billing/checkout-session",
       headers: authHeaders(pending.cookie),
       payload: { planCode: "starter" },
     });
-    expect(pendingResponse.statusCode).toBe(409);
+    expect(pendingResponse.statusCode).toBe(200);
+    expect(parseJson<{ checkoutUrl: string; reused: boolean }>(pendingResponse)).toMatchObject({
+      checkoutUrl: "https://checkout.stripe.test/resume",
+      reused: true,
+    });
+    expect(stripeProviderMocks.createCheckoutSession).not.toHaveBeenCalled();
   });
 
   test("reuses the durable checkout generation after a post-provider persistence failure", async () => {

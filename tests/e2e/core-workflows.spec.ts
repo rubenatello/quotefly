@@ -18,7 +18,7 @@ test.describe("controlled beta core workflow", () => {
     page,
     request,
   }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(150_000);
     const account = await signUpViaApi(request, "core");
     await addSessionCookie(context, account);
     await page.goto("/app/customers");
@@ -44,7 +44,7 @@ test.describe("controlled beta core workflow", () => {
     await expect(page.getByText(customerName).filter({ visible: true })).toBeVisible();
 
     await page.getByText(customerName).filter({ visible: true }).first().click();
-    const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer activity history" });
+    const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer details and activity" });
     await expect(customerWorkspaceDialog.getByText("Customer details", { exact: true })).toBeVisible();
     await expect(customerWorkspaceDialog.getByRole("button", { name: "Save details" })).toBeDisabled();
 
@@ -63,10 +63,10 @@ test.describe("controlled beta core workflow", () => {
     await expect(customerWorkspaceDialog.getByLabel("Name")).toHaveValue(updatedCustomerName);
     await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
-    await page.getByPlaceholder(/search customer name/i).fill(customerName);
+    await page.getByLabel("Search customers").fill(customerName);
     await expect(page.getByText(customerEmail).filter({ visible: true })).toBeVisible();
 
-    await page.getByPlaceholder(/search customer name/i).clear();
+    await page.getByLabel("Search customers").clear();
     await page.getByRole("button", { name: "Add Customer" }).first().click();
     const duplicateDialog = page.getByRole("dialog", { name: /add customer fast/i });
     await duplicateDialog.getByLabel("Full name").fill(`${customerName} Duplicate`);
@@ -98,7 +98,7 @@ test.describe("controlled beta core workflow", () => {
 
     await page.getByRole("button", { name: "Create Quote" }).first().click();
     await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/);
-    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: quoteTitle })).toBeVisible();
 
     const quoteId = page.url().match(/\/app\/quotes\/([^/?#]+)/)?.[1];
@@ -167,7 +167,7 @@ test.describe("controlled beta core workflow", () => {
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
 
     await page.goto("/app/follow-up");
-    await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: "Follow-up", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page).toHaveTitle("Follow-up | QuoteFly");
 

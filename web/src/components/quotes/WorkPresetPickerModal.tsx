@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { PackageSearch, Search } from "lucide-react";
 import { money } from "../dashboard/DashboardContext";
 import { Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader } from "../ui";
 import type { WorkPreset } from "../../lib/api";
@@ -23,6 +23,7 @@ export function WorkPresetPickerModal({
   onPrimaryAction,
   secondaryActionLabel,
   onSecondaryAction,
+  onManageProducts,
 }: {
   open: boolean;
   onClose: () => void;
@@ -35,36 +36,73 @@ export function WorkPresetPickerModal({
   onPrimaryAction: () => void;
   secondaryActionLabel?: string;
   onSecondaryAction?: () => void;
+  onManageProducts?: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"ALL" | "STANDARD" | "CUSTOM">("ALL");
 
   const filteredPresets = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return presets;
-    return presets.filter((preset) =>
-      `${preset.name} ${preset.description ?? ""}`.toLowerCase().includes(normalized),
-    );
-  }, [presets, query]);
+    return presets.filter((preset) => {
+      if (sourceFilter === "STANDARD" && !preset.catalogKey) return false;
+      if (sourceFilter === "CUSTOM" && preset.catalogKey) return false;
+      if (!normalized) return true;
+      return `${preset.name} ${preset.description ?? ""}`.toLowerCase().includes(normalized);
+    });
+  }, [presets, query, sourceFilter]);
 
-  const selectedPreset = filteredPresets.find((preset) => preset.id === selectedPresetId)
-    ?? presets.find((preset) => preset.id === selectedPresetId)
-    ?? null;
+  const selectedPreset = filteredPresets.find((preset) => preset.id === selectedPresetId) ?? null;
+
+  function closePicker() {
+    setQuery("");
+    setSourceFilter("ALL");
+    onClose();
+  }
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" ariaLabel="Saved jobs">
+    <Modal open={open} onClose={closePicker} size="lg" ariaLabel="Products and services">
       <ModalHeader
-        title="Saved jobs"
-        description="Pick a standard or saved job, set quantity, then load it into the quote."
-        onClose={onClose}
+        title="Products & services"
+        description="Choose a standard or custom catalog item, set quantity, then add it to the quote."
+        onClose={closePicker}
       />
       <ModalBody className="space-y-4 bg-slate-50">
         <Input
-          label="Search jobs"
+          label="Search products"
           icon={<Search size={14} />}
-          placeholder="Search saved jobs"
+          placeholder="Search products and descriptions"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1" aria-label="Product source filter">
+            {([
+              { value: "ALL", label: "All" },
+              { value: "STANDARD", label: "Standard" },
+              { value: "CUSTOM", label: "Custom" },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={sourceFilter === option.value}
+                onClick={() => setSourceFilter(option.value)}
+                className={`min-h-[40px] rounded-lg px-3 text-xs font-semibold transition sm:min-h-[32px] ${
+                  sourceFilter === option.value
+                    ? "bg-quotefly-blue text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {onManageProducts ? (
+            <Button variant="ghost" size="sm" icon={<PackageSearch size={14} />} onClick={onManageProducts}>
+              Manage catalog
+            </Button>
+          ) : null}
+        </div>
 
         <div className="grid gap-2 sm:grid-cols-2">
           {filteredPresets.length ? (
@@ -101,7 +139,7 @@ export function WorkPresetPickerModal({
             })
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500 sm:col-span-2">
-              No saved jobs match this search.
+              No products match this search and filter.
             </div>
           )}
         </div>
@@ -110,7 +148,7 @@ export function WorkPresetPickerModal({
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected job</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected product</p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
               </div>
               <div className="w-24">
@@ -128,7 +166,7 @@ export function WorkPresetPickerModal({
         ) : null}
       </ModalBody>
       <ModalFooter>
-        <Button variant="outline" onClick={onClose}>
+        <Button variant="outline" onClick={closePicker}>
           Close
         </Button>
         {secondaryActionLabel && onSecondaryAction ? (

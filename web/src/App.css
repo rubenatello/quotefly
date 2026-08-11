@@ -1,5 +1,7 @@
 :root {
-  --qf-mobile-nav-clearance: calc(6.5rem + env(safe-area-inset-bottom));
+  --qf-mobile-nav-height: 4rem;
+  --qf-mobile-nav-clearance: calc(var(--qf-mobile-nav-height) + env(safe-area-inset-bottom) + 0.75rem);
+  --qf-mobile-content-clearance: calc(var(--qf-mobile-nav-height) + env(safe-area-inset-bottom) + 1.5rem);
 }
 
 .qf-workspace-main {
@@ -10,6 +12,7 @@
 .qf-mobile-bottom-nav {
   padding-left: max(0.75rem, env(safe-area-inset-left));
   padding-right: max(0.75rem, env(safe-area-inset-right));
+  isolation: isolate;
 }
 
 @media (max-width: 420px) {

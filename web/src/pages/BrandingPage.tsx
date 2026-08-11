@@ -5,6 +5,7 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  AlertTriangle,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -13,6 +14,7 @@ import {
   Eye,
   ImageIcon,
   Palette,
+  RefreshCw,
   SwatchBook,
   Upload,
 } from "lucide-react";
@@ -26,9 +28,12 @@ import {
   type BrandingLogoPosition,
   type PlanCode,
 } from "../lib/api";
-import { Badge, Button, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
+import { isSupportedBrandLogoDataUrl, resizeBrandLogoFile } from "../lib/brand-logo";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
+import { Badge, Button, ConfirmModal, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
+import { BrandQuickSetup } from "../components/branding/BrandQuickSetup";
 import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
 import {
   QUOTE_TEMPLATE_OPTIONS,
@@ -83,7 +88,6 @@ const FALLBACK_TIMEZONES = [
 
 const COLOR_COMPONENTS: Array<{ key: keyof BrandingComponentColors; label: string; description: string }> = [
   { key: "headerBgColor", label: "Header Background", description: "Top header block color in the PDF quote." },
-  { key: "headerTextColor", label: "Header Text", description: "Text color used on colored quote headers." },
   { key: "sectionTitleColor", label: "Section Titles", description: "Color for section labels like Scope and Customer." },
   { key: "tableHeaderBgColor", label: "Table Header", description: "Line-item table header background color." },
   { key: "tableHeaderTextColor", label: "Table Header Text", description: "Text color used inside the line-item table header." },
@@ -199,6 +203,55 @@ function getContrastingTextColor(color: string): string {
   return luminance > 0.62 ? "#111111" : "#ffffff";
 }
 
+function getRelativeLuminance(color: string): number {
+  const safe = /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#000000";
+  const channels = [1, 3, 5].map((offset) => {
+    const value = Number.parseInt(safe.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function getContrastRatio(first: string, second: string): number {
+  const firstLuminance = getRelativeLuminance(first);
+  const secondLuminance = getRelativeLuminance(second);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function normalizeComponentColors(colors?: BrandingComponentColors | null): BrandingComponentColors {
+  if (!colors) return {};
+
+  return {
+    ...(colors.headerBgColor ? { headerBgColor: colors.headerBgColor } : {}),
+    ...(colors.sectionTitleColor ? { sectionTitleColor: colors.sectionTitleColor } : {}),
+    ...(colors.tableHeaderBgColor ? { tableHeaderBgColor: colors.tableHeaderBgColor } : {}),
+    ...(colors.tableHeaderTextColor ? { tableHeaderTextColor: colors.tableHeaderTextColor } : {}),
+    ...(colors.totalsColor ? { totalsColor: colors.totalsColor } : {}),
+    ...(colors.footerTextColor ? { footerTextColor: colors.footerTextColor } : {}),
+  };
+}
+
+function buildBrandingSnapshot(input: {
+  companyName: string;
+  logo: string | null;
+  logoPosition: BrandingLogoPosition;
+  hideQuoteFlyAttribution: boolean;
+  brandColor: string;
+  timezone: string;
+  businessProfile: BrandingBusinessProfile;
+  selectedTemplate: StandardQuoteTemplateId;
+  componentColors: BrandingComponentColors;
+}): string {
+  return JSON.stringify({
+    ...input,
+    companyName: input.companyName.trim(),
+    businessProfile: normalizeBusinessProfile(input.businessProfile),
+    componentColors: normalizeComponentColors(input.componentColors),
+  });
+}
+
 function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): BrandingBusinessProfile {
   const normalize = (value?: string | null) => {
     const trimmed = value?.trim();
@@ -215,74 +268,6 @@ function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): Bran
     state: normalize(profile.state),
     postalCode: normalize(profile.postalCode),
   };
-}
-
-async function resizeLogoFile(file: File): Promise<string> {
-  const readAsDataUrl = () =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result;
-        if (typeof result === "string") {
-          resolve(result);
-          return;
-        }
-        reject(new Error("Could not read logo file."));
-      };
-      reader.onerror = () => reject(new Error("Could not read logo file."));
-      reader.readAsDataURL(file);
-    });
-
-  const dataUrl = await readAsDataUrl();
-
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const nextImage = new Image();
-    nextImage.onload = () => resolve(nextImage);
-    nextImage.onerror = () => reject(new Error("Could not process logo image."));
-    nextImage.src = dataUrl;
-  });
-
-  const maxDimension = 1200;
-  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
-  const targetWidth = Math.max(1, Math.round(image.width * scale));
-  const targetHeight = Math.max(1, Math.round(image.height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Could not prepare logo image.");
-  }
-
-  context.clearRect(0, 0, targetWidth, targetHeight);
-  context.drawImage(image, 0, 0, targetWidth, targetHeight);
-
-  const pngDataUrl = canvas.toDataURL("image/png");
-  if (pngDataUrl.length <= 850_000) {
-    return pngDataUrl;
-  }
-
-  const smallerScale = Math.min(scale, 900 / Math.max(image.width, image.height));
-  const smallerWidth = Math.max(1, Math.round(image.width * smallerScale));
-  const smallerHeight = Math.max(1, Math.round(image.height * smallerScale));
-  canvas.width = smallerWidth;
-  canvas.height = smallerHeight;
-  context.clearRect(0, 0, smallerWidth, smallerHeight);
-  context.drawImage(image, 0, 0, smallerWidth, smallerHeight);
-  const smallerPngDataUrl = canvas.toDataURL("image/png");
-  if (smallerPngDataUrl.length <= 850_000) {
-    return smallerPngDataUrl;
-  }
-
-  context.save();
-  context.globalCompositeOperation = "destination-over";
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, smallerWidth, smallerHeight);
-  context.restore();
-
-  return canvas.toDataURL("image/jpeg", 0.86);
 }
 
 interface BrandingSectionCardProps {
@@ -428,6 +413,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   const timezoneOptions = useMemo(() => getSupportedTimezones(), []);
 
   const [companyName, setCompanyName] = useState("QuoteFly Services");
+  const [canEditBusinessName, setCanEditBusinessName] = useState(false);
   const [logo, setLogo] = useState<string | null>(null);
   const [logoPosition, setLogoPosition] = useState<BrandingLogoPosition>("left");
   const [hideQuoteFlyAttribution, setHideQuoteFlyAttribution] = useState(false);
@@ -436,41 +422,102 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   const [businessProfile, setBusinessProfile] = useState<BrandingBusinessProfile>(EMPTY_BUSINESS_PROFILE);
   const [selectedTemplate, setSelectedTemplate] = useState<StandardQuoteTemplateId>("modern");
   const [componentColors, setComponentColors] = useState<BrandingComponentColors>({});
+  const [isLoading, setIsLoading] = useState(Boolean(effectiveTenantId));
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadErrorMessage, setLoadErrorMessage] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Record<BrandingSectionId, boolean>>({
-    business: true,
-    logo: true,
+    business: false,
+    logo: false,
     colors: false,
-    templates: true,
+    templates: false,
     preview: true,
   });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const saveStatusTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!effectiveTenantId) return;
+    if (!effectiveTenantId) {
+      setIsLoading(false);
+      setHasLoaded(false);
+      setCanEditBusinessName(false);
+      setLoadErrorMessage(null);
+      setLastSavedSnapshot(null);
+      return;
+    }
+
+    let isActive = true;
+    setIsLoading(true);
+    setHasLoaded(false);
+    setLoadErrorMessage(null);
+    setSaveErrorMessage(null);
 
     api.branding
       .get(effectiveTenantId)
-      .then(({ tenant, branding }) => {
+      .then(({ tenant, branding, permissions }) => {
+        if (!isActive) return;
+
+        const nextTimezone = tenant.timezone === "UTC" ? browserTimezone : tenant.timezone;
+        const nextLogo = isSupportedBrandLogoDataUrl(branding?.logoUrl) ? branding.logoUrl : null;
+        const nextBrandColor = branding?.primaryColor ?? "#5B85AA";
+        const nextTemplate = normalizeQuoteTemplateId(branding?.templateId);
+        const nextLogoPosition = branding?.logoPosition ?? "left";
+        const nextHideAttribution = Boolean(branding?.hideQuoteFlyAttribution);
+        const nextComponentColors = normalizeComponentColors(branding?.componentColors);
+        const nextBusinessProfile = normalizeBusinessProfile(branding);
+
         setCompanyName(tenant.name);
-        setTimezone(tenant.timezone === "UTC" ? browserTimezone : tenant.timezone);
-        setLogo(branding?.logoUrl ?? null);
-
-        if (!branding) return;
-
-        setBrandColor(branding.primaryColor);
-        setSelectedTemplate(normalizeQuoteTemplateId(branding.templateId));
-        setLogoPosition(branding.logoPosition ?? "left");
-        setHideQuoteFlyAttribution(Boolean(branding.hideQuoteFlyAttribution));
-        setComponentColors(branding.componentColors ?? {});
-        setBusinessProfile(normalizeBusinessProfile(branding));
+        setCanEditBusinessName(permissions.canEditBusinessName);
+        setTimezone(nextTimezone);
+        setLogo(nextLogo);
+        setBrandColor(nextBrandColor);
+        setSelectedTemplate(nextTemplate);
+        setLogoPosition(nextLogoPosition);
+        setHideQuoteFlyAttribution(nextHideAttribution);
+        setComponentColors(nextComponentColors);
+        setBusinessProfile(nextBusinessProfile);
+        setLastSavedSnapshot(
+          buildBrandingSnapshot({
+            companyName: tenant.name,
+            logo: nextLogo,
+            logoPosition: nextLogoPosition,
+            hideQuoteFlyAttribution: nextHideAttribution,
+            brandColor: nextBrandColor,
+            timezone: nextTimezone,
+            businessProfile: nextBusinessProfile,
+            selectedTemplate: nextTemplate,
+            componentColors: nextComponentColors,
+          }),
+        );
+        setHasLoaded(true);
       })
-      .catch(() => {
-        // Silently ignore while auth/session is not ready yet.
+      .catch((error) => {
+        if (!isActive) return;
+        setCanEditBusinessName(false);
+        setLoadErrorMessage(error instanceof ApiError ? error.message : "Could not load branding settings.");
+        setHasLoaded(false);
+      })
+      .finally(() => {
+        if (isActive) setIsLoading(false);
       });
-  }, [browserTimezone, effectiveTenantId]);
+
+    return () => {
+      isActive = false;
+    };
+  }, [browserTimezone, effectiveTenantId, loadAttempt]);
+
+  useEffect(
+    () => () => {
+      if (saveStatusTimerRef.current !== null) {
+        window.clearTimeout(saveStatusTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const selectedTemplateIndex = useMemo(() => {
     const index = QUOTE_TEMPLATE_OPTIONS.findIndex((template) => template.id === selectedTemplate);
@@ -503,6 +550,40 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     label: section.title,
     hint: section.description,
   }));
+  const currentSnapshot = useMemo(
+    () =>
+      buildBrandingSnapshot({
+        companyName,
+        logo,
+        logoPosition,
+        hideQuoteFlyAttribution,
+        brandColor,
+        timezone,
+        businessProfile,
+        selectedTemplate,
+        componentColors,
+      }),
+    [
+      brandColor,
+      businessProfile,
+      companyName,
+      componentColors,
+      hideQuoteFlyAttribution,
+      logo,
+      logoPosition,
+      selectedTemplate,
+      timezone,
+    ],
+  );
+  const isDirty = hasLoaded && lastSavedSnapshot !== currentSnapshot;
+  const isBusinessNameInvalid = canEditBusinessName && companyName.trim().length < 2;
+  const {
+    navigationPromptOpen,
+    cancelNavigation,
+    continueNavigation,
+  } = useUnsavedChangesGuard(isDirty && !isSaving, {
+    historyPrompt: "You have unsaved branding changes. Leave this page and discard them?",
+  });
 
   const moveTemplate = (offset: -1 | 1) => {
     const nextIndex = (selectedTemplateIndex + offset + QUOTE_TEMPLATE_OPTIONS.length) % QUOTE_TEMPLATE_OPTIONS.length;
@@ -525,16 +606,18 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   };
 
   const handleSave = async () => {
-    if (!effectiveTenantId) return;
+    if (!effectiveTenantId || !hasLoaded || isLoading || !isDirty || isBusinessNameInvalid) return;
 
     setIsSaving(true);
     setSaveStatus("idle");
     setSaveErrorMessage(null);
 
     try {
-      const componentColorPayload = Object.keys(componentColors).length > 0 ? componentColors : null;
+      const normalizedComponentColors = normalizeComponentColors(componentColors);
+      const componentColorPayload = Object.keys(normalizedComponentColors).length > 0 ? normalizedComponentColors : null;
 
       const result = await api.branding.save(effectiveTenantId, {
+        ...(canEditBusinessName ? { businessName: companyName.trim() } : {}),
         logoUrl: logo ?? null,
         logoPosition,
         hideQuoteFlyAttribution,
@@ -545,18 +628,40 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
         componentColors: componentColorPayload,
       });
 
+      const nextTimezone = result.tenant.timezone === "UTC" ? browserTimezone : result.tenant.timezone;
+      const nextLogo = isSupportedBrandLogoDataUrl(result.branding.logoUrl) ? result.branding.logoUrl : null;
+      const nextTemplate = normalizeQuoteTemplateId(result.branding.templateId);
+      const nextLogoPosition = result.branding.logoPosition ?? "left";
+      const nextHideAttribution = Boolean(result.branding.hideQuoteFlyAttribution);
+      const nextComponentColors = normalizeComponentColors(result.branding.componentColors);
+      const nextBusinessProfile = normalizeBusinessProfile(result.branding);
+
       setCompanyName(result.tenant.name);
-      setTimezone(result.tenant.timezone === "UTC" ? browserTimezone : result.tenant.timezone);
+      setTimezone(nextTimezone);
       setBrandColor(result.branding.primaryColor);
-      setSelectedTemplate(normalizeQuoteTemplateId(result.branding.templateId));
-      setLogo(result.branding.logoUrl ?? null);
-      setLogoPosition(result.branding.logoPosition ?? "left");
-      setHideQuoteFlyAttribution(Boolean(result.branding.hideQuoteFlyAttribution));
-      setComponentColors(result.branding.componentColors ?? {});
-      setBusinessProfile(normalizeBusinessProfile(result.branding));
+      setSelectedTemplate(nextTemplate);
+      setLogo(nextLogo);
+      setLogoPosition(nextLogoPosition);
+      setHideQuoteFlyAttribution(nextHideAttribution);
+      setComponentColors(nextComponentColors);
+      setBusinessProfile(nextBusinessProfile);
+      setLastSavedSnapshot(
+        buildBrandingSnapshot({
+          companyName: result.tenant.name,
+          logo: nextLogo,
+          logoPosition: nextLogoPosition,
+          hideQuoteFlyAttribution: nextHideAttribution,
+          brandColor: result.branding.primaryColor,
+          timezone: nextTimezone,
+          businessProfile: nextBusinessProfile,
+          selectedTemplate: nextTemplate,
+          componentColors: nextComponentColors,
+        }),
+      );
 
       setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 3000);
+      if (saveStatusTimerRef.current !== null) window.clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (err) {
       setSaveStatus("error");
       setSaveErrorMessage(err instanceof ApiError ? err.message : "Failed to save branding.");
@@ -569,14 +674,21 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   const handleLogoUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.type !== "image/png" && file.type !== "image/jpeg") {
+      setSaveStatus("error");
+      setSaveErrorMessage("Choose a PNG or JPG logo.");
+      event.target.value = "";
+      return;
+    }
     if (file.size > 8 * 1024 * 1024) {
       setSaveStatus("error");
       setSaveErrorMessage("Logo file is too large. Keep it under 8 MB before upload.");
+      event.target.value = "";
       return;
     }
 
     try {
-      const normalizedLogo = await resizeLogoFile(file);
+      const normalizedLogo = await resizeBrandLogoFile(file);
       setLogo(normalizedLogo);
       setSaveStatus("idle");
       setSaveErrorMessage(null);
@@ -623,7 +735,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     businessProfile.businessEmail?.trim(),
   ]
     .filter(Boolean)
-    .join(" / ");
+    .join("\n");
   const previewFooterText = buildQuoteFooterText({
     businessName: companyName,
     businessPhone: businessProfile.businessPhone,
@@ -635,13 +747,34 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   );
   const previewComponentColors: BrandingComponentColors = {
     headerBgColor: previewHeaderColor,
-    headerTextColor: getComponentColorValue("headerTextColor"),
     sectionTitleColor: getComponentColorValue("sectionTitleColor"),
     tableHeaderBgColor: getComponentColorValue("tableHeaderBgColor"),
     tableHeaderTextColor: getComponentColorValue("tableHeaderTextColor"),
     totalsColor: getComponentColorValue("totalsColor"),
     footerTextColor: getComponentColorValue("footerTextColor"),
   };
+  const componentColorOverrideCount = Object.keys(normalizeComponentColors(componentColors)).length;
+  const contrastWarnings = [
+    {
+      label: "Table header text",
+      ratio: getContrastRatio(
+        previewComponentColors.tableHeaderTextColor ?? "#ffffff",
+        previewComponentColors.tableHeaderBgColor ?? brandColor,
+      ),
+    },
+    {
+      label: "Section titles",
+      ratio: getContrastRatio(previewComponentColors.sectionTitleColor ?? brandColor, "#ffffff"),
+    },
+    {
+      label: "Totals",
+      ratio: getContrastRatio(previewComponentColors.totalsColor ?? brandColor, "#ffffff"),
+    },
+    {
+      label: "Footer text",
+      ratio: getContrastRatio(previewComponentColors.footerTextColor ?? "#666666", "#ffffff"),
+    },
+  ].filter((warning) => warning.ratio < 4.5);
   const activeTemplateSummaryCard = (
     <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -660,16 +793,42 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 p-3 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-slate-50 p-3 pb-28 sm:p-6 sm:pb-28 lg:p-8 lg:pb-28 xl:pb-8">
       <div className="mx-auto max-w-7xl">
         <PageHeader
           title="Quote Branding"
           subtitle="Set the sender identity, colors, and template your customers actually see."
-          actions={<Badge tone="blue">{completedSectionCount}/4 ready</Badge>}
+          actions={hasLoaded ? <Badge tone="blue">{completedSectionCount}/4 ready</Badge> : undefined}
         />
 
-        <div className="grid gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+        {!effectiveTenantId ? (
+          <div className="rounded-[28px] border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <h2 className="font-display text-xl font-semibold text-slate-900">Sign in to manage quote branding</h2>
+            <p className="mt-2 text-sm text-slate-500">Your saved business details, logo, and PDF styling will appear here.</p>
+          </div>
+        ) : isLoading ? (
+          <div className="rounded-[28px] border border-slate-200 bg-white p-8 text-center shadow-sm" aria-live="polite">
+            <p className="text-sm font-semibold text-slate-700">Loading saved branding settings...</p>
+            <p className="mt-2 text-xs text-slate-500">Editing and saving stay disabled until the saved version is ready.</p>
+          </div>
+        ) : loadErrorMessage || !hasLoaded ? (
+          <div className="rounded-[28px] border border-red-200 bg-white p-8 text-center shadow-sm" role="alert">
+            <h2 className="font-display text-xl font-semibold text-slate-900">Branding settings did not load</h2>
+            <p className="mt-2 text-sm text-red-600">{loadErrorMessage ?? "Could not load branding settings."}</p>
+            <Button
+              type="button"
+              variant="outline"
+              icon={<RefreshCw size={15} />}
+              className="mt-5"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="min-w-0 space-y-4 xl:sticky xl:top-24 xl:self-start">
             <WorkspaceRailCard
               eyebrow="Brand Setup"
               title={companyName}
@@ -711,7 +870,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     {effectivePlanCode === "starter"
-                      ? "Basic always shows QuoteFly attribution."
+                      ? "Starter always shows QuoteFly attribution."
                       : "Professional and Enterprise can hide it."}
                   </p>
                 </div>
@@ -748,22 +907,42 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     );
                   })}
                 </div>
-                <Button onClick={handleSave} disabled={isSaving || !effectiveTenantId} loading={isSaving} fullWidth>
-                  {isSaving ? "Saving..." : "Save Branding"}
+                <Button onClick={handleSave} disabled={isSaving || !isDirty || isBusinessNameInvalid} loading={isSaving} fullWidth>
+                  {isSaving ? "Saving..." : isDirty ? "Save Branding" : "Branding Saved"}
                 </Button>
-                <div className="min-h-[20px] text-sm">
-                  {saveStatus === "saved" ? <span className="font-medium text-quotefly-blue">Saved</span> : null}
+                <div className="min-h-[20px] text-sm" aria-live="polite">
+                  {saveStatus === "saved" && !isDirty ? <span className="font-medium text-quotefly-blue">Saved</span> : null}
                   {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? "Save failed"}</span> : null}
-                  {!effectiveTenantId ? <span className="text-slate-400">Sign in to save your branding settings.</span> : null}
+                  {isDirty && saveStatus !== "error" ? <span className="font-medium text-amber-700">Unsaved changes</span> : null}
                 </div>
                 <p className="text-xs leading-5 text-slate-500">
-                  Save applies your logo, template, and colors across the quote editor, live preview, and downloaded PDF.
+                  Save applies your business details, logo, template, and colors to new quote output.
                 </p>
               </div>
             </WorkspaceRailCard>
           </aside>
 
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
+            <BrandQuickSetup
+              brandColor={brandColor}
+              componentColorOverrideCount={componentColorOverrideCount}
+              isBusinessNameInvalid={isBusinessNameInvalid}
+              isDirty={isDirty}
+              isSaving={isSaving}
+              logo={logo}
+              logoInputRef={logoInputRef}
+              logoPosition={logoPosition}
+              selectedTemplate={selectedTemplate}
+              onBrandColorChange={setBrandColor}
+              onClearComponentColors={() => setComponentColors({})}
+              onLogoPositionChange={setLogoPosition}
+              onLogoRemove={() => setLogo(null)}
+              onLogoUpload={handleLogoUpload}
+              onSave={handleSave}
+              onTemplateChange={setSelectedTemplate}
+              onViewPreview={() => focusSection("preview")}
+            />
+
             <BrandingSectionCard
               id="business"
               title="Business Info"
@@ -774,7 +953,23 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               onToggle={() => toggleSection("business")}
             >
               <div className="grid gap-4 md:grid-cols-2">
-                <Input value={companyName} disabled label="Company Name" className="bg-slate-100 text-slate-700" />
+                <div>
+                  <Input
+                    value={companyName}
+                    onChange={(event) => setCompanyName(event.target.value)}
+                    disabled={!canEditBusinessName}
+                    label="Business Name"
+                    maxLength={120}
+                    className={!canEditBusinessName ? "bg-slate-100 text-slate-700" : undefined}
+                  />
+                  <p className={`mt-1 text-xs ${isBusinessNameInvalid ? "text-red-600" : "text-slate-500"}`}>
+                    {isBusinessNameInvalid
+                      ? "Business name must be at least 2 characters."
+                      : canEditBusinessName
+                      ? "Owners and admins can update the name shown on customer quotes."
+                      : "Ask an owner or admin to update the name shown on customer quotes."}
+                  </p>
+                </div>
                 <Input
                   label="Business Email"
                   type="email"
@@ -894,7 +1089,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
                     {effectivePlanCode === "starter"
-                      ? "Basic always shows QuoteFly attribution for brand recognition."
+                      ? "Starter always shows QuoteFly attribution."
                       : "Turn this off if you do not want QuoteFly attribution on customer-facing quotes."}
                   </p>
                 </div>
@@ -912,7 +1107,6 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             >
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div className="space-y-4">
-                  <input ref={logoInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
                   {logo ? (
                     <>
                       <div className="flex min-h-[180px] items-center justify-center rounded-xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
@@ -931,14 +1125,20 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                       </div>
                     </>
                   ) : (
-                    <label className="block">
-                      <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-                      <div className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
+                    <div className="rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
                         <Upload size={28} className="mx-auto mb-3 text-slate-400" />
-                        <p className="text-sm font-medium text-slate-700">Upload logo</p>
-                        <p className="mt-1 text-xs text-slate-400">PNG or JPG, automatically resized for the quote editor and PDF.</p>
-                      </div>
-                    </label>
+                        <p className="text-sm font-medium text-slate-700">Add your business logo</p>
+                        <p className="mt-1 text-xs text-slate-400">PNG or JPG, automatically resized for previews and PDFs.</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          icon={<Upload size={14} />}
+                          className="mt-4"
+                          onClick={() => logoInputRef.current?.click()}
+                        >
+                          Choose Logo
+                        </Button>
+                    </div>
                   )}
 
                   <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -1019,7 +1219,11 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   <h3 className="font-display text-lg font-semibold text-slate-900">Primary Brand Color</h3>
 
                   <div className="mt-4 space-y-3">
+                    <label htmlFor="branding-primary-color" className="block text-xs font-medium text-slate-600">
+                      Primary color
+                    </label>
                     <input
+                      id="branding-primary-color"
                       type="color"
                       value={brandColor}
                       onChange={(event) => setBrandColor(event.target.value)}
@@ -1034,7 +1238,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   <div className="mb-4">
                     <h3 className="font-display text-lg font-semibold text-slate-900">Component Overrides</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Leave a component unassigned to let it follow your primary brand color.
+                      Leave a component unassigned to use its brand-aware default.
                     </p>
                   </div>
 
@@ -1043,17 +1247,27 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                       const value = getComponentColorValue(component.key);
                       const hasOverride = componentColors[component.key] !== undefined;
                       const resetLabel =
-                        component.key === "footerTextColor" ? "Use neutral default" : "Use brand color";
+                        component.key === "footerTextColor"
+                          ? "Use neutral default"
+                          : component.key === "tableHeaderTextColor"
+                            ? "Use automatic contrast"
+                            : "Use brand color";
 
                       return (
                         <div key={component.key} className="rounded-lg border border-slate-200 p-3">
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                              <p className="text-sm font-semibold text-slate-800">{component.label}</p>
+                              <label
+                                htmlFor={`branding-color-${component.key}`}
+                                className="text-sm font-semibold text-slate-800"
+                              >
+                                {component.label}
+                              </label>
                               <p className="text-xs text-slate-500">{component.description}</p>
                             </div>
                             <div className="flex items-center gap-2 self-start sm:self-auto">
                               <input
+                                id={`branding-color-${component.key}`}
                                 type="color"
                                 value={value}
                                 onChange={(event) => updateComponentColor(component.key, event.target.value)}
@@ -1080,6 +1294,21 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </div>
                 </div>
               </div>
+              {contrastWarnings.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4" role="status">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-700" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-950">Some text may be hard to read</p>
+                      <p className="mt-1 text-xs leading-5 text-amber-900">
+                        Aim for a contrast ratio of at least 4.5:1. Review {contrastWarnings
+                          .map((warning) => `${warning.label} (${warning.ratio.toFixed(1)}:1)`)
+                          .join(", ")}.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </BrandingSectionCard>
 
             <BrandingSectionCard
@@ -1208,7 +1437,42 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               </div>
             </BrandingSectionCard>
           </div>
-        </div>
+            </div>
+
+            <div className="h-24 xl:hidden" aria-hidden="true" />
+            <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur xl:hidden">
+              <div className="mx-auto flex max-w-7xl items-center gap-3">
+                <div className="min-w-0 flex-1" aria-live="polite">
+                  <p className="text-sm font-semibold text-slate-900">
+                    {isDirty ? "Unsaved branding changes" : "Branding is up to date"}
+                  </p>
+                  {saveStatus === "error" ? (
+                    <p className="truncate text-xs text-red-600">{saveErrorMessage ?? "Save failed"}</p>
+                  ) : (
+                    <p className="truncate text-xs text-slate-500">Logo, colors, template, and business details</p>
+                  )}
+                </div>
+                <Button
+                  onClick={handleSave}
+                  disabled={isSaving || !isDirty || isBusinessNameInvalid}
+                  loading={isSaving}
+                  className="min-h-11 shrink-0"
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+        <ConfirmModal
+          open={navigationPromptOpen}
+          onClose={cancelNavigation}
+          onConfirm={continueNavigation}
+          title="Leave with unsaved branding changes?"
+          description="Your business details, logo, colors, or template changes have not been saved and will be lost."
+          confirmLabel="Discard changes and leave"
+          confirmVariant="warning"
+        />
       </div>
     </div>
   );

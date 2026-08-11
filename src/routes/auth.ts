@@ -5,6 +5,8 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { getJwtClaims } from "../lib/auth";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
+import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
+import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
 import { isSuperuserEmail } from "../lib/superuser";
 import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
@@ -18,7 +20,6 @@ const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
 const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const TRIAL_DAYS = 14;
-const CURRENT_LEGAL_VERSION = "2026-07-30";
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
 const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
 const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
@@ -35,11 +36,10 @@ const SignUpSchema = z.object({
   fullName: z.string().trim().min(2),
   companyName: z.string().trim().min(2),
   primaryTrade: z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]),
-  logoUrl: z.string().trim().max(1_500_000).optional(),
-  generateLogoIfMissing: z.boolean().default(true),
+  logoUrl: BrandLogoDataUrlSchema.optional(),
   acceptedLegalTerms: z.literal(true),
-  termsVersion: z.literal(CURRENT_LEGAL_VERSION),
-  privacyPolicyVersion: z.literal(CURRENT_LEGAL_VERSION),
+  termsVersion: z.literal(CURRENT_TERMS_VERSION),
+  privacyPolicyVersion: z.literal(CURRENT_PRIVACY_POLICY_VERSION),
 });
 
 const SignInSchema = z.object({
@@ -193,7 +193,6 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             companyName: payload.companyName,
             primaryTrade: payload.primaryTrade,
             logoUrl: payload.logoUrl,
-            generateLogoIfMissing: payload.generateLogoIfMissing,
           });
 
           return [newUser, newTenant] as const;
@@ -342,8 +341,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         const resetToken = await app.prisma.$transaction(async (tx) => {
           // Serialize reset issuance per user. Without this lock, two requests can both
           // pass the cooldown check, send different links, and invalidate each other.
-          await tx.$queryRaw`
-            SELECT pg_advisory_xact_lock(hashtext(${`password-reset:${user.id}`}))
+          await tx.$queryRaw<Array<{ lock: string }>>`
+            SELECT pg_advisory_xact_lock(hashtext(${`password-reset:${user.id}`}))::text AS "lock"
           `;
 
           const tokenIssuedByConcurrentRequest = await tx.passwordResetToken.findFirst({

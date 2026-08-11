@@ -1,11 +1,9 @@
+import { BASIC_PLAN } from "./plans";
+
 export const PUBLIC_SITE_URL = "https://www.quotefly.us";
 export const PUBLIC_OG_IMAGE_URL = `${PUBLIC_SITE_URL}/og-image.jpg`;
 
-export const PUBLIC_BASIC_PLAN = {
-  name: "Basic",
-  monthlyPriceUsd: 19,
-  trialDays: 14,
-} as const;
+export const PUBLIC_BASIC_PLAN = BASIC_PLAN;
 
 export const PUBLIC_ROUTE_PATHS = [
   "/",

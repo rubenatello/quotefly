@@ -134,6 +134,20 @@ model TenantBranding {
   tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
+model TenantBrandAsset {
+  id         String   @id @default(cuid())
+  tenantId   String
+  sha256     String   @db.VarChar(64)
+  mimeType   String   @db.VarChar(32)
+  data       Bytes
+  byteLength Int
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, sha256])
+  @@index([tenantId, createdAt])
+}
+
 model Tenant {
   id                                String                   @id @default(cuid())
   name                              String
@@ -168,6 +182,7 @@ model Tenant {
   billingStateEventCreatedAtUtc     DateTime?                @db.Timestamptz(3)
   billingStateEventId               String?
   branding                          TenantBranding?
+  brandAssets                       TenantBrandAsset[]
   quoteLineItems                    QuoteLineItem[]
   quoteRevisions                    QuoteRevision[]
   quoteOutboundEvents               QuoteOutboundEvent[]
@@ -187,17 +202,17 @@ model Tenant {
 }
 
 model User {
-  id                   String         @id @default(cuid())
-  email                String         @unique
+  id                   String               @id @default(cuid())
+  email                String               @unique
   fullName             String
   passwordHash         String
-  authVersion          Int            @default(0)
-  legalAcceptedAtUtc   DateTime?      @db.Timestamptz(3)
+  authVersion          Int                  @default(0)
+  legalAcceptedAtUtc   DateTime?            @db.Timestamptz(3)
   termsVersion         String?
   privacyPolicyVersion String?
-  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
-  deletedAtUtc         DateTime?      @db.Timestamptz(3)
+  createdAt            DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAtUtc         DateTime?            @db.Timestamptz(3)
   tenantLink           TenantUser[]
   aiUsageEvents        AiUsageEvent[]
   passwordResetTokens  PasswordResetToken[]

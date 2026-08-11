@@ -27,17 +27,31 @@ export function buildQuoteFooterText(input: {
 export function QuoteAttributionFooter({
   footerText,
   showQuoteFlyAttribution,
+  textColor,
 }: {
   footerText?: string;
   showQuoteFlyAttribution?: boolean;
+  textColor?: string;
 }) {
   if (!footerText && !showQuoteFlyAttribution) return null;
 
   return (
     <div className="border-t border-[var(--qf-border)] px-5 py-2.5 text-center sm:px-6">
-      {footerText ? <p className="text-[11px] leading-5 text-slate-500">{footerText}</p> : null}
+      {footerText ? (
+        <p
+          className={`text-[11px] leading-5 ${textColor ? "" : "text-slate-500"}`}
+          style={textColor ? { color: textColor } : undefined}
+        >
+          {footerText}
+        </p>
+      ) : null}
       {showQuoteFlyAttribution ? (
-        <div className={`flex items-center justify-center gap-1.5 text-[11px] text-slate-400 ${footerText ? "mt-1.5" : ""}`}>
+        <div
+          className={`flex items-center justify-center gap-1.5 text-[11px] ${
+            textColor ? "" : "text-slate-400"
+          } ${footerText ? "mt-1.5" : ""}`}
+          style={textColor ? { color: textColor } : undefined}
+        >
           <img src="/favicon.png" alt="" aria-hidden="true" className="h-3.5 w-3.5 object-contain opacity-80" />
           <span>Created with QuoteFly</span>
         </div>

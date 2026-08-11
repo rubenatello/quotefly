@@ -51,6 +51,10 @@ npm run verify:launch
 | `STRIPE_PRICE_ID_STARTER` | Required for sellable Basic | No | Basic test price ID | Basic is the only launch sellable plan |
 | `STRIPE_PRICE_ID_PROFESSIONAL` | Optional | No | test placeholder | Keep off-sale until enabled |
 | `STRIPE_PRICE_ID_ENTERPRISE` | Optional | No | test placeholder | Keep off-sale until enabled |
+| `RESEND_API_KEY` | Required | No | Resend test/staging key | Backend-only; verify the production sending domain before launch |
+| `PASSWORD_RESET_EMAIL_FROM` | Required | No | `QuoteFly <support@quotefly.us>` | Must use a verified sender identity paired with `RESEND_API_KEY` |
+| `PASSWORD_RESET_TOKEN_TTL_MINUTES` | Optional | No | `30` | Keep between 10 and 60 minutes |
+| `SUPPORT_EMAIL` | Required | No | `support@quotefly.us` | Confirm the monitored inbox receives account and billing requests |
 | `OPENAI_API_KEY` | Required for AI | No | staging key or empty | Empty disables real provider calls; AI stays beta |
 | `OPENAI_MODEL` | Optional | No | `gpt-4o-mini` | Track quality and spend before launch expansion |
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
@@ -106,9 +110,10 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 3. Apply production env vars in API provider.
 4. Follow `docs/billing-integrity-rollout.md` before deploying the current billing migration; its coordinated webhook/API cutover replaces a normal rolling deploy.
 5. Verify health, readiness, migrations, webhook processing, and paid access.
-6. Deploy Vercel production with production `VITE_API_BASE_URL`.
-7. Run production smoke checks with a beta test account.
-8. Enable only the providers that passed sandbox smoke checks.
+6. Verify the Resend sending domain and complete a real password-reset delivery smoke test.
+7. Deploy Vercel production with production `VITE_API_BASE_URL`.
+8. Run production smoke checks with a beta test account.
+9. Enable only the providers that passed sandbox smoke checks.
 
 ## Smoke Checks
 
@@ -119,6 +124,9 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 - Create manual quote with one line item.
 - Open quote desk, download PDF, mark sent, and verify send log after an outbound event.
 - Admin billing screen shows Basic as sellable and Professional/Enterprise as disabled/coming soon.
+- An active trial can start Stripe Checkout, retains its promised remaining trial, and activates after a signed webhook.
+- A canceled checkout resumes, and past-due billing can open the portal on a mobile viewport.
+- Forgot-password delivers through the verified sender and the single-use reset link succeeds.
 - QuickBooks shows disconnected or configured state without crashing.
 - AI prompt surface shows enabled, limit, or provider-error state clearly.
 - Mobile customer and quote pages render without overlapping controls.

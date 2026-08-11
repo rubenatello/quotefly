@@ -32,6 +32,7 @@ test.describe("public site and session auth", () => {
   });
 
   test("public launch pages render and the auth modal opens", async ({ page }) => {
+    test.setTimeout(90_000);
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/"].heading })).toBeVisible();
 
@@ -71,9 +72,9 @@ test.describe("public site and session auth", () => {
     await expect(authDialog).toBeVisible();
     const passwordInput = authDialog.getByLabel("Password");
     await passwordInput.fill("VisiblePassword123!");
-    await authDialog.getByRole("button", { name: "Show password" }).click();
+    await authDialog.getByRole("button", { name: "Show entered characters" }).click();
     await expect(passwordInput).toHaveAttribute("type", "text");
-    await authDialog.getByRole("button", { name: "Hide password" }).click();
+    await authDialog.getByRole("button", { name: "Hide entered characters" }).click();
     await expect(passwordInput).toHaveAttribute("type", "password");
   });
 

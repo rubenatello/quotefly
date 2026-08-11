@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Headphones, Mail } from "lucide-react";
+import { Headphones, Lightbulb, Mail } from "lucide-react";
+import { FeatureRequestForm } from "../components/feedback/FeatureRequestForm";
 import { MarketingAction, MarketingHero } from "../components/marketing/PublicPageLayout";
 import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { PUBLIC_ROUTE_SEO } from "../lib/public-seo-data";
@@ -7,9 +8,11 @@ import { setPublicSEOMetadata } from "../lib/seo";
 
 interface SupportPageProps {
   onOpenAuth: () => void;
+  initialName?: string;
+  initialEmail?: string;
 }
 
-export function SupportPage({ onOpenAuth }: SupportPageProps) {
+export function SupportPage({ onOpenAuth, initialName, initialEmail }: SupportPageProps) {
   useEffect(() => {
     setPublicSEOMetadata("/support");
   }, []);
@@ -48,11 +51,45 @@ export function SupportPage({ onOpenAuth }: SupportPageProps) {
             When something blocks your workflow, we want the next step to be obvious.
           </>
         }
+        actions={
+          <>
+            <MarketingAction
+              href="#feature-request"
+              icon={<Lightbulb size={18} aria-hidden="true" />}
+              iconPosition="start"
+            >
+              Request a feature
+            </MarketingAction>
+            <MarketingAction href={SUPPORT_MAILTO} variant="secondary">
+              Get support
+            </MarketingAction>
+          </>
+        }
       />
 
       <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-6">
+            <div
+              id="feature-request"
+              className="scroll-mt-24 rounded-3xl border border-quotefly-blue/20 bg-white p-6 shadow-[0_18px_44px_rgba(15,23,42,0.08)] sm:p-8"
+            >
+              <div className="mb-6">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-quotefly-blue/10 text-quotefly-blue">
+                  <Lightbulb size={22} aria-hidden="true" />
+                </span>
+                <h2 className="mt-4 text-2xl font-bold text-slate-950">Help shape QuoteFly</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  We are building for people doing real work in the field. Tell us what would make quoting or customer follow-up easier.
+                </p>
+              </div>
+              <FeatureRequestForm
+                source="PUBLIC"
+                initialName={initialName}
+                initialEmail={initialEmail}
+              />
+            </div>
+
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_12px_34px_rgba(15,23,42,0.055)] sm:p-8">
               <h2 className="text-2xl font-bold text-slate-900">Contact support</h2>
               <p className="mt-3 text-slate-600">

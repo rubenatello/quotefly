@@ -2,9 +2,25 @@ import { Prisma } from "@prisma/client";
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { BrandLogoDataUrlSchema, sanitizeBrandLogoDataUrl } from "../lib/brand-logo";
 
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
-const DataImageUrlSchema = z.string().regex(/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/);
+
+const LegacyTemplateIdSchema = z.enum(["modern", "professional", "minimal", "bold", "classic"]);
+
+export type BrandingTemplateId = "modern" | "professional" | "minimal";
+
+export function normalizeBrandingTemplateId(templateId?: string | null): BrandingTemplateId {
+  if (templateId === "minimal") return "minimal";
+  if (templateId === "professional" || templateId === "bold" || templateId === "classic") {
+    return "professional";
+  }
+  return "modern";
+}
+
+export function sanitizeBrandingLogoUrl(logoUrl?: string | null): string | null {
+  return sanitizeBrandLogoDataUrl(logoUrl);
+}
 
 function nullableTrimmedStringSchema(max: number) {
   return z.preprocess(
@@ -40,6 +56,7 @@ const BrandingComponentColorsSchema = z
   .optional();
 
 const LogoPositionSchema = z.enum(["left", "center", "right"]);
+const TemplateIdSchema = LegacyTemplateIdSchema.transform(normalizeBrandingTemplateId);
 
 const BusinessProfileSchema = z
   .object({
@@ -55,11 +72,12 @@ const BusinessProfileSchema = z
   .default({});
 
 const UpsertBrandingSchema = z.object({
-  logoUrl: z.union([z.string().url(), DataImageUrlSchema]).optional().nullable(),
+  businessName: z.string().trim().min(2).max(120).optional(),
+  logoUrl: BrandLogoDataUrlSchema.optional().nullable(),
   logoPosition: LogoPositionSchema.default("left"),
   hideQuoteFlyAttribution: z.boolean().optional().default(false),
   primaryColor: HexColorSchema.default("#5B85AA"),
-  templateId: z.enum(["modern", "professional", "bold", "minimal", "classic"]).default("modern"),
+  templateId: TemplateIdSchema.default("modern"),
   timezone: z.string().trim().min(1).max(100).default("UTC"),
   businessProfile: BusinessProfileSchema,
   componentColors: BrandingComponentColorsSchema,
@@ -72,6 +90,11 @@ function requireSameTenant(request: FastifyRequest, reply: FastifyReply, tenantI
     return false;
   }
   return true;
+}
+
+function canEditBusinessName(request: FastifyRequest): boolean {
+  const role = request.liveAuthMembership?.role.trim().toLowerCase();
+  return role === "owner" || role === "admin";
 }
 
 export const brandingRoutes: FastifyPluginAsync = async (app) => {
@@ -118,7 +141,16 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           name: tenant.name,
           timezone: tenant.timezone,
         },
-        branding: tenant.branding,
+        permissions: {
+          canEditBusinessName: canEditBusinessName(request),
+        },
+        branding: tenant.branding
+          ? {
+              ...tenant.branding,
+              logoUrl: sanitizeBrandingLogoUrl(tenant.branding.logoUrl),
+              templateId: normalizeBrandingTemplateId(tenant.branding.templateId),
+            }
+          : null,
       };
     },
   );
@@ -132,6 +164,9 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
       if (!requireSameTenant(request, reply, tenantId)) return;
 
       const payload = UpsertBrandingSchema.parse(request.body);
+      if (payload.businessName !== undefined && !canEditBusinessName(request)) {
+        return reply.code(403).send({ error: "Only owners and admins can change the business name." });
+      }
       const businessProfile = payload.businessProfile ?? {};
       const componentColorsInput =
         payload.componentColors === undefined
@@ -145,6 +180,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           where: { id: tenantId },
           data: {
             timezone: payload.timezone,
+            ...(payload.businessName !== undefined ? { name: payload.businessName } : {}),
           },
           select: {
             name: true,

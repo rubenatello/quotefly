@@ -559,7 +559,6 @@ export function DashboardPage({ session }: DashboardPageProps) {
     try {
       await api.onboarding.saveSetup({
         primaryTrade: setupTrade,
-        generateLogoIfMissing: true,
         chargeBySquareFoot: setupSqFtMode,
         sqFtUnitCost: setupSqFtMode && setupSqFtUnitCost ? Number(setupSqFtUnitCost) : undefined,
         sqFtUnitPrice: setupSqFtMode && setupSqFtUnitPrice ? Number(setupSqFtUnitPrice) : undefined,

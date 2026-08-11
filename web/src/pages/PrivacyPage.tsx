@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
+import { CURRENT_PRIVACY_POLICY_UPDATED_LABEL } from "../lib/legal";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
 import { setPublicSEOMetadata } from "../lib/seo";
 
@@ -17,6 +18,7 @@ export function PrivacyPage() {
         "Account data such as name, email address, company name, role, and workspace membership.",
         "Customer and quote data that you add to the workspace, including names, phone numbers, emails, addresses, notes, scopes, line items, internal costs, customer prices, and generated documents.",
         "AI inputs and usage records, including prompts, relevant customer or quote context, model details, and usage telemetry when you choose an AI-assisted feature.",
+        "Support and product-feedback submissions, including your contact details, company name, feature ideas, and any text you choose to provide.",
         "Operational data such as sign-in activity, usage events, device or browser details, and billing metadata needed to run the service.",
       ],
     },
@@ -27,6 +29,7 @@ export function PrivacyPage() {
         "To prepare quote drafts or revisions with OpenAI when you intentionally use an AI-assisted feature. You must review AI output before relying on or sending it.",
         "To secure accounts, prevent abuse, troubleshoot issues, and improve product performance.",
         "To communicate about the service, support requests, billing updates, and important account notices.",
+        "To review feature requests, contact you about submitted ideas, and guide product improvements.",
       ],
     },
     {
@@ -61,7 +64,7 @@ export function PrivacyPage() {
       eyebrow="Privacy Policy"
       title="How QuoteFly handles personal data"
       description="This policy describes how QuoteFly collects, uses, stores, and discloses information when you use the service."
-      updated="July 30, 2026"
+      updated={CURRENT_PRIVACY_POLICY_UPDATED_LABEL}
       icon={ShieldCheck}
     >
         {sections.map((section) => (

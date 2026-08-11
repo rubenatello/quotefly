@@ -56,7 +56,7 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
       quoteHistoryDays: 30,
     },
     features: {
-      quoteVersionHistory: false,
+      quoteVersionHistory: true,
       communicationLog: false,
       advancedAnalytics: false,
       multiTrade: false,

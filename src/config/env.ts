@@ -33,6 +33,7 @@ const EnvSchema = z.object({
   CORS_ALLOWED_ORIGINS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
   PASSWORD_RESET_EMAIL_FROM: z.string().default(""),
+  SUPPORT_EMAIL: z.string().trim().email().default("support@quotefly.us"),
   PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(10).max(60).default(30),
   SESSION_COOKIE_NAME: z.string().min(1).default("qf_session"),
   SESSION_COOKIE_DOMAIN: z.string().default(""),
@@ -104,6 +105,36 @@ const EnvSchema = z.object({
       code: "custom",
       path: [value.RESEND_API_KEY ? "PASSWORD_RESET_EMAIL_FROM" : "RESEND_API_KEY"],
       message: "RESEND_API_KEY and PASSWORD_RESET_EMAIL_FROM must be configured together.",
+    });
+  }
+
+  const requiredPaidLaunchValues = [
+    ["STRIPE_SECRET_KEY", value.STRIPE_SECRET_KEY, /^(?:sk|rk)_(?:test|live)_/],
+    ["STRIPE_WEBHOOK_SECRET", value.STRIPE_WEBHOOK_SECRET, /^whsec_/],
+    ["STRIPE_PRICE_ID_STARTER", value.STRIPE_PRICE_ID_STARTER, /^price_/],
+    ["RESEND_API_KEY", value.RESEND_API_KEY, /\S/],
+    ["PASSWORD_RESET_EMAIL_FROM", value.PASSWORD_RESET_EMAIL_FROM, /\S/],
+  ] as const;
+  for (const [key, configuredValue, expectedPattern] of requiredPaidLaunchValues) {
+    if (!configuredValue.trim() || !expectedPattern.test(configuredValue.trim())) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} must be configured for a paid production launch.`,
+      });
+    }
+  }
+
+  const configuredPriceIds = [
+    value.STRIPE_PRICE_ID_STARTER,
+    value.STRIPE_PRICE_ID_PROFESSIONAL,
+    value.STRIPE_PRICE_ID_ENTERPRISE,
+  ].filter(Boolean);
+  if (new Set(configuredPriceIds).size !== configuredPriceIds.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["STRIPE_PRICE_ID_STARTER"],
+      message: "Configured Stripe plan price ids must be unique.",
     });
   }
 

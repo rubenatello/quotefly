@@ -8,6 +8,7 @@ import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
 import { BillingRequiredScreen } from "./components/billing/BillingRequiredScreen";
+import { TrialConversionBanner } from "./components/billing/TrialConversionBanner";
 import { BottomTabBar } from "./components/crm/BottomTabBar";
 import {
   workspacePageFromPath,
@@ -44,6 +45,7 @@ const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ def
 const SuperuserAiPage = lazy(() => import("./pages/SuperuserAiPage").then((module) => ({ default: module.SuperuserAiPage })));
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
 const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
+const ProductsPage = lazy(() => import("./pages/ProductsPage").then((module) => ({ default: module.ProductsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
 const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
@@ -156,6 +158,50 @@ function CrmLayout({
     session.entitlements?.billingRequired === true &&
     session.entitlements.hasWorkspaceAccess === false &&
     !session.isSuperuser;
+  const billingReturnState = new URLSearchParams(location.search).get("billing");
+  const billingSubscriptionConfirmed =
+    Boolean(session.subscriptionPlanCode) &&
+    ["active", "trialing"].includes((session.subscriptionStatus ?? "").toLowerCase());
+
+  useEffect(() => {
+    if (
+      billingReturnState !== "success" ||
+      billingSubscriptionConfirmed ||
+      session.role.trim().toLowerCase() !== "owner"
+    ) {
+      return;
+    }
+
+    let stopped = false;
+    let inFlight = false;
+    let attempts = 0;
+    const refreshBillingState = async () => {
+      if (stopped || inFlight || attempts >= 10) return;
+      inFlight = true;
+      attempts += 1;
+      try {
+        await onRefreshSession();
+      } catch {
+        // The return screen keeps a manual refresh action available if the
+        // bounded webhook-confirmation polling window expires.
+      } finally {
+        inFlight = false;
+        if (attempts >= 10) window.clearInterval(intervalId);
+      }
+    };
+
+    const intervalId = window.setInterval(() => void refreshBillingState(), 1_500);
+    void refreshBillingState();
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    billingReturnState,
+    billingSubscriptionConfirmed,
+    onRefreshSession,
+    session.role,
+  ]);
 
   useEffect(() => {
     if (workspaceLocked) return;
@@ -196,6 +242,7 @@ function CrmLayout({
       onQuickAction={handleQuickAction}
       onLogout={onLogout}
       fullName={session.fullName}
+      email={session.email}
       planName={session.effectivePlanName}
       planCode={session.effectivePlanCode}
       isTrial={session.isTrial}
@@ -207,9 +254,15 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-28 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
+        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto w-full max-w-[1840px]">
+              {session.isTrial ? (
+                <TrialConversionBanner
+                  trialEndsAtUtc={session.trialEndsAtUtc}
+                  ownerView={session.role.trim().toLowerCase() === "owner"}
+                />
+              ) : null}
               <Routes>
                 <Route index element={<Navigate to="/app/customers" replace />} />
                 <Route path="customers" element={<CustomersPage />} />
@@ -218,6 +271,7 @@ function CrmLayout({
                 <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
                 <Route path="build" element={<QuoteBuilderView />} />
                 <Route path="quotes" element={<QuotesPage />} />
+                <Route path="products" element={<ProductsPage />} />
                 <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
                 <Route path="history" element={<Navigate to="/app/analytics" replace />} />
                 <Route path="settings" element={<AdminPage session={session} />} />
@@ -260,11 +314,13 @@ function MarketingLayout({
   onOpenSignIn,
   onLogout,
   isLoggedIn,
+  session,
 }: {
   onOpenAuth: () => void;
   onOpenSignIn: () => void;
   onLogout: () => void;
   isLoggedIn: boolean;
+  session?: Session | null;
 }) {
   const location = useLocation();
   const currentPage = location.pathname === "/" ? "landing" : location.pathname.slice(1);
@@ -293,7 +349,16 @@ function MarketingLayout({
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
-            <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
+            <Route
+              path="support"
+              element={
+                <SupportPage
+                  onOpenAuth={onOpenAuth}
+                  initialName={session?.fullName}
+                  initialEmail={session?.email}
+                />
+              }
+            />
             <Route path="privacy" element={<PrivacyPage />} />
             <Route path="data-privacy" element={<DataPrivacyPage />} />
             <Route path="terms" element={<TermsPage />} />
@@ -340,7 +405,7 @@ function AppRoutes() {
     setIsAuthModalOpen(true);
   };
 
-  async function hydrateSessionState(): Promise<Session> {
+  const hydrateSessionState = useCallback(async (): Promise<Session> => {
     try {
       const payload = await loadAuthSession();
       prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
@@ -357,11 +422,11 @@ function AppRoutes() {
       }
       throw error;
     }
-  }
+  }, []);
 
-  async function refreshSessionState(): Promise<void> {
+  const refreshSessionState = useCallback(async (): Promise<void> => {
     await hydrateSessionState();
-  }
+  }, [hydrateSessionState]);
 
   const handleSessionCheckFailure = useCallback((error: unknown, source: SessionRecovery["source"]) => {
     if (isDefinitiveSignedOut(error)) {
@@ -511,6 +576,7 @@ function AppRoutes() {
               onOpenSignIn={() => openAuth("signin")}
               onLogout={handleLogout}
               isLoggedIn={isLoggedIn}
+              session={session}
             />
           }
         />

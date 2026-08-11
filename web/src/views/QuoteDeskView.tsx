@@ -51,6 +51,19 @@ import {
 import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
+import {
+  isQuoteDraftTimestampFresh,
+  quoteDeskDraftStorageKey,
+  readQuoteDeskDraft,
+  removeQuoteDeskDraft,
+  writeQuoteDeskDraft,
+} from "../lib/quote-builder-draft-storage";
+import {
+  isCompleteQuoteLine,
+  QUOTE_LINE_CHANGE_LIMIT,
+  validateQuoteHeading,
+  validateQuoteLine,
+} from "../lib/quote-form-validation";
 import { formatUsPhoneDisplay } from "../lib/phone";
 import {
   applyAiQuoteLinePatch,
@@ -64,6 +77,7 @@ import {
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 
 function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   if (unitType === "SQ_FT") return "SQ FT";
@@ -117,7 +131,127 @@ function buildDeskAiPromptStarters(
 
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
-type PendingOutboundAction = "send-tab" | "email" | "sms" | "copy" | "pdf";
+type PendingOutboundAction = "send-tab" | "email" | "sms" | "copy" | "pdf" | "pdf-preview";
+type StoredDeskDraft = {
+  version: 1;
+  savedAtUtc: string;
+  quoteId: string;
+  baseUpdatedAtUtc: string;
+  quote: {
+    serviceType: Quote["serviceType"];
+    status: Quote["status"];
+    jobStatus: Quote["jobStatus"];
+    afterSaleFollowUpStatus: Quote["afterSaleFollowUpStatus"];
+    title: string;
+    scopeText: string;
+    taxAmount: string;
+  };
+  lines: EditableQuoteLine[];
+  newLine: EditableQuoteLine;
+  mobilePane: DeskPane;
+};
+type PendingLifecycleStatus = Quote["status"] | null;
+
+const SERVICE_TYPES = new Set(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
+const QUOTE_STATUSES = new Set(["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"]);
+const JOB_STATUSES = new Set(["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"]);
+const FOLLOW_UP_STATUSES = new Set(["NOT_READY", "DUE", "COMPLETED"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+function parseStoredDeskLine(value: unknown): EditableQuoteLine | null {
+  if (!isRecord(value)) return null;
+  if (
+    !isBoundedString(value.id, 200) ||
+    !isBoundedString(value.title, 1_000) ||
+    !isBoundedString(value.details, 20_000) ||
+    (value.sectionType !== "INCLUDED" && value.sectionType !== "ALTERNATE") ||
+    !isBoundedString(value.sectionLabel, 80) ||
+    !isBoundedString(value.quantity, 100) ||
+    !isBoundedString(value.unitCost, 100) ||
+    !isBoundedString(value.unitPrice, 100) ||
+    (value.sourcePresetId !== undefined && value.sourcePresetId !== null && !isBoundedString(value.sourcePresetId, 200)) ||
+    (value.presetPromptHandled !== undefined && typeof value.presetPromptHandled !== "boolean")
+  ) return null;
+
+  return {
+    ...makeEditableQuoteLine({
+    title: value.title,
+    details: value.details,
+    sectionType: value.sectionType,
+    sectionLabel: value.sectionLabel,
+    quantity: value.quantity,
+    unitCost: value.unitCost,
+    unitPrice: value.unitPrice,
+    sourcePresetId: value.sourcePresetId as string | null | undefined,
+    presetPromptHandled: value.presetPromptHandled as boolean | undefined,
+    }),
+    id: value.id,
+  };
+}
+
+function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
+  const value: unknown = JSON.parse(raw);
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    !isBoundedString(value.savedAtUtc, 64) ||
+    !isQuoteDraftTimestampFresh(value.savedAtUtc) ||
+    !isBoundedString(value.quoteId, 200) ||
+    !isBoundedString(value.baseUpdatedAtUtc, 64) ||
+    !isRecord(value.quote) ||
+    !Array.isArray(value.lines) ||
+    value.lines.length > QUOTE_LINE_CHANGE_LIMIT ||
+    !isRecord(value.newLine) ||
+    (value.mobilePane !== "editor" && value.mobilePane !== "preview")
+  ) return null;
+
+  const quote = value.quote;
+  if (
+    !isBoundedString(quote.serviceType, 32) || !SERVICE_TYPES.has(quote.serviceType) ||
+    !isBoundedString(quote.status, 32) || !QUOTE_STATUSES.has(quote.status) ||
+    !isBoundedString(quote.jobStatus, 32) || !JOB_STATUSES.has(quote.jobStatus) ||
+    !isBoundedString(quote.afterSaleFollowUpStatus, 32) || !FOLLOW_UP_STATUSES.has(quote.afterSaleFollowUpStatus) ||
+    !isBoundedString(quote.title, 1_000) ||
+    !isBoundedString(quote.scopeText, 20_000) ||
+    !isBoundedString(quote.taxAmount, 100)
+  ) return null;
+
+  const lines = value.lines.map(parseStoredDeskLine);
+  const newLine = parseStoredDeskLine(value.newLine);
+  if (lines.some((line) => line === null) || !newLine) return null;
+
+  return {
+    version: 1,
+    savedAtUtc: value.savedAtUtc,
+    quoteId: value.quoteId,
+    baseUpdatedAtUtc: value.baseUpdatedAtUtc,
+    quote: {
+      serviceType: quote.serviceType as Quote["serviceType"],
+      status: quote.status as Quote["status"],
+      jobStatus: quote.jobStatus as Quote["jobStatus"],
+      afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus as Quote["afterSaleFollowUpStatus"],
+      title: quote.title,
+      scopeText: quote.scopeText,
+      taxAmount: quote.taxAmount,
+    },
+    lines: lines as EditableQuoteLine[],
+    newLine,
+    mobilePane: value.mobilePane,
+  };
+}
+
+function persistStoredDeskDraft(storageKey: string, draft: StoredDeskDraft) {
+  const savedAtUtc = new Date().toISOString();
+  const stored = { ...draft, savedAtUtc } satisfies StoredDeskDraft;
+  return writeQuoteDeskDraft(storageKey, JSON.stringify(stored)) ? savedAtUtc : null;
+}
 const QUOTE_DESK_HEADER_GRID_COLUMNS =
   "xl:grid-cols-[minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_106px_130px] 2xl:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
 const QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS =
@@ -153,6 +287,14 @@ export function QuoteDeskView() {
   const [selectedPresetQuantity, setSelectedPresetQuantity] = useState("1");
   const [editableLines, setEditableLines] = useState<EditableQuoteLine[]>([]);
   const [newLine, setNewLine] = useState<EditableQuoteLine>(makeEditableQuoteLine());
+  const [hydratedDeskDraftKey, setHydratedDeskDraftKey] = useState<string | null>(null);
+  const [deskDraftRestored, setDeskDraftRestored] = useState(false);
+  const [deskDraftSavedAtUtc, setDeskDraftSavedAtUtc] = useState<string | null>(null);
+  const [deskDraftPersistenceFailed, setDeskDraftPersistenceFailed] = useState(false);
+  const [deskDraftRecoveryMessage, setDeskDraftRecoveryMessage] = useState<string | null>(null);
+  const [conflictingDeskDraft, setConflictingDeskDraft] = useState<StoredDeskDraft | null>(null);
+  const latestDeskDraftRef = useRef<{ draft: StoredDeskDraft; hasChanges: boolean } | null>(null);
+  const preventDeskDraftPersistenceRef = useRef(false);
   const editableQuoteIdRef = useRef<string | null>(null);
   const savedLineBaselineRef = useRef<Map<string, EditableQuoteLine>>(new Map());
   const [presetPromptLine, setPresetPromptLine] = useState<EditableQuoteLine | null>(null);
@@ -171,6 +313,8 @@ export function QuoteDeskView() {
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
   const [restoreRevisionTarget, setRestoreRevisionTarget] = useState<QuoteRevision | null>(null);
   const [restoreRevisionSaving, setRestoreRevisionSaving] = useState(false);
+  const [pendingLifecycleStatus, setPendingLifecycleStatus] = useState<PendingLifecycleStatus>(null);
+  const [lifecyclePreparationSaving, setLifecyclePreparationSaving] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
@@ -225,6 +369,10 @@ export function QuoteDeskView() {
     navigateToQuote,
   } = useDashboard();
   const { quoteId } = useParams<{ quoteId: string }>();
+  const deskDraftStorageKey = useMemo(
+    () => session && quoteId ? quoteDeskDraftStorageKey(session.tenantId, session.userId, quoteId) : null,
+    [quoteId, session],
+  );
 
   useEffect(() => {
     if (!quoteId) return;
@@ -238,15 +386,15 @@ export function QuoteDeskView() {
     setPresetsLoading(true);
     setPresetLoadError(null);
 
-    api.onboarding
-      .getSetup()
+    api.products
+      .list()
       .then((result) => {
         if (!mounted) return;
-        setPresetLibrary(result.presets);
+        setPresetLibrary(result.products);
       })
       .catch(() => {
         if (!mounted) return;
-        setPresetLoadError("Common work names could not be loaded.");
+        setPresetLoadError("Products and services could not be loaded.");
       })
       .finally(() => {
         if (mounted) setPresetsLoading(false);
@@ -425,10 +573,15 @@ export function QuoteDeskView() {
       .map((line) => line.id);
   }, [editableLines, originalLineMap]);
 
-  const lineItemCount = editableLines.length;
+  const completeDraftNewLine = useMemo(() => isCompleteQuoteLine(newLine) ? newLine : null, [newLine]);
+  const effectiveEditableLines = useMemo(
+    () => completeDraftNewLine ? [...editableLines, completeDraftNewLine] : editableLines,
+    [completeDraftNewLine, editableLines],
+  );
+  const lineItemCount = effectiveEditableLines.length;
   const includedEditableLines = useMemo(
-    () => editableLines.filter((line) => isIncludedEditableQuoteLine(line)),
-    [editableLines],
+    () => effectiveEditableLines.filter((line) => isIncludedEditableQuoteLine(line)),
+    [effectiveEditableLines],
   );
   const internalSubtotal = useMemo(
     () => includedEditableLines.reduce((total, line) => total + quoteLineCostTotal(line.quantity, line.unitCost), 0),
@@ -451,7 +604,7 @@ export function QuoteDeskView() {
   const customerEmail = selectedQuote?.customer?.email ?? null;
   const previewLines = useMemo(
     () =>
-      editableLines.map((line) => ({
+      effectiveEditableLines.map((line) => ({
         id: line.id,
         title: line.title,
         details: line.details,
@@ -461,7 +614,7 @@ export function QuoteDeskView() {
         unitPrice: line.unitPrice,
         lineTotal: quoteLineAmount(line.quantity, line.unitPrice),
     })),
-    [editableLines],
+    [effectiveEditableLines],
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
@@ -529,6 +682,136 @@ export function QuoteDeskView() {
     [newLine],
   );
   const hasUnsavedQuoteSheetChanges = metadataDirty || dirtyLineIds.length > 0 || hasDraftNewLine;
+  const currentDeskDraft = useMemo<StoredDeskDraft | null>(
+    () => selectedQuote ? {
+      version: 1,
+      savedAtUtc: new Date().toISOString(),
+      quoteId: selectedQuote.id,
+      baseUpdatedAtUtc: selectedQuote.updatedAt,
+      quote: {
+        serviceType: quoteEditForm.serviceType,
+        status: quoteEditForm.status,
+        jobStatus: quoteEditForm.jobStatus,
+        afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
+        title: quoteEditForm.title,
+        scopeText: quoteEditForm.scopeText,
+        taxAmount: quoteEditForm.taxAmount,
+      },
+      lines: editableLines,
+      newLine,
+      mobilePane,
+    } : null,
+    [editableLines, mobilePane, newLine, quoteEditForm, selectedQuote],
+  );
+  latestDeskDraftRef.current = currentDeskDraft ? { draft: currentDeskDraft, hasChanges: hasUnsavedQuoteSheetChanges } : null;
+
+  const applyStoredDeskDraft = useCallback((stored: StoredDeskDraft) => {
+    setQuoteEditForm({ ...stored.quote });
+    setEditableLines(stored.lines);
+    setNewLine(stored.newLine);
+    setMobilePane(stored.mobilePane);
+    setActiveTab("quote");
+    setDeskDraftSavedAtUtc(stored.savedAtUtc);
+    setDeskDraftPersistenceFailed(false);
+    setDeskDraftRestored(true);
+    setConflictingDeskDraft(null);
+  }, [setQuoteEditForm]);
+
+  useEffect(() => {
+    if (!deskDraftStorageKey || !selectedQuote || hydratedDeskDraftKey === deskDraftStorageKey) return;
+    preventDeskDraftPersistenceRef.current = false;
+    setDeskDraftRestored(false);
+    setDeskDraftRecoveryMessage(null);
+    try {
+      const raw = readQuoteDeskDraft(deskDraftStorageKey);
+      if (!raw) {
+        setHydratedDeskDraftKey(deskDraftStorageKey);
+        return;
+      }
+      const stored = parseStoredDeskDraft(raw);
+      if (!stored || stored.quoteId !== selectedQuote.id) {
+        removeQuoteDeskDraft(deskDraftStorageKey);
+        setDeskDraftRecoveryMessage("An incompatible saved quote draft was cleared safely.");
+        setHydratedDeskDraftKey(deskDraftStorageKey);
+        return;
+      }
+      if (stored.baseUpdatedAtUtc !== selectedQuote.updatedAt) {
+        setConflictingDeskDraft(stored);
+        return;
+      }
+      applyStoredDeskDraft(stored);
+      setHydratedDeskDraftKey(deskDraftStorageKey);
+    } catch {
+      removeQuoteDeskDraft(deskDraftStorageKey);
+      setDeskDraftRecoveryMessage("The saved quote draft could not be read and was cleared safely.");
+      setHydratedDeskDraftKey(deskDraftStorageKey);
+    }
+  }, [applyStoredDeskDraft, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote]);
+
+  useEffect(() => {
+    if (!deskDraftStorageKey || hydratedDeskDraftKey !== deskDraftStorageKey || !currentDeskDraft) return;
+    if (!hasUnsavedQuoteSheetChanges) {
+      removeQuoteDeskDraft(deskDraftStorageKey);
+      setDeskDraftSavedAtUtc(null);
+      setDeskDraftPersistenceFailed(false);
+      setDeskDraftRestored(false);
+      return;
+    }
+    if (preventDeskDraftPersistenceRef.current) return;
+    const savedAtUtc = persistStoredDeskDraft(deskDraftStorageKey, currentDeskDraft);
+    setDeskDraftSavedAtUtc(savedAtUtc);
+    setDeskDraftPersistenceFailed(!savedAtUtc);
+  }, [currentDeskDraft, deskDraftStorageKey, hasUnsavedQuoteSheetChanges, hydratedDeskDraftKey]);
+
+  useEffect(() => {
+    if (!deskDraftStorageKey || hydratedDeskDraftKey !== deskDraftStorageKey) return;
+    const persistLatestDraft = () => {
+      const latest = latestDeskDraftRef.current;
+      if (!latest?.hasChanges || preventDeskDraftPersistenceRef.current) return;
+      persistStoredDeskDraft(deskDraftStorageKey, latest.draft);
+    };
+    window.addEventListener("pagehide", persistLatestDraft);
+    return () => {
+      window.removeEventListener("pagehide", persistLatestDraft);
+      persistLatestDraft();
+    };
+  }, [deskDraftStorageKey, hydratedDeskDraftKey]);
+
+  const {
+    navigationPromptOpen,
+    requestNavigation,
+    cancelNavigation,
+    continueNavigation,
+  } = useUnsavedChangesGuard(hasUnsavedQuoteSheetChanges && hydratedDeskDraftKey === deskDraftStorageKey && !saving);
+
+  function clearStoredDeskDraft() {
+    preventDeskDraftPersistenceRef.current = true;
+    if (deskDraftStorageKey) removeQuoteDeskDraft(deskDraftStorageKey);
+    setDeskDraftSavedAtUtc(null);
+    setDeskDraftPersistenceFailed(false);
+    setDeskDraftRestored(false);
+    setConflictingDeskDraft(null);
+    window.setTimeout(() => {
+      preventDeskDraftPersistenceRef.current = false;
+    }, 0);
+  }
+
+  function restoreConflictingDeskDraft() {
+    if (!conflictingDeskDraft || !deskDraftStorageKey) return;
+    applyStoredDeskDraft(conflictingDeskDraft);
+    setHydratedDeskDraftKey(deskDraftStorageKey);
+    setNotice("Restored the browser draft. Review it against the latest saved quote before saving.");
+  }
+
+  function useLatestSavedQuote() {
+    if (!deskDraftStorageKey) return;
+    removeQuoteDeskDraft(deskDraftStorageKey);
+    setConflictingDeskDraft(null);
+    setHydratedDeskDraftKey(deskDraftStorageKey);
+    setDeskDraftRestored(false);
+    setDeskDraftSavedAtUtc(null);
+    setNotice("Using the latest saved quote. The older browser draft was discarded.");
+  }
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
     setEditableLines((current) =>
@@ -542,8 +825,10 @@ export function QuoteDeskView() {
       return false;
     }
     const line = editableLines.find((entry) => entry.id === lineId);
-    if (!line || !line.title.trim()) {
-      setError("Each line needs a title before it can be saved.");
+    if (!line) return false;
+    const lineError = validateQuoteLine(line);
+    if (lineError) {
+      setError(lineError);
       return false;
     }
 
@@ -567,8 +852,9 @@ export function QuoteDeskView() {
       setUnlockConfirmOpen(true);
       return false;
     }
-    if (!newLine.title.trim()) {
-      setError("Add a line title before inserting a new row.");
+    const lineError = validateQuoteLine(newLine, "New line");
+    if (lineError) {
+      setError(lineError);
       return false;
     }
 
@@ -607,15 +893,20 @@ export function QuoteDeskView() {
       setUnlockConfirmOpen(true);
       return null;
     }
-    if (hasDraftNewLine && !newLine.title.trim()) {
-      setError("Finish the new line title or clear that row before sending the quote.");
+    const headingError = validateQuoteHeading(quoteEditForm.title, quoteEditForm.scopeText, quoteEditForm.taxAmount);
+    if (headingError) {
+      setError(headingError);
       return null;
     }
-    const invalidDirtyLine = editableLines.find(
-      (line) => dirtyLineIds.includes(line.id) && !line.title.trim(),
-    );
-    if (invalidDirtyLine) {
-      setError("Each edited line needs a title before the quote can be saved.");
+    const changedLines = editableLines.filter((line) => dirtyLineIds.includes(line.id));
+    const linesToValidate = hasDraftNewLine ? [...changedLines, newLine] : changedLines;
+    if (linesToValidate.length > QUOTE_LINE_CHANGE_LIMIT) {
+      setError(`At most ${QUOTE_LINE_CHANGE_LIMIT} line changes can be saved at once.`);
+      return null;
+    }
+    const invalidLineIndex = linesToValidate.findIndex((line) => validateQuoteLine(line) !== null);
+    if (invalidLineIndex >= 0) {
+      setError(validateQuoteLine(linesToValidate[invalidLineIndex], `Changed line ${invalidLineIndex + 1}`));
       return null;
     }
 
@@ -645,6 +936,7 @@ export function QuoteDeskView() {
       newLineItems: lineToMaybeSave ? [linePayload(lineToMaybeSave)] : [],
     });
     if (!savedQuote) return null;
+    clearStoredDeskDraft();
 
     if (lineToMaybeSave) {
       setNewLine(makeEditableQuoteLine());
@@ -662,6 +954,10 @@ export function QuoteDeskView() {
   }
 
   async function runOutboundAction(action: PendingOutboundAction, quoteOverride = selectedQuote) {
+    if (action === "pdf-preview") {
+      await downloadQuotePdf({ inline: true, quoteOverride: quoteOverride ?? undefined });
+      return;
+    }
     setActiveTab("send");
     if (action === "send-tab") return;
     if (action === "pdf") {
@@ -694,6 +990,37 @@ export function QuoteDeskView() {
     revertQuoteSheetToLastSaved();
     setPendingOutboundAction(null);
     void runOutboundAction(action, selectedQuote);
+  }
+
+  function requestLifecycleUpdate(status: Quote["status"]) {
+    if (!selectedQuote) return;
+    if (hasUnsavedQuoteSheetChanges) {
+      setPendingLifecycleStatus(status);
+      setActiveTab("quote");
+      setMobilePane("editor");
+      return;
+    }
+    void updateQuoteLifecycle(selectedQuote.id, { status });
+  }
+
+  function discardEditsAndContinueLifecycle() {
+    if (!pendingLifecycleStatus || !selectedQuote || lifecyclePreparationSaving) return;
+    const status = pendingLifecycleStatus;
+    revertQuoteSheetToLastSaved();
+    setPendingLifecycleStatus(null);
+    void updateQuoteLifecycle(selectedQuote.id, { status });
+  }
+
+  async function saveAndContinueLifecycle() {
+    if (!pendingLifecycleStatus || !selectedQuote || lifecyclePreparationSaving) return;
+    const status = pendingLifecycleStatus;
+    setLifecyclePreparationSaving(true);
+    const savedQuote = await handleSaveQuoteSheet({ offerPreset: false });
+    if (savedQuote) {
+      setPendingLifecycleStatus(null);
+      await updateQuoteLifecycle(savedQuote.id, { status });
+    }
+    setLifecyclePreparationSaving(false);
   }
 
   async function saveAndContinueOutbound() {
@@ -815,6 +1142,11 @@ export function QuoteDeskView() {
 
   async function confirmRestoreRevision() {
     if (!selectedQuote || !restoreRevisionTarget) return;
+    if (hasUnsavedQuoteSheetChanges) {
+      setRestoreRevisionTarget(null);
+      setError("Save or revert the current quote edits before restoring an older revision.");
+      return;
+    }
     setRestoreRevisionSaving(true);
     setError(null);
     try {
@@ -824,6 +1156,7 @@ export function QuoteDeskView() {
       setRestoreRevisionTarget(null);
       setAiInsight(null);
       setMobilePane("editor");
+      clearStoredDeskDraft();
       setNotice(`${result.quote.title} restored to revision v${restoreRevisionTarget.version}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed restoring the selected revision.");
@@ -846,6 +1179,7 @@ export function QuoteDeskView() {
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
     setPresetPromptLine(null);
+    clearStoredDeskDraft();
     setNotice("Reverted to the last saved quote version.");
   }
 
@@ -921,6 +1255,11 @@ export function QuoteDeskView() {
 
   async function confirmQuoteRetentionAction() {
     if (!selectedQuote || !quoteRetentionAction) return;
+    if (hasUnsavedQuoteSheetChanges) {
+      setQuoteRetentionAction(null);
+      setError("Save or revert the current quote edits before archiving or deleting this quote.");
+      return;
+    }
 
     setQuoteRetentionSaving(true);
     setError(null);
@@ -935,6 +1274,7 @@ export function QuoteDeskView() {
       }
 
       setQuoteRetentionAction(null);
+      clearStoredDeskDraft();
       await loadQuotes();
       navigate("/app/quotes");
     } catch (err) {
@@ -1009,9 +1349,9 @@ export function QuoteDeskView() {
           customerActionVariant="secondary"
           onCustomerAction={(customer) => {
             setNotice(`${customer.fullName} is ready for a new quote.`);
-            navigateToBuilder(customer.id);
+            requestNavigation(() => navigateToBuilder(customer.id));
           }}
-          onQuoteAction={(quote) => navigateToQuote(quote.id)}
+          onQuoteAction={(quote) => requestNavigation(() => navigateToQuote(quote.id))}
         />
       </div>
     );
@@ -1038,6 +1378,33 @@ export function QuoteDeskView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {deskDraftRecoveryMessage ? (
+        <Alert tone="warning" onDismiss={() => setDeskDraftRecoveryMessage(null)}>{deskDraftRecoveryMessage}</Alert>
+      ) : null}
+      {conflictingDeskDraft ? (
+        <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-slate-900">
+          <p className="text-sm font-semibold">This quote changed after the browser draft was saved</p>
+          <p className="mt-1 text-sm text-slate-700">
+            Use the latest saved quote, or restore the browser draft and review it carefully before saving.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" size="sm" onClick={restoreConflictingDeskDraft}>Restore browser draft</Button>
+            <Button size="sm" onClick={useLatestSavedQuote}>Use latest saved quote</Button>
+          </div>
+        </div>
+      ) : null}
+      {hasUnsavedQuoteSheetChanges && hydratedDeskDraftKey === deskDraftStorageKey ? (
+        <div role="status" aria-live="polite" className="rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3">
+          <p className="text-sm font-semibold text-slate-900">
+            {deskDraftPersistenceFailed ? "Unsaved edits are open in this tab" : deskDraftRestored ? "Browser draft restored" : "Edits saved for recovery"}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">
+            {deskDraftPersistenceFailed
+              ? "Keep this tab open until the quote is saved."
+              : `Stored in this browser for up to 12 hours${deskDraftSavedAtUtc ? ` · updated ${new Date(deskDraftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}.`}
+          </p>
+        </div>
+      ) : null}
       {aiInsight ? (
         <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1078,7 +1445,7 @@ export function QuoteDeskView() {
         <div className="flex gap-2 xl:hidden">
           {([
             { id: "editor", label: "Edit quote" },
-            { id: "preview", label: "Preview" },
+            { id: "preview", label: "Draft preview" },
           ] as const).map((pane) => (
             <button
               key={pane.id}
@@ -1178,7 +1545,7 @@ export function QuoteDeskView() {
                     AI Prompt
                   </Button>
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                    Preview
+                    Draft preview
                   </Button>
                   {isQuoteLocked ? (
                     <Button variant="outline" size="sm" icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
@@ -1201,12 +1568,12 @@ export function QuoteDeskView() {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Common work names</p>
-                    <p className="mt-1 text-sm text-slate-600">Load prior jobs into the new line row or insert them directly into the quote.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Products &amp; services</p>
+                    <p className="mt-1 text-sm text-slate-600">Load catalog items into the new row or insert them directly into the quote.</p>
                   </div>
-                  <div className="xl:hidden">
+                  <div>
                     <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
-                      Browse jobs
+                      Browse products
                     </Button>
                   </div>
                   {selectedPreset ? (
@@ -1288,7 +1655,7 @@ export function QuoteDeskView() {
                     ))
                   ) : (
                     <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-                      No saved jobs for this trade yet.
+                      No products for this trade yet.
                     </div>
                   )}
                 </div>
@@ -1308,7 +1675,7 @@ export function QuoteDeskView() {
                 </div>
                 {lineItemCount === 0 ? (
                   <div className="p-4">
-                    <EmptyState title="No saved lines yet" description="Add the first line below or load one from common work names." />
+                    <EmptyState title="No saved lines yet" description="Add the first line below or load one from Products & services." />
                   </div>
                 ) : null}
                 <div className="divide-y divide-slate-200">
@@ -1349,6 +1716,7 @@ export function QuoteDeskView() {
             <div className={mobilePane === "preview" ? "block xl:hidden" : "hidden"}>
               <QuoteLivePreview
                 businessName={session?.tenantName ?? "QuoteFly"}
+                quoteReferenceLabel={`Quote #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
                 businessHint={businessHint}
                 customerName={customerName}
                 customerPhone={customerPhone}
@@ -1449,7 +1817,7 @@ export function QuoteDeskView() {
                   </Button>
                 )}
                 <div className="grid gap-2 xl:hidden">
-                  <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                  <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     Start Another Quote
                   </Button>
                   <details className="rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -1491,10 +1859,10 @@ export function QuoteDeskView() {
                   <Button fullWidth variant="outline" icon={<RotateCcw size={14} />} onClick={revertQuoteSheetToLastSaved} disabled={!hasUnsavedQuoteSheetChanges}>
                     Revert to Last Saved
                   </Button>
-                  <Button fullWidth variant="outline" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                    Preview PDF
+                  <Button fullWidth variant="outline" icon={<Eye size={14} />} onClick={() => requestOutboundAction("pdf-preview")}>
+                    Preview Generated PDF
                   </Button>
-                  <Button fullWidth variant="outline" onClick={() => navigateToBuilder(selectedQuote.customerId)}>
+                  <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     Start Another Quote
                   </Button>
                   <div className="grid grid-cols-2 gap-2">
@@ -1530,21 +1898,21 @@ export function QuoteDeskView() {
                 activeQuoteId={selectedQuote.id}
                 onCustomerAction={(customer) => {
                   setNotice(`${customer.fullName} is ready for a new quote.`);
-                  navigateToBuilder(customer.id);
+                  requestNavigation(() => navigateToBuilder(customer.id));
                 }}
-                onQuoteAction={(quote) => navigateToQuote(quote.id)}
+                onQuoteAction={(quote) => requestNavigation(() => navigateToQuote(quote.id))}
               />
 
               <Card variant="default" padding="md">
                 <CardHeader title="Quote status" subtitle="Move the quote forward without leaving the editor." />
                 <div className="grid gap-2">
-                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "SENT_TO_CUSTOMER" })}>
+                  <Button variant="outline" onClick={() => requestLifecycleUpdate("SENT_TO_CUSTOMER")}>
                     Mark sent
                   </Button>
-                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "ACCEPTED" })}>
+                  <Button variant="outline" onClick={() => requestLifecycleUpdate("ACCEPTED")}>
                     Mark closed / won
                   </Button>
-                  <Button variant="outline" onClick={() => void updateQuoteLifecycle(selectedQuote.id, { status: "REJECTED" })}>
+                  <Button variant="outline" onClick={() => requestLifecycleUpdate("REJECTED")}>
                     Mark lost
                   </Button>
                 </div>
@@ -1568,7 +1936,7 @@ export function QuoteDeskView() {
                 icon={mobilePane === "preview" ? <ChevronDown size={14} /> : <Eye size={14} />}
                 onClick={() => setMobilePane((current) => (current === "editor" ? "preview" : "editor"))}
               >
-                {mobilePane === "preview" ? "Edit Quote" : "Preview"}
+                {mobilePane === "preview" ? "Edit Quote" : "Draft preview"}
               </Button>
               {isQuoteLocked ? (
                 <Button icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
@@ -1854,6 +2222,42 @@ export function QuoteDeskView() {
         </ModalFooter>
       </Modal>
 
+      <Modal
+        open={pendingLifecycleStatus !== null}
+        onClose={() => {
+          if (!lifecyclePreparationSaving) setPendingLifecycleStatus(null);
+        }}
+        closeOnBackdrop={!lifecyclePreparationSaving}
+        size="md"
+        ariaLabel="Save changes before updating quote status"
+      >
+        <ModalHeader
+          title="Save changes before updating status"
+          description="Choose whether the status change should use the quote currently shown or the last saved version."
+          onClose={() => {
+            if (!lifecyclePreparationSaving) setPendingLifecycleStatus(null);
+          }}
+        />
+        <ModalBody>
+          <Alert tone="warning">This quote has unsaved changes. They will not be included unless you save first.</Alert>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="outline" onClick={() => setPendingLifecycleStatus(null)} disabled={lifecyclePreparationSaving}>Cancel</Button>
+          <Button variant="ghost" onClick={discardEditsAndContinueLifecycle} disabled={lifecyclePreparationSaving}>Discard edits</Button>
+          <Button onClick={() => void saveAndContinueLifecycle()} loading={lifecyclePreparationSaving}>Save and continue</Button>
+        </ModalFooter>
+      </Modal>
+
+      <ConfirmModal
+        open={navigationPromptOpen}
+        onClose={cancelNavigation}
+        onConfirm={continueNavigation}
+        title="Leave with unsaved quote edits?"
+        description="Your edits are saved in this browser for up to 12 hours and can be restored when you return."
+        confirmLabel="Keep draft and leave"
+        confirmVariant="warning"
+      />
+
       <ConfirmModal
         open={lineItemPendingDeleteId !== null}
         onClose={() => setLineItemPendingDeleteId(null)}
@@ -1953,6 +2357,10 @@ export function QuoteDeskView() {
           loadPresetToNewLine(selectedPreset);
           setPresetPickerOpen(false);
         }}
+        onManageProducts={() => {
+          setPresetPickerOpen(false);
+          requestNavigation(() => navigate("/app/products"));
+        }}
       />
 
       <QuoteAiPromptModal
@@ -1987,15 +2395,16 @@ export function QuoteDeskView() {
         submitLabel="Apply AI Suggestion"
       />
 
-      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Draft quote preview">
         <ModalHeader
-          title="Quote preview"
-          description="This is the customer-facing view of the active quote."
+          title="Draft preview"
+          description="This in-app preview includes current unsaved edits. Use Preview Generated PDF to review the saved PDF output."
           onClose={() => setPreviewOpen(false)}
         />
         <ModalBody className="bg-slate-50">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
+            quoteReferenceLabel={`Quote #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
             businessHint={businessHint}
             customerName={customerName}
             customerPhone={customerPhone}
@@ -2017,6 +2426,18 @@ export function QuoteDeskView() {
             showQuoteFlyAttribution={showQuoteFlyAttribution}
           />
         </ModalBody>
+        <ModalFooter>
+          <Button variant="outline" onClick={() => setPreviewOpen(false)}>Close</Button>
+          <Button
+            icon={<FileOutput size={14} />}
+            onClick={() => {
+              setPreviewOpen(false);
+              requestOutboundAction("pdf-preview");
+            }}
+          >
+            Preview Generated PDF
+          </Button>
+        </ModalFooter>
       </Modal>
 
       {sendComposer ? (

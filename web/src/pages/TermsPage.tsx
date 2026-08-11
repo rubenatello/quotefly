@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ScrollText } from "lucide-react";
 import { PolicyPageLayout, PolicySection } from "../components/marketing/PublicPageLayout";
+import { CURRENT_TERMS_UPDATED_LABEL } from "../lib/legal";
 import { setPublicSEOMetadata } from "../lib/seo";
 
 export function TermsPage() {
@@ -53,7 +54,7 @@ export function TermsPage() {
       eyebrow="Terms of Service"
       title="Using QuoteFly"
       description="These terms describe the basic rules and responsibilities for using the QuoteFly service."
-      updated="July 30, 2026"
+      updated={CURRENT_TERMS_UPDATED_LABEL}
       icon={ScrollText}
     >
         {sections.map((section) => (

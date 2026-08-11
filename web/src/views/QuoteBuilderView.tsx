@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Eye, Plus, Sparkles, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -16,6 +17,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmModal,
   Input,
   Modal,
   ModalBody,
@@ -28,10 +30,12 @@ import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, ty
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import {
   quoteBuilderDraftStorageKey,
+  isQuoteDraftTimestampFresh,
   readQuoteBuilderDraft,
   removeQuoteBuilderDraft,
   writeQuoteBuilderDraft,
 } from "../lib/quote-builder-draft-storage";
+import { QUOTE_LINE_CHANGE_LIMIT, validateQuoteHeading, validateQuoteLine } from "../lib/quote-form-validation";
 import {
   applyAiQuoteLinePatch,
   buildPresetPayloadFromLine,
@@ -43,6 +47,7 @@ import {
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 
 function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
   if (unitType === "SQ_FT") return "SQ FT";
@@ -168,8 +173,8 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
   const value: unknown = JSON.parse(raw);
   if (!isRecord(value) || value.version !== 1 || !isDraftString(value.savedAtUtc, 64)) return null;
   const savedAt = Date.parse(value.savedAtUtc);
-  if (!Number.isFinite(savedAt) || savedAt > Date.now() + 60_000) return null;
-  if (!isRecord(value.quote) || !Array.isArray(value.lines) || value.lines.length === 0 || value.lines.length > 100) return null;
+  if (!Number.isFinite(savedAt) || !isQuoteDraftTimestampFresh(value.savedAtUtc)) return null;
+  if (!isRecord(value.quote) || !Array.isArray(value.lines) || value.lines.length === 0 || value.lines.length > QUOTE_LINE_CHANGE_LIMIT) return null;
   if (
     !isDraftString(value.quote.customerId, 200) ||
     !isDraftString(value.quote.serviceType, 32) ||
@@ -269,6 +274,7 @@ const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 
 export function QuoteBuilderView() {
   usePageView("quote_builder");
+  const navigate = useNavigate();
   const track = useTrack();
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickCustomerForm, setQuickCustomerForm] = useState<QuickCustomerForm>(EMPTY_QUICK_CUSTOMER_FORM);
@@ -375,6 +381,14 @@ export function QuoteBuilderView() {
     [draftLines, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteForm],
   );
   const hasMeaningfulDraft = useMemo(() => hasMeaningfulBuilderDraft(currentBuilderDraft), [currentBuilderDraft]);
+  const {
+    navigationPromptOpen,
+    requestNavigation,
+    cancelNavigation,
+    continueNavigation,
+  } = useUnsavedChangesGuard(
+    hasMeaningfulDraft && hydratedDraftStorageKey === draftStorageKey && !saving && !quoteCreationCompletedRef.current,
+  );
   latestDraftRef.current = currentBuilderDraft;
   selectedCustomerIdRef.current = quoteForm.customerId;
 
@@ -467,15 +481,15 @@ export function QuoteBuilderView() {
     setPresetsLoading(true);
     setPresetLoadError(null);
 
-    api.onboarding
-      .getSetup()
+    api.products
+      .list()
       .then((result) => {
         if (!mounted) return;
-        setPresetLibrary(result.presets);
+        setPresetLibrary(result.products);
       })
       .catch(() => {
         if (!mounted) return;
-        setPresetLoadError("Common work names could not be loaded.");
+        setPresetLoadError("Products and services could not be loaded.");
       })
       .finally(() => {
         if (mounted) setPresetsLoading(false);
@@ -883,17 +897,30 @@ export function QuoteBuilderView() {
       return;
     }
 
-    if (!quoteForm.title.trim()) {
-      setError("Add a quote title before creating the quote.");
-      return;
-    }
-
     if (filteredDraftLines.length === 0) {
       setError("Add at least one quote line before creating the quote.");
       return;
     }
 
+    if (filteredDraftLines.length > QUOTE_LINE_CHANGE_LIMIT) {
+      setError(`A quote can include at most ${QUOTE_LINE_CHANGE_LIMIT} lines.`);
+      return;
+    }
+
     const linesToCreate = filteredDraftLines;
+    const scopeText =
+      quoteForm.scopeText.trim() ||
+      linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n");
+    const headingError = validateQuoteHeading(quoteForm.title, scopeText, quoteForm.taxAmount);
+    if (headingError) {
+      setError(headingError);
+      return;
+    }
+    const invalidLineIndex = linesToCreate.findIndex((line) => validateQuoteLine(line) !== null);
+    if (invalidLineIndex >= 0) {
+      setError(validateQuoteLine(linesToCreate[invalidLineIndex], `Line ${invalidLineIndex + 1}`));
+      return;
+    }
     const promptCandidate =
       [...linesToCreate]
         .reverse()
@@ -910,9 +937,7 @@ export function QuoteBuilderView() {
     track("builder_quote_create");
     const createdQuote = await createQuoteDraftFromForm({
       quoteOverride: {
-        scopeText:
-          quoteForm.scopeText.trim() ||
-          linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n"),
+        scopeText,
         internalCostSubtotal: internalSubtotal.toFixed(2),
         customerPriceSubtotal: customerSubtotal.toFixed(2),
       },
@@ -939,14 +964,18 @@ export function QuoteBuilderView() {
     }
   }
 
+  const mobileBuilderStep = mobilePane === "preview" ? 3 : activeCustomer ? 2 : 1;
+
   return (
     <div className="space-y-5" data-testid="quote-builder">
       <PageHeader
         title="Quick Quote"
-        subtitle="Choose an existing customer or add one here, price the work, preview, and share from your phone."
+        subtitle="Choose the customer, add the work, then review the quote."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
+            {selectedQuoteId ? (
+              <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>Open Active Quote</Button>
+            ) : null}
           </div>
         }
       />
@@ -981,25 +1010,42 @@ export function QuoteBuilderView() {
           role="status"
           aria-live="polite"
           data-testid="quote-builder-draft-status"
-          className="flex flex-col gap-3 rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+          className="rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-3 py-2.5 sm:px-4 sm:py-3"
         >
-          <div>
-            <p className="text-sm font-semibold text-slate-900">
-              {draftPersistenceFailed
-                ? "Draft open in this tab"
-                : draftRestored
-                  ? "Draft restored in this tab"
-                  : "Draft autosaved in this tab"}
-            </p>
-            <p className="mt-1 text-xs text-slate-600">
-              {draftPersistenceFailed
-                ? "This browser blocked local draft storage. Keep this tab open until the quote is created."
-                : `Saved only in this tab for the signed-in workspace account${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}. Closing the tab clears it.`}
-            </p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-quotefly-blue/10 text-quotefly-blue">
+                <Check size={15} strokeWidth={2.5} aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {draftPersistenceFailed
+                    ? "Draft open in this tab"
+                    : draftRestored
+                      ? "Draft restored"
+                      : "Draft autosaved"}
+                </p>
+                <p className="truncate text-xs text-slate-600">
+                  {draftPersistenceFailed
+                    ? "Keep this tab open until the quote is created."
+                    : `Saved in this browser${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}
+                </p>
+              </div>
+            </div>
+            {!discardDraftConfirmOpen ? (
+              <button
+                type="button"
+                className="min-h-[44px] shrink-0 rounded-lg px-2 text-xs font-semibold text-slate-600 transition hover:bg-white hover:text-red-600 sm:min-h-[36px]"
+                onClick={() => setDiscardDraftConfirmOpen(true)}
+                aria-label="Discard saved quote draft and start over"
+              >
+                Start Over
+              </button>
+            ) : null}
           </div>
           {discardDraftConfirmOpen ? (
-            <div role="group" aria-label="Confirm discard saved quote draft" className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <span className="w-full text-xs font-semibold text-slate-700 sm:w-auto">Discard this draft?</span>
+            <div role="group" aria-label="Confirm discard saved quote draft" className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-quotefly-blue/10 pt-2">
+              <span className="mr-auto text-xs font-semibold text-slate-700">Discard this draft?</span>
               <Button ref={keepDraftButtonRef} variant="outline" size="sm" onClick={() => setDiscardDraftConfirmOpen(false)}>
                 Keep Draft
               </Button>
@@ -1007,17 +1053,7 @@ export function QuoteBuilderView() {
                 Discard Draft
               </Button>
             </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => setDiscardDraftConfirmOpen(true)}
-              aria-label="Discard saved quote draft and start over"
-            >
-              Start Over
-            </Button>
-          )}
+          ) : null}
         </div>
       ) : null}
       {aiInsight ? (
@@ -1056,63 +1092,29 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
 
-      <div className="flex gap-2 xl:hidden">
-        {([
-          { id: "editor", label: "Edit quote" },
-          { id: "preview", label: "Preview" },
-        ] as const).map((pane) => (
-          <button
-            key={pane.id}
-            type="button"
-            onClick={() => setMobilePane(pane.id)}
-            aria-pressed={mobilePane === pane.id}
-            className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
-              mobilePane === pane.id
-                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                : "border-slate-200 bg-white text-slate-700"
-            }`}
-          >
-            {pane.label}
-          </button>
-          ))}
-      </div>
-
-      <Card variant="default" padding="sm" className="xl:hidden">
-        <div className="grid gap-3">
-          <Select
-            label="Trade"
-            value={quoteForm.serviceType}
-            onChange={(event) =>
-              setQuoteForm((prev) => ({
-                ...prev,
-                serviceType: event.target.value as typeof prev.serviceType,
-              }))
-            }
-            options={[
-              { value: "HVAC", label: "HVAC" },
-              { value: "PLUMBING", label: "Plumbing" },
-              { value: "FLOORING", label: "Flooring" },
-              { value: "ROOFING", label: "Roofing" },
-              { value: "GARDENING", label: "Gardening" },
-              { value: "CONSTRUCTION", label: "Construction" },
-            ]}
-          />
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Quick actions</p>
-              <p className="text-sm font-semibold text-slate-900">Total {money(totalAmount)}</p>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Button variant="outline" size="sm" onClick={() => setQuickCustomerOpen(true)}>
-                Add Customer
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setPresetPickerOpen(true)}>
-                Browse Jobs
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Card>
+      <ol className="grid grid-cols-3 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 xl:hidden" aria-label="Quote progress">
+        {["Customer", "Work", "Review"].map((label, index) => {
+          const step = index + 1;
+          const active = step === mobileBuilderStep;
+          const complete = step < mobileBuilderStep;
+          return (
+            <li
+              key={label}
+              aria-current={active ? "step" : undefined}
+              className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-2 text-xs font-semibold transition ${
+                active ? "bg-quotefly-blue/[0.08] text-quotefly-blue" : complete ? "text-slate-700" : "text-slate-400"
+              }`}
+            >
+              <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
+                active ? "bg-quotefly-blue text-white" : complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+              }`}>
+                {complete ? <Check size={13} strokeWidth={2.5} aria-hidden="true" /> : step}
+              </span>
+              <span>{label}</span>
+            </li>
+          );
+        })}
+      </ol>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px] 2xl:grid-cols-[minmax(0,1fr)_300px]">
         <Card variant="blue" padding="md" className="order-2 hidden self-start xl:block xl:sticky xl:top-24">
@@ -1194,16 +1196,6 @@ export function QuoteBuilderView() {
             actions={
               <div className="flex items-center gap-2">
                 <Button
-                  variant="ghost"
-                  size="md"
-                  className="h-11 w-11 min-h-[44px] rounded-full border-0 p-0 text-quotefly-blue hover:bg-transparent active:bg-transparent xl:hidden"
-                  icon={<Sparkles size={18} />}
-                  onClick={() => setAiModalOpen(true)}
-                  disabled={!canUseChatToQuote}
-                  aria-label="AI Prompt"
-                  title="AI Prompt"
-                />
-                <Button
                   variant="secondary"
                   size="sm"
                   className="hidden xl:inline-flex"
@@ -1213,22 +1205,58 @@ export function QuoteBuilderView() {
                 >
                   AI Prompt
                 </Button>
-                <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                  Preview
+                <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
+                  Draft preview
                 </Button>
               </div>
             }
           >
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            {!activeCustomer ? (
+              <div className="rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
+                Choose or add a customer above to start pricing the work.
+              </div>
+            ) : null}
+
+            <div className={`grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2 ${activeCustomer ? "grid" : "hidden"} xl:hidden`}>
+              <Select
+                label="Work type"
+                value={quoteForm.serviceType}
+                onChange={(event) =>
+                  setQuoteForm((prev) => ({
+                    ...prev,
+                    serviceType: event.target.value as typeof prev.serviceType,
+                  }))
+                }
+                options={[
+                  { value: "HVAC", label: "HVAC" },
+                  { value: "PLUMBING", label: "Plumbing" },
+                  { value: "FLOORING", label: "Flooring" },
+                  { value: "ROOFING", label: "Roofing" },
+                  { value: "GARDENING", label: "Gardening" },
+                  { value: "CONSTRUCTION", label: "Construction" },
+                ]}
+              />
+              <Button variant="outline" onClick={() => setPresetPickerOpen(true)}>
+                <span className="sm:hidden">Products</span>
+                <span className="hidden sm:inline">Products &amp; services</span>
+              </Button>
+              <Button
+                variant="outline"
+                icon={<Sparkles size={15} />}
+                onClick={() => setAiModalOpen(true)}
+                disabled={!canUseChatToQuote}
+                aria-label="Build quote with AI"
+                title="Build quote with AI"
+              >
+                AI
+              </Button>
+            </div>
+
+            <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:block">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Common work names</p>
-                  <p className="mt-1 text-sm text-slate-600">Load standard jobs or your saved work names into the quote sheet.</p>
-                </div>
-                <div className="xl:hidden">
-                  <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
-                    Browse jobs
-                  </Button>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Products &amp; services</p>
+                  <p className="mt-1 text-sm text-slate-600">Load standard or custom catalog items into the quote sheet.</p>
                 </div>
                 {selectedPreset ? (
                   <div className="hidden flex-col gap-2 sm:flex-row sm:items-end xl:flex">
@@ -1251,36 +1279,7 @@ export function QuoteBuilderView() {
 
               {presetLoadError ? <p className="mt-3 text-xs text-red-600">{presetLoadError}</p> : null}
 
-              {selectedPreset ? (
-                <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:hidden">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {money(selectedPreset.unitPrice)} / {formatPresetUnitLabel(selectedPreset.unitType)}
-                      </p>
-                    </div>
-                    {selectedPreset.catalogKey ? <Badge tone="blue">Standard</Badge> : <Badge tone="slate">Saved</Badge>}
-                  </div>
-                  <div className="mt-3 grid grid-cols-[96px_minmax(0,1fr)] gap-2">
-                    <Input
-                      label={formatPresetUnitLabel(selectedPreset.unitType)}
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={selectedPresetQuantity}
-                      onChange={(event) => setSelectedPresetQuantity(event.target.value)}
-                    />
-                    <div className="flex items-end">
-                      <Button fullWidth size="sm" variant="outline" onClick={() => applyPresetToDraft(selectedPreset)}>
-                        Load selected job
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 xl:flex">
+              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                 {presetsLoading ? (
                   <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work…</div>
                 ) : availablePresets.length ? (
@@ -1304,13 +1303,18 @@ export function QuoteBuilderView() {
                   })
                 ) : (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-                    No saved jobs for this trade yet. Add them in Setup.
+                    No products for this trade yet. Add them in Products.
                   </div>
                 )}
               </div>
+              <div className="mt-3 flex justify-end">
+                <Button size="sm" variant="ghost" onClick={() => setPresetPickerOpen(true)}>
+                  Browse all products
+                </Button>
+              </div>
             </div>
 
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+            <div className={`overflow-x-auto rounded-2xl border border-slate-200 bg-white ${activeCustomer ? "block" : "hidden"} xl:block`}>
               <div
                 className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid ${QUOTE_BUILDER_LINE_GRID_COLUMNS} ${QUOTE_BUILDER_LINE_GRID_MIN_WIDTH}`}
               >
@@ -1335,6 +1339,11 @@ export function QuoteBuilderView() {
                     onRemove={removeDraftLine}
                   />
                 ))}
+                <div className="px-3 py-3 xl:hidden">
+                  <Button className="w-full" variant="outline" icon={<Plus size={15} />} onClick={() => addBlankLine()}>
+                    Add another item
+                  </Button>
+                </div>
               </div>
             </div>
           </QuoteSheetEditor>
@@ -1368,28 +1377,34 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
 
-      <div className="xl:hidden">
-        <div className="h-24" />
-        <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+      {activeCustomer || mobilePane === "preview" ? <div className="xl:hidden">
+        <div className="h-20" />
+        <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 px-3 py-2.5 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
           {error ? <p role="alert" className="mb-2 line-clamp-2 text-xs font-medium text-red-700">{error}</p> : null}
-          <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-            <span>{filteredDraftLines.length} line{filteredDraftLines.length === 1 ? "" : "s"}</span>
-            <span>Total {money(totalAmount)}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              icon={mobilePane === "preview" ? <ChevronDown size={14} /> : <Eye size={14} />}
-              onClick={() => setMobilePane((current) => (current === "editor" ? "preview" : "editor"))}
-            >
-              {mobilePane === "preview" ? "Edit Quote" : "Preview"}
-            </Button>
-            <Button loading={saving} onClick={() => void handleCreateQuote()}>
-              Create Quote
-            </Button>
-          </div>
+          {mobilePane === "editor" ? (
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1 pl-1">
+                <p className="text-[11px] font-medium text-slate-500">
+                  {filteredDraftLines.length} work item{filteredDraftLines.length === 1 ? "" : "s"}
+                </p>
+                <p className="text-sm font-bold text-slate-950">Total {money(totalAmount)}</p>
+              </div>
+              <Button className="min-w-[148px]" icon={<Eye size={15} />} onClick={() => setMobilePane("preview")}>
+                Review quote
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2">
+              <Button variant="outline" icon={<ArrowLeft size={15} />} onClick={() => setMobilePane("editor")}>
+                Back
+              </Button>
+              <Button loading={saving} onClick={() => void handleCreateQuote()}>
+                Create Quote
+              </Button>
+            </div>
+          )}
         </div>
-      </div>
+      </div> : null}
 
       <QuickCustomerModal
         open={quickCustomerOpen}
@@ -1429,11 +1444,15 @@ export function QuoteBuilderView() {
         onSelectPreset={setSelectedPresetId}
         quantity={selectedPresetQuantity}
         onQuantityChange={setSelectedPresetQuantity}
-        primaryActionLabel="Load selected job"
+        primaryActionLabel="Load selected product"
         onPrimaryAction={() => {
           if (!selectedPreset) return;
           applyPresetToDraft(selectedPreset);
           setPresetPickerOpen(false);
+        }}
+        onManageProducts={() => {
+          setPresetPickerOpen(false);
+          requestNavigation(() => navigate("/app/products"));
         }}
       />
 
@@ -1475,10 +1494,10 @@ export function QuoteBuilderView() {
         submitLabel="Apply AI Suggestion"
       />
 
-      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Quote preview">
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Draft quote preview">
         <ModalHeader
-          title="Quote preview"
-          description="This is the customer-facing view of the quote as you build it."
+          title="Draft preview"
+          description="This is an in-app preview of the unsaved quote. Create the quote to generate its PDF."
           onClose={() => setPreviewOpen(false)}
         />
         <ModalBody className="bg-slate-50">
@@ -1506,6 +1525,16 @@ export function QuoteBuilderView() {
           />
         </ModalBody>
       </Modal>
+
+      <ConfirmModal
+        open={navigationPromptOpen}
+        onClose={cancelNavigation}
+        onConfirm={continueNavigation}
+        title="Leave this quote draft?"
+        description="Your draft is saved in this browser for up to 12 hours and can be restored when you return."
+        confirmLabel="Keep draft and leave"
+        confirmVariant="warning"
+      />
     </div>
   );
 }
@@ -1570,6 +1599,9 @@ function DraftLineEditorRow({
   onRemove: (lineId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    Boolean(line.details.trim() || Number(line.unitCost) > 0 || line.sectionType === "ALTERNATE"),
+  );
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
   const sectionPillLabel =
     line.sectionType === "ALTERNATE"
@@ -1609,10 +1641,12 @@ function DraftLineEditorRow({
             >
               <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
-                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
-                  {sectionPillLabel}
-                </span>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Item {index + 1}</p>
+                {line.sectionType === "ALTERNATE" ? (
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
+                    {sectionPillLabel}
+                  </span>
+                ) : null}
               </div>
               <p className="truncate text-sm font-semibold text-slate-900">{line.title.trim() || "Untitled line"}</p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1625,22 +1659,14 @@ function DraftLineEditorRow({
                 {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
             </button>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onInsertBelow(line.id)}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-[var(--qf-border-strong)] hover:text-quotefly-blue"
-                aria-label="Add line below"
-              >
-                <Plus size={14} />
-              </button>
+            <div className="flex shrink-0 items-center">
               <button
                 type="button"
                 onClick={() => onRemove(line.id)}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
-                aria-label="Remove line"
+                aria-label={`Remove item ${index + 1}`}
               >
-                <X size={14} />
+                <Trash2 size={15} />
               </button>
             </div>
           </div>
@@ -1648,41 +1674,54 @@ function DraftLineEditorRow({
           <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
             <div className="space-y-3">
               <Input
-                label="Line"
+                label="Work item"
                 aria-label={`Line ${index + 1} title`}
                 placeholder="Asphalt shingle tear-off"
                 value={line.title}
                 onChange={(event) => onChange(line.id, "title", event.target.value)}
               />
-              <Textarea
-                label="Description"
-                aria-label={`Line ${index + 1} description`}
-                rows={3}
-                placeholder="Optional scope details for this line"
-                value={line.details}
-                onChange={(event) => onChange(line.id, "details", event.target.value)}
-              />
-              <QuoteLineSectionField
-                sectionType={line.sectionType}
-                sectionLabel={line.sectionLabel}
-                onSectionTypeChange={updateSectionType}
-                onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
-              />
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Input label="Qty" aria-label={`Line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-                <Input label="Cost" aria-label={`Line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
                 <Input label="Price" aria-label={`Line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
               </div>
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((current) => !current)}
+                className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-[var(--qf-border)] bg-white px-3 text-sm font-medium text-slate-700"
+                aria-expanded={advancedOpen}
+              >
+                More details
+                {advancedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              </button>
+              {advancedOpen ? (
+                <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-white p-3">
+                  <Textarea
+                    label="Description"
+                    aria-label={`Line ${index + 1} description`}
+                    rows={3}
+                    placeholder="Optional scope details for this item"
+                    value={line.details}
+                    onChange={(event) => onChange(line.id, "details", event.target.value)}
+                  />
+                  <Input
+                    label="Internal cost"
+                    aria-label={`Line ${index + 1} cost`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={line.unitCost}
+                    onChange={(event) => onChange(line.id, "unitCost", event.target.value)}
+                  />
+                  <QuoteLineSectionField
+                    sectionType={line.sectionType}
+                    sectionLabel={line.sectionLabel}
+                    onSectionTypeChange={updateSectionType}
+                    onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
+                  />
+                </div>
+              ) : null}
               <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
                 Line total {money(lineTotal)}
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button size="sm" variant="outline" icon={<Plus size={14} />} onClick={() => onInsertBelow(line.id)}>
-                  Add below
-                </Button>
-                <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={() => onRemove(line.id)}>
-                  Remove
-                </Button>
               </div>
             </div>
           </div>
