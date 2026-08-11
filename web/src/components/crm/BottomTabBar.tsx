@@ -53,14 +53,17 @@ export function BottomTabBar() {
         <span className={`mb-1 inline-flex items-center justify-center rounded-xl p-1.5 ${active ? "bg-quotefly-blue/[0.08]" : ""}`}>
           {tab.icon}
         </span>
-        <span className="block max-w-full truncate text-center leading-none">{tab.label}</span>
+        <span className="block whitespace-nowrap text-center leading-none">{tab.label}</span>
       </button>
     );
   };
 
   return (
-    <nav aria-label="Mobile workspace" className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] lg:hidden">
-      <div className="grid grid-cols-5 overflow-hidden rounded-[28px] border border-slate-200 bg-white/96 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+    <nav
+      aria-label="Mobile workspace"
+      className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200/90 bg-white/98 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_28px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
+    >
+      <div className="mx-auto grid max-w-[540px] grid-cols-5">
         {PRIMARY_TABS.map(renderTab)}
         <button
           type="button"

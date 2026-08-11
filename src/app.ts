@@ -24,6 +24,7 @@ import { onboardingRoutes } from "./routes/onboarding";
 import { orgUserRoutes } from "./routes/org-users";
 import { quickBooksRoutes } from "./routes/quickbooks";
 import { internalAdminRoutes } from "./routes/internal-admin";
+import { feedbackRoutes } from "./routes/feedback";
 import { swaggerPlugin } from "./plugins/swagger";
 
 type CorsOriginCallback = (error: Error | null, origin: boolean) => void;
@@ -267,6 +268,7 @@ export function buildServer() {
 
   app.register(healthRoutes, { prefix: "/v1" });
   app.register(authRoutes, { prefix: "/v1" });
+  app.register(feedbackRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });

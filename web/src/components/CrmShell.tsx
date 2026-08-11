@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Clock3, FilePlus2, MoreHorizontal, Search } from "lucide-react";
+import { Clock3, FilePlus2, Lightbulb, MoreHorizontal, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
+import { FeatureRequestForm } from "./feedback/FeatureRequestForm";
 import {
   AnalyticsIcon,
   CustomerIcon,
@@ -15,6 +16,7 @@ import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmCommandPalette } from "./crm/CrmCommandPalette";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
+import { Modal, ModalBody, ModalHeader } from "./ui";
 import {
   WORKSPACE_OPERATIONS_LINKS,
   WORKSPACE_PAGE_META,
@@ -30,6 +32,7 @@ interface CrmShellProps {
   onLogout: () => void;
   children: ReactNode;
   fullName?: string;
+  email?: string;
   planName?: string;
   planCode?: PlanCode;
   isTrial?: boolean;
@@ -65,6 +68,7 @@ export function CrmShell({
   onLogout,
   children,
   fullName,
+  email,
   planName,
   isTrial,
   entitlements,
@@ -76,6 +80,7 @@ export function CrmShell({
     return savedValue === "true";
   });
   const [commandOpen, setCommandOpen] = useState(false);
+  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerWasOpenRef = useRef(false);
 
@@ -139,6 +144,12 @@ export function CrmShell({
     setMobileOpen((open) => !open);
   };
 
+  const handleRequestFeature = () => {
+    setMobileOpen(false);
+    setCommandOpen(false);
+    setFeatureRequestOpen(true);
+  };
+
   const pageMeta = WORKSPACE_PAGE_META[currentPage];
 
   useEffect(() => {
@@ -179,6 +190,7 @@ export function CrmShell({
           operationsLinks={OPERATIONS_LINKS}
           settingsLinks={SETTINGS_LINKS}
           onLogout={onLogout}
+          onRequestFeature={handleRequestFeature}
           planName={planName}
           isTrial={isTrial}
           entitlements={entitlements}
@@ -279,6 +291,14 @@ export function CrmShell({
                       </div>
                       <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
                       <DropdownMenuPrimitive.Item
+                        onSelect={handleRequestFeature}
+                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                      >
+                        <Lightbulb size={15} className="text-quotefly-blue" aria-hidden="true" />
+                        Request a feature
+                      </DropdownMenuPrimitive.Item>
+                      <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
+                      <DropdownMenuPrimitive.Item
                         onSelect={() => onLogout()}
                         className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-red-600 outline-none transition hover:bg-red-50")}
                       >
@@ -292,10 +312,31 @@ export function CrmShell({
           </div>
 
           {children}
-          <div className="pb-24 lg:pb-0" />
-          <CrmLayoutFooter />
+          <div className="pb-[var(--qf-mobile-content-clearance)] lg:pb-0">
+            <CrmLayoutFooter />
+          </div>
         </div>
       </div>
+
+      <Modal
+        open={featureRequestOpen}
+        onClose={() => setFeatureRequestOpen(false)}
+        size="lg"
+        ariaLabel="Request a QuoteFly feature"
+      >
+        <ModalHeader
+          title="Request a feature"
+          description="Tell us what would make QuoteFly faster or easier on the job."
+          onClose={() => setFeatureRequestOpen(false)}
+        />
+        <ModalBody>
+          <FeatureRequestForm
+            source="WORKSPACE"
+            initialName={fullName}
+            initialEmail={email}
+          />
+        </ModalBody>
+      </Modal>
     </div>
   );
 }

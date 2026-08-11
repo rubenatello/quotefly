@@ -61,7 +61,7 @@ export function InlineCustomerLookup({
   return (
     <div className="w-full max-w-[560px]">
       <div className="relative">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -79,14 +79,16 @@ export function InlineCustomerLookup({
           <button
             type="button"
             onClick={onAddCustomer}
+            aria-label="Add Customer"
             className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-quotefly-blue sm:min-h-[40px]"
           >
             <UserRoundPlus size={15} />
-            <span>Add customer</span>
+            <span className="sm:hidden">Add</span>
+            <span className="hidden sm:inline">Add customer</span>
           </button>
         </div>
 
-        {query.trim().length >= 2 ? (
+        {query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase() ? (
           <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_40px_rgba(15,23,42,0.12)]">
             {loading ? (
               <p className="px-3 py-3 text-sm text-slate-500">Searching customers...</p>

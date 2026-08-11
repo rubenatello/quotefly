@@ -196,6 +196,7 @@ function CrmLayout({
       onQuickAction={handleQuickAction}
       onLogout={onLogout}
       fullName={session.fullName}
+      email={session.email}
       planName={session.effectivePlanName}
       planCode={session.effectivePlanCode}
       isTrial={session.isTrial}
@@ -207,7 +208,7 @@ function CrmLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-28 pt-3 sm:px-6 sm:pb-8 sm:pt-6 lg:px-8 lg:pt-8 xl:px-10 2xl:px-12">
+        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto w-full max-w-[1840px]">
               <Routes>
@@ -260,11 +261,13 @@ function MarketingLayout({
   onOpenSignIn,
   onLogout,
   isLoggedIn,
+  session,
 }: {
   onOpenAuth: () => void;
   onOpenSignIn: () => void;
   onLogout: () => void;
   isLoggedIn: boolean;
+  session?: Session | null;
 }) {
   const location = useLocation();
   const currentPage = location.pathname === "/" ? "landing" : location.pathname.slice(1);
@@ -293,7 +296,16 @@ function MarketingLayout({
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
-            <Route path="support" element={<SupportPage onOpenAuth={onOpenAuth} />} />
+            <Route
+              path="support"
+              element={
+                <SupportPage
+                  onOpenAuth={onOpenAuth}
+                  initialName={session?.fullName}
+                  initialEmail={session?.email}
+                />
+              }
+            />
             <Route path="privacy" element={<PrivacyPage />} />
             <Route path="data-privacy" element={<DataPrivacyPage />} />
             <Route path="terms" element={<TermsPage />} />
@@ -511,6 +523,7 @@ function AppRoutes() {
               onOpenSignIn={() => openAuth("signin")}
               onLogout={handleLogout}
               isLoggedIn={isLoggedIn}
+              session={session}
             />
           }
         />

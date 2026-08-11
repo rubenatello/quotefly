@@ -96,7 +96,10 @@ export function QuoteSheetEditor({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accentColor }} />
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Editable quote sheet</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      <span className="sm:hidden">Quote details</span>
+                      <span className="hidden sm:inline">Editable quote sheet</span>
+                    </p>
                   </div>
                   <input
                     aria-label="Quote title"
@@ -104,7 +107,7 @@ export function QuoteSheetEditor({
                     onChange={(event) => onTitleChange(event.target.value)}
                     placeholder={titlePlaceholder ?? "Untitled quote"}
                     readOnly={readOnly}
-                    className={`mt-2 w-full border-0 px-0 text-[1.7rem] font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 sm:text-[1.9rem] ${
+                    className={`mt-2 w-full border-0 px-0 text-[1.4rem] font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 sm:text-[1.9rem] ${
                       readOnly
                         ? "cursor-default bg-transparent focus:outline-none"
                         : "bg-transparent focus:outline-none"
@@ -115,7 +118,7 @@ export function QuoteSheetEditor({
             </div>
             <div className="flex shrink-0 items-center gap-1.5 self-start">
               {logoPosition === "right" ? logo : null}
-              <Badge tone="blue" icon={<FileText size={12} />} className="border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)]">
+              <Badge tone="blue" icon={<FileText size={12} />} className="hidden border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)] sm:inline-flex">
                 Customer view
               </Badge>
               {actions}
@@ -143,10 +146,6 @@ export function QuoteSheetEditor({
                 </button>
               </div>
               {customerTools ? <div className="mt-3">{customerTools}</div> : null}
-              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--qf-border)] pt-3">
-                <SheetMeta label="Prepared" value={preparedDateLabel} compact labelColor={sectionLabelColor} />
-                <SheetMeta label="Sent" value={sentDateLabel} compact labelColor={sectionLabelColor} />
-              </div>
             </div>
           </div>
 
@@ -194,7 +193,9 @@ export function QuoteSheetEditor({
 
           {children}
         </div>
-        <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} />
+        <div className="hidden sm:block">
+          <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} />
+        </div>
       </div>
     </div>
   );
@@ -243,12 +244,10 @@ function SheetParty({
 function SheetMeta({
   label,
   value,
-  compact,
   labelColor,
 }: {
   label: string;
   value: string;
-  compact?: boolean;
   labelColor?: string;
 }) {
   return (
@@ -256,7 +255,7 @@ function SheetMeta({
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: labelColor ?? "#64748b" }}>
         {label}
       </p>
-      <p className={`text-sm font-semibold text-slate-900 ${compact ? "mt-1" : "mt-2"}`}>{value}</p>
+      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
 }

@@ -33,6 +33,7 @@ const EnvSchema = z.object({
   CORS_ALLOWED_ORIGINS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
   PASSWORD_RESET_EMAIL_FROM: z.string().default(""),
+  SUPPORT_EMAIL: z.string().trim().email().default("support@quotefly.us"),
   PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(10).max(60).default(30),
   SESSION_COOKIE_NAME: z.string().min(1).default("qf_session"),
   SESSION_COOKIE_DOMAIN: z.string().default(""),

@@ -822,7 +822,28 @@ export type QuickBooksPushInvoiceResult = {
   createdItems: number;
 };
 
+export type FeatureRequestInput = {
+  requestId: string;
+  name: string;
+  email: string;
+  company?: string;
+  category: "QUOTING" | "CUSTOMERS" | "MOBILE" | "REPORTING" | "INTEGRATIONS" | "OTHER";
+  priority: "NICE_TO_HAVE" | "IMPORTANT" | "BLOCKING";
+  title: string;
+  details: string;
+  source: "PUBLIC" | "WORKSPACE";
+  website?: string;
+};
+
 export const api = {
+  feedback: {
+    submitFeatureRequest: (body: FeatureRequestInput) =>
+      request<{ message: string }>("/v1/feedback/feature-requests", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
   auth: {
     signup: (body: {
       email: string;

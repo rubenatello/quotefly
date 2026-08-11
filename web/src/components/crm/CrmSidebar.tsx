@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, LifeBuoy } from "lucide-react";
+import { ChevronLeft, ChevronRight, LifeBuoy, Lightbulb } from "lucide-react";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 import { CloseIcon } from "../Icons";
@@ -29,6 +29,7 @@ interface CrmSidebarProps {
   operationsLinks: readonly CrmNavLink[];
   settingsLinks: readonly CrmNavLink[];
   onLogout: () => void;
+  onRequestFeature: () => void;
   planName?: string;
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
@@ -58,6 +59,7 @@ export function CrmSidebar({
   operationsLinks,
   settingsLinks,
   onLogout,
+  onRequestFeature,
   planName,
   isTrial,
   entitlements,
@@ -317,6 +319,21 @@ export function CrmSidebar({
               />
             </div>
           ) : null}
+
+          <SidebarTooltip label="Request a feature" collapsed={collapsed}>
+            <button
+              type="button"
+              onClick={onRequestFeature}
+              aria-label="Request a feature"
+              className={cn(
+                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-quotefly-blue/15 bg-quotefly-blue/[0.06] py-2.5 text-sm font-medium text-slate-700 transition hover:border-quotefly-blue/25 hover:bg-quotefly-blue/[0.1] sm:min-h-[40px]",
+                collapsed ? "px-0" : "gap-2 px-4",
+              )}
+            >
+              <Lightbulb size={15} className="text-quotefly-blue" aria-hidden="true" />
+              {!collapsed && "Request a feature"}
+            </button>
+          </SidebarTooltip>
 
           <SidebarTooltip label="Contact support" collapsed={collapsed}>
             <a
