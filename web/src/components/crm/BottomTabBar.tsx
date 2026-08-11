@@ -1,10 +1,9 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode } from "react";
-import { Clock3, FilePlus2 } from "lucide-react";
+import { Clock3, FilePlus2, FileText } from "lucide-react";
 import {
   AnalyticsIcon,
   CustomerIcon,
-  QuoteIcon,
 } from "../Icons";
 import {
   WORKSPACE_PAGE_META,
@@ -20,13 +19,13 @@ interface TabItem {
 }
 
 const PRIMARY_TABS: TabItem[] = [
-  { id: "customers", path: "/app/customers", label: "Customers", icon: <CustomerIcon size={20} /> },
-  { id: "quotes", path: "/app/quotes", label: "Quotes", icon: <QuoteIcon size={20} /> },
+  { id: "customers", path: "/app/customers", label: "Customers", icon: <CustomerIcon size={22} /> },
+  { id: "quotes", path: "/app/quotes", label: "Quotes", icon: <FileText size={22} /> },
 ];
 
 const SECONDARY_TABS: TabItem[] = [
-  { id: "follow-up", path: "/app/follow-up", label: "Follow-up", icon: <Clock3 size={20} /> },
-  { id: "analytics", path: "/app/analytics", label: "Analytics", icon: <AnalyticsIcon size={20} /> },
+  { id: "follow-up", path: "/app/follow-up", label: "Follow-up", icon: <Clock3 size={22} /> },
+  { id: "analytics", path: "/app/analytics", label: "Analytics", icon: <AnalyticsIcon size={22} /> },
 ];
 
 export function BottomTabBar() {
@@ -42,18 +41,25 @@ export function BottomTabBar() {
         key={tab.path}
         type="button"
         onClick={() => navigate(tab.path)}
-        className={`relative flex min-h-[64px] min-w-0 flex-col items-center justify-center overflow-hidden px-0.5 py-2 text-[10px] font-medium transition-colors ${
+        className={`relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors ${
           active
             ? "text-quotefly-blue"
             : "text-slate-500 hover:text-slate-700"
         }`}
+        aria-label={tab.label}
         aria-current={active ? "page" : undefined}
+        title={tab.label}
       >
-        {active ? <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-quotefly-blue" /> : null}
-        <span className={`mb-1 inline-flex items-center justify-center rounded-xl p-1.5 ${active ? "bg-quotefly-blue/[0.08]" : ""}`}>
+        {active ? <span className="absolute top-1.5 h-1 w-5 rounded-full bg-quotefly-blue" aria-hidden="true" /> : null}
+        <span
+          className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl transition ${
+            active ? "bg-quotefly-blue/[0.1] shadow-[0_5px_14px_rgba(47,111,214,0.12)]" : ""
+          }`}
+          aria-hidden="true"
+        >
           {tab.icon}
         </span>
-        <span className="block whitespace-nowrap text-center leading-none">{tab.label}</span>
+        <span className="sr-only">{tab.label}</span>
       </button>
     );
   };
@@ -68,14 +74,18 @@ export function BottomTabBar() {
         <button
           type="button"
           onClick={() => navigate("/app/build")}
-          className="relative flex min-h-[64px] flex-col items-center justify-center text-[10px] font-semibold text-quotefly-blue"
+          className="relative flex min-h-[64px] items-center justify-center text-quotefly-blue"
           aria-label="New quote"
+          title="New quote"
           data-testid="mobile-quick-quote"
         >
-          <span className="mb-1 inline-flex h-10 w-10 -translate-y-1 items-center justify-center rounded-2xl bg-quotefly-blue text-white shadow-[0_8px_20px_rgba(47,111,214,0.3)]">
-            <FilePlus2 size={20} />
+          <span
+            className="inline-flex h-12 w-12 -translate-y-1 items-center justify-center rounded-2xl bg-quotefly-blue text-white shadow-[0_8px_20px_rgba(47,111,214,0.3)]"
+            aria-hidden="true"
+          >
+            <FilePlus2 size={22} />
           </span>
-          <span className="absolute bottom-2 leading-none">New</span>
+          <span className="sr-only">New quote</span>
         </button>
         {SECONDARY_TABS.map(renderTab)}
       </div>

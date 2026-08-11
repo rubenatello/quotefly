@@ -25,6 +25,7 @@ import { productRoutes } from "./routes/products";
 import { orgUserRoutes } from "./routes/org-users";
 import { quickBooksRoutes } from "./routes/quickbooks";
 import { internalAdminRoutes } from "./routes/internal-admin";
+import { internalControlPlaneRoutes } from "./routes/internal-control-plane";
 import { feedbackRoutes } from "./routes/feedback";
 import { swaggerPlugin } from "./plugins/swagger";
 
@@ -280,6 +281,7 @@ export function buildServer() {
   app.register(orgUserRoutes, { prefix: "/v1" });
   app.register(quickBooksRoutes, { prefix: "/v1" });
   app.register(internalAdminRoutes, { prefix: "/v1" });
+  app.register(internalControlPlaneRoutes, { prefix: "/v1" });
   if (env.ENABLE_TWILIO_SMS) {
     app.register(smsRoutes, { prefix: "/v1" });
   }

@@ -42,6 +42,7 @@ const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage").then((m
 const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
+const SuperuserAdminPage = lazy(() => import("./pages/SuperuserAdminPage").then((module) => ({ default: module.SuperuserAdminPage })));
 const SuperuserAiPage = lazy(() => import("./pages/SuperuserAiPage").then((module) => ({ default: module.SuperuserAiPage })));
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
 const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
@@ -277,6 +278,10 @@ function CrmLayout({
                 <Route path="settings" element={<AdminPage session={session} />} />
                 <Route path="settings/users" element={<AdminPage session={session} />} />
                 <Route
+                  path="internal/admin"
+                  element={session.isSuperuser ? <SuperuserAdminPage /> : <Navigate to="/app/settings" replace />}
+                />
+                <Route
                   path="internal/admin/ai-quality"
                   element={session.isSuperuser ? <SuperuserAiPage /> : <Navigate to="/app/settings" replace />}
                 />
@@ -292,7 +297,7 @@ function CrmLayout({
                   path="admin"
                   element={
                     session.isSuperuser
-                      ? <Navigate to="/app/internal/admin/ai-quality" replace />
+                      ? <Navigate to="/app/internal/admin" replace />
                       : <Navigate to="/app/settings" replace />
                   }
                 />

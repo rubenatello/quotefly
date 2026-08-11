@@ -1,5 +1,18 @@
-import { Prisma, PrismaClient, type AiUsageEventType } from "@prisma/client";
+import {
+  AiRetrievalAuditStatus,
+  Prisma,
+  PrismaClient,
+  type AiPurpose,
+  type AiUsageEventType,
+  type ServiceCategory,
+} from "@prisma/client";
 import type { ActivityActor } from "./activity";
+import {
+  governAiPrompt,
+  hashSourceReference,
+  maxClassificationForQuotePurpose,
+} from "./ai-data-governance";
+import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import type { TenantEntitlements } from "./subscription";
 import { startOfCurrentUtcMonth, startOfNextUtcMonth } from "./subscription";
 
@@ -33,6 +46,7 @@ export type AiUsageTrace = {
   insightSummary?: string | null;
   insightReasons?: string[] | null;
   insightSourceLabels?: string[] | null;
+  sourceTypes?: string[] | null;
   confidenceLevel?: string | null;
   confidenceLabel?: string | null;
   riskNote?: string | null;
@@ -189,28 +203,72 @@ export async function createAiUsageEvent(
     actor?: ActivityActor | null;
     eventType: AiUsageEventType;
     promptText: string;
+    requestId: string;
+    purpose?: AiPurpose;
+    serviceType?: ServiceCategory | null;
+    sensitiveValues?: readonly (string | null | undefined)[];
     model?: string | null;
     creditsConsumed?: number;
     telemetry?: AiUsageTelemetry | null;
     trace?: AiUsageTrace | null;
   },
 ) {
+  const requestId = params.requestId.trim();
+  if (!requestId) {
+    throw new Error("AI audit requestId is required.");
+  }
+  const purpose: AiPurpose =
+    params.purpose ?? (params.eventType === "REVISE" ? "QUOTE_REVISION" : "QUOTE_DRAFT");
+  const governedPrompt = governAiPrompt(params.promptText, {
+    knownSensitiveValues: [
+      params.actor?.actorEmail,
+      params.actor?.actorName,
+      ...(params.sensitiveValues ?? []),
+    ].filter((value): value is string => Boolean(value?.trim())),
+  });
+  const sourceTypes = Array.from(
+    new Set((params.trace?.sourceTypes ?? []).map((value) => value.trim()).filter(Boolean)),
+  )
+    .slice(0, 16)
+    .map((value) => value.slice(0, 64));
+  const sourceRefs = [
+    params.quoteId
+      ? { type: "quote", refHash: hashSourceReference("quote", params.quoteId) }
+      : null,
+    params.customerId
+      ? { type: "customer", refHash: hashSourceReference("customer", params.customerId) }
+      : null,
+  ].filter((value): value is { type: string; refHash: string } => value !== null);
+
   return prisma.aiUsageEvent.create({
     data: {
-      tenantId: params.tenantId,
-      quoteId: params.quoteId ?? null,
-      customerId: params.customerId ?? null,
-      actorUserId: params.actor?.actorUserId ?? null,
+      tenant: { connect: { id: params.tenantId } },
+      ...(params.quoteId
+        ? { quote: { connect: { id_tenantId: { id: params.quoteId, tenantId: params.tenantId } } } }
+        : {}),
+      ...(params.customerId
+        ? { customer: { connect: { id_tenantId: { id: params.customerId, tenantId: params.tenantId } } } }
+        : {}),
+      ...(params.actor?.actorUserId
+        ? { actorUser: { connect: { id: params.actor.actorUserId } } }
+        : {}),
       actorEmail: params.actor?.actorEmail ?? null,
       actorName: params.actor?.actorName ?? null,
       eventType: params.eventType,
+      purpose,
+      classification: maxClassificationForQuotePurpose(purpose),
+      serviceType: params.serviceType ?? null,
       creditsConsumed: params.creditsConsumed ?? 1,
       requestCount: params.telemetry?.requestCount ?? 1,
       promptTokens: params.telemetry?.promptTokens ?? null,
       completionTokens: params.telemetry?.completionTokens ?? null,
       totalTokens: params.telemetry?.totalTokens ?? null,
       estimatedCostUsd: params.telemetry?.estimatedCostUsd ?? null,
-      promptText: params.promptText,
+      // New events intentionally avoid retaining the raw prompt. Historical
+      // rows remain untouched until an explicitly authorized purge is run.
+      promptText: null,
+      promptRedacted: governedPrompt.redacted,
+      promptHash: governedPrompt.sha256,
       model: params.model ?? null,
       insightSummary: params.trace?.insightSummary?.trim() || null,
       insightReasons: params.trace?.insightReasons?.filter(Boolean) ?? [],
@@ -221,6 +279,29 @@ export async function createAiUsageEvent(
       patchAdded: params.trace?.patch?.added ?? null,
       patchUpdated: params.trace?.patch?.updated ?? null,
       patchRemoved: params.trace?.patch?.removed ?? null,
+      sourceCount: sourceTypes.length,
+      retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
+      retrievalAuditEvent: {
+        create: {
+          tenant: { connect: { id: params.tenantId } },
+          ...(params.actor?.actorUserId
+            ? { actorUser: { connect: { id: params.actor.actorUserId } } }
+            : {}),
+          requestId: requestId.slice(0, 128),
+          purpose,
+          model: params.model ?? null,
+          maxClassification: maxClassificationForQuotePurpose(purpose),
+          sourceTypes,
+          sourceRefs: sourceRefs.length ? sourceRefs : Prisma.JsonNull,
+          resultCount: sourceTypes.length,
+          inputTokenCount: params.telemetry?.promptTokens ?? null,
+          outputTokenCount: params.telemetry?.completionTokens ?? null,
+          queryHash: governedPrompt.sha256,
+          policyVersion: AI_DATA_POLICY_VERSION,
+          status: AiRetrievalAuditStatus.SUCCEEDED,
+          retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
+        },
+      },
     },
   });
 }

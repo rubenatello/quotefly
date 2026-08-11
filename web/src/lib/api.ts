@@ -246,6 +246,159 @@ export type InternalAiQualityTenantRow = {
   regexFallbackRatePct: number;
 };
 
+export type DataClassification =
+  | "C0_PUBLIC"
+  | "C1_BUSINESS_INTERNAL"
+  | "C2_CUSTOMER_CONFIDENTIAL"
+  | "C3_FINANCIAL_CONFIDENTIAL"
+  | "C4_RESTRICTED";
+
+export type DataGovernanceValidationIssue = {
+  severity: "error" | "warning";
+  code: string;
+  model: string;
+  field?: string;
+  message: string;
+};
+
+export type DataGovernanceValidation = {
+  status: "PASSED" | "FAILED";
+  policyVersion: string;
+  schemaHash: string;
+  baselineHash: string;
+  modelCount: number;
+  fieldCount: number;
+  issueCount: number;
+  errorCount: number;
+  warningCount: number;
+  issues: DataGovernanceValidationIssue[];
+};
+
+export type InternalControlPlaneSummary = {
+  generatedAtUtc: string;
+  configuredAiModel: string;
+  totals: {
+    activeTenants: number;
+    deletedTenants: number;
+    activeUsers: number;
+    activeCustomers: number;
+    activeQuotes: number;
+    aiRuns: number;
+    aiTokens: number;
+    aiSpendUsd: number;
+  };
+  observedModels: Array<{ model: string; runCount: number }>;
+  liveValidation: DataGovernanceValidation;
+  latestValidation: null | {
+    id: string;
+    status: "PASSED" | "FAILED";
+    schemaHash: string;
+    baselineHash: string;
+    modelCount: number;
+    fieldCount: number;
+    issueCount: number;
+    createdAt: string;
+  };
+  mutationPolicy: { enabled: false; reason: string };
+};
+
+export type InternalTenantMetadata = {
+  id: string;
+  name: string;
+  slug: string;
+  primaryTrade: ServiceType;
+  subscriptionStatus: string;
+  subscriptionPlanCode?: string | null;
+  onboardingCompletedAtUtc?: string | null;
+  trialEndsAtUtc?: string | null;
+  subscriptionCurrentPeriodEndUtc?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAtUtc?: string | null;
+  _count: {
+    users: number;
+    customers: number;
+    quotes: number;
+    workPresets: number;
+    aiUsageEvents: number;
+  };
+};
+
+export type InternalDataCatalogField = {
+  field: string;
+  column: string;
+  type: string;
+  kind: string;
+  isRequired: boolean;
+  isList: boolean;
+  isId: boolean;
+  isUnique: boolean;
+  hasDefaultValue: boolean;
+  classification: DataClassification;
+  classificationSource: "field_override" | "model_default" | "fail_closed";
+  ragStatus: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
+  requiredAccess: string[];
+};
+
+export type InternalDataCatalogModel = {
+  model: string;
+  table: string;
+  purpose: string;
+  tenantScope: "required" | "optional" | "platform";
+  defaultClassification: DataClassification;
+  reviewStatus: "REVIEWED" | "REVIEW_REQUIRED";
+  fields: InternalDataCatalogField[];
+};
+
+export type InternalDataCatalog = {
+  policyVersion: string;
+  validation: DataGovernanceValidation;
+  summary: {
+    modelCount: number;
+    fieldCount: number;
+    classificationCounts: Record<DataClassification, number>;
+    ragEligibleCount: number;
+    reviewRequiredCount: number;
+  };
+  models: InternalDataCatalogModel[];
+  filters: {
+    search?: string;
+    classification?: DataClassification;
+    ragStatus?: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
+  };
+};
+
+export type InternalPermissionPolicy = {
+  capabilities: string[];
+  roles: Record<"owner" | "admin" | "member", string[]>;
+  operatorCapabilities: Record<string, boolean>;
+};
+
+export type InternalValidationRun = {
+  id: string;
+  actorUserId?: string | null;
+  schemaHash: string;
+  baselineHash: string;
+  policyVersion: string;
+  status: "PASSED" | "FAILED";
+  modelCount: number;
+  fieldCount: number;
+  issueCount: number;
+  issues: DataGovernanceValidationIssue[];
+  createdAt: string;
+};
+
+export type InternalSuperuserAuditEvent = {
+  id: string;
+  requestId: string;
+  action: string;
+  targetType?: string | null;
+  targetRefHash?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+  actorUser?: { id: string; email: string; fullName: string } | null;
+};
+
 export type QuoteStatus =
   | "DRAFT"
   | "READY_FOR_REVIEW"
@@ -405,7 +558,6 @@ export type Quote = {
   taxAmount: DecimalLike;
   totalAmount: DecimalLike;
   aiGeneratedAtUtc?: string | null;
-  aiPromptText?: string | null;
   aiModel?: string | null;
   closedAtUtc?: string | null;
   jobCompletedAtUtc?: string | null;
@@ -598,13 +750,22 @@ export type AiQuoteRun = {
   actorEmail?: string | null;
   actorName?: string | null;
   eventType: "DRAFT" | "REVISE";
+  purpose?: "QUOTE_DRAFT" | "QUOTE_REVISION" | "BUSINESS_INSIGHT" | null;
+  classification?:
+    | "C0_PUBLIC"
+    | "C1_BUSINESS_INTERNAL"
+    | "C2_CUSTOMER_CONFIDENTIAL"
+    | "C3_FINANCIAL_CONFIDENTIAL"
+    | "C4_RESTRICTED"
+    | null;
+  serviceType?: ServiceType | null;
   creditsConsumed: number;
   requestCount: number;
   promptTokens?: number | null;
   completionTokens?: number | null;
   totalTokens?: number | null;
   estimatedCostUsd?: number | null;
-  promptText: string;
+  promptRedacted?: string | null;
   model?: string | null;
   insightSummary?: string | null;
   insightReasons: string[];
@@ -615,6 +776,7 @@ export type AiQuoteRun = {
   patchAdded?: number | null;
   patchUpdated?: number | null;
   patchRemoved?: number | null;
+  sourceCount?: number | null;
   createdAt: string;
 };
 
@@ -871,6 +1033,46 @@ export const api = {
   },
 
   internal: {
+    controlPlane: {
+      summary: () => request<InternalControlPlaneSummary>("/v1/internal/control-plane/summary"),
+      tenants: (query?: {
+        limit?: number;
+        offset?: number;
+        search?: string;
+        lifecycle?: "active" | "deleted" | "all";
+      }) => request<{
+        tenants: InternalTenantMetadata[];
+        pagination: { limit: number; offset: number; total: number };
+        fieldsExcluded: string[];
+      }>(`/v1/internal/control-plane/tenants${toQueryString({
+        limit: query?.limit,
+        offset: query?.offset,
+        search: query?.search,
+        lifecycle: query?.lifecycle,
+      })}`),
+      dataCatalog: (query?: {
+        search?: string;
+        classification?: DataClassification;
+        ragStatus?: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
+      }) => request<InternalDataCatalog>(
+        `/v1/internal/control-plane/data-catalog${toQueryString({
+          search: query?.search,
+          classification: query?.classification,
+          ragStatus: query?.ragStatus,
+        })}`,
+      ),
+      permissions: () => request<InternalPermissionPolicy>("/v1/internal/control-plane/permissions"),
+      runValidation: () => request<{ run: InternalValidationRun & DataGovernanceValidation }>(
+        "/v1/internal/control-plane/validation-runs",
+        { method: "POST" },
+      ),
+      validationRuns: (query?: { limit?: number }) => request<{ runs: InternalValidationRun[] }>(
+        `/v1/internal/control-plane/validation-runs${toQueryString({ limit: query?.limit })}`,
+      ),
+      auditEvents: (query?: { limit?: number }) => request<{ events: InternalSuperuserAuditEvent[] }>(
+        `/v1/internal/control-plane/audit-events${toQueryString({ limit: query?.limit })}`,
+      ),
+    },
     aiQuality: {
       summary: (query?: { days?: number }) =>
         request<InternalAiQualitySummary>(

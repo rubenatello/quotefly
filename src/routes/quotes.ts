@@ -2,6 +2,7 @@ import { LeadFollowUpStatus, Prisma, PrismaClient, QuoteOutboundChannel, QuoteRe
 import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
 import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
@@ -306,13 +307,16 @@ const AiUsageTraceSelect = {
   actorEmail: true,
   actorName: true,
   eventType: true,
+  purpose: true,
+  classification: true,
+  serviceType: true,
   creditsConsumed: true,
   requestCount: true,
   promptTokens: true,
   completionTokens: true,
   totalTokens: true,
   estimatedCostUsd: true,
-  promptText: true,
+  promptRedacted: true,
   model: true,
   insightSummary: true,
   insightReasons: true,
@@ -323,6 +327,7 @@ const AiUsageTraceSelect = {
   patchAdded: true,
   patchUpdated: true,
   patchRemoved: true,
+  sourceCount: true,
   createdAt: true,
 } as const satisfies Prisma.AiUsageEventSelect;
 
@@ -1659,6 +1664,7 @@ function buildAiUsageTraceFromInsight(
     insightSummary: insight.summary,
     insightReasons,
     insightSourceLabels: sourceLabels,
+    sourceTypes: insight.sources.map((source) => source.type),
     confidenceLevel: insight.confidence.level,
     confidenceLabel: insight.confidence.label,
     riskNote: insight.riskNote,
@@ -3094,7 +3100,40 @@ function inferPresetQuantity(
   return Number(Math.max(defaultQuantity, 1).toFixed(2));
 }
 
+/**
+ * Defense-in-depth for historical rows created before prompt minimization.
+ * Quote handlers return several different Prisma projections, so the scoped
+ * serialization hook removes raw prompt fields from every JSON shape without
+ * changing dates, decimals, streams, or binary PDF responses.
+ */
+function stripRestrictedAiPromptFields(payload: unknown, seen = new WeakSet<object>()): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  if (payload instanceof Date || Buffer.isBuffer(payload)) return payload;
+  if (seen.has(payload)) return payload;
+  seen.add(payload);
+
+  if (Array.isArray(payload)) {
+    for (const value of payload) stripRestrictedAiPromptFields(value, seen);
+    return payload;
+  }
+
+  const prototype = Object.getPrototypeOf(payload);
+  if (prototype !== Object.prototype && prototype !== null) return payload;
+
+  const record = payload as Record<string, unknown>;
+  delete record.aiPromptText;
+  delete record.promptText;
+  for (const value of Object.values(record)) {
+    stripRestrictedAiPromptFields(value, seen);
+  }
+  return payload;
+}
+
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
+  app.addHook("preSerialization", async (_request, _reply, payload) =>
+    stripRestrictedAiPromptFields(payload),
+  );
+
   app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = SuggestQuoteWithAiSchema.parse(request.body);
     const claims = getJwtClaims(request);
@@ -3722,6 +3761,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         actor,
         eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
         promptText: payload.prompt,
+        requestId: request.id,
+        serviceType: suggestion.serviceType,
+        sensitiveValues: selectedCustomer
+          ? [selectedCustomer.fullName, selectedCustomer.email, selectedCustomer.phone]
+          : [],
         model: suggestion.model,
         telemetry: aiTelemetry,
         trace: buildAiUsageTraceFromInsight(insight, {
@@ -4266,7 +4310,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           taxAmount,
           totalAmount,
           aiGeneratedAtUtc: new Date(),
-          aiPromptText: payload.prompt,
+          aiPromptText: null,
           aiModel: aiRuntime.model,
         },
       });
@@ -4312,9 +4356,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         actor,
         eventType: "DRAFT",
         promptText: payload.prompt,
+        requestId: request.id,
+        serviceType: parsedDraft.serviceType,
+        sensitiveValues: [
+          customer.fullName,
+          customer.email,
+          customer.phone,
+          parsedDraft.customerName,
+          parsedDraft.customerEmail,
+          parsedDraft.customerPhone,
+        ],
         model: aiRuntime.model,
         telemetry: aiTelemetry,
-        trace: buildAiUsageTraceFromInsight(draftInsight),
+        trace: buildAiUsageTraceFromInsight(draftInsight, {
+          serviceType: parsedDraft.serviceType,
+        }),
       });
 
       return tx.quote.findFirst({
@@ -4809,14 +4865,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/quotes/:quoteId/ai-runs", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const query = QuoteAiRunsByQuoteQuerySchema.parse(request.query);
 
     const quote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
-        ...tenantActiveQuoteScope(claims.tenantId),
+        ...tenantActiveQuoteScope(access.tenantId),
       },
       select: { id: true },
     });
@@ -4826,9 +4882,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const where: Prisma.AiUsageEventWhereInput = {
-      tenantId: claims.tenantId,
+      tenantId: access.tenantId,
       quoteId: quote.id,
       deletedAtUtc: null,
+      ...(!hasCapability(access, "viewAiRunAudit")
+        ? { actorUserId: access.userId }
+        : {}),
     };
 
     const [runs, total] = await app.prisma.$transaction([
@@ -4844,11 +4903,42 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     return {
       runs: runs.map((run) => ({
-        ...run,
-        estimatedCostUsd:
-          run.estimatedCostUsd === null || run.estimatedCostUsd === undefined
-            ? null
-            : Number(run.estimatedCostUsd),
+        id: run.id,
+        quoteId: run.quoteId,
+        customerId: run.customerId,
+        actorUserId: run.actorUserId,
+        actorEmail: run.actorEmail,
+        actorName: run.actorName,
+        eventType: run.eventType,
+        purpose: run.purpose,
+        classification: run.classification,
+        serviceType: run.serviceType,
+        creditsConsumed: run.creditsConsumed,
+        requestCount: run.requestCount,
+        promptTokens: run.promptTokens,
+        completionTokens: run.completionTokens,
+        totalTokens: run.totalTokens,
+        ...(hasCapability(access, "viewInternalCosts")
+          ? {
+              estimatedCostUsd:
+                run.estimatedCostUsd === null || run.estimatedCostUsd === undefined
+                  ? null
+                  : Number(run.estimatedCostUsd),
+            }
+          : {}),
+        promptRedacted: run.promptRedacted,
+        model: run.model,
+        insightSummary: run.insightSummary,
+        insightReasons: run.insightReasons,
+        insightSourceLabels: run.insightSourceLabels,
+        confidenceLevel: run.confidenceLevel,
+        confidenceLabel: run.confidenceLabel,
+        riskNote: run.riskNote,
+        patchAdded: run.patchAdded,
+        patchUpdated: run.patchUpdated,
+        patchRemoved: run.patchRemoved,
+        sourceCount: run.sourceCount,
+        createdAt: run.createdAt,
       })),
       pagination: {
         limit: query.limit,

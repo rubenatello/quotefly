@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError, api, type InternalAiQualitySummary, type InternalAiQualityTenantRow } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
-import { Alert, Card, CardHeader, PageHeader } from "../components/ui";
+import { Alert, Button, Card, CardHeader, PageHeader } from "../components/ui";
 
 export function SuperuserAiPage() {
+  const navigate = useNavigate();
   const [summary, setSummary] = useState<InternalAiQualitySummary | null>(null);
   const [tenants, setTenants] = useState<InternalAiQualityTenantRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +49,11 @@ export function SuperuserAiPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Superuser AI Quality" subtitle="Platform-only metrics. Not visible to tenant users." />
+      <PageHeader
+        title="Superuser AI Quality"
+        subtitle="Platform-only metrics. Not visible to tenant users."
+        actions={<Button variant="outline" onClick={() => navigate("/app/internal/admin")}>Operator console</Button>}
+      />
 
       {error ? (
         <Alert tone="error" onDismiss={() => setError(null)}>

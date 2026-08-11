@@ -20,6 +20,7 @@ process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
 process.env.ENABLE_TWILIO_SMS = "true";
 process.env.TWILIO_WEBHOOK_AUTH_TOKEN ||= "twilio-integration-webhook-auth-token";
+process.env.SUPERUSER_EMAILS ||= "superuser-integration@example.com";
 
 const databaseUrl = process.env.DATABASE_URL;
 

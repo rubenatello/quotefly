@@ -49,10 +49,18 @@ test.describe("mobile launch smoke", () => {
     await page.setViewportSize({ width: 390, height: 844 });
 
     const quickQuote = page.getByTestId("mobile-quick-quote");
+    const mobileWorkspace = page.getByRole("navigation", { name: "Mobile workspace" });
     await expect(quickQuote).toBeVisible();
     await expect(quickQuote).toHaveAttribute("aria-label", "New quote");
+    await expect(quickQuote.getByText("New quote", { exact: true })).toHaveClass(/sr-only/);
+    for (const label of ["Customers", "Quotes", "Follow-up", "Analytics"]) {
+      const tab = mobileWorkspace.getByRole("button", { name: label, exact: true });
+      await expect(tab).toHaveAttribute("title", label);
+      await expect(tab.getByText(label, { exact: true })).toHaveClass(/sr-only/);
+      expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
 
-    await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Quotes", exact: true }).click();
+    await mobileWorkspace.getByRole("button", { name: "Quotes", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
     await expect(page.getByText("Ready to send", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Waiting on reply", { exact: true })).toBeVisible();

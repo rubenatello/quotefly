@@ -1,8 +1,6 @@
-import { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { getJwtClaims } from "../lib/auth";
-import { isSuperuserEmail } from "../lib/superuser";
-import { parseChatToQuotePrompt } from "../services/chat-to-quote";
+import { recordSuperuserAuditEvent, requireSuperuserAccess } from "../lib/superuser-access";
 
 const AiQualitySummaryQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(180).default(30),
@@ -26,18 +24,10 @@ function roundPercent(value: number): number {
   return Number(value.toFixed(2));
 }
 
-function requireSuperuser(request: FastifyRequest, reply: FastifyReply) {
-  const claims = getJwtClaims(request);
-  if (!isSuperuserEmail(claims.email)) {
-    reply.code(403).send({ error: "Superuser access required." });
-    return null;
-  }
-  return claims;
-}
-
 export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
   app.get("/internal/ai-quality/summary", { preHandler: [app.authenticate] }, async (request, reply) => {
-    if (!requireSuperuser(request, reply)) return reply;
+    const claims = requireSuperuserAccess(request, reply);
+    if (!claims) return reply;
     const query = AiQualitySummaryQuerySchema.parse(request.query);
     const windowStartUtc = daysAgoUtc(query.days);
 
@@ -115,7 +105,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: "desc" },
         select: {
           eventType: true,
-          promptText: true,
+          serviceType: true,
           model: true,
           confidenceLevel: true,
           patchAdded: true,
@@ -177,7 +167,8 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
     >();
 
     for (const run of recentRuns) {
-      const trade = parseChatToQuotePrompt(run.promptText).serviceType;
+      const trade = run.serviceType;
+      if (!trade) continue;
       const row = tradeRows.get(trade) ?? {
         runCount: 0,
         draftRuns: 0,
@@ -244,6 +235,14 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       ratePct: totalRuns > 0 ? roundPercent((signal.count / totalRuns) * 100) : 0,
     }));
 
+    await recordSuperuserAuditEvent(app.prisma, {
+      actorUserId: claims.userId,
+      requestId: request.id,
+      action: "AI_QUALITY_SUMMARY_VIEWED",
+      targetType: "AiUsageEvent",
+      metadata: { windowDays: query.days, runCount: totalRuns },
+    });
+
     return {
       windowDays: query.days,
       windowStartUtc,
@@ -283,7 +282,8 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/internal/ai-quality/tenants", { preHandler: [app.authenticate] }, async (request, reply) => {
-    if (!requireSuperuser(request, reply)) return reply;
+    const claims = requireSuperuserAccess(request, reply);
+    if (!claims) return reply;
     const query = AiQualityTenantsQuerySchema.parse(request.query);
     const windowStartUtc = daysAgoUtc(query.days);
 
@@ -379,6 +379,14 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
     const regexFallbackByTenant = new Map(
       regexFallbackGroups.map((group) => [group.tenantId, group._count._all ?? 0]),
     );
+
+    await recordSuperuserAuditEvent(app.prisma, {
+      actorUserId: claims.userId,
+      requestId: request.id,
+      action: "AI_QUALITY_TENANT_LIST_VIEWED",
+      targetType: "Tenant",
+      metadata: { windowDays: query.days, limit: query.limit, resultCount: sorted.length },
+    });
 
     return {
       windowDays: query.days,

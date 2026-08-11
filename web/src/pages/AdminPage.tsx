@@ -571,10 +571,10 @@ export function AdminPage({ session }: AdminPageProps) {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => navigate("/app/internal/admin/ai-quality")}
+                  onClick={() => navigate("/app/internal/admin")}
                   fullWidth
                 >
-                  Open AI Quality Console
+                  Open Operator Console
                 </Button>
               ) : null}
               {settingsMode === "org" && ownerView ? (

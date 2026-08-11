@@ -83,10 +83,14 @@ async function expectStatus(response: APIResponse, expectedStatus: number) {
   }
 }
 
-export async function signUpViaApi(request: APIRequestContext, prefix = "beta"): Promise<E2eAccount> {
+export async function signUpViaApi(
+  request: APIRequestContext,
+  prefix = "beta",
+  emailOverride?: string,
+): Promise<E2eAccount> {
   const label = uniqueRunLabel(prefix);
   const password = "TestPassword123!";
-  const email = `${label}@example.com`;
+  const email = emailOverride ?? `${label}@example.com`;
   const response = await request.post(`${apiBaseUrl}/v1/auth/signup`, {
     data: {
       email,

@@ -2003,14 +2003,14 @@ export function QuoteDeskView() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">AI runs</p>
-                  <p className="mt-1 text-sm text-slate-600">Inspect prompts, context quality, and AI cost for this quote.</p>
+                  <p className="mt-1 text-sm text-slate-600">Review privacy-safe AI activity and context quality for this quote.</p>
                 </div>
               </div>
 
               {aiRunsLoading ? (
                 <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading AI runs...</p>
               ) : aiRuns.length === 0 ? (
-                <EmptyState title="No AI runs yet" description="AI prompt history appears here after draft or revise actions." />
+                <EmptyState title="No AI runs yet" description="Privacy-safe AI activity appears here after draft or revise actions." />
               ) : (
                 <div className="space-y-2">
                   {aiRuns.map((run) => (
@@ -2032,7 +2032,11 @@ export function QuoteDeskView() {
                         <span className="text-xs text-slate-500">{formatDateTime(run.createdAt)}</span>
                       </div>
                       <p className="mt-2 text-sm font-semibold text-slate-900">{run.insightSummary || "AI prepared a quote update."}</p>
-                      <p className="mt-1 text-sm text-slate-600">{run.promptText}</p>
+                      {run.promptRedacted ? (
+                        <p className="mt-1 text-sm text-slate-600">{run.promptRedacted}</p>
+                      ) : (
+                        <p className="mt-1 text-sm text-slate-500">Prompt details are unavailable for this historical run.</p>
+                      )}
                       {run.riskNote ? <p className="mt-2 text-xs text-slate-600">{run.riskNote}</p> : null}
                       {run.insightReasons.length ? (
                         <div className="mt-2 flex flex-wrap gap-2">
