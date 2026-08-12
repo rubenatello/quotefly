@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Clock3, FilePlus2, Lightbulb, MoreHorizontal, PackageSearch, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { cn } from "../lib/utils";
-import { FeatureRequestForm } from "./feedback/FeatureRequestForm";
 import {
   AnalyticsIcon,
   CustomerIcon,
@@ -13,7 +12,6 @@ import {
   SettingsIcon,
 } from "./Icons";
 import { CrmMobileHeader } from "./crm/CrmMobileHeader";
-import { CrmCommandPalette } from "./crm/CrmCommandPalette";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
 import { Modal, ModalBody, ModalHeader } from "./ui";
@@ -24,6 +22,9 @@ import {
   type WorkspaceNavigationId,
   type WorkspacePage,
 } from "./crm/workspace-navigation";
+
+const CrmCommandPalette = lazy(() => import("./crm/CrmCommandPalette").then((module) => ({ default: module.CrmCommandPalette })));
+const FeatureRequestForm = lazy(() => import("./feedback/FeatureRequestForm").then((module) => ({ default: module.FeatureRequestForm })));
 
 interface CrmShellProps {
   currentPage: WorkspacePage;
@@ -169,12 +170,16 @@ export function CrmShell({
         onLogout={onLogout}
         currentLabel={pageMeta.label}
       />
-      <CrmCommandPalette
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        onNavigate={(page) => handleNavigate(page)}
-        onQuickAction={handleQuickAction}
-      />
+      {commandOpen ? (
+        <Suspense fallback={null}>
+          <CrmCommandPalette
+            open={commandOpen}
+            onOpenChange={setCommandOpen}
+            onNavigate={(page) => handleNavigate(page)}
+            onQuickAction={handleQuickAction}
+          />
+        </Suspense>
+      ) : null}
 
       <div
         className={`mx-auto w-full max-w-[1920px] lg:grid ${
@@ -332,11 +337,13 @@ export function CrmShell({
           onClose={() => setFeatureRequestOpen(false)}
         />
         <ModalBody>
-          <FeatureRequestForm
-            source="WORKSPACE"
-            initialName={fullName}
-            initialEmail={email}
-          />
+          <Suspense fallback={<p className="text-sm text-slate-500">Loading feature request form...</p>}>
+            <FeatureRequestForm
+              source="WORKSPACE"
+              initialName={fullName}
+              initialEmail={email}
+            />
+          </Suspense>
         </ModalBody>
       </Modal>
     </div>

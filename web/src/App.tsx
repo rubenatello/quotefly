@@ -2,29 +2,17 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import { Navbar } from "./components/Navbar";
-import { CrmShell } from "./components/CrmShell";
-import { AuthModal, type AuthEntryMode } from "./components/AuthModal";
+import type { AuthEntryMode } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
-import { BillingRequiredScreen } from "./components/billing/BillingRequiredScreen";
-import { TrialConversionBanner } from "./components/billing/TrialConversionBanner";
-import { BottomTabBar } from "./components/crm/BottomTabBar";
-import {
-  workspacePageFromPath,
-  workspacePathForNavigation,
-  type WorkspaceNavigationId,
-} from "./components/crm/workspace-navigation";
-import { DashboardProvider, type DashboardSession } from "./components/dashboard/DashboardContext";
 import {
   api,
   ApiError,
   type AuthPayload,
   type AuthSessionPayload,
-  type ServiceType,
-  type TenantEntitlements,
-  type TenantUsageSnapshot,
 } from "./lib/api";
+import type { AppSession, SessionRecovery } from "./lib/app-session";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
 import { Toaster } from "sonner";
 
@@ -39,44 +27,8 @@ const DataPrivacyPage = lazy(() => import("./pages/DataPrivacyPage").then((modul
 const TermsPage = lazy(() => import("./pages/TermsPage").then((module) => ({ default: module.TermsPage })));
 const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((module) => ({ default: module.CookiePolicyPage })));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
-const KodyAssistant = lazy(() => import("./components/ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
-const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
-const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
-const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
-const SuperuserAdminPage = lazy(() => import("./pages/SuperuserAdminPage").then((module) => ({ default: module.SuperuserAdminPage })));
-const SuperuserAiPage = lazy(() => import("./pages/SuperuserAiPage").then((module) => ({ default: module.SuperuserAiPage })));
-const CustomersPage = lazy(() => import("./pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
-const QuotesPage = lazy(() => import("./pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
-const ProductsPage = lazy(() => import("./pages/ProductsPage").then((module) => ({ default: module.ProductsPage })));
-const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
-const QuoteBuilderView = lazy(() => import("./views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
-const QuoteDeskView = lazy(() => import("./views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
-const PipelineView = lazy(() => import("./views/PipelineView").then((module) => ({ default: module.PipelineView })));
-
-type Session = {
-  userId: string;
-  email: string;
-  fullName: string;
-  tenantId: string;
-  tenantName: string;
-  role: string;
-  primaryTrade?: ServiceType | null;
-  onboardingCompletedAtUtc?: string | null;
-  subscriptionStatus?: string;
-  subscriptionPlanCode?: string | null;
-  trialEndsAtUtc?: string | null;
-  subscriptionCurrentPeriodEndUtc?: string | null;
-  effectivePlanCode?: "starter" | "professional" | "enterprise";
-  effectivePlanName?: string;
-  isTrial?: boolean;
-  entitlements?: TenantEntitlements;
-  usage?: TenantUsageSnapshot;
-  isSuperuser?: boolean;
-};
-
-type SessionRecovery = {
-  source: "restore" | "post-auth";
-};
+const AuthModal = lazy(() => import("./components/AuthModal").then((module) => ({ default: module.AuthModal })));
+const CrmAppLayout = lazy(() => import("./components/CrmAppLayout").then((module) => ({ default: module.CrmAppLayout })));
 
 const SESSION_CHECK_TIMEOUT_MS = 15_000;
 
@@ -103,7 +55,7 @@ function clearStoredSession() {
   localStorage.removeItem("qf_full_name");
 }
 
-function toSession(payload: AuthSessionPayload): Session {
+function toSession(payload: AuthSessionPayload): AppSession {
   return {
     userId: payload.user.id,
     email: payload.user.email,
@@ -126,196 +78,6 @@ function toSession(payload: AuthSessionPayload): Session {
   };
 }
 
-function toDashboardSession(s: Session): DashboardSession {
-  return {
-    userId: s.userId,
-    email: s.email,
-    fullName: s.fullName,
-    tenantId: s.tenantId,
-    tenantName: s.tenantName,
-    primaryTrade: s.primaryTrade,
-    onboardingCompletedAtUtc: s.onboardingCompletedAtUtc,
-    effectivePlanName: s.effectivePlanName,
-    effectivePlanCode: s.effectivePlanCode,
-    isTrial: s.isTrial,
-    entitlements: s.entitlements,
-    usage: s.usage,
-  };
-}
-
-/* ─── CRM Layout with DashboardProvider + BottomTabBar ─── */
-
-function CrmLayout({
-  session,
-  onLogout,
-  onRefreshSession,
-}: {
-  session: Session;
-  onLogout: () => void;
-  onRefreshSession: () => Promise<void>;
-}) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const workspaceLocked =
-    session.entitlements?.billingRequired === true &&
-    session.entitlements.hasWorkspaceAccess === false &&
-    !session.isSuperuser;
-  const billingReturnState = new URLSearchParams(location.search).get("billing");
-  const billingSubscriptionConfirmed =
-    Boolean(session.subscriptionPlanCode) &&
-    ["active", "trialing"].includes((session.subscriptionStatus ?? "").toLowerCase());
-
-  useEffect(() => {
-    if (
-      billingReturnState !== "success" ||
-      billingSubscriptionConfirmed ||
-      session.role.trim().toLowerCase() !== "owner"
-    ) {
-      return;
-    }
-
-    let stopped = false;
-    let inFlight = false;
-    let attempts = 0;
-    const refreshBillingState = async () => {
-      if (stopped || inFlight || attempts >= 10) return;
-      inFlight = true;
-      attempts += 1;
-      try {
-        await onRefreshSession();
-      } catch {
-        // The return screen keeps a manual refresh action available if the
-        // bounded webhook-confirmation polling window expires.
-      } finally {
-        inFlight = false;
-        if (attempts >= 10) window.clearInterval(intervalId);
-      }
-    };
-
-    const intervalId = window.setInterval(() => void refreshBillingState(), 1_500);
-    void refreshBillingState();
-    return () => {
-      stopped = true;
-      window.clearInterval(intervalId);
-    };
-  }, [
-    billingReturnState,
-    billingSubscriptionConfirmed,
-    onRefreshSession,
-    session.role,
-  ]);
-
-  useEffect(() => {
-    if (workspaceLocked) return;
-    if (!session.onboardingCompletedAtUtc && !location.pathname.startsWith("/app/setup")) {
-      navigate("/app/setup", { replace: true });
-    }
-  }, [location.pathname, navigate, session.onboardingCompletedAtUtc, workspaceLocked]);
-
-  if (workspaceLocked) {
-    return (
-      <BillingRequiredScreen
-        session={session}
-        onLogout={onLogout}
-        onRefreshSession={onRefreshSession}
-      />
-    );
-  }
-
-  const currentPage = workspacePageFromPath(location.pathname);
-
-  const handleNavigate = (page: WorkspaceNavigationId) => {
-    navigate(workspacePathForNavigation(page));
-  };
-
-  const handleQuickAction = (action: "new-customer" | "new-quote") => {
-    if (action === "new-customer") {
-      navigate("/app/customers?compose=customer");
-      return;
-    }
-
-    navigate("/app/build");
-  };
-
-  return (
-    <CrmShell
-      currentPage={currentPage}
-      onNavigate={handleNavigate}
-      onQuickAction={handleQuickAction}
-      onLogout={onLogout}
-      fullName={session.fullName}
-      email={session.email}
-      planName={session.effectivePlanName}
-      planCode={session.effectivePlanCode}
-      isTrial={session.isTrial}
-      entitlements={session.entitlements}
-      usage={session.usage}
-    >
-      <DashboardProvider
-        session={toDashboardSession(session)}
-        onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
-        onNavigateToBuilder={() => navigate("/app/build")}
-      >
-        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
-          <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
-            <div className="mx-auto w-full max-w-[1840px]">
-              {session.isTrial ? (
-                <TrialConversionBanner
-                  trialEndsAtUtc={session.trialEndsAtUtc}
-                  ownerView={session.role.trim().toLowerCase() === "owner"}
-                />
-              ) : null}
-              <Routes>
-                <Route index element={<Navigate to="/app/customers" replace />} />
-                <Route path="customers" element={<CustomersPage />} />
-                <Route path="follow-up" element={<PipelineView />} />
-                <Route path="analytics" element={<AnalyticsPage />} />
-                <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
-                <Route path="build" element={<QuoteBuilderView />} />
-                <Route path="quotes" element={<QuotesPage />} />
-                <Route path="products" element={<ProductsPage />} />
-                <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
-                <Route path="history" element={<Navigate to="/app/analytics" replace />} />
-                <Route path="settings" element={<AdminPage session={session} />} />
-                <Route path="settings/users" element={<AdminPage session={session} />} />
-                <Route
-                  path="internal/admin"
-                  element={session.isSuperuser ? <SuperuserAdminPage /> : <Navigate to="/app/settings" replace />}
-                />
-                <Route
-                  path="internal/admin/ai-quality"
-                  element={session.isSuperuser ? <SuperuserAiPage /> : <Navigate to="/app/settings" replace />}
-                />
-                <Route
-                  path="internal/ai-quality"
-                  element={<Navigate to="/app/internal/admin/ai-quality" replace />}
-                />
-                <Route
-                  path="branding"
-                  element={<BrandingPage tenantId={session.tenantId} effectivePlanCode={session.effectivePlanCode ?? "starter"} />}
-                />
-                <Route
-                  path="admin"
-                  element={
-                    session.isSuperuser
-                      ? <Navigate to="/app/internal/admin" replace />
-                      : <Navigate to="/app/settings" replace />
-                  }
-                />
-                <Route path="*" element={<Navigate to="/app/customers" replace />} />
-              </Routes>
-            </div>
-          </Suspense>
-        </main>
-        <BottomTabBar />
-        <Suspense fallback={null}>
-          <KodyAssistant currentPage={currentPage} />
-        </Suspense>
-      </DashboardProvider>
-    </CrmShell>
-  );
-}
-
 /* ─── Marketing Layout ─── */
 
 function MarketingLayout({
@@ -329,7 +91,7 @@ function MarketingLayout({
   onOpenSignIn: () => void;
   onLogout: () => void;
   isLoggedIn: boolean;
-  session?: Session | null;
+  session?: AppSession | null;
 }) {
   const location = useLocation();
   const currentPage = location.pathname === "/" ? "landing" : location.pathname.slice(1);
@@ -401,7 +163,7 @@ function ScrollToRoute() {
 function AppRoutes() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authEntryMode, setAuthEntryMode] = useState<AuthEntryMode>("signup");
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AppSession | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const [sessionRecovery, setSessionRecovery] = useState<SessionRecovery | null>(null);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -414,7 +176,7 @@ function AppRoutes() {
     setIsAuthModalOpen(true);
   };
 
-  const hydrateSessionState = useCallback(async (): Promise<Session> => {
+  const hydrateSessionState = useCallback(async (): Promise<AppSession> => {
     try {
       const payload = await loadAuthSession();
       prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
@@ -451,7 +213,7 @@ function AppRoutes() {
     setSessionRecovery(source === "post-auth" || initialPath.startsWith("/app") ? { source } : null);
   }, [initialPath]);
 
-  function navigateAfterHydration(nextSession: Session, source: SessionRecovery["source"]) {
+  function navigateAfterHydration(nextSession: AppSession, source: SessionRecovery["source"]) {
     if (source === "post-auth") {
       navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
     }
@@ -572,7 +334,11 @@ function AppRoutes() {
         {isLoggedIn && session ? (
           <Route
             path="/app/*"
-            element={<CrmLayout session={session} onLogout={handleLogout} onRefreshSession={refreshSessionState} />}
+            element={
+              <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
+                <CrmAppLayout session={session} onLogout={handleLogout} onRefreshSession={refreshSessionState} />
+              </Suspense>
+            }
           />
         ) : (
           <Route path="/app/*" element={<Navigate to="/" replace />} />
@@ -590,12 +356,16 @@ function AppRoutes() {
           }
         />
       </Routes>
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onSuccess={handleAuthSuccess}
-        initialMode={authEntryMode}
-      />
+      {isAuthModalOpen ? (
+        <Suspense fallback={null}>
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+            onSuccess={handleAuthSuccess}
+            initialMode={authEntryMode}
+          />
+        </Suspense>
+      ) : null}
       <CookieConsentBanner />
       <Toaster position="top-right" richColors closeButton theme="light" />
     </>
