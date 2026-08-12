@@ -25,6 +25,7 @@ type KodyMessage = {
   id: string;
   role: "user" | "kody";
   text: string;
+  pending?: boolean;
   response?: AiAssistantResponse["assistant"];
   usageNotice?: string;
 };
@@ -81,6 +82,23 @@ function assistantContextFromPage(page: WorkspacePage): "quotes" | "customers" |
 
 function makeMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function elapsedSince(startedAt: number) {
+  return Number((performance.now() - startedAt).toFixed(1));
+}
+
+function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO") {
+  if (elapsedMs < 900) return "Checking approved workspace tools...";
+  if (elapsedMs >= 8_000) return "Still working. AI and retrieval can take a few more seconds on larger workspaces.";
+  if (elapsedMs >= 3_500) return "Preparing a cited answer and checking guardrails...";
+
+  if (tool === "SEARCH_CUSTOMERS") return "Searching tenant-scoped customers and quote activity...";
+  if (tool === "DRAFT_QUOTE") return "Loading allowed customer, product, and quote context...";
+  if (tool === "SUMMARIZE_PIPELINE") return "Summarizing your tenant-scoped sales pipeline...";
+  if (tool === "RANK_PROFITABLE_JOBS") return "Filtering profitability data to your role permissions...";
+
+  return "Retrieving only the data Kody is allowed to use...";
 }
 
 function getString(value: unknown) {
@@ -312,8 +330,11 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   const [contextOverride, setContextOverride] = useState<KodyOpenDetail["context"] | null>(null);
   const [messages, setMessages] = useState<KodyMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
+  const [loadingTool, setLoadingTool] = useState<AiAssistantTool | "AUTO">("AUTO");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingMessageIdRef = useRef<string | null>(null);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
@@ -343,6 +364,25 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
     return () => window.removeEventListener(KODY_OPEN_EVENT, handleOpenKody);
   }, [currentContextPage, track]);
 
+  useEffect(() => {
+    if (loadingStartedAt === null) return undefined;
+
+    const updatePendingMessage = () => {
+      const pendingMessageId = pendingMessageIdRef.current;
+      if (!pendingMessageId) return;
+      const text = kodyLoadingText(elapsedSince(loadingStartedAt), loadingTool);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === pendingMessageId && message.pending ? { ...message, text } : message,
+        ),
+      );
+    };
+
+    updatePendingMessage();
+    const timer = window.setInterval(updatePendingMessage, 900);
+    return () => window.clearInterval(timer);
+  }, [loadingStartedAt, loadingTool]);
+
   async function submitPrompt(options?: { prompt?: string; tool?: AiAssistantTool | "AUTO" }) {
     const messageText = (options?.prompt ?? prompt).trim();
     if (!messageText || loading) return;
@@ -353,12 +393,24 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
       limit: contextOverride?.limit ?? 8,
     };
 
+    const startedAt = performance.now();
+    const userMessageId = makeMessageId();
+    const pendingMessageId = makeMessageId();
+    pendingMessageIdRef.current = pendingMessageId;
     setError(null);
     setLoading(true);
+    setLoadingTool(tool);
+    setLoadingStartedAt(startedAt);
     setPrompt("");
     setMessages((current) => [
       ...current,
-      { id: makeMessageId(), role: "user", text: messageText },
+      { id: userMessageId, role: "user", text: messageText },
+      {
+        id: pendingMessageId,
+        role: "kody",
+        text: kodyLoadingText(0, tool),
+        pending: true,
+      },
     ]);
     track("kody_submit", { tool, page: currentContextPage });
 
@@ -368,16 +420,28 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         tool,
         context,
       });
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeMessageId(),
+      track("kody_response", {
+        tool,
+        page: currentContextPage,
+        ok: true,
+        durationMs: elapsedSince(startedAt),
+        resultCount: response.assistant.results.length,
+        citationCount: response.assistant.citations.length,
+        maxClassification: response.assistant.maxClassification,
+      });
+      setMessages((current) => {
+        const replacement: KodyMessage = {
+          id: pendingMessageId,
           role: "kody",
           text: response.assistant.answer,
+          pending: false,
           response: response.assistant,
           usageNotice: formatAiUsageNotice(response.usage),
-        },
-      ]);
+        };
+        return current.some((message) => message.id === pendingMessageId)
+          ? current.map((message) => (message.id === pendingMessageId ? replacement : message))
+          : [...current, replacement];
+      });
       setSelectedTool("AUTO");
       setContextOverride(null);
     } catch (err) {
@@ -386,11 +450,30 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
           ? err.message
           : "Kody could not complete that request. Try again or use the regular workspace tools.";
       setError(message);
-      setMessages((current) => [
-        ...current,
-        { id: makeMessageId(), role: "kody", text: message },
-      ]);
+      track("kody_response", {
+        tool,
+        page: currentContextPage,
+        ok: false,
+        durationMs: elapsedSince(startedAt),
+        status: err instanceof ApiError ? err.status : 0,
+      });
+      setMessages((current) => {
+        const replacement: KodyMessage = {
+          id: pendingMessageId,
+          role: "kody",
+          text: message,
+          pending: false,
+        };
+        return current.some((existingMessage) => existingMessage.id === pendingMessageId)
+          ? current.map((existingMessage) => (existingMessage.id === pendingMessageId ? replacement : existingMessage))
+          : [...current, replacement];
+      });
     } finally {
+      if (pendingMessageIdRef.current === pendingMessageId) {
+        pendingMessageIdRef.current = null;
+      }
+      setLoadingStartedAt(null);
+      setLoadingTool("AUTO");
       setLoading(false);
     }
   }
@@ -534,7 +617,17 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                         : "border border-slate-200 bg-slate-50 text-slate-800",
                     )}
                   >
-                    {message.response ? (
+                    {message.pending ? (
+                      <div className="flex items-start gap-2 text-sm leading-6 text-slate-700" aria-live="polite">
+                        <LoaderCircle size={16} className="mt-1 shrink-0 animate-spin text-quotefly-blue" />
+                        <div>
+                          <p>{message.text}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Backend-only AI. Tenant-scoped retrieval. No browser API key.
+                          </p>
+                        </div>
+                      </div>
+                    ) : message.response ? (
                       <KodyResponse response={message.response} usageNotice={message.usageNotice} onAction={handleAction} />
                     ) : (
                       <p className="text-sm leading-6">{message.text}</p>
@@ -548,12 +641,6 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                 </div>
               ))
             )}
-            {loading ? (
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                <LoaderCircle size={16} className="animate-spin text-quotefly-blue" />
-                Kody is checking the approved workspace tools...
-              </div>
-            ) : null}
           </div>
 
           {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}

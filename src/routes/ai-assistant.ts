@@ -5,6 +5,7 @@ import { resolveActivityActor } from "../lib/activity";
 import { AI_ASSISTANT_TOOLS, runAiAssistant } from "../lib/ai-assistant";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { getJwtClaims } from "../lib/auth";
+import { measureRequestPerformance } from "../lib/request-performance";
 import { loadTenantEntitlements } from "../lib/subscription";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
@@ -33,18 +34,18 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
     const access = buildAccessContext(request);
     const payload = AssistantRequestSchema.parse(request.body);
 
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+    const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
-    });
+    }));
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const { blocked, blockedBy, snapshot } = await assertAiUsageAvailable(
+    const { blocked, blockedBy, snapshot } = await measureRequestPerformance(request, "db", () => assertAiUsageAvailable(
       app.prisma,
       claims.tenantId,
       entitlements,
-    );
+    ));
     if (blocked) {
       return reply.code(402).send({
         code: "AI_USAGE_LIMIT_REACHED",
@@ -54,8 +55,8 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const actor = await resolveActivityActor(app.prisma, claims);
-    const result = await runAiAssistant(app.prisma, {
+    const actor = await measureRequestPerformance(request, "db", () => resolveActivityActor(app.prisma, claims));
+    const result = await measureRequestPerformance(request, "ai", () => runAiAssistant(app.prisma, {
       access,
       actor,
       message: payload.message,
@@ -74,7 +75,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
           }
         : undefined,
       usageSnapshot: snapshot,
-    });
+    }));
 
     return {
       assistant: result.assistant,

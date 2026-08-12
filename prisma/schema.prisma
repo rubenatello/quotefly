@@ -283,6 +283,7 @@ model TenantUser {
   @@unique([tenantId, userId])
   @@index([userId])
   @@index([tenantId, deletedAtUtc])
+  @@index([tenantId, userId, deletedAtUtc])
 }
 
 model TenantPhoneNumber {
@@ -328,6 +329,8 @@ model Customer {
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, phoneDigits, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
+  @@index([tenantId, updatedAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
 }
 
 model PricingProfile {
@@ -405,6 +408,9 @@ model Quote {
   @@index([tenantId, aiGeneratedAtUtc])
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
+  @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, customerId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
 }
 
 model AiUsageEvent {
@@ -541,6 +547,7 @@ model AiRetrievalChunk {
   @@index([tenantId, sourceType, sourceId, deletedAtUtc])
   @@index([tenantId, sourceField, deletedAtUtc])
   @@index([tenantId, indexedAtUtc])
+  @@index([tenantId, classification, deletedAtUtc, policyVersion, embeddingDimensions, indexedAtUtc(sort: Desc)])
 }
 
 model DataGovernanceValidationRun {

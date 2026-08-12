@@ -1,4 +1,18 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+import { trackEvent } from "./analytics";
+
+const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "http://localhost:4000";
+const SLOW_API_REQUEST_MS = 1_500;
+const VERY_SLOW_API_REQUEST_MS = 5_000;
+
+type RequestTelemetry = {
+  route: string;
+  method: string;
+  status: number;
+  ok: boolean;
+  durationMs: number;
+  requestId: string | null;
+  slowBucket: "normal" | "slow" | "very_slow";
+};
 
 function toQueryString(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();
@@ -8,6 +22,113 @@ function toQueryString(params: Record<string, string | number | boolean | undefi
   }
   const serialized = search.toString();
   return serialized ? `?${serialized}` : "";
+}
+
+function stripQueryString(path: string): string {
+  return path.split("?")[0] ?? path;
+}
+
+function maskPathIdentifiers(pathname: string): string {
+  return pathname
+    .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?=\/|$)/gi, "/:id")
+    .replace(/\/[a-z][a-z0-9]*_[A-Za-z0-9_-]{8,}(?=\/|$)/g, "/:id")
+    .replace(/\/(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{16,}(?=\/|$)/g, "/:id");
+}
+
+export function apiTelemetryRoute(path: string): string {
+  const pathname = stripQueryString(path)
+    .replace(/^https?:\/\/[^/]+/i, "")
+    .replace(/\/+$/, "");
+
+  if (pathname === "/v1/auth/me") return "/v1/auth/me";
+  if (pathname.startsWith("/v1/auth/")) return "/v1/auth/:action";
+  if (pathname.startsWith("/v1/ai/assistant")) return "/v1/ai/assistant";
+  if (pathname.startsWith("/v1/ai/business-insights")) return "/v1/ai/business-insights";
+  if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/activity")) return "/v1/customers/:id/activity";
+  if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/archive")) return "/v1/customers/:id/archive";
+  if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/restore")) return "/v1/customers/:id/restore";
+  if (pathname.startsWith("/v1/customers/")) return "/v1/customers/:id";
+  if (pathname === "/v1/customers") return "/v1/customers";
+  if (pathname.startsWith("/v1/quotes/") && pathname.includes("/line-items/")) return "/v1/quotes/:id/line-items/:id";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/line-items")) return "/v1/quotes/:id/line-items";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/history")) return "/v1/quotes/:id/history";
+  if (pathname.startsWith("/v1/quotes/") && pathname.includes("/history/")) return "/v1/quotes/:id/history/:id/restore";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/ai-runs")) return "/v1/quotes/:id/ai-runs";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/outbound-events")) return "/v1/quotes/:id/outbound-events";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/confirm-send")) return "/v1/quotes/:id/confirm-send";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/decision")) return "/v1/quotes/:id/decision";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/sheet")) return "/v1/quotes/:id/sheet";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/archive")) return "/v1/quotes/:id/archive";
+  if (pathname.startsWith("/v1/quotes/") && pathname.endsWith("/pdf")) return "/v1/quotes/:id/pdf";
+  if (pathname === "/v1/quotes/chat-draft") return "/v1/quotes/chat-draft";
+  if (pathname === "/v1/quotes/ai-suggest") return "/v1/quotes/ai-suggest";
+  if (pathname === "/v1/quotes/history") return "/v1/quotes/history";
+  if (pathname === "/v1/quotes/invoices/export-csv") return "/v1/quotes/invoices/export-csv";
+  if (pathname.startsWith("/v1/quotes/")) return "/v1/quotes/:id";
+  if (pathname === "/v1/quotes") return "/v1/quotes";
+  if (pathname.startsWith("/v1/products/")) return "/v1/products/:id";
+  if (pathname === "/v1/products") return "/v1/products";
+  if (pathname.startsWith("/v1/internal/control-plane")) return maskPathIdentifiers(pathname);
+  if (pathname.startsWith("/v1/")) return maskPathIdentifiers(pathname);
+  return "/unknown";
+}
+
+function slowBucket(durationMs: number): RequestTelemetry["slowBucket"] {
+  if (durationMs >= VERY_SLOW_API_REQUEST_MS) return "very_slow";
+  if (durationMs >= SLOW_API_REQUEST_MS) return "slow";
+  return "normal";
+}
+
+function methodFromOptions(options: RequestInit): string {
+  return (options.method ?? "GET").toUpperCase();
+}
+
+function durationSince(startedAt: number): number {
+  return Number((performance.now() - startedAt).toFixed(1));
+}
+
+function trackApiRequest(telemetry: RequestTelemetry) {
+  if (telemetry.slowBucket === "normal" && telemetry.ok) return;
+  trackEvent("api_request_latency", {
+    route: telemetry.route,
+    method: telemetry.method,
+    status: telemetry.status,
+    ok: telemetry.ok,
+    durationMs: telemetry.durationMs,
+    requestId: telemetry.requestId,
+    slowBucket: telemetry.slowBucket,
+  });
+}
+
+function buildRequestTelemetry(
+  path: string,
+  options: RequestInit,
+  response: Response,
+  startedAt: number,
+): RequestTelemetry {
+  const durationMs = durationSince(startedAt);
+  return {
+    route: apiTelemetryRoute(path),
+    method: methodFromOptions(options),
+    status: response.status,
+    ok: response.ok,
+    durationMs,
+    requestId: response.headers.get("x-request-id"),
+    slowBucket: slowBucket(durationMs),
+  };
+}
+
+function buildFailedRequestTelemetry(path: string, options: RequestInit, startedAt: number): RequestTelemetry {
+  const durationMs = durationSince(startedAt);
+  return {
+    route: apiTelemetryRoute(path),
+    method: methodFromOptions(options),
+    status: 0,
+    ok: false,
+    durationMs,
+    requestId: null,
+    slowBucket: slowBucket(durationMs),
+  };
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -33,12 +154,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.delete("Content-Type");
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    body,
-    credentials: options.credentials ?? "include",
-    headers,
-  });
+  const startedAt = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      body,
+      credentials: options.credentials ?? "include",
+      headers,
+    });
+  } catch (error) {
+    trackApiRequest(buildFailedRequestTelemetry(path, options, startedAt));
+    throw error;
+  }
+  trackApiRequest(buildRequestTelemetry(path, options, res, startedAt));
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -63,11 +192,19 @@ async function requestBlob(path: string, options: RequestInit = {}): Promise<Blo
     ...(options.headers as Record<string, string>),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    credentials: options.credentials ?? "include",
-    headers,
-  });
+  const startedAt = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: options.credentials ?? "include",
+      headers,
+    });
+  } catch (error) {
+    trackApiRequest(buildFailedRequestTelemetry(path, options, startedAt));
+    throw error;
+  }
+  trackApiRequest(buildRequestTelemetry(path, options, res, startedAt));
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const message = (body as { error?: string }).error ?? `Request failed: ${res.status}`;
@@ -1670,12 +1807,21 @@ export const api = {
           "Content-Type": "application/json",
         };
 
-        const res = await fetch(`${API_BASE}/v1/quotes/ai-suggest`, {
-          method: "POST",
-          credentials: "include",
-          headers,
-          body: JSON.stringify(body),
-        });
+        const streamStartedAt = performance.now();
+        const streamRequestOptions: RequestInit = { method: "POST" };
+        let res: Response;
+        try {
+          res = await fetch(`${API_BASE}/v1/quotes/ai-suggest`, {
+            ...streamRequestOptions,
+            credentials: "include",
+            headers,
+            body: JSON.stringify(body),
+          });
+        } catch (error) {
+          trackApiRequest(buildFailedRequestTelemetry("/v1/quotes/ai-suggest", streamRequestOptions, streamStartedAt));
+          throw error;
+        }
+        trackApiRequest(buildRequestTelemetry("/v1/quotes/ai-suggest", streamRequestOptions, res, streamStartedAt));
 
         if (!res.ok) {
           const errorBody = await res.json().catch(() => ({}));

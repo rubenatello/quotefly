@@ -17,6 +17,7 @@ import {
   tenantActiveQuoteScope,
   tenantActiveScope,
 } from "../lib/query-scope";
+import { measureRequestPerformance } from "../lib/request-performance";
 import {
   buildTenantEntitlements,
   loadTenantEntitlements,
@@ -4661,7 +4662,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         : {}),
     };
 
-    const [quotes, total] = await app.prisma.$transaction([
+    const [quotes, total] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
       app.prisma.quote.findMany({
         where,
         orderBy: { createdAt: "desc" },
@@ -4703,7 +4704,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
       }),
       app.prisma.quote.count({ where }),
-    ]);
+    ]));
 
     return {
       quotes,

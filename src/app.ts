@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
@@ -30,6 +30,14 @@ import { aiAssistantRoutes } from "./routes/ai-assistant";
 import { aiBusinessInsightRoutes } from "./routes/ai-business-insights";
 import { feedbackRoutes } from "./routes/feedback";
 import { swaggerPlugin } from "./plugins/swagger";
+import {
+  applyRequestPerformanceHeaders,
+  clearRequestPerformance,
+  durationMsSince,
+  getRequestPerformanceSummary,
+  recordRequestPerformance,
+  startRequestPerformance,
+} from "./lib/request-performance";
 
 type CorsOriginCallback = (error: Error | null, origin: boolean) => void;
 type CorsOriginFunction = (origin: string | undefined, callback: CorsOriginCallback) => void;
@@ -102,6 +110,31 @@ function requiresWorkspaceAccess(method: string, url: string): boolean {
   return WORKSPACE_ACCESS_MUTATION_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
+function shouldExposeServerTiming(): boolean {
+  return env.NODE_ENV !== "production";
+}
+
+function slowRequestThresholdMs(pathname: string): number {
+  if (pathname.startsWith("/v1/ai")) return 10_000;
+  if (pathname === "/v1/ready") return 1_000;
+  if (pathname.startsWith("/v1/quotes") || pathname.startsWith("/v1/customers")) return 1_500;
+  return 2_000;
+}
+
+function performanceLogPath(request: FastifyRequest): string {
+  const routePath = request.routeOptions.url;
+  if (routePath) return routePath;
+
+  return requestPathname(request.url)
+    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "/:id")
+    .replace(/\/c[a-z0-9]{16,}/gi, "/:id")
+    .replace(/\/[A-Za-z0-9_-]{16,}/g, "/:id");
+}
+
+function performanceLogLevel(durationMs: number, thresholdMs: number): "info" | "warn" {
+  return durationMs >= thresholdMs ? "warn" : "info";
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     prisma: PrismaClient;
@@ -161,6 +194,36 @@ export function buildServer() {
   });
   app.register(swaggerPlugin);
 
+  app.addHook("onRequest", async (request) => {
+    startRequestPerformance(request);
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    applyRequestPerformanceHeaders(request, reply, shouldExposeServerTiming());
+    return payload;
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const pathname = requestPathname(request.url);
+    const summary = getRequestPerformanceSummary(request);
+    const thresholdMs = slowRequestThresholdMs(pathname);
+    const level = performanceLogLevel(summary.durationMs, thresholdMs);
+
+    request.log[level](
+      {
+        method: request.method,
+        path: performanceLogPath(request),
+        statusCode: reply.statusCode,
+        durationMs: summary.durationMs,
+        timings: summary.metrics,
+        slowRequest: summary.durationMs >= thresholdMs,
+      },
+      summary.durationMs >= thresholdMs ? "Slow API request completed." : "API request completed.",
+    );
+
+    clearRequestPerformance(request);
+  });
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({
@@ -211,6 +274,7 @@ export function buildServer() {
       return;
     }
 
+    const authStartedAt = process.hrtime.bigint();
     const membership = await app.prisma.tenantUser.findFirst({
       where: {
         tenantId: claims.tenantId,
@@ -221,6 +285,7 @@ export function buildServer() {
       },
       select: LiveAuthMembershipSelect,
     });
+    recordRequestPerformance(request, "auth", durationMsSince(authStartedAt));
 
     if (!membership) {
       reply.code(401).send({ error: "Session is no longer valid." });
@@ -253,11 +318,13 @@ export function buildServer() {
     const claims = getJwtClaims(request);
     const membership = request.liveAuthMembership;
     if (!membership) return reply.code(401).send({ error: "Session is no longer valid." });
+    const workspaceStartedAt = process.hrtime.bigint();
     const entitlements = buildTenantEntitlements(
       membership.tenant,
       new Date(),
       { userEmail: membership.user.email },
     );
+    recordRequestPerformance(request, "workspace", durationMsSince(workspaceStartedAt));
 
     if (!entitlements.hasWorkspaceAccess) {
       return reply.code(402).send({

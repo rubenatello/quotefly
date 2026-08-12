@@ -57,6 +57,7 @@ npm run verify:launch
 | `SUPPORT_EMAIL` | Required | No | `support@quotefly.us` | Confirm the monitored inbox receives account and billing requests |
 | `OPENAI_API_KEY` | Required for AI | No | staging key or empty | Empty disables real provider calls; AI stays beta |
 | `OPENAI_MODEL` | Optional | No | `gpt-4o-mini` | Track quality and spend before launch expansion |
+| `OPENAI_EMBEDDING_MODEL` | Optional | No | `text-embedding-3-small` | Keep consistent with indexed RAG chunks; changing it requires reindexing |
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
@@ -78,8 +79,31 @@ Railway/Render settings:
 - Start command: `npm run start:prod`.
 - Process liveness: `GET /v1/health`.
 - Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
+- Keep the API service region physically close to the managed Postgres region. For Railway + Neon, choose matching or nearest available US regions before optimizing code.
+- Use the Neon pooled connection string for API runtime traffic and a direct connection only for Prisma CLI/migration work.
+- Disable Neon scale-to-zero, or set a production-safe suspend timeout, before selling accounts that expect mobile-app-like response times.
 
 `start:prod` runs `prisma migrate deploy` before starting the API. For safer production rollouts, run migrations as a release/predeploy command and start with `node dist/server.js` after migrations succeed.
+
+## Performance Operations
+
+Baseline production targets:
+
+- `/v1/health`: p95 under 500ms from US clients.
+- `/v1/ready`: p95 under 750ms when the database is warm.
+- Customers and quotes list endpoints: p95 under 1.5s for beta tenants.
+- Kody first visible response/progress: under 500ms; complete simple lookup/summary under 5s; complete quote drafting under 15s.
+
+API responses include `X-Request-Id`. Non-production responses also include `Server-Timing`; production keeps detailed timings in structured API logs instead of browser-visible headers.
+
+When latency is reported:
+
+1. Check Railway API logs for `Slow API request completed.` and compare `auth`, `workspace`, `db`, and `ai` timings.
+2. Confirm Railway API region and Neon database region are colocated or nearest available.
+3. Confirm production Neon compute is not waking from scale-to-zero during active use.
+4. Confirm API runtime uses the pooled Neon connection string, while migrations use a direct connection.
+5. Compare `/v1/health` and `/v1/ready`; if health is fast but ready is slow, prioritize database/connection tuning.
+6. For Kody, separate retrieval/query time from OpenAI provider time using the request timing fields.
 
 ## Web Deploy
 

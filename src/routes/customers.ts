@@ -20,6 +20,7 @@ import {
   tenantActiveScope,
   tenantScope,
 } from "../lib/query-scope";
+import { measureRequestPerformance } from "../lib/request-performance";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -691,7 +692,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       ? Prisma.sql`stage = ${query.stage}`
       : Prisma.sql`TRUE`;
 
-    const listResult = await app.prisma.$transaction(async (tx) => {
+    const listResult = await measureRequestPerformance(request, "db", () => app.prisma.$transaction(async (tx) => {
       const pageRows = await tx.$queryRaw<CustomerStagePageRow[]>(Prisma.sql`
         ${stageScopeSql}
         SELECT id
@@ -782,7 +783,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }, {
       isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
       timeout: 10_000,
-    });
+    }));
 
     const { pageIds, customerRecords, aggregates } = listResult;
     const { activeCount, archivedCount, deletedCount } = listResult.lifecycleCounts;

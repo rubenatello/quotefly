@@ -633,7 +633,7 @@ export async function retrieveAiContextFromIndex(
         deletedAtUtc: null,
       },
     },
-    orderBy: [{ indexedAtUtc: "desc" }, { id: "desc" }],
+    orderBy: [{ indexedAtUtc: "desc" }],
     take: MAX_CANDIDATE_CHUNKS,
     select: {
       id: true,
