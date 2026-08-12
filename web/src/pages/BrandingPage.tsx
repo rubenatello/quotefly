@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, ReactNode } from "react";
+import type { ChangeEvent } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlignCenter,
@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -32,6 +31,7 @@ import { isSupportedBrandLogoDataUrl, resizeBrandLogoFile } from "../lib/brand-l
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { Badge, Button, ConfirmModal, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
+import { BrandingSectionCard, BrandingSummaryTile } from "../components/branding/BrandingSectionCard";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { BrandQuickSetup } from "../components/branding/BrandQuickSetup";
 import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
@@ -268,64 +268,6 @@ function normalizeBusinessProfileForSave(profile: BrandingBusinessProfile): Bran
     state: normalize(profile.state),
     postalCode: normalize(profile.postalCode),
   };
-}
-
-interface BrandingSectionCardProps {
-  id: BrandingSectionId;
-  title: string;
-  description: string;
-  icon: LucideIcon;
-  isOpen: boolean;
-  completionLabel?: string;
-  onToggle: () => void;
-  children: ReactNode;
-}
-
-function BrandingSectionCard({
-  id,
-  title,
-  description,
-  icon: Icon,
-  isOpen,
-  completionLabel,
-  onToggle,
-  children,
-}: BrandingSectionCardProps) {
-  return (
-    <section
-      id={`branding-${id}`}
-      className="scroll-mt-24 rounded-[28px] border border-slate-200 bg-white shadow-sm"
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-4 rounded-[28px] px-5 py-5 text-left sm:px-6"
-        aria-expanded={isOpen}
-      >
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-quotefly-primary">
-            <Icon size={18} />
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="font-display text-lg font-semibold text-slate-900">{title}</h2>
-              {completionLabel ? (
-                <span className="rounded-full bg-quotefly-blue/[0.08] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-quotefly-blue">
-                  {completionLabel}
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-1 text-sm text-slate-500">{description}</p>
-          </div>
-        </div>
-        <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500">
-          <ChevronDown size={18} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
-        </div>
-      </button>
-
-      {isOpen ? <div className="border-t border-slate-100 px-5 py-5 sm:px-6">{children}</div> : null}
-    </section>
-  );
 }
 
 function TemplateMiniPreview({
@@ -793,8 +735,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 p-3 pb-28 sm:p-6 sm:pb-28 lg:p-8 lg:pb-28 xl:pb-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="space-y-5 pb-24 xl:pb-0">
         <PageHeader
           title="Quote Branding"
           subtitle="Set the sender identity, colors, and template your customers actually see."
@@ -827,7 +768,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           </div>
         ) : (
           <>
-            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-24 xl:self-start">
             <WorkspaceRailCard
               eyebrow="Brand Setup"
@@ -835,18 +776,15 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               description="Manage sender identity, visual styling, and quote layout from one operator surface."
             >
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-1">
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Timezone</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{timezone}</p>
-                </div>
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Template</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
-                </div>
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Logo</p>
+                <BrandingSummaryTile label="Timezone">
+                  <p className="text-sm font-semibold text-slate-900">{timezone}</p>
+                </BrandingSummaryTile>
+                <BrandingSummaryTile label="Template">
+                  <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
+                </BrandingSummaryTile>
+                <BrandingSummaryTile label="Logo">
                   {logo ? (
-                    <div className="mt-2 flex items-center gap-3">
+                    <div className="flex items-center gap-3">
                       <div className="flex h-11 w-16 items-center justify-center rounded-xl border border-slate-200 bg-white px-2">
                         <img src={logo} alt="Saved logo" className="max-h-8 w-auto max-w-full object-contain" />
                       </div>
@@ -856,16 +794,14 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                       </div>
                     </div>
                   ) : (
-                    <p className="mt-2 text-sm font-semibold text-slate-900">Not uploaded</p>
+                    <p className="text-sm font-semibold text-slate-900">Not uploaded</p>
                   )}
-                </div>
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Placement</p>
-                  <p className="mt-2 text-sm font-semibold capitalize text-slate-900">{logoPosition}</p>
-                </div>
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-3 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">QuoteFly footer</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                </BrandingSummaryTile>
+                <BrandingSummaryTile label="Placement">
+                  <p className="text-sm font-semibold capitalize text-slate-900">{logoPosition}</p>
+                </BrandingSummaryTile>
+                <BrandingSummaryTile label="QuoteFly footer">
+                  <p className="text-sm font-semibold text-slate-900">
                     {showQuoteFlyAttribution ? "Visible on quotes" : "Hidden on quotes"}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
@@ -873,7 +809,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                       ? "Starter always shows QuoteFly attribution."
                       : "Professional and Enterprise can hide it."}
                   </p>
-                </div>
+                </BrandingSummaryTile>
               </div>
               <ProgressBar
                 value={(completedSectionCount / 4) * 100}
@@ -944,7 +880,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             />
 
             <BrandingSectionCard
-              id="business"
+              id="branding-business"
               title="Business Info"
               description="Customer PDFs use this sender block and footer message."
               icon={Building2}
@@ -1097,7 +1033,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             </BrandingSectionCard>
 
             <BrandingSectionCard
-              id="logo"
+              id="branding-logo"
               title="Logo"
               description="Upload the mark that appears on customer-facing quote PDFs."
               icon={ImageIcon}
@@ -1206,7 +1142,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             </BrandingSectionCard>
 
             <BrandingSectionCard
-              id="colors"
+              id="branding-colors"
               title="Colors"
               description="Set the primary brand color and override PDF components only where needed."
               icon={Palette}
@@ -1312,7 +1248,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             </BrandingSectionCard>
 
             <BrandingSectionCard
-              id="templates"
+              id="branding-templates"
               title="Templates"
               description="Use arrows to browse layouts. The preview updates instantly."
               icon={SwatchBook}
@@ -1381,7 +1317,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             </BrandingSectionCard>
 
             <BrandingSectionCard
-              id="preview"
+              id="branding-preview"
               title="Preview"
               description="Review the customer-facing PDF layout with your sender details."
               icon={Eye}
@@ -1441,7 +1377,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <div className="h-24 xl:hidden" aria-hidden="true" />
             <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur xl:hidden">
-              <div className="mx-auto flex max-w-7xl items-center gap-3">
+              <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1" aria-live="polite">
                   <p className="text-sm font-semibold text-slate-900">
                     {isDirty ? "Unsaved branding changes" : "Branding is up to date"}
@@ -1473,7 +1409,6 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           confirmLabel="Discard changes and leave"
           confirmVariant="warning"
         />
-      </div>
     </div>
   );
 }

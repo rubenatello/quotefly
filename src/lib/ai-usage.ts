@@ -4,6 +4,7 @@ import {
   PrismaClient,
   type AiPurpose,
   type AiUsageEventType,
+  type DataClassification,
   type ServiceCategory,
 } from "@prisma/client";
 import type { ActivityActor } from "./activity";
@@ -17,8 +18,8 @@ import type { TenantEntitlements } from "./subscription";
 import { startOfCurrentUtcMonth, startOfNextUtcMonth } from "./subscription";
 
 type AiUsageClient =
-  | Pick<PrismaClient, "aiUsageEvent">
-  | Pick<Prisma.TransactionClient, "aiUsageEvent">;
+  | Pick<PrismaClient, "aiUsageEvent" | "aiRetrievalAuditEvent">
+  | Pick<Prisma.TransactionClient, "aiUsageEvent" | "aiRetrievalAuditEvent">;
 
 export type MonthlyAiUsageSnapshot = {
   periodStartUtc: Date;
@@ -205,12 +206,14 @@ export async function createAiUsageEvent(
     promptText: string;
     requestId: string;
     purpose?: AiPurpose;
+    classification?: DataClassification;
     serviceType?: ServiceCategory | null;
     sensitiveValues?: readonly (string | null | undefined)[];
     model?: string | null;
     creditsConsumed?: number;
     telemetry?: AiUsageTelemetry | null;
     trace?: AiUsageTrace | null;
+    retrievalAuditEventId?: string | null;
   },
 ) {
   const requestId = params.requestId.trim();
@@ -219,6 +222,7 @@ export async function createAiUsageEvent(
   }
   const purpose: AiPurpose =
     params.purpose ?? (params.eventType === "REVISE" ? "QUOTE_REVISION" : "QUOTE_DRAFT");
+  const classification = params.classification ?? maxClassificationForQuotePurpose(purpose);
   const governedPrompt = governAiPrompt(params.promptText, {
     knownSensitiveValues: [
       params.actor?.actorEmail,
@@ -239,6 +243,21 @@ export async function createAiUsageEvent(
       ? { type: "customer", refHash: hashSourceReference("customer", params.customerId) }
       : null,
   ].filter((value): value is { type: string; refHash: string } => value !== null);
+  const retrievalAuditEventId = params.retrievalAuditEventId?.trim() || null;
+  const existingRetrievalAuditEvent = retrievalAuditEventId
+    ? await prisma.aiRetrievalAuditEvent.findFirst({
+        where: {
+          id: retrievalAuditEventId,
+          tenantId: params.tenantId,
+          deletedAtUtc: null,
+        },
+        select: { id: true },
+      })
+    : null;
+
+  if (retrievalAuditEventId && !existingRetrievalAuditEvent) {
+    throw new Error("AI retrieval audit event not found for tenant.");
+  }
 
   return prisma.aiUsageEvent.create({
     data: {
@@ -256,7 +275,7 @@ export async function createAiUsageEvent(
       actorName: params.actor?.actorName ?? null,
       eventType: params.eventType,
       purpose,
-      classification: maxClassificationForQuotePurpose(purpose),
+      classification,
       serviceType: params.serviceType ?? null,
       creditsConsumed: params.creditsConsumed ?? 1,
       requestCount: params.telemetry?.requestCount ?? 1,
@@ -281,27 +300,29 @@ export async function createAiUsageEvent(
       patchRemoved: params.trace?.patch?.removed ?? null,
       sourceCount: sourceTypes.length,
       retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
-      retrievalAuditEvent: {
-        create: {
-          tenant: { connect: { id: params.tenantId } },
-          ...(params.actor?.actorUserId
-            ? { actorUser: { connect: { id: params.actor.actorUserId } } }
-            : {}),
-          requestId: requestId.slice(0, 128),
-          purpose,
-          model: params.model ?? null,
-          maxClassification: maxClassificationForQuotePurpose(purpose),
-          sourceTypes,
-          sourceRefs: sourceRefs.length ? sourceRefs : Prisma.JsonNull,
-          resultCount: sourceTypes.length,
-          inputTokenCount: params.telemetry?.promptTokens ?? null,
-          outputTokenCount: params.telemetry?.completionTokens ?? null,
-          queryHash: governedPrompt.sha256,
-          policyVersion: AI_DATA_POLICY_VERSION,
-          status: AiRetrievalAuditStatus.SUCCEEDED,
-          retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
-        },
-      },
+      retrievalAuditEvent: existingRetrievalAuditEvent
+        ? { connect: { id: existingRetrievalAuditEvent.id } }
+        : {
+            create: {
+              tenant: { connect: { id: params.tenantId } },
+              ...(params.actor?.actorUserId
+                ? { actorUser: { connect: { id: params.actor.actorUserId } } }
+                : {}),
+              requestId: requestId.slice(0, 128),
+              purpose,
+              model: params.model ?? null,
+              maxClassification: classification,
+              sourceTypes,
+              sourceRefs: sourceRefs.length ? sourceRefs : Prisma.JsonNull,
+              resultCount: sourceTypes.length,
+              inputTokenCount: params.telemetry?.promptTokens ?? null,
+              outputTokenCount: params.telemetry?.completionTokens ?? null,
+              queryHash: governedPrompt.sha256,
+              policyVersion: AI_DATA_POLICY_VERSION,
+              status: AiRetrievalAuditStatus.SUCCEEDED,
+              retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
+            },
+          },
     },
   });
 }

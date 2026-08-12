@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
+import { KodyButton } from "../components/ai/KodyButton";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary } from "../lib/api";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
@@ -116,6 +117,10 @@ function openDialer(phone: string) {
 
 function openTextComposer(phone: string) {
   window.location.assign(`sms:${toPhoneHrefValue(phone)}`);
+}
+
+function isRouteStateRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function StageFilterButton({
@@ -417,6 +422,8 @@ function activityActorLabel(item: CustomerActivityEvent): string {
 
 export function CustomersPage() {
   usePageView("customers");
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     error,
     notice,
@@ -592,14 +599,20 @@ export function CustomersPage() {
     return customerRows.find((row) => row.customer.id === activityCustomerId) ?? null;
   }, [activityCustomerId, customerRows, selectedCustomerDetail]);
 
-  function openCustomerDetail(customerId: string) {
+  const openCustomerDetail = useCallback((customerId: string) => {
     const snapshot = customerItems.find((customer) => customer.id === customerId) ?? null;
     activityRequestIdRef.current += 1;
     detailRequestIdRef.current += 1;
     setSelectedCustomerDetail(snapshot);
     setSelectedActivityQuotes([]);
     setActivityCustomerId(customerId);
-  }
+  }, [customerItems]);
+
+  useEffect(() => {
+    if (!isRouteStateRecord(location.state) || typeof location.state.kodyCustomerId !== "string") return;
+    openCustomerDetail(location.state.kodyCustomerId);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate, openCustomerDetail]);
 
   const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
   const totalCustomerPages = Math.max(1, Math.ceil(customerTotal / CUSTOMER_PAGE_SIZE));
@@ -1153,6 +1166,17 @@ export function CustomersPage() {
               )}
             </div>
             <div className="flex flex-wrap gap-2">
+              <KodyButton
+                label="Ask Kody"
+                prompt={`Summarize customer ${selectedActivityRow.customer.fullName}. Show quote status, next follow-up, and anything that helps me move this customer toward a sent or accepted quote.`}
+                tool="SEARCH_CUSTOMERS"
+                context={{
+                  currentPage: "customers",
+                  customerId: selectedActivityRow.customer.id,
+                  search: selectedActivityRow.customer.fullName,
+                  limit: 1,
+                }}
+              />
               <Button variant="outline" onClick={closeActivityModal}>
                 Close
               </Button>

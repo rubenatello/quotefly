@@ -35,6 +35,7 @@ import {
   type WorkPresetCategory,
   type WorkPresetUnitType,
 } from "../lib/api";
+import { KodyButton } from "../components/ai/KodyButton";
 import { setSEOMetadata } from "../lib/seo";
 
 const TRADE_LABELS: Record<ServiceType, string> = {
@@ -528,6 +529,16 @@ export function ProductsPage() {
         subtitle="Keep reusable work, pricing, and scope details ready for fast, consistent quotes."
         actions={
           <>
+            <KodyButton
+              label="Find profitable services"
+              prompt={`Rank profitable jobs and products for ${TRADE_LABELS[selectedTrade]}. Use safe tenant-scoped analytics to suggest which services are worth quoting more often.`}
+              tool="RANK_PROFITABLE_JOBS"
+              context={{
+                currentPage: "products",
+                serviceType: selectedTrade,
+                limit: 8,
+              }}
+            />
             <Button className="lg:hidden" variant="outline" icon={<FilePlus2 size={16} />} onClick={() => navigate("/app/build")}>New quote</Button>
             <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>Add product</Button>
           </>

@@ -20,6 +20,7 @@ const EnvSchema = z.object({
   JWT_SECRET: z.string().min(32),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
   OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
   STRIPE_SECRET_KEY: z.string().default(""),

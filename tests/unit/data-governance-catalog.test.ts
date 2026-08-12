@@ -65,4 +65,14 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
   ]) {
     assert.equal(fields.get(fieldName)?.ragStatus, "ELIGIBLE", fieldName);
   }
+
+  for (const fieldName of [
+    "Quote.customerPriceSubtotal",
+    "Quote.internalCostSubtotal",
+    "QuoteLineItem.unitPrice",
+    "QuoteLineItem.unitCost",
+  ]) {
+    assert.equal(fields.get(fieldName)?.analyticsStatus, "ELIGIBLE", fieldName);
+    assert.equal(fields.get(fieldName)?.ragStatus, "EXCLUDED", fieldName);
+  }
 });

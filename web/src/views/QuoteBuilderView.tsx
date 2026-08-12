@@ -1,7 +1,8 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
+import { KodyButton } from "../components/ai/KodyButton";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
@@ -169,6 +170,29 @@ function isDraftString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength;
 }
 
+function readKodyQuoteDraftState(value: unknown): null | {
+  prompt: string;
+  customerId: string | null;
+  serviceType: BuilderDraftData["quote"]["serviceType"] | null;
+} {
+  if (!isRecord(value) || !isRecord(value.kodyQuoteDraft)) return null;
+  const draft = value.kodyQuoteDraft;
+  const promptParts = [
+    isDraftString(draft.prompt, 2_000) ? draft.prompt.trim() : "",
+    isDraftString(draft.title, 500) ? `Title: ${draft.title.trim()}` : "",
+    isDraftString(draft.scopeText, 4_000) ? `Scope: ${draft.scopeText.trim()}` : "",
+  ].filter(Boolean);
+  const serviceType = isDraftString(draft.serviceType, 32) && SERVICE_TYPE_SET.has(draft.serviceType)
+    ? draft.serviceType as BuilderDraftData["quote"]["serviceType"]
+    : null;
+
+  return {
+    prompt: promptParts.join("\n\n"),
+    customerId: isDraftString(draft.customerId, 200) && draft.customerId.trim() ? draft.customerId.trim() : null,
+    serviceType,
+  };
+}
+
 function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
   const value: unknown = JSON.parse(raw);
   if (!isRecord(value) || value.version !== 1 || !isDraftString(value.savedAtUtc, 64)) return null;
@@ -275,6 +299,7 @@ const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 export function QuoteBuilderView() {
   usePageView("quote_builder");
   const navigate = useNavigate();
+  const location = useLocation();
   const track = useTrack();
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickCustomerForm, setQuickCustomerForm] = useState<QuickCustomerForm>(EMPTY_QUICK_CUSTOMER_FORM);
@@ -449,6 +474,40 @@ export function QuoteBuilderView() {
       if (!hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
     }
   }, [draftStorageKey, setQuoteForm]);
+
+  useEffect(() => {
+    const draft = readKodyQuoteDraftState(location.state);
+    if (!draft) return;
+
+    const canApplyKodyContext = !hasMeaningfulDraft;
+    if (canApplyKodyContext && draft.customerId) {
+      selectQuoteCustomer(draft.customerId);
+    }
+    if (canApplyKodyContext && draft.serviceType) {
+      setQuoteForm((current) => ({ ...current, serviceType: draft.serviceType ?? current.serviceType }));
+    }
+    if (draft.prompt) {
+      setChatPrompt(draft.prompt);
+    }
+    setAiModalOpen(true);
+    setMobilePane("editor");
+    setNotice(
+      canApplyKodyContext
+        ? "Kody prepared a quote prompt. Review it, then generate and apply the quote suggestion."
+        : "Kody prepared a quote prompt without changing your existing draft. Review it, then generate and apply the quote suggestion.",
+    );
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+    hasMeaningfulDraft,
+    selectQuoteCustomer,
+    setChatPrompt,
+    setNotice,
+    setQuoteForm,
+  ]);
 
   useEffect(() => {
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || quoteCreationCompletedRef.current) return;
@@ -976,6 +1035,24 @@ export function QuoteBuilderView() {
             {selectedQuoteId ? (
               <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>Open Active Quote</Button>
             ) : null}
+            <KodyButton
+              label="Draft with Kody"
+              variant="secondary"
+              prompt={[
+                activeCustomer ? `Draft a quote for ${activeCustomer.fullName}.` : "Draft a new quote.",
+                `Trade: ${quoteForm.serviceType}.`,
+                quoteForm.title.trim() ? `Current title: ${quoteForm.title.trim()}.` : "",
+                quoteForm.scopeText.trim() ? `Current scope: ${quoteForm.scopeText.trim()}` : "Ask me for missing customer, scope, quantities, and pricing details before generating anything final.",
+              ].filter(Boolean).join("\n")}
+              tool="DRAFT_QUOTE"
+              context={{
+                currentPage: "quotes",
+                customerId: activeCustomer?.id,
+                serviceType: quoteForm.serviceType,
+                limit: 6,
+              }}
+              disabled={!canUseChatToQuote}
+            />
           </div>
         }
       />
@@ -1205,6 +1282,25 @@ export function QuoteBuilderView() {
                 >
                   AI Prompt
                 </Button>
+                <KodyButton
+                  label="Improve scope"
+                  size="sm"
+                  className="hidden xl:inline-flex"
+                  prompt={[
+                    activeCustomer ? `Improve this quote draft for ${activeCustomer.fullName}.` : "Improve this quote draft.",
+                    `Trade: ${quoteForm.serviceType}.`,
+                    quoteForm.title.trim() ? `Title: ${quoteForm.title.trim()}.` : "",
+                    quoteForm.scopeText.trim() ? `Scope: ${quoteForm.scopeText.trim()}` : "Help me turn rough job notes into a clean quote scope.",
+                  ].filter(Boolean).join("\n")}
+                  tool="DRAFT_QUOTE"
+                  context={{
+                    currentPage: "quotes",
+                    customerId: activeCustomer?.id,
+                    serviceType: quoteForm.serviceType,
+                    limit: 6,
+                  }}
+                  disabled={!canUseChatToQuote}
+                />
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                   Draft preview
                 </Button>

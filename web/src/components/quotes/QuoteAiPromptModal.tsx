@@ -296,6 +296,7 @@ export function QuoteAiPromptModal({
             </div>
 
             <Textarea
+              data-testid="quote-ai-prompt"
               className="mt-4 min-h-[260px] border-[color:rgba(47,111,214,0.16)] bg-[linear-gradient(180deg,rgba(47,111,214,0.03),rgba(255,255,255,0.96))] text-[15px] leading-7 text-quotefly-blue placeholder:text-quotefly-blue/45 caret-quotefly-blue shadow-inner selection:bg-quotefly-blue/15"
               rows={9}
               placeholder={promptPlaceholder}

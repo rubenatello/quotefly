@@ -9,11 +9,14 @@ export function applyE2eEnv() {
     throw new Error("TEST_DATABASE_URL is required for E2E. Use a dedicated database such as quotefly_test.");
   }
 
+  const apiPort = process.env.E2E_API_PORT || process.env.PORT || "4100";
+  const webPort = process.env.E2E_WEB_PORT || "4173";
+
   process.env.NODE_ENV = "test";
-  process.env.PORT ||= process.env.E2E_API_PORT || "4100";
+  process.env.PORT ||= apiPort;
   process.env.DATABASE_URL = testDatabaseUrl;
   process.env.JWT_SECRET ||= "e2e-jwt-secret-for-quotefly-launch-readiness";
-  process.env.APP_URL = process.env.E2E_WEB_URL || "http://127.0.0.1:4173";
+  process.env.APP_URL = process.env.E2E_WEB_URL || `http://127.0.0.1:${webPort}`;
   process.env.API_URL = process.env.E2E_API_URL || `http://127.0.0.1:${process.env.PORT}`;
   process.env.CORS_ALLOWED_ORIGINS = process.env.APP_URL;
   process.env.SESSION_COOKIE_NAME ||= "qf_session";

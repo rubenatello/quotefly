@@ -26,8 +26,11 @@ test("superuser data-governance console is usable at a mobile app viewport", asy
 
   await sectionNav.getByRole("button", { name: "Data explorer", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Data classification explorer" })).toBeVisible();
-  await expect(page.getByText("Customer.notes", { exact: true })).toBeVisible();
-  await expect(page.getByText("RAG Eligible", { exact: true }).first()).toBeVisible();
+  const mobileModels = page.getByRole("list", { name: "Data models" });
+  await expect(mobileModels.getByText("Customer.notes", { exact: true })).toHaveCount(0);
+  await mobileModels.getByRole("button", { name: "Expand fields for Customer", exact: true }).click();
+  await expect(mobileModels.getByText("Customer.notes", { exact: true })).toBeVisible();
+  await expect(mobileModels.getByText("RAG eligible", { exact: true }).first()).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);

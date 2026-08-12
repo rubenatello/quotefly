@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
+import { KodyButton } from "../components/ai/KodyButton";
 import {
   FeatureLockedCard,
   HistoryEventPill,
@@ -1371,6 +1372,23 @@ export function QuoteDeskView() {
         subtitle="Edit the quote directly: update the customer-facing copy, adjust the lines, then send or export when it is ready."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <KodyButton
+              label="Ask Kody"
+              prompt={[
+                `Help me with this quote for ${customerName}.`,
+                `Quote title: ${quoteEditForm.title || selectedQuote.title}.`,
+                `Status: ${selectedQuote.status}.`,
+                "Suggest the next best action, follow-up angle, or quote improvement. Do not send or save anything automatically.",
+              ].join("\n")}
+              tool="DRAFT_QUOTE"
+              context={{
+                currentPage: "quotes",
+                quoteId: selectedQuote.id,
+                customerId: selectedQuote.customerId,
+                serviceType: quoteEditForm.serviceType,
+                limit: 6,
+              }}
+            />
             <QuoteStatusPill status={selectedQuote.status} />
           </div>
         }

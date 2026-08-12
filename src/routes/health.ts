@@ -32,6 +32,8 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
       });
       await app.prisma.passwordResetToken.findFirst({ select: { id: true } });
       await app.prisma.tenantBrandAsset.findFirst({ select: { id: true, sha256: true } });
+      await app.prisma.aiRetrievalDocument.findFirst({ select: { id: true, contentHash: true } });
+      await app.prisma.aiRetrievalChunk.findFirst({ select: { id: true, contentHash: true } });
 
       return {
         status: "ready",

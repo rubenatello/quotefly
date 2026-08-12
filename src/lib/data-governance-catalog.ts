@@ -19,6 +19,8 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   Quote: "afterSaleFollowUpCompletedAtUtc afterSaleFollowUpDueAtUtc afterSaleFollowUpStatus aiGeneratedAtUtc aiModel aiPromptText archivedAtUtc closedAtUtc createdAt customerId customerPriceSubtotal deletedAtUtc id internalCostSubtotal jobCompletedAtUtc jobStatus scopeText sentAt serviceType status taxAmount tenantId title totalAmount updatedAt",
   AiUsageEvent: "actorEmail actorName actorUserId classification completionTokens confidenceLabel confidenceLevel createdAt creditsConsumed customerId deletedAtUtc estimatedCostUsd eventType id insightReasons insightSourceLabels insightSummary model patchAdded patchRemoved patchUpdated promptHash promptRedacted promptText promptTokens purpose quoteId requestCount retentionExpiresAtUtc retrievalAuditEventId riskNote serviceType sourceCount tenantId totalTokens",
   AiRetrievalAuditEvent: "actorUserId createdAt deletedAtUtc denialCode id inputTokenCount maxClassification model outputTokenCount policyVersion purpose queryHash requestId resultCount retentionExpiresAtUtc sourceRefs sourceTypes status tenantId",
+  AiRetrievalDocument: "citationLabel contentHash deletedAtUtc id indexedAtUtc maxClassification metadata policyVersion sourceId sourceType sourceUpdatedAtUtc status tenantId",
+  AiRetrievalChunk: "citationLabel chunkIndex classification content contentHash deletedAtUtc documentId embedding embeddingDimensions embeddingModel id indexedAtUtc metadata policyVersion sourceField sourceId sourceType sourceUpdatedAtUtc tenantId",
   DataGovernanceValidationRun: "actorUserId baselineHash createdAt fieldCount id issueCount issues modelCount policyVersion requestId schemaHash status",
   SuperuserAuditEvent: "action actorUserId createdAt id metadata requestId targetRefHash targetType",
   QuoteLineItem: "createdAt deletedAtUtc description id position quantity quoteId sectionLabel sectionType tenantId unitCost unitPrice",
@@ -59,6 +61,8 @@ const MODEL_POLICIES = {
   Quote: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Customer quote workflow and totals" },
   AiUsageEvent: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "AI usage, quality, prompt trace, and cost telemetry" },
   AiRetrievalAuditEvent: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Content-free AI retrieval audit evidence" },
+  AiRetrievalDocument: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant-scoped RAG source document index metadata" },
+  AiRetrievalChunk: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant-scoped RAG source excerpts and embeddings" },
   DataGovernanceValidationRun: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Platform schema-classification validation evidence" },
   SuperuserAuditEvent: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "platform", purpose: "Cross-tenant operator action audit evidence" },
   QuoteLineItem: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote scope, quantity, price, and internal cost lines" },
@@ -134,6 +138,18 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "QuickBooksInvoiceSync.payloadSnapshot": "C4_RESTRICTED",
   "QuickBooksWebhookEvent.payload": "C4_RESTRICTED",
   "QuoteOutboundEvent.idempotencyKey": "C4_RESTRICTED",
+  "AiRetrievalDocument.id": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalDocument.tenantId": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalDocument.sourceId": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalDocument.contentHash": "C3_FINANCIAL_CONFIDENTIAL",
+  "AiRetrievalDocument.metadata": "C3_FINANCIAL_CONFIDENTIAL",
+  "AiRetrievalChunk.id": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalChunk.tenantId": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalChunk.documentId": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalChunk.sourceId": "C1_BUSINESS_INTERNAL",
+  "AiRetrievalChunk.contentHash": "C3_FINANCIAL_CONFIDENTIAL",
+  "AiRetrievalChunk.embedding": "C3_FINANCIAL_CONFIDENTIAL",
+  "AiRetrievalChunk.metadata": "C3_FINANCIAL_CONFIDENTIAL",
 } as const satisfies Record<string, DataClassification>;
 
 const RAG_ELIGIBLE_FIELDS = new Set([
@@ -147,6 +163,22 @@ const RAG_ELIGIBLE_FIELDS = new Set([
   "QuoteTemplate.description",
   "WorkPreset.name",
   "WorkPreset.description",
+]);
+
+const ANALYTICS_ELIGIBLE_FIELDS = new Set([
+  "Quote.serviceType",
+  "Quote.status",
+  "Quote.jobStatus",
+  "Quote.customerPriceSubtotal",
+  "Quote.internalCostSubtotal",
+  "Quote.taxAmount",
+  "Quote.totalAmount",
+  "Quote.createdAt",
+  "Quote.closedAtUtc",
+  "QuoteLineItem.description",
+  "QuoteLineItem.quantity",
+  "QuoteLineItem.unitPrice",
+  "QuoteLineItem.unitCost",
 ]);
 
 const reviewedFields = Object.fromEntries(
@@ -318,6 +350,19 @@ function validateInventory(models: readonly GovernanceInventoryModel[]) {
     }
   }
 
+  for (const qualifiedField of ANALYTICS_ELIGIBLE_FIELDS) {
+    const [model, field] = qualifiedField.split(".");
+    if (!model || !field || !currentMap.get(model)?.has(field)) {
+      issues.push({
+        severity: "error",
+        code: "UNKNOWN_RAG_FIELD",
+        model: model || "unknown",
+        field,
+        message: `Analytics field ${qualifiedField} does not match a current scalar field.`,
+      });
+    }
+  }
+
   const schemaHash = sha256(JSON.stringify(schemaShape(models)));
   const baselineHash = sha256(JSON.stringify(reviewedShape()));
   const fieldCount = models.reduce((sum, model) => sum + model.fields.length, 0);
@@ -382,6 +427,7 @@ export function getDataClassificationCatalog() {
         const fieldUnreviewed = modelUnreviewed || unreviewed.has(qualifiedField);
         const classification = classificationFor(model.name, field.name);
         const eligible = RAG_ELIGIBLE_FIELDS.has(qualifiedField) && !fieldUnreviewed;
+        const analyticsEligible = ANALYTICS_ELIGIBLE_FIELDS.has(qualifiedField) && !fieldUnreviewed;
         return {
           field: field.name,
           column: field.dbName,
@@ -402,6 +448,11 @@ export function getDataClassificationCatalog() {
           ragStatus: fieldUnreviewed
             ? "REVIEW_REQUIRED" as const
             : eligible
+              ? "ELIGIBLE" as const
+              : "EXCLUDED" as const,
+          analyticsStatus: fieldUnreviewed
+            ? "REVIEW_REQUIRED" as const
+            : analyticsEligible
               ? "ELIGIBLE" as const
               : "EXCLUDED" as const,
           requiredAccess: requiredAccessFor(classification),
@@ -433,6 +484,7 @@ export function getDataClassificationCatalog() {
       fieldCount: fields.length,
       classificationCounts,
       ragEligibleCount: fields.filter((field) => field.ragStatus === "ELIGIBLE").length,
+      analyticsEligibleCount: fields.filter((field) => field.analyticsStatus === "ELIGIBLE").length,
       reviewRequiredCount: fields.filter((field) => field.ragStatus === "REVIEW_REQUIRED").length,
     },
     models,

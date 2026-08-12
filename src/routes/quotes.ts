@@ -4,6 +4,11 @@ import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
+import {
+  buildGovernedQuoteAiContext,
+  markQuoteAiRetrievalSourcesDeleted,
+  type AiRetrievalResult,
+} from "../lib/ai-retrieval";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
 import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
 import {
@@ -955,6 +960,12 @@ async function restoreQuoteRevision(
     ],
   });
 
+  await markQuoteAiRetrievalSourcesDeleted(tx, {
+    tenantId: params.tenantId,
+    quoteIds: [finalizedQuote.id],
+    now,
+  });
+
   return { status: "ok" as const };
 }
 
@@ -1548,6 +1559,7 @@ function buildAiSuggestionInsight(params: {
   presetCount: number;
   standardPresetCount?: number;
   similarQuotes: SimilarQuoteContext[];
+  retrievalCitations?: AiRetrievalResult["citations"];
   targetAmount?: number | null;
   patch: AiQuotePatchResult;
 }): AiSuggestionInsight {
@@ -1623,6 +1635,15 @@ function buildAiSuggestionInsight(params: {
     });
   }
 
+  if (params.retrievalCitations?.length) {
+    for (const citation of params.retrievalCitations.slice(0, 2)) {
+      sources.push({
+        type: "retrieved_context",
+        label: `Retrieved source ${citation.key}: ${citation.label}`,
+      });
+    }
+  }
+
   return {
     summary,
     reasons: (params.reasons ?? []).filter(Boolean).slice(0, 3),
@@ -1680,15 +1701,19 @@ function buildAiRevisionContextPrompt(
   contextPrompt: string,
   currentQuoteContext: AiCurrentQuoteContextForDiff,
   baselineSuggestion: AiSuggestedQuoteDraft,
+  options?: {
+    includeFinancialContext?: boolean;
+  },
 ) {
+  const includeFinancialContext = options?.includeFinancialContext ?? false;
   return [
     contextPrompt,
     "Current quote lines:",
     ...(currentQuoteContext?.lineItems.map(
       (lineItem, index) =>
-        `${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+        `${index + 1}. ${lineItem.description} | qty ${lineItem.quantity}${includeFinancialContext ? ` | cost ${lineItem.unitCost.toFixed(
           2,
-        )} | price ${lineItem.unitPrice.toFixed(2)}`,
+        )}` : ""} | price ${lineItem.unitPrice.toFixed(2)}`,
     ) ?? []),
     "",
     "Baseline AI draft:",
@@ -1697,9 +1722,9 @@ function buildAiRevisionContextPrompt(
     `- Scope: ${baselineSuggestion.scopeText}`,
     ...baselineSuggestion.lineItems.map(
       (lineItem, index) =>
-        `  ${index + 1}. ${lineItem.description} | qty ${lineItem.quantity} | cost ${lineItem.unitCost.toFixed(
+        `  ${index + 1}. ${lineItem.description} | qty ${lineItem.quantity}${includeFinancialContext ? ` | cost ${lineItem.unitCost.toFixed(
           2,
-        )} | price ${lineItem.unitPrice.toFixed(2)}`,
+        )}` : ""} | price ${lineItem.unitPrice.toFixed(2)}`,
     ),
   ]
     .filter(Boolean)
@@ -1928,7 +1953,8 @@ type AiSuggestionInsight = {
       | "customer_activity"
       | "saved_jobs"
       | "trade_catalog"
-      | "similar_quote";
+      | "similar_quote"
+      | "retrieved_context";
     label: string;
   }>;
   confidence: {
@@ -2153,8 +2179,11 @@ function buildAiQuoteContext(params: {
     materialMarkup: number;
   } | null;
   similarQuotes?: SimilarQuoteContext[];
+  retrievalContext?: string;
+  includeFinancialContext?: boolean;
 }) {
   const sections: string[] = [];
+  const includeFinancialContext = params.includeFinancialContext ?? false;
 
   if (params.customer) {
     sections.push(
@@ -2193,7 +2222,7 @@ function buildAiQuoteContext(params: {
           ? `- Current lines:\n${params.currentQuote.lineItems
               .map(
                 (line, index) =>
-                  `  ${index + 1}. ${line.sectionType === "ALTERNATE" ? `${line.sectionLabel?.trim() || "Alternate option"} | ` : ""}${line.description} | qty ${line.quantity} | cost ${line.unitCost} | price ${line.unitPrice}`,
+                  `  ${index + 1}. ${line.sectionType === "ALTERNATE" ? `${line.sectionLabel?.trim() || "Alternate option"} | ` : ""}${line.description} | qty ${line.quantity}${includeFinancialContext ? ` | cost ${line.unitCost}` : ""} | price ${line.unitPrice}`,
               )
               .join("\n")}`
           : null,
@@ -2203,7 +2232,7 @@ function buildAiQuoteContext(params: {
     );
   }
 
-  if (params.pricingProfile) {
+  if (params.pricingProfile && includeFinancialContext) {
     sections.push(
       [
         "Pricing hints:",
@@ -2219,9 +2248,9 @@ function buildAiQuoteContext(params: {
         "Saved jobs and pricing:",
         ...params.presets.map(
           (preset) =>
-            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType} | cost ${preset.unitCost.toFixed(
+            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType}${includeFinancialContext ? ` | cost ${preset.unitCost.toFixed(
               2,
-            )} | price ${preset.unitPrice.toFixed(2)}`,
+            )}` : ""} | price ${preset.unitPrice.toFixed(2)}`,
         ),
       ].join("\n"),
     );
@@ -2233,9 +2262,9 @@ function buildAiQuoteContext(params: {
         "Standard trade catalog matches:",
         ...params.standardCatalogMatches.map(
           (preset) =>
-            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType} | cost ${preset.unitCost.toFixed(
+            `- ${preset.name} | ${preset.description ?? "No description"} | ${preset.unitType}${includeFinancialContext ? ` | cost ${preset.unitCost.toFixed(
               2,
-            )} | price ${preset.unitPrice.toFixed(2)}${typeof preset.score === "number" ? ` | match ${preset.score}` : ""}`,
+            )}` : ""} | price ${preset.unitPrice.toFixed(2)}${typeof preset.score === "number" ? ` | match ${preset.score}` : ""}`,
         ),
       ].join("\n"),
     );
@@ -2264,6 +2293,10 @@ function buildAiQuoteContext(params: {
         }),
       ].join("\n"),
     );
+  }
+
+  if (params.retrievalContext?.trim()) {
+    sections.push(params.retrievalContext.trim());
   }
 
   return sections.join("\n\n");
@@ -3137,6 +3170,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = SuggestQuoteWithAiSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const includeFinancialContext = hasCapability(access, "viewInternalCosts");
     const actor = await resolveActivityActor(app.prisma, claims);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -3387,6 +3422,21 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
         : null;
 
+    let governedRetrieval: AiRetrievalResult | null = null;
+    try {
+      governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
+        access,
+        query: payload.prompt,
+        purpose: currentQuoteContext || existingQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
+        serviceType: preliminaryServiceType,
+        requestId: request.id,
+        customerId: selectedCustomer?.id ?? null,
+        quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+      });
+    } catch (retrievalErr) {
+      request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] governed retrieval context unavailable");
+    }
+
     let contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
       customer: selectedCustomer
           ? {
@@ -3427,6 +3477,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           }
           : null,
       similarQuotes,
+      retrievalContext: governedRetrieval?.context,
+      includeFinancialContext,
     }), payload.prompt);
 
     stream.progress(
@@ -3505,6 +3557,20 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         })),
       );
 
+      try {
+        governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
+          access,
+          query: payload.prompt,
+          purpose: currentQuoteContext || existingQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
+          serviceType: preliminaryServiceType,
+          requestId: request.id,
+          customerId: selectedCustomer.id,
+          quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+        });
+      } catch (retrievalErr) {
+        request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] customer-specific retrieval context unavailable");
+      }
+
       contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
         customer: {
           fullName: selectedCustomer.fullName,
@@ -3543,6 +3609,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         similarQuotes,
+        retrievalContext: governedRetrieval?.context,
+        includeFinancialContext,
       }), payload.prompt);
 
       parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
@@ -3580,7 +3648,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     let revisionPlan = hasCurrentSheetContext
       ? await aiBuildQuoteRevisionPlan(payload.prompt, {
-          context: buildAiRevisionContextPrompt(contextPrompt, currentQuoteContext, baselineSuggestion),
+          context: buildAiRevisionContextPrompt(contextPrompt, currentQuoteContext, baselineSuggestion, {
+            includeFinancialContext,
+          }),
           telemetry: aiTelemetry,
         })
       : null;
@@ -3643,6 +3713,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 retryContextPrompt,
                 currentQuoteContext,
                 retryBaselineSuggestion,
+                { includeFinancialContext },
               ),
               telemetry: aiTelemetry,
             })
@@ -3722,6 +3793,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       presetCount: contextPresets.length,
       standardPresetCount: standardCatalogMatches.length,
       similarQuotes,
+      retrievalCitations: governedRetrieval?.citations,
       targetAmount: suggestion.totalAmount,
       patch,
     });
@@ -3772,6 +3844,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           serviceType: suggestion.serviceType,
           retryApplied: guardrailRetryApplied,
         }),
+        retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
       });
       aiRunId = aiUsageEvent.id;
     } catch (eventErr) {
@@ -3823,6 +3896,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes/chat-draft", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteFromChatSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const includeFinancialContext = hasCapability(access, "viewInternalCosts");
     const actor = await resolveActivityActor(app.prisma, claims);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -4000,6 +4075,20 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       limit: 7,
     });
 
+    let governedRetrieval: AiRetrievalResult | null = null;
+    try {
+      governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
+        access,
+        query: payload.prompt,
+        purpose: "QUOTE_DRAFT",
+        serviceType: preflightDraft.serviceType,
+        requestId: request.id,
+        customerId: customer?.id ?? null,
+      });
+    } catch (retrievalErr) {
+      request.log.warn({ err: retrievalErr }, "[quotes/chat-draft] governed retrieval context unavailable");
+    }
+
     const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
       context: appendAiPromptStructureHints(buildAiQuoteContext({
         customer: customer
@@ -4026,6 +4115,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         similarQuotes,
+        retrievalContext: governedRetrieval?.context,
+        includeFinancialContext,
       }), payload.prompt),
       telemetry: aiTelemetry,
     });
@@ -4286,6 +4377,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       presetCount: contextPresets.length,
       standardPresetCount: standardCatalogMatches.length,
       similarQuotes,
+      retrievalCitations: governedRetrieval?.citations,
       targetAmount: totalAmount,
       patch: {
         lineChanges: [],
@@ -4371,6 +4463,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         trace: buildAiUsageTraceFromInsight(draftInsight, {
           serviceType: parsedDraft.serviceType,
         }),
+        retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
       });
 
       return tx.quote.findFirst({
@@ -5303,6 +5396,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           });
         }
 
+        await markQuoteAiRetrievalSourcesDeleted(tx, {
+          tenantId: claims.tenantId,
+          quoteIds: [recalculatedQuote.id],
+        });
+
         return tx.quote.findFirst({
           where: {
             id: recalculatedQuote.id,
@@ -5434,6 +5532,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      await markQuoteAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        quoteIds: [updatedQuote.id],
+      });
+
       return updatedQuote;
     });
 
@@ -5487,6 +5590,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         data: { deletedAtUtc: now },
       });
 
+      await markQuoteAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        quoteIds: [quote.id],
+        now,
+      });
+
       return true;
     });
 
@@ -5526,6 +5635,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           archivedAtUtc: now,
           deletedAtUtc: null,
         },
+      });
+
+      await markQuoteAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        quoteIds: [quote.id],
+        now,
       });
 
       return true;
@@ -5948,6 +6063,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         ],
       });
 
+      await markQuoteAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        quoteIds: [updatedQuote.id],
+      });
+
       return { lineItem, quote: updatedQuote };
     });
 
@@ -6014,6 +6134,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ],
         });
 
+        await markQuoteAiRetrievalSourcesDeleted(tx, {
+          tenantId: claims.tenantId,
+          quoteIds: [updatedQuote.id],
+        });
+
         return { lineItem: updatedLineItem, quote: updatedQuote };
       });
 
@@ -6068,6 +6193,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             "customerPriceSubtotal",
             "totalAmount",
           ],
+        });
+
+        await markQuoteAiRetrievalSourcesDeleted(tx, {
+          tenantId: claims.tenantId,
+          quoteIds: [updatedQuote.id],
+          now,
         });
 
         return true;

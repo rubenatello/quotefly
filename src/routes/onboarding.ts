@@ -1,6 +1,10 @@
 import { PresetCategory, PresetUnitType } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  markTenantAiRetrievalSourceTypeDeleted,
+  markWorkPresetAiRetrievalSourceDeleted,
+} from "../lib/ai-retrieval";
 import { getJwtClaims } from "../lib/auth";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import {
@@ -150,8 +154,8 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const result = await app.prisma.$transaction((transaction) =>
-      applyOnboardingSetup(transaction, {
+    const result = await app.prisma.$transaction(async (transaction) => {
+      const setupResult = await applyOnboardingSetup(transaction, {
         tenantId: tenant.id,
         companyName: tenant.name,
         primaryTrade: payload.primaryTrade,
@@ -161,8 +165,13 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
         sqFtUnitCost: payload.sqFtUnitCost,
         sqFtUnitPrice: payload.sqFtUnitPrice,
         customPresets: payload.presets,
-      }),
-    );
+      });
+      await markTenantAiRetrievalSourceTypeDeleted(transaction, {
+        tenantId: tenant.id,
+        sourceTypes: ["WorkPreset"],
+      });
+      return setupResult;
+    });
 
     return reply.send({
       message: "Onboarding setup saved.",
@@ -193,6 +202,10 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       defaultQuantity: payload.defaultQuantity,
       unitCost: payload.unitCost,
       unitPrice: payload.unitPrice,
+    });
+    await markWorkPresetAiRetrievalSourceDeleted(app.prisma, {
+      tenantId: tenant.id,
+      workPresetIds: [result.preset.id],
     });
 
     return reply.send({

@@ -77,6 +77,7 @@ enum QuoteOutboundChannel {
 enum AiUsageEventType {
   DRAFT
   REVISE
+  BUSINESS_INSIGHT
 }
 
 enum AiPurpose {
@@ -97,6 +98,11 @@ enum AiRetrievalAuditStatus {
   SUCCEEDED
   DENIED
   FAILED
+}
+
+enum AiRetrievalDocumentStatus {
+  ACTIVE
+  DELETED
 }
 
 enum DataGovernanceValidationStatus {
@@ -197,6 +203,8 @@ model Tenant {
   customerActivityEvents            CustomerActivityEvent[]
   aiUsageEvents                     AiUsageEvent[]
   aiRetrievalAuditEvents            AiRetrievalAuditEvent[]
+  aiRetrievalDocuments              AiRetrievalDocument[]
+  aiRetrievalChunks                 AiRetrievalChunk[]
   quoteDecisionSessions             QuoteDecisionSession[]
   smsMessages                       SmsMessage[]
   stripeCustomerId                  String?                  @unique
@@ -479,6 +487,60 @@ model AiRetrievalAuditEvent {
   @@index([tenantId, purpose, createdAt])
   @@index([tenantId, retentionExpiresAtUtc])
   @@index([tenantId, deletedAtUtc])
+}
+
+model AiRetrievalDocument {
+  id                 String                    @id @default(cuid())
+  tenantId           String
+  sourceType         String                    @db.VarChar(64)
+  sourceId           String
+  sourceUpdatedAtUtc DateTime?                 @db.Timestamptz(3)
+  status             AiRetrievalDocumentStatus @default(ACTIVE)
+  maxClassification  DataClassification
+  contentHash        String                    @db.VarChar(64)
+  citationLabel      String                    @db.VarChar(160)
+  metadata           Json?
+  policyVersion      String                    @db.VarChar(32)
+  indexedAtUtc       DateTime                  @default(now()) @db.Timestamptz(3)
+  deletedAtUtc       DateTime?                 @db.Timestamptz(3)
+  tenant             Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chunks             AiRetrievalChunk[]
+
+  @@unique([tenantId, sourceType, sourceId])
+  @@unique([id, tenantId])
+  @@index([tenantId, status, indexedAtUtc])
+  @@index([tenantId, sourceType, deletedAtUtc])
+  @@index([tenantId, maxClassification, deletedAtUtc])
+}
+
+model AiRetrievalChunk {
+  id                  String              @id @default(cuid())
+  tenantId            String
+  documentId          String
+  sourceType          String              @db.VarChar(64)
+  sourceId            String
+  sourceField         String              @db.VarChar(128)
+  chunkIndex          Int
+  content             String              @db.Text
+  contentHash         String              @db.VarChar(64)
+  embedding           Float[]
+  embeddingModel      String              @db.VarChar(80)
+  embeddingDimensions Int
+  classification      DataClassification
+  citationLabel       String              @db.VarChar(160)
+  metadata            Json?
+  policyVersion       String              @db.VarChar(32)
+  sourceUpdatedAtUtc  DateTime?           @db.Timestamptz(3)
+  indexedAtUtc        DateTime            @default(now()) @db.Timestamptz(3)
+  deletedAtUtc        DateTime?           @db.Timestamptz(3)
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document            AiRetrievalDocument @relation(fields: [documentId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@unique([tenantId, documentId, chunkIndex])
+  @@index([tenantId, classification, deletedAtUtc])
+  @@index([tenantId, sourceType, sourceId, deletedAtUtc])
+  @@index([tenantId, sourceField, deletedAtUtc])
+  @@index([tenantId, indexedAtUtc])
 }
 
 model DataGovernanceValidationRun {

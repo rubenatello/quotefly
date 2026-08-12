@@ -44,6 +44,7 @@ jobs:
       SESSION_COOKIE_SAME_SITE: lax
       OPENAI_API_KEY: ""
       OPENAI_MODEL: gpt-4o-mini
+      SUPERUSER_EMAILS: superuser-e2e@example.com
       STRIPE_SECRET_KEY: sk_test_quotefly_ci
       STRIPE_WEBHOOK_SECRET: whsec_quotefly_ci
       STRIPE_PRICE_ID_STARTER: price_test_starter

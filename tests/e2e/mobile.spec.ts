@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   addSessionCookie,
   createCustomerViaApi,
@@ -6,6 +6,15 @@ import {
   getQuoteViaApi,
   signUpViaApi,
 } from "./helpers";
+
+async function expectScreenReaderOnlyText(
+  locator: Locator,
+) {
+  await expect(locator).toHaveClass(/sr-only/);
+  await expect(locator).toHaveCSS("position", "absolute");
+  await expect(locator).toHaveCSS("width", "1px");
+  await expect(locator).toHaveCSS("height", "1px");
+}
 
 test.describe("mobile launch smoke", () => {
   test("customer and quote surfaces render on mobile viewport", async ({ context, page, request }) => {
@@ -52,16 +61,19 @@ test.describe("mobile launch smoke", () => {
     const mobileWorkspace = page.getByRole("navigation", { name: "Mobile workspace" });
     await expect(quickQuote).toBeVisible();
     await expect(quickQuote).toHaveAttribute("aria-label", "New quote");
-    await expect(quickQuote.getByText("New quote", { exact: true })).toHaveClass(/sr-only/);
+    await expectScreenReaderOnlyText(quickQuote.getByText("New quote", { exact: true }));
     for (const label of ["Customers", "Quotes", "Follow-up", "Analytics"]) {
       const tab = mobileWorkspace.getByRole("button", { name: label, exact: true });
       await expect(tab).toHaveAttribute("title", label);
-      await expect(tab.getByText(label, { exact: true })).toHaveClass(/sr-only/);
+      await expectScreenReaderOnlyText(tab.getByText(label, { exact: true }));
       expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     }
+    await expect(page.getByTestId("mobile-tab-customers")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("mobile-tab-customers-icon")).toHaveClass(/bg-quotefly-blue/);
 
     await mobileWorkspace.getByRole("button", { name: "Quotes", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
+    await expect(page.getByTestId("mobile-tab-quotes")).toHaveAttribute("aria-current", "page");
     await expect(page.getByText("Ready to send", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Waiting on reply", { exact: true })).toBeVisible();
 

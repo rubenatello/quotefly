@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode } from "react";
 import { Clock3, FilePlus2, FileText } from "lucide-react";
+import { cn } from "../../lib/utils";
 import {
   AnalyticsIcon,
   CustomerIcon,
@@ -28,6 +29,49 @@ const SECONDARY_TABS: TabItem[] = [
   { id: "analytics", path: "/app/analytics", label: "Analytics", icon: <AnalyticsIcon size={22} /> },
 ];
 
+function MobileTabButton({
+  tab,
+  active,
+  onSelect,
+}: {
+  tab: TabItem;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors",
+        active ? "text-quotefly-blue" : "text-slate-500 hover:text-slate-700",
+      )}
+      aria-label={tab.label}
+      aria-current={active ? "page" : undefined}
+      title={tab.label}
+      data-testid={`mobile-tab-${tab.id}`}
+    >
+      <span
+        className={cn(
+          "relative inline-flex h-12 w-12 items-center justify-center rounded-[18px] transition",
+          active && "bg-quotefly-blue/[0.12] shadow-[0_8px_20px_rgba(47,111,214,0.14)]",
+        )}
+        aria-hidden="true"
+        data-testid={`mobile-tab-${tab.id}-icon`}
+      >
+        {active ? (
+          <>
+            <span className="absolute -top-1 h-1.5 w-1.5 rounded-full bg-quotefly-blue shadow-[0_0_0_4px_rgba(47,111,214,0.08)]" />
+            <span className="absolute inset-1 rounded-[15px] border border-quotefly-blue/10" />
+          </>
+        ) : null}
+        <span className="relative">{tab.icon}</span>
+      </span>
+      <span className="sr-only">{tab.label}</span>
+    </button>
+  );
+}
+
 export function BottomTabBar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -37,30 +81,12 @@ export function BottomTabBar() {
   const renderTab = (tab: TabItem) => {
     const active = tab.id === activeNavigation;
     return (
-      <button
+      <MobileTabButton
         key={tab.path}
-        type="button"
-        onClick={() => navigate(tab.path)}
-        className={`relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors ${
-          active
-            ? "text-quotefly-blue"
-            : "text-slate-500 hover:text-slate-700"
-        }`}
-        aria-label={tab.label}
-        aria-current={active ? "page" : undefined}
-        title={tab.label}
-      >
-        {active ? <span className="absolute top-1.5 h-1 w-5 rounded-full bg-quotefly-blue" aria-hidden="true" /> : null}
-        <span
-          className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl transition ${
-            active ? "bg-quotefly-blue/[0.1] shadow-[0_5px_14px_rgba(47,111,214,0.12)]" : ""
-          }`}
-          aria-hidden="true"
-        >
-          {tab.icon}
-        </span>
-        <span className="sr-only">{tab.label}</span>
-      </button>
+        tab={tab}
+        active={active}
+        onSelect={() => navigate(tab.path)}
+      />
     );
   };
 
@@ -80,7 +106,7 @@ export function BottomTabBar() {
           data-testid="mobile-quick-quote"
         >
           <span
-            className="inline-flex h-12 w-12 -translate-y-1 items-center justify-center rounded-2xl bg-quotefly-blue text-white shadow-[0_8px_20px_rgba(47,111,214,0.3)]"
+            className="inline-flex h-[52px] w-[52px] -translate-y-1.5 items-center justify-center rounded-[20px] bg-quotefly-blue text-white shadow-[0_10px_24px_rgba(47,111,214,0.32)] ring-4 ring-white"
             aria-hidden="true"
           >
             <FilePlus2 size={22} />

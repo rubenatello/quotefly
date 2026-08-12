@@ -216,8 +216,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 28,
-      fieldCount: 376,
+      modelCount: 30,
+      fieldCount: 408,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);
@@ -246,5 +246,32 @@ describe("superuser data-governance control plane", () => {
     });
     expect(history.statusCode).toBe(200);
     expect((history.json() as { runs: unknown[] }).runs).toHaveLength(1);
+
+    const ragIndex = await app.inject({
+      method: "GET",
+      url: "/v1/internal/control-plane/rag-index",
+      headers: { cookie: superuser.cookie },
+    });
+    expect(ragIndex.statusCode).toBe(200);
+    const ragIndexBody = ragIndex.json() as {
+      totals: {
+        documents: number;
+        activeDocuments: number;
+        chunks: number;
+        activeChunks: number;
+      };
+      fieldsExcluded: string[];
+    };
+    expect(ragIndexBody.totals).toMatchObject({
+      documents: 0,
+      activeDocuments: 0,
+      chunks: 0,
+      activeChunks: 0,
+    });
+    expect(ragIndexBody.fieldsExcluded).toEqual(expect.arrayContaining([
+      "chunk content",
+      "embedding vectors",
+      "source row ids",
+    ]));
   });
 });

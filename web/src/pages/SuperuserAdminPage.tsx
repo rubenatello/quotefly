@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   BrainCircuit,
   Building2,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Database,
   KeyRound,
   LockKeyhole,
@@ -20,6 +22,7 @@ import {
   type InternalControlPlaneSummary,
   type InternalDataCatalog,
   type InternalPermissionPolicy,
+  type InternalRagIndexSummary,
   type InternalSuperuserAuditEvent,
   type InternalTenantMetadata,
   type InternalValidationRun,
@@ -88,6 +91,7 @@ export function SuperuserAdminPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<ConsoleTab>("overview");
   const [summary, setSummary] = useState<InternalControlPlaneSummary | null>(null);
+  const [ragIndex, setRagIndex] = useState<InternalRagIndexSummary | null>(null);
   const [tenants, setTenants] = useState<InternalTenantMetadata[]>([]);
   const [tenantTotal, setTenantTotal] = useState(0);
   const [tenantOffset, setTenantOffset] = useState(0);
@@ -97,6 +101,7 @@ export function SuperuserAdminPage() {
   const [catalogSearch, setCatalogSearch] = useState("");
   const [classification, setClassification] = useState<"" | DataClassification>("");
   const [ragStatus, setRagStatus] = useState<"" | "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED">("");
+  const [expandedCatalogModels, setExpandedCatalogModels] = useState<Set<string>>(new Set());
   const [permissions, setPermissions] = useState<InternalPermissionPolicy | null>(null);
   const [validationRuns, setValidationRuns] = useState<InternalValidationRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<InternalSuperuserAuditEvent[]>([]);
@@ -118,7 +123,12 @@ export function SuperuserAdminPage() {
     setLoading(true);
     setError(null);
     try {
-      setSummary(await api.internal.controlPlane.summary());
+      const [summaryResult, ragIndexResult] = await Promise.all([
+        api.internal.controlPlane.summary(),
+        api.internal.controlPlane.ragIndex(),
+      ]);
+      setSummary(summaryResult);
+      setRagIndex(ragIndexResult);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -150,11 +160,15 @@ export function SuperuserAdminPage() {
     setSectionLoading(true);
     setError(null);
     try {
-      setCatalog(await api.internal.controlPlane.dataCatalog({
+      const result = await api.internal.controlPlane.dataCatalog({
         search: catalogSearch.trim() || undefined,
         classification: classification || undefined,
         ragStatus: ragStatus || undefined,
-      }));
+      });
+      setCatalog(result);
+      setExpandedCatalogModels((current) => new Set(
+        [...current].filter((modelName) => result.models.some((model) => model.model === modelName)),
+      ));
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -234,6 +248,24 @@ export function SuperuserAdminPage() {
     [catalog],
   );
 
+  function toggleCatalogModel(modelName: string) {
+    setExpandedCatalogModels((current) => {
+      const next = new Set(current);
+      if (next.has(modelName)) next.delete(modelName);
+      else next.add(modelName);
+      return next;
+    });
+  }
+
+  function toggleAllCatalogModels() {
+    if (!catalog) return;
+    const allExpanded = catalog.models.length > 0
+      && catalog.models.every((model) => expandedCatalogModels.has(model.model));
+    setExpandedCatalogModels(allExpanded
+      ? new Set()
+      : new Set(catalog.models.map((model) => model.model)));
+  }
+
   return (
     <div className="space-y-5" data-testid="superuser-operator-console">
       <PageHeader
@@ -284,7 +316,7 @@ export function SuperuserAdminPage() {
       ) : null}
 
       {!loading && tab === "overview" ? (
-        <OverviewPanel summary={summary} onRefresh={() => void loadSummary()} />
+        <OverviewPanel summary={summary} ragIndex={ragIndex} onRefresh={() => void loadSummary()} />
       ) : null}
 
       {!loading && tab === "tenants" ? (
@@ -373,36 +405,14 @@ export function SuperuserAdminPage() {
             </div>
           ) : null}
 
-          <div className="space-y-3">
-            {catalog?.models.map((model) => (
-              <Card key={model.model} variant="elevated" padding="md">
-                <CardHeader
-                  title={model.model}
-                  subtitle={`${model.purpose} · table ${model.table} · ${model.tenantScope} tenant scope`}
-                  actions={<Badge tone={model.reviewStatus === "REVIEWED" ? "blue" : "red"}>{readable(model.reviewStatus)}</Badge>}
-                />
-                <div className="grid gap-2 xl:grid-cols-2">
-                  {model.fields.map((field) => (
-                    <div key={field.field} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="break-all text-sm font-semibold text-slate-900">{model.model}.{field.field}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">{field.type}{field.isList ? "[]" : ""} · {field.isRequired ? "required" : "optional"}</p>
-                        </div>
-                        <Badge tone={classificationTone(field.classification)}>{field.classification.split("_")[0]}</Badge>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        <Badge tone={field.ragStatus === "ELIGIBLE" ? "emerald" : field.ragStatus === "REVIEW_REQUIRED" ? "red" : "slate"}>
-                          RAG {readable(field.ragStatus)}
-                        </Badge>
-                        {field.requiredAccess.map((access) => <Badge key={access} tone="slate">{access}</Badge>)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))}
-          </div>
+          {catalog && catalog.models.length > 0 ? (
+            <DataCatalogExplorer
+              catalog={catalog}
+              expandedModels={expandedCatalogModels}
+              onToggleModel={toggleCatalogModel}
+              onToggleAll={toggleAllCatalogModels}
+            />
+          ) : null}
           {!sectionLoading && catalog?.models.length === 0 ? (
             <Card padding="lg" className="text-sm text-slate-600">No schema fields matched these filters.</Card>
           ) : null}
@@ -431,7 +441,15 @@ export function SuperuserAdminPage() {
   );
 }
 
-function OverviewPanel({ summary, onRefresh }: { summary: InternalControlPlaneSummary | null; onRefresh: () => void }) {
+function OverviewPanel({
+  summary,
+  ragIndex,
+  onRefresh,
+}: {
+  summary: InternalControlPlaneSummary | null;
+  ragIndex: InternalRagIndexSummary | null;
+  onRefresh: () => void;
+}) {
   if (!summary) return <Card padding="lg" className="text-sm text-slate-600">No platform summary is available.</Card>;
   const valid = summary.liveValidation.status === "PASSED";
   return (
@@ -464,6 +482,46 @@ function OverviewPanel({ summary, onRefresh }: { summary: InternalControlPlaneSu
           </div>
         </Card>
       </div>
+      <Card variant="elevated" padding="lg">
+        <CardHeader
+          title="RAG retrieval index"
+          subtitle={ragIndex?.policyVersion ? `Policy ${ragIndex.policyVersion}` : "No indexed retrieval chunks yet"}
+          actions={<Button variant="outline" size="sm" icon={<RefreshCw size={15} />} onClick={onRefresh}>Refresh</Button>}
+        />
+        {ragIndex ? (
+          <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
+            <div className="grid grid-cols-2 gap-3">
+              <MetricCompact label="Active docs" value={ragIndex.totals.activeDocuments.toLocaleString()} />
+              <MetricCompact label="Retired docs" value={ragIndex.totals.deletedDocuments.toLocaleString()} />
+              <MetricCompact label="Active chunks" value={ragIndex.totals.activeChunks.toLocaleString()} />
+              <MetricCompact label="Retired chunks" value={ragIndex.totals.deletedChunks.toLocaleString()} />
+            </div>
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(ragIndex.activeChunksByClassification).map(([classificationName, count]) => (
+                  <Badge key={classificationName} tone={classificationTone(classificationName as DataClassification)}>
+                    {classificationName.split("_")[0]} · {count}
+                  </Badge>
+                ))}
+                {Object.keys(ragIndex.activeChunksByClassification).length === 0 ? (
+                  <span className="text-sm text-slate-500">No active chunks have been indexed.</span>
+                ) : null}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {ragIndex.activeChunksBySourceType.slice(0, 6).map((source) => (
+                  <MetricCompact key={source.sourceType} label={source.sourceType} value={source.chunkCount.toLocaleString()} />
+                ))}
+              </div>
+              <p className="text-xs text-slate-500">
+                Latest index write: {ragIndex.latestIndexedAtUtc ? formatDate(ragIndex.latestIndexedAtUtc) : "None"}.
+                Excludes {ragIndex.fieldsExcluded.join(", ")}.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-600">RAG index metadata is unavailable.</p>
+        )}
+      </Card>
       <Alert tone="info">{summary.mutationPolicy.reason}</Alert>
     </section>
   );
@@ -492,6 +550,183 @@ function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
         <p className="mt-1"><span className="font-medium text-slate-700">Created:</span> {formatDate(tenant.createdAt)}</p>
       </div>
     </Card>
+  );
+}
+
+function DataCatalogExplorer({ catalog, expandedModels, onToggleModel, onToggleAll }: {
+  catalog: InternalDataCatalog;
+  expandedModels: ReadonlySet<string>;
+  onToggleModel: (modelName: string) => void;
+  onToggleAll: () => void;
+}) {
+  const allExpanded = catalog.models.length > 0
+    && catalog.models.every((model) => expandedModels.has(model.model));
+
+  return (
+    <Card variant="elevated" padding="sm" className="overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-1 pb-3 sm:flex-row sm:items-center sm:justify-between sm:px-2">
+        <div>
+          <h3 className="text-base font-semibold text-slate-900">Classification catalog</h3>
+          <p className="mt-1 text-sm text-slate-600">Expand a model to inspect every field, access requirement, and retrieval decision.</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onToggleAll}
+          icon={allExpanded ? <ChevronDown className="rotate-180" size={15} /> : <ChevronDown size={15} />}
+        >
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </Button>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 px-1 py-3 sm:flex-wrap sm:px-2" aria-label="Classification legend">
+        {CLASSIFICATIONS.filter((item): item is { value: DataClassification; label: string } => Boolean(item.value)).map((item) => (
+          <Badge key={item.value} tone={classificationTone(item.value)} className="shrink-0 whitespace-nowrap">
+            {item.label} · {catalog.summary.classificationCounts[item.value]}
+          </Badge>
+        ))}
+      </div>
+
+      <div className="space-y-2 px-1 pt-3 md:hidden" role="list" aria-label="Data models">
+        {catalog.models.map((model) => {
+          const expanded = expandedModels.has(model.model);
+          const ragEligibleCount = model.fields.filter((field) => field.ragStatus === "ELIGIBLE").length;
+          return (
+            <article key={model.model} className="overflow-hidden rounded-xl border border-slate-200 bg-white" role="listitem">
+              <button
+                type="button"
+                className="flex min-h-11 w-full items-start gap-3 px-3 py-3 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue"
+                aria-expanded={expanded}
+                aria-controls={`mobile-fields-${model.model}`}
+                aria-label={`${expanded ? "Collapse" : "Expand"} fields for ${model.model}`}
+                onClick={() => onToggleModel(model.model)}
+              >
+                {expanded ? <ChevronDown className="mt-0.5 shrink-0 text-slate-500" size={18} /> : <ChevronRight className="mt-0.5 shrink-0 text-slate-500" size={18} />}
+                <span className="min-w-0 flex-1">
+                  <span className="block break-words text-sm font-semibold text-slate-900">{model.model}</span>
+                  <span className="mt-0.5 block break-words text-xs text-slate-500">{model.table} · {model.fields.length} visible fields · {ragEligibleCount} RAG eligible</span>
+                </span>
+                <Badge tone={classificationTone(model.defaultClassification)} className="shrink-0">{model.defaultClassification.split("_")[0]}</Badge>
+              </button>
+              {expanded ? (
+                <div id={`mobile-fields-${model.model}`} className="space-y-2 border-t border-slate-200 bg-slate-50/70 p-2" aria-label={`Fields for ${model.model}`}>
+                  <p className="px-1 py-1 text-xs text-slate-600">{model.purpose} · {model.tenantScope} tenant scope</p>
+                  {model.fields.map((field) => (
+                    <div key={field.field} className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="break-all text-sm font-semibold text-slate-900">{model.model}.{field.field}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">Column {field.column} · {field.type}{field.isList ? "[]" : ""} · {field.isRequired ? "required" : "optional"}</p>
+                        </div>
+                        <ClassificationBadge classification={field.classification} />
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <RagBadge status={field.ragStatus} />
+                        {field.requiredAccess.map((access) => <Badge key={access} tone="slate">{access}</Badge>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="hidden overflow-x-auto pt-3 md:block">
+        <table className="min-w-[900px] w-full text-sm" aria-label="Data classification models">
+          <thead>
+            <tr className="border-y border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <th className="px-3 py-2.5">Model and table</th>
+              <th className="px-3 py-2.5">Tenant scope</th>
+              <th className="px-3 py-2.5">Default class</th>
+              <th className="px-3 py-2.5 text-right">Visible fields</th>
+              <th className="px-3 py-2.5 text-right">RAG eligible</th>
+              <th className="px-3 py-2.5">Review</th>
+            </tr>
+          </thead>
+          <tbody>
+            {catalog.models.map((model) => {
+              const expanded = expandedModels.has(model.model);
+              const ragEligibleCount = model.fields.filter((field) => field.ragStatus === "ELIGIBLE").length;
+              return (
+                <Fragment key={model.model}>
+                  <tr className="border-b border-slate-200 bg-white align-top hover:bg-slate-50/70">
+                    <td className="px-3 py-3">
+                      <button
+                        type="button"
+                        className="flex min-h-11 w-full items-start gap-2 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+                        aria-expanded={expanded}
+                        aria-controls={`desktop-fields-${model.model}`}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} fields for ${model.model}`}
+                        onClick={() => onToggleModel(model.model)}
+                      >
+                        {expanded ? <ChevronDown className="mt-0.5 shrink-0 text-slate-500" size={18} /> : <ChevronRight className="mt-0.5 shrink-0 text-slate-500" size={18} />}
+                        <span>
+                          <span className="block font-semibold text-slate-900">{model.model}</span>
+                          <span className="mt-0.5 block text-xs text-slate-500">{model.table}</span>
+                          <span className="mt-1 block max-w-xl text-xs text-slate-600">{model.purpose}</span>
+                        </span>
+                      </button>
+                    </td>
+                    <td className="px-3 py-3 text-slate-700">{readable(model.tenantScope)}</td>
+                    <td className="px-3 py-3"><ClassificationBadge classification={model.defaultClassification} /></td>
+                    <td className="px-3 py-3 text-right font-medium text-slate-900">{model.fields.length}</td>
+                    <td className="px-3 py-3 text-right font-medium text-slate-900">{ragEligibleCount}</td>
+                    <td className="px-3 py-3"><Badge tone={model.reviewStatus === "REVIEWED" ? "blue" : "red"}>{readable(model.reviewStatus)}</Badge></td>
+                  </tr>
+                  {expanded ? (
+                    <tr id={`desktop-fields-${model.model}`} className="border-b border-slate-200 bg-slate-50/80">
+                      <td colSpan={6} className="p-3">
+                        <table className="w-full table-fixed overflow-hidden rounded-lg border border-slate-200 bg-white text-xs" aria-label={`Fields for ${model.model}`}>
+                          <thead>
+                            <tr className="border-b border-slate-200 bg-slate-100 text-left uppercase tracking-wide text-slate-500">
+                              <th className="w-[28%] px-3 py-2">Field</th>
+                              <th className="w-[14%] px-3 py-2">Type</th>
+                              <th className="w-[20%] px-3 py-2">Classification</th>
+                              <th className="w-[14%] px-3 py-2">RAG</th>
+                              <th className="w-[24%] px-3 py-2">Required access</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {model.fields.map((field) => (
+                              <tr key={field.field} className="border-b border-slate-100 last:border-b-0">
+                                <td className="px-3 py-2.5 align-top">
+                                  <p className="break-all font-semibold text-slate-900">{model.model}.{field.field}</p>
+                                  <p className="mt-0.5 break-all text-[11px] text-slate-500">Column {field.column}</p>
+                                </td>
+                                <td className="px-3 py-2.5 align-top text-slate-700">{field.type}{field.isList ? "[]" : ""}<span className="mt-0.5 block text-[11px] text-slate-500">{field.isRequired ? "Required" : "Optional"}</span></td>
+                                <td className="px-3 py-2.5 align-top"><ClassificationBadge classification={field.classification} /></td>
+                                <td className="px-3 py-2.5 align-top"><RagBadge status={field.ragStatus} /></td>
+                                <td className="px-3 py-2.5 align-top"><div className="flex flex-wrap gap-1">{field.requiredAccess.map((access) => <Badge key={access} tone="slate">{access}</Badge>)}</div></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function ClassificationBadge({ classification }: { classification: DataClassification }) {
+  const prefix = classification.split("_")[0];
+  return <Badge tone={classificationTone(classification)} className="whitespace-nowrap">{prefix} {readable(classification)}</Badge>;
+}
+
+function RagBadge({ status }: { status: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED" }) {
+  return (
+    <Badge tone={status === "ELIGIBLE" ? "emerald" : status === "REVIEW_REQUIRED" ? "red" : "slate"} className="whitespace-nowrap">
+      {status === "ELIGIBLE" ? "RAG eligible" : status === "EXCLUDED" ? "RAG excluded" : "RAG review required"}
+    </Badge>
   );
 }
 

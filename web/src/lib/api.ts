@@ -337,6 +337,7 @@ export type InternalDataCatalogField = {
   classification: DataClassification;
   classificationSource: "field_override" | "model_default" | "fail_closed";
   ragStatus: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
+  analyticsStatus: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
   requiredAccess: string[];
 };
 
@@ -358,6 +359,7 @@ export type InternalDataCatalog = {
     fieldCount: number;
     classificationCounts: Record<DataClassification, number>;
     ragEligibleCount: number;
+    analyticsEligibleCount: number;
     reviewRequiredCount: number;
   };
   models: InternalDataCatalogModel[];
@@ -366,6 +368,117 @@ export type InternalDataCatalog = {
     classification?: DataClassification;
     ragStatus?: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
   };
+};
+
+export type AiBusinessInsightTool =
+  | "SALES_PIPELINE"
+  | "SERVICE_PROFITABILITY"
+  | "ITEM_PROFITABILITY"
+  | "LOW_MARGIN_QUOTES";
+
+export type AiBusinessInsight = {
+  tool: AiBusinessInsightTool;
+  generatedAtUtc: string;
+  policyVersion: string;
+  maxClassification: DataClassification;
+  dateRange: { from: string; to: string };
+  filters: {
+    serviceType: ServiceType | null;
+    includeArchived: boolean;
+    statuses: QuoteStatus[];
+  };
+  answer: string;
+  summary: {
+    quoteCount: number;
+    acceptedQuoteCount: number;
+    pipelineQuoteCount: number;
+    revenue: number;
+    acceptedRevenue: number;
+    pipelineRevenue: number;
+    averageAcceptedQuoteValue: number | null;
+    grossCost?: number;
+    grossProfit?: number;
+    grossMarginPercent?: number | null;
+    winRatePercent?: number | null;
+  };
+  rows: Array<Record<string, string | number | null>>;
+  citations: Array<{
+    key: string;
+    label: string;
+    sourceType: string;
+    classification: DataClassification;
+  }>;
+  auditEventId: string;
+  fieldsExcluded: string[];
+};
+
+export type AiAssistantRequestedTool =
+  | "AUTO"
+  | "SEARCH_CUSTOMERS"
+  | "SUMMARIZE_PIPELINE"
+  | "RANK_PROFITABLE_JOBS"
+  | "DRAFT_QUOTE";
+
+export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
+
+export type AiAssistantContext = {
+  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard";
+  customerId?: string;
+  quoteId?: string;
+  search?: string;
+  serviceType?: ServiceType;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  includeArchived?: boolean;
+};
+
+export type AiAssistantAction = {
+  type: "OPEN_CUSTOMER" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "REQUEST_ADMIN_ACCESS";
+  label: string;
+  requiresConfirmation: boolean;
+  payload: Record<string, unknown>;
+};
+
+export type AiAssistantCitation = {
+  key: string;
+  label: string;
+  sourceType: string;
+  classification: DataClassification;
+};
+
+export type AiAssistantResponse = {
+  assistant: {
+    tool: AiAssistantTool;
+    generatedAtUtc: string;
+    policyVersion: string;
+    maxClassification: DataClassification;
+    answer: string;
+    results: Array<Record<string, string | number | boolean | null>>;
+    citations: AiAssistantCitation[];
+    actions: AiAssistantAction[];
+    auditEventId: string;
+    fieldsExcluded: string[];
+  };
+  usage: AiUsageSummary;
+};
+
+export type InternalRagIndexSummary = {
+  generatedAtUtc: string;
+  policyVersion: string | null;
+  totals: {
+    documents: number;
+    activeDocuments: number;
+    deletedDocuments: number;
+    chunks: number;
+    activeChunks: number;
+    deletedChunks: number;
+  };
+  documentsByStatus: Record<string, number>;
+  activeChunksByClassification: Partial<Record<DataClassification, number>>;
+  activeChunksBySourceType: Array<{ sourceType: string; chunkCount: number }>;
+  latestIndexedAtUtc: string | null;
+  fieldsExcluded: string[];
 };
 
 export type InternalPermissionPolicy = {
@@ -1032,6 +1145,30 @@ export const api = {
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
   },
 
+  ai: {
+    assistant: (body: {
+      message: string;
+      tool?: AiAssistantRequestedTool;
+      context?: AiAssistantContext;
+    }) => request<AiAssistantResponse>("/v1/ai/assistant", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+    businessInsight: (body: {
+      prompt: string;
+      tool: AiBusinessInsightTool;
+      dateFrom?: string;
+      dateTo?: string;
+      serviceType?: ServiceType;
+      limit?: number;
+      includeArchived?: boolean;
+    }) => request<{ insight: AiBusinessInsight; usage: AiUsageSummary }>("/v1/ai/business-insights", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  },
+
   internal: {
     controlPlane: {
       summary: () => request<InternalControlPlaneSummary>("/v1/internal/control-plane/summary"),
@@ -1061,6 +1198,7 @@ export const api = {
           ragStatus: query?.ragStatus,
         })}`,
       ),
+      ragIndex: () => request<InternalRagIndexSummary>("/v1/internal/control-plane/rag-index"),
       permissions: () => request<InternalPermissionPolicy>("/v1/internal/control-plane/permissions"),
       runValidation: () => request<{ run: InternalValidationRun & DataGovernanceValidation }>(
         "/v1/internal/control-plane/validation-runs",

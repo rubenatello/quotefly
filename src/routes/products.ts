@@ -1,6 +1,7 @@
 import { PresetCategory, PresetUnitType, Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { markWorkPresetAiRetrievalSourceDeleted } from "../lib/ai-retrieval";
 import { getJwtClaims } from "../lib/auth";
 
 const ServiceTypeEnum = z.enum([
@@ -183,6 +184,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             },
           });
 
+      if (existingProduct) {
+        await markWorkPresetAiRetrievalSourceDeleted(transaction, {
+          tenantId: claims.tenantId,
+          workPresetIds: [existingProduct.id],
+        });
+      }
+
       return { kind: "success", product, restored: Boolean(existingProduct) } as const;
     });
 
@@ -271,6 +279,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           ...(payload.isDefault !== undefined ? { isDefault: payload.isDefault } : {}),
         },
       });
+      await markWorkPresetAiRetrievalSourceDeleted(transaction, {
+        tenantId: claims.tenantId,
+        workPresetIds: [existingProduct.id],
+      });
       return { kind: "success", product } as const;
     });
 
@@ -317,9 +329,17 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    await app.prisma.workPreset.update({
-      where: { id: existingProduct.id },
-      data: { deletedAtUtc: new Date() },
+    const now = new Date();
+    await app.prisma.$transaction(async (transaction) => {
+      await transaction.workPreset.update({
+        where: { id: existingProduct.id },
+        data: { deletedAtUtc: now },
+      });
+      await markWorkPresetAiRetrievalSourceDeleted(transaction, {
+        tenantId: claims.tenantId,
+        workPresetIds: [existingProduct.id],
+        now,
+      });
     });
 
     return reply.send({ message: "Product archived." });

@@ -2,6 +2,10 @@ import { FastifyPluginAsync } from "fastify";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import {
+  markCustomerAiRetrievalSourcesDeleted,
+  markQuoteAiRetrievalSourcesDeleted,
+} from "../lib/ai-retrieval";
 import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activity";
 import {
   normalizeCustomerPhone,
@@ -1146,6 +1150,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           title: payload.notes?.trim() ? "Customer notes updated" : "Customer notes cleared",
           detail: payload.notes?.trim() ? payload.notes.trim().slice(0, 500) : "Notes were cleared.",
         });
+        await markCustomerAiRetrievalSourcesDeleted(tx, {
+          tenantId: claims.tenantId,
+          customerIds: [updatedCustomer.id],
+        });
       }
 
       if (payload.followUpStatus && payload.followUpStatus !== existing.followUpStatus) {
@@ -1260,12 +1268,24 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
+      await markQuoteAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        quoteIds: relatedQuotes.map((quote) => quote.id),
+        now,
+      });
+
       await tx.customer.update({
         where: { id: existing.id },
         data: {
           archivedAtUtc: now,
           deletedAtUtc: null,
         },
+      });
+
+      await markCustomerAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        customerIds: [existing.id],
+        now,
       });
 
       return true;
@@ -1353,6 +1373,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           archivedAtUtc: null,
           deletedAtUtc: now,
         },
+      });
+
+      await markCustomerAiRetrievalSourcesDeleted(tx, {
+        tenantId: claims.tenantId,
+        customerIds: [existing.id],
+        includeQuotes: true,
+        now,
       });
 
       return true;

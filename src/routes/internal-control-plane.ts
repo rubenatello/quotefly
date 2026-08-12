@@ -252,6 +252,101 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.get("/internal/control-plane/rag-index", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = requireSuperuserAccess(request, reply);
+    if (!claims) return reply;
+
+    const [
+      documentCount,
+      activeDocumentCount,
+      deletedDocumentCount,
+      chunkCount,
+      activeChunkCount,
+      deletedChunkCount,
+      documentStatusRows,
+      chunkClassificationRows,
+      sourceTypeRows,
+      latestDocument,
+      latestChunk,
+    ] = await Promise.all([
+      app.prisma.aiRetrievalDocument.count(),
+      app.prisma.aiRetrievalDocument.count({ where: { deletedAtUtc: null, status: "ACTIVE" } }),
+      app.prisma.aiRetrievalDocument.count({ where: { OR: [{ deletedAtUtc: { not: null } }, { status: "DELETED" }] } }),
+      app.prisma.aiRetrievalChunk.count(),
+      app.prisma.aiRetrievalChunk.count({ where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } } }),
+      app.prisma.aiRetrievalChunk.count({ where: { deletedAtUtc: { not: null } } }),
+      app.prisma.aiRetrievalDocument.groupBy({
+        by: ["status"],
+        _count: { _all: true },
+        orderBy: { status: "asc" },
+      }),
+      app.prisma.aiRetrievalChunk.groupBy({
+        by: ["classification"],
+        where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } },
+        _count: { _all: true },
+        orderBy: { classification: "asc" },
+      }),
+      app.prisma.aiRetrievalChunk.groupBy({
+        by: ["sourceType"],
+        where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } },
+        _count: { _all: true },
+        orderBy: { _count: { sourceType: "desc" } },
+        take: 20,
+      }),
+      app.prisma.aiRetrievalDocument.findFirst({
+        orderBy: { indexedAtUtc: "desc" },
+        select: { indexedAtUtc: true, policyVersion: true },
+      }),
+      app.prisma.aiRetrievalChunk.findFirst({
+        orderBy: { indexedAtUtc: "desc" },
+        select: { indexedAtUtc: true, policyVersion: true },
+      }),
+    ]);
+
+    await recordSuperuserAuditEvent(app.prisma, {
+      actorUserId: claims.userId,
+      requestId: request.id,
+      action: "RAG_INDEX_SUMMARY_VIEWED",
+      targetType: "AiRetrievalIndex",
+      metadata: {
+        documentCount,
+        activeDocumentCount,
+        activeChunkCount,
+      },
+    });
+
+    return {
+      generatedAtUtc: new Date(),
+      policyVersion: latestChunk?.policyVersion ?? latestDocument?.policyVersion ?? null,
+      totals: {
+        documents: documentCount,
+        activeDocuments: activeDocumentCount,
+        deletedDocuments: deletedDocumentCount,
+        chunks: chunkCount,
+        activeChunks: activeChunkCount,
+        deletedChunks: deletedChunkCount,
+      },
+      documentsByStatus: Object.fromEntries(
+        documentStatusRows.map((row) => [row.status, row._count._all ?? 0]),
+      ),
+      activeChunksByClassification: Object.fromEntries(
+        chunkClassificationRows.map((row) => [row.classification, row._count._all ?? 0]),
+      ),
+      activeChunksBySourceType: sourceTypeRows.map((row) => ({
+        sourceType: row.sourceType,
+        chunkCount: row._count._all ?? 0,
+      })),
+      latestIndexedAtUtc: latestChunk?.indexedAtUtc ?? latestDocument?.indexedAtUtc ?? null,
+      fieldsExcluded: [
+        "chunk content",
+        "embedding vectors",
+        "source row ids",
+        "tenant ids",
+        "customer data",
+      ],
+    };
+  });
+
   app.get("/internal/control-plane/permissions", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;

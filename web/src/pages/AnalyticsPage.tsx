@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, PageHeader } from "../components/ui";
 import { QuoteStatusPill } from "../components/dashboard/DashboardUi";
+import { KodyButton } from "../components/ai/KodyButton";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
 import type { Customer, Quote } from "../lib/api";
@@ -658,6 +659,20 @@ export function AnalyticsPage() {
       <PageHeader
         title="Analytics"
         subtitle="Track response speed, quote volume, and recent activity without leaving the operating workflow."
+        actions={
+          <KodyButton
+            label="Ask Kody for insight"
+            variant="secondary"
+            prompt={`Summarize my sales pipeline for ${formatRangeLabel(activeRange)}. Call out quote volume, accepted revenue, stale follow-ups, and one practical action to improve close rate.`}
+            tool="SUMMARIZE_PIPELINE"
+            context={{
+              currentPage: "analytics",
+              dateFrom: activeRange.start.toISOString(),
+              dateTo: activeRange.endExclusive.toISOString(),
+              limit: 8,
+            }}
+          />
+        }
       />
 
       {error ? (

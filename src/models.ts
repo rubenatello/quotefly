@@ -58,6 +58,11 @@ export type QuoteOutboundChannel =
   | "COPY"
   | "NATIVE_SHARE";
 
+export type AiUsageEventType =
+  | "DRAFT"
+  | "REVISE"
+  | "BUSINESS_INSIGHT";
+
 export type PresetCategory =
   | "LABOR"
   | "MATERIAL"

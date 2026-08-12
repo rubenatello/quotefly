@@ -91,7 +91,7 @@ export async function signUpViaApi(
   const label = uniqueRunLabel(prefix);
   const password = "TestPassword123!";
   const email = emailOverride ?? `${label}@example.com`;
-  const response = await request.post(`${apiBaseUrl}/v1/auth/signup`, {
+  let response = await request.post(`${apiBaseUrl}/v1/auth/signup`, {
     data: {
       email,
       password,
@@ -105,7 +105,14 @@ export async function signUpViaApi(
     },
   });
 
-  await expectStatus(response, 201);
+  if (response.status() === 409 && emailOverride) {
+    response = await request.post(`${apiBaseUrl}/v1/auth/signin`, {
+      data: { email, password },
+    });
+    await expectStatus(response, 200);
+  } else {
+    await expectStatus(response, 201);
+  }
 
   const payload = (await response.json()) as Pick<E2eAccount, "user" | "tenant">;
   const cookie = extractSessionCookie(response);

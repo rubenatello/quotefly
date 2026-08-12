@@ -39,6 +39,7 @@ const DataPrivacyPage = lazy(() => import("./pages/DataPrivacyPage").then((modul
 const TermsPage = lazy(() => import("./pages/TermsPage").then((module) => ({ default: module.TermsPage })));
 const CookiePolicyPage = lazy(() => import("./pages/CookiePolicyPage").then((module) => ({ default: module.CookiePolicyPage })));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
+const KodyAssistant = lazy(() => import("./components/ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
 const BrandingPage = lazy(() => import("./pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("./pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
@@ -307,6 +308,9 @@ function CrmLayout({
           </Suspense>
         </main>
         <BottomTabBar />
+        <Suspense fallback={null}>
+          <KodyAssistant currentPage={currentPage} />
+        </Suspense>
       </DashboardProvider>
     </CrmShell>
   );
