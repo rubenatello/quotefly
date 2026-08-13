@@ -5,12 +5,14 @@ import { healthRoutes } from "../../src/routes/health";
 const openApps: Array<ReturnType<typeof Fastify>> = [];
 
 function buildHealthServer(
-  queryRaw: () => Promise<unknown>,
+  queryRaw: (...args: unknown[]) => Promise<unknown>,
+  nodeEnv: "test" | "production" = "test",
 ) {
   const app = Fastify({ logger: false });
   app.decorate("prisma", {
     $queryRaw: queryRaw,
   });
+  app.decorate("env", { NODE_ENV: nodeEnv });
   app.register(healthRoutes, { prefix: "/v1" });
   openApps.push(app);
   return app;
@@ -35,14 +37,21 @@ describe("health and readiness routes", () => {
   });
 
   test("returns ready only after the database probe succeeds", async () => {
-    const queryRaw = vi.fn(async () => [{ value: 1 }]);
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      return [
+        { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
+        { tableName: "AiRetrievalChunk", enabled: true, forced: true },
+        { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+      ];
+    });
     const app = buildHealthServer(queryRaw);
 
     const response = await app.inject({ method: "GET", url: "/v1/ready" });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: "ready", service: "quotefly-api" });
-    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(queryRaw).toHaveBeenCalledTimes(2);
   });
 
   test("returns a stable safe response when the database probe fails", async () => {
@@ -100,5 +109,81 @@ describe("health and readiness routes", () => {
     expect(response.json()).toEqual({ error: "Service is not ready." });
     expect(response.body).not.toContain("TenantBrandAsset");
     expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
+  test("returns not ready when AI retrieval RLS is missing or not forced", async () => {
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      return [
+        { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
+        { tableName: "AiRetrievalChunk", enabled: true, forced: false },
+        { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+      ];
+    });
+    const app = buildHealthServer(queryRaw);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("AiRetrievalChunk");
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  test("production readiness verifies the connected least-privileged runtime role", async () => {
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      if (queryRaw.mock.calls.length === 2) {
+        return [
+          { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
+          { tableName: "AiRetrievalChunk", enabled: true, forced: true },
+          { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+        ];
+      }
+      return [{
+        currentUser: "quotefly_runtime",
+        sessionUser: "quotefly_runtime",
+        superuser: false,
+        bypassRls: false,
+        protectedTableOwner: false,
+        hasMemberships: false,
+      }];
+    });
+    const app = buildHealthServer(queryRaw, "production");
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ready" });
+    expect(queryRaw).toHaveBeenCalledTimes(3);
+  });
+
+  test("production readiness rejects a runtime role with a privilege escalation path", async () => {
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      if (queryRaw.mock.calls.length === 2) {
+        return [
+          { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
+          { tableName: "AiRetrievalChunk", enabled: true, forced: true },
+          { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+        ];
+      }
+      return [{
+        currentUser: "quotefly_runtime",
+        sessionUser: "quotefly_runtime",
+        superuser: false,
+        bypassRls: false,
+        protectedTableOwner: false,
+        hasMemberships: true,
+      }];
+    });
+    const app = buildHealthServer(queryRaw, "production");
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("quotefly_runtime");
+    expect(queryRaw).toHaveBeenCalledTimes(3);
   });
 });

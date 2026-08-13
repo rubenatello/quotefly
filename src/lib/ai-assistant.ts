@@ -1,4 +1,17 @@
-import { Prisma, type DataClassification, type PrismaClient, type ServiceCategory } from "@prisma/client";
+import {
+  Prisma,
+  type AiPurpose,
+  type AiUsageEventType,
+  type DataClassification,
+  type PrismaClient,
+  type ServiceCategory,
+} from "@prisma/client";
+import {
+  AI_ASSISTANT_TOOLS,
+  type AiAssistantConversationTurn,
+  type AiAssistantRequestedTool,
+  type AiAssistantTool,
+} from "./ai-assistant-contract";
 import type { AccessContext } from "./access-policy";
 import { hasCapability } from "./access-policy";
 import type { ActivityActor } from "./activity";
@@ -10,6 +23,7 @@ import {
 import { governAiPrompt, hashSourceReference } from "./ai-data-governance";
 import {
   createAiUsageEvent,
+  mergeAiUsageTelemetry,
   type AiUsageTelemetry,
   type MonthlyAiUsageSnapshot,
 } from "./ai-usage";
@@ -18,25 +32,15 @@ import {
   generateAiBusinessInsight,
   type AiBusinessInsightTool,
 } from "./ai-business-insights";
+import { buildGovernedQuoteAiContext, type AiRetrievalResult } from "./ai-retrieval";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import { normalizePhoneSearchDigits } from "./phone";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope } from "./query-scope";
+import { withTenantRlsContext } from "./tenant-rls";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 
-export const AI_ASSISTANT_TOOLS = [
-  "AUTO",
-  "NAVIGATE_WORKSPACE",
-  "FOLLOW_UP_QUEUE",
-  "CUSTOMERS_WITHOUT_QUOTES",
-  "PIPELINE_SCENARIO",
-  "SEARCH_CUSTOMERS",
-  "SUMMARIZE_PIPELINE",
-  "RANK_PROFITABLE_JOBS",
-  "DRAFT_QUOTE",
-] as const;
-
-export type AiAssistantRequestedTool = (typeof AI_ASSISTANT_TOOLS)[number];
-export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
+export { AI_ASSISTANT_TOOLS } from "./ai-assistant-contract";
+export type { AiAssistantRequestedTool, AiAssistantTool } from "./ai-assistant-contract";
 
 export type AiAssistantContext = Readonly<{
   currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard";
@@ -107,6 +111,7 @@ export type AiAssistantInput = Readonly<{
   message: string;
   tool?: AiAssistantRequestedTool;
   context?: AiAssistantContext;
+  conversation?: readonly AiAssistantConversationTurn[];
   now?: Date;
   usageSnapshot?: MonthlyAiUsageSnapshot;
 }>;
@@ -121,6 +126,20 @@ const ZERO_AI_TELEMETRY: AiUsageTelemetry = Object.freeze({
   totalTokens: 0,
   estimatedCostUsd: 0,
 });
+const CLASSIFICATION_RANK: Record<DataClassification, number> = {
+  C0_PUBLIC: 0,
+  C1_BUSINESS_INTERNAL: 1,
+  C2_CUSTOMER_CONFIDENTIAL: 2,
+  C3_FINANCIAL_CONFIDENTIAL: 3,
+  C4_RESTRICTED: 4,
+};
+
+function highestClassification(...values: readonly DataClassification[]) {
+  return values.reduce<DataClassification>(
+    (current, value) => CLASSIFICATION_RANK[value] > CLASSIFICATION_RANK[current] ? value : current,
+    "C0_PUBLIC",
+  );
+}
 const STOP_CUSTOMER_SEARCH_PREFIX =
   /^(?:please\s+)?(?:find|search|look\s+up|show|show\s+me|open)\s+(?:a\s+)?(?:customer|client|contact|customers|clients|contacts)\s*(?:named|called|for|matching|with)?\s*/i;
 const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin|item|items|product|products)\b/i;
@@ -133,6 +152,8 @@ const CUSTOMERS_WITHOUT_QUOTES_PATTERN =
 const PIPELINE_SCENARIO_PATTERN =
   /(?:\b(?:close|closed|convert|converted|win|won|sell|sold|attain|attained|land|landed|realize|realized)\b.{0,64}\b(?:\d{1,3}(?:\.\d+)?\s*(?:%|percent)|open\s+(?:quotes?|pipeline))\b)|(?:\b\d{1,3}(?:\.\d+)?\s*(?:%|percent)\b.{0,64}\b(?:open\s+quotes?|pipeline|revenue)\b)/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me)\b/i;
+const CONVERSATION_FOLLOW_UP_PATTERN =
+  /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|them|those)\b)/i;
 const SEARCH_STOP_WORDS = new Set([
   "a",
   "an",
@@ -212,6 +233,7 @@ export function resolveAssistantTool(
   message: string,
   requestedTool?: AiAssistantRequestedTool,
   context?: AiAssistantContext,
+  conversation?: readonly AiAssistantConversationTurn[],
 ): AiAssistantTool {
   if (requestedTool && requestedTool !== "AUTO") return requestedTool;
   const lower = message.toLowerCase();
@@ -222,11 +244,33 @@ export function resolveAssistantTool(
   if (navigationTarget(lower)) return "NAVIGATE_WORKSPACE";
   if (FINANCIAL_INTENT_PATTERN.test(lower)) return "RANK_PROFITABLE_JOBS";
   if (PIPELINE_INTENT_PATTERN.test(lower)) return "SUMMARIZE_PIPELINE";
-  if (CUSTOMER_INTENT_PATTERN.test(lower) || context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
-  if (QUOTE_DRAFT_INTENT_PATTERN.test(lower) || context?.currentPage === "quotes") return "DRAFT_QUOTE";
+  if (CUSTOMER_INTENT_PATTERN.test(lower)) return "SEARCH_CUSTOMERS";
+  if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
+
+  const previousTool = conversation?.at(-1)?.resolvedTool;
+  if (previousTool && previousTool !== "NAVIGATE_WORKSPACE" && CONVERSATION_FOLLOW_UP_PATTERN.test(lower.trim())) {
+    return previousTool;
+  }
+
+  if (context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
+  if (context?.currentPage === "quotes") return "DRAFT_QUOTE";
   if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
 
   return "DRAFT_QUOTE";
+}
+
+export function inferAssistantRelativeDateRange(message: string, now: Date) {
+  const normalized = message.normalize("NFKC").toLowerCase();
+  const numericDays = normalized.match(/\b(?:last|past|previous)\s+(\d{1,3})\s+days?\b/);
+  let days = numericDays ? Number(numericDays[1]) : null;
+  if (days === null && /\b(?:last|past|previous)\s+week\b/.test(normalized)) days = 7;
+  if (days === null && /\b(?:last|past|previous)\s+month\b/.test(normalized)) days = 30;
+  if (days === null && /\b(?:last|past|previous)\s+quarter\b/.test(normalized)) days = 90;
+  if (days === null && /\b(?:last|past|previous)\s+year\b/.test(normalized)) days = 365;
+  if (days === null || !Number.isFinite(days) || days < 1 || days > 730) return null;
+  const from = new Date(now);
+  from.setUTCDate(from.getUTCDate() - days);
+  return { from, to: now };
 }
 
 export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
@@ -328,6 +372,8 @@ async function createAssistantUsageEvent(
     retrievalAuditEventId?: string | null;
     model?: string | null;
     telemetry?: AiUsageTelemetry | null;
+    eventType?: AiUsageEventType;
+    purpose?: AiPurpose;
   },
 ) {
   return createAiUsageEvent(prisma, {
@@ -335,8 +381,8 @@ async function createAssistantUsageEvent(
     quoteId: params.quoteId ?? null,
     customerId: params.customerId ?? null,
     actor: params.actor,
-    eventType: "BUSINESS_INSIGHT",
-    purpose: "BUSINESS_INSIGHT",
+    eventType: params.eventType ?? "BUSINESS_INSIGHT",
+    purpose: params.purpose ?? "BUSINESS_INSIGHT",
     classification: params.classification,
     promptText: params.message,
     requestId: params.access.requestId,
@@ -531,6 +577,7 @@ async function runCustomerSearch(
     fieldsExcluded,
     diagnostics: baseDiagnostics,
     sensitiveValues: [params.actor.actorEmail, params.actor.actorName],
+    conversation: params.conversation,
   });
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
@@ -1118,7 +1165,7 @@ async function createDeniedFinancialAudit(
       params.actor.actorName,
     ].filter((value): value is string => Boolean(value?.trim())),
   });
-  const retrievalAudit = await prisma.aiRetrievalAuditEvent.create({
+  const retrievalAudit = await withTenantRlsContext(prisma, params.access.tenantId, (tx) => tx.aiRetrievalAuditEvent.create({
     data: {
       tenant: { connect: { id: params.access.tenantId } },
       ...(params.actor.actorUserId ? { actorUser: { connect: { id: params.actor.actorUserId } } } : {}),
@@ -1134,7 +1181,7 @@ async function createDeniedFinancialAudit(
       denialCode: "MISSING_FINANCIAL_CAPABILITY",
       retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
     },
-  });
+  }));
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
     actor: params.actor,
@@ -1187,6 +1234,7 @@ async function runBusinessInsightTool(
 ): Promise<AiAssistantRunResult> {
   const businessTool: AiBusinessInsightTool =
     tool === "SUMMARIZE_PIPELINE" ? "SALES_PIPELINE" : businessToolForProfitPrompt(params.message);
+  const inferredRange = inferAssistantRelativeDateRange(params.message, generatedAtUtc);
 
   try {
     const insight = await generateAiBusinessInsight(prisma, {
@@ -1194,13 +1242,14 @@ async function runBusinessInsightTool(
       actor: params.actor,
       prompt: params.message,
       tool: businessTool,
-      dateFrom: params.context?.dateFrom ?? null,
-      dateTo: params.context?.dateTo ?? null,
+      dateFrom: params.context?.dateFrom ?? inferredRange?.from ?? null,
+      dateTo: params.context?.dateTo ?? inferredRange?.to ?? null,
       serviceType: params.context?.serviceType ?? null,
       limit: params.context?.limit,
       includeArchived: params.context?.includeArchived,
       now: generatedAtUtc,
       sensitiveValues: [params.message],
+      conversation: params.conversation,
     });
 
     return {
@@ -1346,9 +1395,32 @@ async function runDraftQuotePreview(
   const serviceType = params.context?.serviceType ?? selectedQuote?.serviceType ?? draft.serviceType;
   const title = selectedQuote?.title || draft.title;
   const scopeText = selectedQuote?.scopeText || draft.scopeText;
+  let governedRetrieval: AiRetrievalResult | null = null;
+  try {
+    governedRetrieval = await buildGovernedQuoteAiContext(prisma, {
+      access: params.access,
+      query: params.message,
+      purpose: selectedQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
+      serviceType,
+      requestId: params.access.requestId,
+      customerId: selectedCustomer?.id ?? null,
+      quoteId: selectedQuote?.id ?? null,
+    });
+  } catch {
+    // Retrieval is additive. Kody still returns a review-only deterministic
+    // preview when indexing or the embedding provider is temporarily unavailable.
+  }
   const includeInternalCost = hasCapability(params.access, "viewInternalCosts") && draft.estimatedInternalCostAmount !== null;
-  const maxClassification: DataClassification = includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL";
-  const answer = `Prepared a preview for a ${serviceType.toLowerCase()} quote: ${title}. Review it before creating or sending anything.`;
+  const promptClassification: DataClassification = includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL";
+  const retrievalClassification = governedRetrieval?.chunks.reduce<DataClassification>(
+    (current, chunk) => highestClassification(current, chunk.classification),
+    "C0_PUBLIC",
+  ) ?? "C0_PUBLIC";
+  const maxClassification = highestClassification(promptClassification, retrievalClassification);
+  const retrievedSourceCount = governedRetrieval?.citations.length ?? 0;
+  const answer = retrievedSourceCount
+    ? `Prepared a ${serviceType.toLowerCase()} quote preview for ${title} and found ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Open the draft to generate the grounded version, then review scope and pricing before saving or sending.`
+    : `Prepared a preview for a ${serviceType.toLowerCase()} quote: ${title}. I did not find useful saved workspace context, so review it carefully before creating or sending anything.`;
   const results = [{
     title,
     serviceType,
@@ -1359,7 +1431,15 @@ async function runDraftQuotePreview(
     estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
     lineItemCount: draft.lineItems.length,
   }];
-  const citations: AiAssistantCitation[] = [{ key: "A1", label: "Parsed quote drafting prompt", sourceType: "Quote", classification: maxClassification }];
+  const citations: AiAssistantCitation[] = [
+    { key: "A1", label: "Parsed quote drafting prompt", sourceType: "Quote", classification: promptClassification },
+    ...(governedRetrieval?.citations.map((citation) => ({
+      key: citation.key,
+      label: citation.label,
+      sourceType: citation.sourceType,
+      classification: citation.classification,
+    })) ?? []),
+  ];
   const actions = [{
     type: "OPEN_QUOTE_DRAFT" as const,
     label: "Review quote draft",
@@ -1386,6 +1466,11 @@ async function runDraftQuotePreview(
         sectionType: lineItem.sectionType ?? "INCLUDED",
         sectionLabel: lineItem.sectionLabel ?? null,
       })),
+      useWorkspaceContext: retrievedSourceCount > 0,
+      retrievedSourceCount,
+      retrievedSourceLabels: Array.from(
+        new Set(governedRetrieval?.citations.map((citation) => citation.label) ?? []),
+      ).slice(0, 6),
     },
   }];
   const fieldsExcluded = [
@@ -1407,6 +1492,7 @@ async function runDraftQuotePreview(
       selectedQuoteFound: Boolean(selectedQuote),
       includeArchivedRequested: Boolean(params.context?.includeArchived),
       includeArchivedEffective: false,
+      retrievedSourceCount,
     },
   });
   const composition = await composeAssistantAnswer({
@@ -1426,33 +1512,57 @@ async function runDraftQuotePreview(
       selectedCustomer?.email,
       selectedCustomer?.phone,
     ],
+    conversation: params.conversation,
+    retrievalExcerpts: governedRetrieval?.chunks.map((chunk) => ({
+      key: chunk.citationKey,
+      label: chunk.citationLabel,
+      sourceType: chunk.sourceType,
+      sourceField: chunk.sourceField,
+      classification: chunk.classification,
+      content: chunk.content,
+    })),
   });
+  const combinedTelemetry = mergeAiUsageTelemetry(governedRetrieval?.telemetry, composition.telemetry);
+  const sourceTypes = Array.from(new Set([
+    "Quote",
+    ...(selectedCustomer ? ["Customer"] : []),
+    ...(governedRetrieval?.citations.map((citation) => citation.sourceType) ?? []),
+  ]));
+  const sourceLabels = Array.from(new Set([
+    selectedQuote
+      ? "Selected active quote"
+      : selectedCustomer
+        ? "Selected active customer"
+        : "Preview quote draft",
+    ...((governedRetrieval?.citations ?? []).map((citation) => citation.label)),
+  ])).slice(0, 16);
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
     actor: params.actor,
     message: params.message,
     answer: composition.answer,
     classification: maxClassification,
-    sourceTypes: selectedCustomer ? ["Customer", "Quote"] : ["Quote"],
-    sourceLabels: selectedQuote
-      ? ["Selected active quote", "Preview quote draft"]
-      : selectedCustomer
-        ? ["Selected active customer", "Preview quote draft"]
-        : ["Preview quote draft"],
+    sourceTypes,
+    sourceLabels,
     quoteId: selectedQuote?.id ?? null,
     customerId: selectedCustomer?.id ?? null,
     serviceType,
     model: composition.model,
-    telemetry: composition.telemetry,
+    telemetry: combinedTelemetry,
+    retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
+    eventType: selectedQuote ? "REVISE" : "DRAFT",
+    purpose: selectedQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
     confidenceLevel: composition.confidenceLevel,
     confidenceLabel: composition.confidenceLabel,
     insightReasons: composition.insightReasons,
-    riskNote: composition.riskNote,
+    riskNote: governedRetrieval
+      ? `${composition.riskNote} Retrieved excerpts were tenant-scoped, policy-filtered, and treated as untrusted source material.`
+      : composition.riskNote,
   });
 
   return {
     consumedCredits: 1,
-    consumedSpendUsd: composition.telemetry?.estimatedCostUsd ?? 0,
+    consumedSpendUsd: combinedTelemetry?.estimatedCostUsd ?? 0,
     assistant: {
       tool: "DRAFT_QUOTE",
       generatedAtUtc,
@@ -1474,7 +1584,7 @@ export async function runAiAssistant(
   params: AiAssistantInput,
 ): Promise<AiAssistantRunResult> {
   const generatedAtUtc = params.now ?? new Date();
-  const tool = resolveAssistantTool(params.message, params.tool, params.context);
+  const tool = resolveAssistantTool(params.message, params.tool, params.context, params.conversation);
 
   if (tool === "NAVIGATE_WORKSPACE") {
     return runWorkspaceNavigation(prisma, params, generatedAtUtc);

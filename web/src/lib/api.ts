@@ -572,6 +572,11 @@ export type AiAssistantRequestedTool =
 
 export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
 
+export type AiAssistantConversationTurn = {
+  message: string;
+  resolvedTool: AiAssistantTool;
+};
+
 export type AiAssistantContext = {
   currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard";
   customerId?: string;
@@ -976,7 +981,15 @@ export type AiQuoteInsight = {
   summary: string;
   reasons: string[];
   sources: Array<{
-    type: "current_quote" | "customer" | "customer_notes" | "customer_activity" | "saved_jobs" | "similar_quote";
+    type:
+      | "current_quote"
+      | "customer"
+      | "customer_notes"
+      | "customer_activity"
+      | "saved_jobs"
+      | "trade_catalog"
+      | "similar_quote"
+      | "retrieved_context";
     label: string;
   }>;
   confidence: {
@@ -1306,6 +1319,7 @@ export const api = {
       message: string;
       tool?: AiAssistantRequestedTool;
       context?: AiAssistantContext;
+      conversation?: AiAssistantConversationTurn[];
     }) => request<AiAssistantResponse>("/v1/ai/assistant", {
       method: "POST",
       body: JSON.stringify(body),
@@ -1372,6 +1386,7 @@ export const api = {
         message: string;
         tool?: AiAssistantRequestedTool;
         context?: AiAssistantContext;
+        conversation?: AiAssistantConversationTurn[];
       }) => request<AiAssistantResponse>("/v1/internal/ai-quality/assistant-test", {
         method: "POST",
         body: JSON.stringify(body),

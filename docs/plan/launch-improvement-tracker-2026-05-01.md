@@ -203,5 +203,6 @@ Open follow-up:
 ## Next 3 Steps (Recommended This Week)
 
 1. Measure actual Basic AI cost per successful Kody task and revisit the `$1.25` cap after the first full paid billing cohort.
-2. Run the full responsive QA pass across iPhone and Android widths and capture any remaining launch-blocker UI regressions.
-3. Confirm production OpenAI key/model in Railway and close remaining owner launch blockers.
+2. Run database-backed QA for Kody's four-turn context plus tenant RAG citations, stale-source rejection, and embedding cost metering.
+3. Run the full responsive QA pass across iPhone and Android widths and capture any remaining launch-blocker UI regressions.
+4. Confirm production OpenAI key/model and embedding cost configuration in Railway, then close remaining owner launch blockers.

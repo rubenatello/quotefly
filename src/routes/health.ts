@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { assertAiRetrievalRlsReady } from "../lib/tenant-rls";
 
 const SERVICE_NAME = "quotefly-api";
 
@@ -61,6 +62,9 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           FULL JOIN ai_document_probe ON false
           FULL JOIN ai_chunk_probe ON false
         `;
+        await assertAiRetrievalRlsReady(app.prisma, {
+          requireRuntimeRole: app.env.NODE_ENV === "production",
+        });
       });
 
       return {

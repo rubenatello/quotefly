@@ -11,6 +11,7 @@ import { hashSourceReference } from "./ai-data-governance";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import { tenantActiveScope } from "./query-scope";
 import type { ActivityActor } from "./activity";
+import type { AiAssistantConversationTurn } from "./ai-assistant-contract";
 
 export const AI_BUSINESS_INSIGHT_TOOLS = [
   "SALES_PIPELINE",
@@ -41,6 +42,7 @@ export type AiBusinessInsightInput = Readonly<{
   includeArchived?: boolean;
   now?: Date;
   sensitiveValues?: readonly (string | null | undefined)[];
+  conversation?: readonly AiAssistantConversationTurn[];
 }>;
 
 export type AiBusinessInsightResult = Readonly<{
@@ -547,6 +549,7 @@ export async function generateAiBusinessInsight(
       params.actor.actorName,
       ...(params.sensitiveValues ?? []),
     ],
+    conversation: params.conversation,
     diagnostics: {
       resultCount: data.rows.length,
       citationCount: data.citations.length,

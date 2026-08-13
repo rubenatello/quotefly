@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { AI_ASSISTANT_TOOLS, type AiAssistantContext } from "./ai-assistant";
+import {
+  AI_ASSISTANT_RESOLVED_TOOLS,
+  AI_ASSISTANT_TOOLS,
+  type AiAssistantConversationTurn,
+} from "./ai-assistant-contract";
+import type { AiAssistantContext } from "./ai-assistant";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 
@@ -19,6 +24,10 @@ export const AssistantRequestSchema = z.object({
   message: z.string().trim().min(3).max(2_000),
   tool: z.enum(AI_ASSISTANT_TOOLS).default("AUTO"),
   context: AssistantContextSchema.optional(),
+  conversation: z.array(z.object({
+    message: z.string().trim().min(1).max(500),
+    resolvedTool: z.enum(AI_ASSISTANT_RESOLVED_TOOLS),
+  }).strict()).max(4).optional(),
 });
 
 export type AssistantRequestPayload = z.infer<typeof AssistantRequestSchema>;
@@ -38,4 +47,14 @@ export function normalizeAssistantContext(
     limit: context.limit,
     includeArchived: context.includeArchived,
   };
+}
+
+export function normalizeAssistantConversation(
+  conversation: AssistantRequestPayload["conversation"],
+): readonly AiAssistantConversationTurn[] {
+  if (!conversation?.length) return [];
+  return conversation.slice(-4).map((turn) => Object.freeze({
+    message: turn.message.trim(),
+    resolvedTool: turn.resolvedTool,
+  }));
 }

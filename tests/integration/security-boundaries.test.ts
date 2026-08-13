@@ -16,6 +16,10 @@ afterEach(() => {
 });
 
 describe("security boundary helpers", () => {
+  const productionDatabaseEnv = {
+    DATABASE_URL: "postgresql://quotefly_runtime:test@example.invalid/quotefly",
+  } as const;
+
   it("keeps browser and API legal acceptance versions synchronized", () => {
     expect(WEB_TERMS_VERSION).toBe(API_TERMS_VERSION);
     expect(WEB_PRIVACY_POLICY_VERSION).toBe(API_PRIVACY_POLICY_VERSION);
@@ -26,7 +30,7 @@ describe("security boundary helpers", () => {
       parseEnv({
         ...process.env,
         NODE_ENV: "production",
-        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        ...productionDatabaseEnv,
         JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
         APP_URL: "https://app.quotefly.example",
         API_URL: "https://api.quotefly.example",
@@ -41,7 +45,7 @@ describe("security boundary helpers", () => {
       parseEnv({
         ...process.env,
         NODE_ENV: "production",
-        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        ...productionDatabaseEnv,
         JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
         APP_URL: "https://app.quotefly.example",
         API_URL: "https://api.quotefly.example",
@@ -57,7 +61,7 @@ describe("security boundary helpers", () => {
       parseEnv({
         ...process.env,
         NODE_ENV: "production",
-        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        ...productionDatabaseEnv,
         JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
         APP_URL: "http://app.quotefly.example",
         API_URL: "https://api.quotefly.example",
@@ -70,7 +74,7 @@ describe("security boundary helpers", () => {
       parseEnv({
         ...process.env,
         NODE_ENV: "production",
-        DATABASE_URL: "postgresql://example.invalid/quotefly",
+        ...productionDatabaseEnv,
         JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
         APP_URL: "https://app.quotefly.example",
         API_URL: "http://api.quotefly.example",
@@ -91,7 +95,7 @@ describe("security boundary helpers", () => {
         parseEnv({
           ...process.env,
           NODE_ENV: "production",
-          DATABASE_URL: "postgresql://example.invalid/quotefly",
+          ...productionDatabaseEnv,
           JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
           APP_URL,
           API_URL: "https://api.quotefly.example",
@@ -106,7 +110,7 @@ describe("security boundary helpers", () => {
     const productionEnv = {
       ...process.env,
       NODE_ENV: "production",
-      DATABASE_URL: "postgresql://example.invalid/quotefly",
+      ...productionDatabaseEnv,
       JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
       APP_URL: "https://app.quotefly.example",
       API_URL: "https://api.quotefly.example",
@@ -122,6 +126,13 @@ describe("security boundary helpers", () => {
     } satisfies NodeJS.ProcessEnv;
 
     expect(() => parseEnv(productionEnv)).not.toThrow();
+    expect(() => parseEnv({ ...productionEnv, DATABASE_URL: "postgresql://migration_owner:test@example.invalid/quotefly" })).toThrow(
+      /dedicated quotefly_runtime role/i,
+    );
+    expect(() => parseEnv({
+      ...productionEnv,
+      DIRECT_DATABASE_URL: "postgresql://migration_owner:test@example.invalid/quotefly",
+    })).toThrow(/must not be present in the production API runtime/i);
     expect(() => parseEnv({ ...productionEnv, STRIPE_WEBHOOK_SECRET: "" })).toThrow(
       /STRIPE_WEBHOOK_SECRET must be configured for a paid production launch/i,
     );

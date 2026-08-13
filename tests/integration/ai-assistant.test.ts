@@ -654,6 +654,7 @@ describe("AI assistant", () => {
       assistant: {
         tool: string;
         results: Array<Record<string, unknown>>;
+        citations: Array<{ key: string; label: string; sourceType: string }>;
         actions: Array<{
           type: string;
           requiresConfirmation: boolean;
@@ -674,8 +675,11 @@ describe("AI assistant", () => {
       payload: expect.objectContaining({
         customerId: customer.id,
         serviceType: "ROOFING",
+        useWorkspaceContext: true,
+        retrievedSourceCount: expect.any(Number),
       }),
     });
+    expect(body.assistant.citations.some((citation) => citation.key.startsWith("S"))).toBe(true);
 
     const afterCount = await prisma.quote.count({
       where: { tenantId: owner.tenant.id },
@@ -690,6 +694,8 @@ describe("AI assistant", () => {
     expect(audit.customerId).toBe(customer.id);
     expect(audit.promptText).toBeNull();
     expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
+    expect(audit.retrievalAuditEvent?.purpose).toBe("QUOTE_DRAFT");
+    expect(audit.retrievalAuditEvent?.resultCount).toBeGreaterThan(0);
   });
 
   test("legacy chat-draft endpoint is review-only and does not create records", async () => {

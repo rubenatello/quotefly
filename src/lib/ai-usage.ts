@@ -16,10 +16,9 @@ import {
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import type { TenantEntitlements } from "./subscription";
 import { startOfCurrentUtcMonth, startOfNextUtcMonth } from "./subscription";
+import { withTenantRlsContext } from "./tenant-rls";
 
-type AiUsageClient =
-  | Pick<PrismaClient, "aiUsageEvent" | "aiRetrievalAuditEvent">
-  | Pick<Prisma.TransactionClient, "aiUsageEvent" | "aiRetrievalAuditEvent">;
+type AiUsageClient = PrismaClient | Prisma.TransactionClient;
 
 export type MonthlyAiUsageSnapshot = {
   periodStartUtc: Date;
@@ -42,6 +41,31 @@ export type AiUsageTelemetry = {
   totalTokens: number;
   estimatedCostUsd: number;
 };
+
+export function mergeAiUsageTelemetry(
+  ...values: readonly (AiUsageTelemetry | null | undefined)[]
+): AiUsageTelemetry | null {
+  const present = values.filter((value): value is AiUsageTelemetry => Boolean(value));
+  if (present.length === 0) return null;
+  return {
+    requestCount: present.reduce((sum, value) => sum + value.requestCount, 0),
+    promptTokens: present.reduce((sum, value) => sum + value.promptTokens, 0),
+    completionTokens: present.reduce((sum, value) => sum + value.completionTokens, 0),
+    totalTokens: present.reduce((sum, value) => sum + value.totalTokens, 0),
+    estimatedCostUsd: roundUsd(present.reduce((sum, value) => sum + value.estimatedCostUsd, 0)),
+  };
+}
+
+export function accumulateAiUsageTelemetry(
+  target: AiUsageTelemetry,
+  value: AiUsageTelemetry | null | undefined,
+) {
+  if (!value) return target;
+  const merged = mergeAiUsageTelemetry(target, value);
+  if (!merged) return target;
+  Object.assign(target, merged);
+  return target;
+}
 
 export type AiUsageTrace = {
   insightSummary?: string | null;
@@ -244,8 +268,9 @@ export async function createAiUsageEvent(
       : null,
   ].filter((value): value is { type: string; refHash: string } => value !== null);
   const retrievalAuditEventId = params.retrievalAuditEventId?.trim() || null;
+  return withTenantRlsContext(prisma, params.tenantId, async (tx) => {
   const existingRetrievalAuditEvent = retrievalAuditEventId
-    ? await prisma.aiRetrievalAuditEvent.findFirst({
+    ? await tx.aiRetrievalAuditEvent.findFirst({
         where: {
           id: retrievalAuditEventId,
           tenantId: params.tenantId,
@@ -259,7 +284,7 @@ export async function createAiUsageEvent(
     throw new Error("AI retrieval audit event not found for tenant.");
   }
 
-  return prisma.aiUsageEvent.create({
+  return tx.aiUsageEvent.create({
     data: {
       tenant: { connect: { id: params.tenantId } },
       ...(params.quoteId
@@ -324,6 +349,7 @@ export async function createAiUsageEvent(
             },
           },
     },
+  });
   });
 }
 

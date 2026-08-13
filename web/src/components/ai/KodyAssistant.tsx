@@ -2,23 +2,30 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
-  Bot,
   FilePlus2,
   LockKeyhole,
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   TrendingUp,
   UserRound,
   X,
 } from "lucide-react";
-import { ApiError, api, type AiAssistantAction, type AiAssistantResponse, type AiAssistantTool, type DataClassification } from "../../lib/api";
+import {
+  ApiError,
+  api,
+  type AiAssistantAction,
+  type AiAssistantConversationTurn,
+  type AiAssistantResponse,
+  type AiAssistantTool,
+  type DataClassification,
+} from "../../lib/api";
 import { formatAiUsageNotice } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
 import { Alert, Button, ConfirmModal, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
+import { KodySparkIcon } from "./KodySparkIcon";
 import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
 import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
 
@@ -83,6 +90,21 @@ function assistantContextFromPage(page: WorkspacePage): "quotes" | "customers" |
 
 function makeMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function recentConversation(messages: readonly KodyMessage[]): AiAssistantConversationTurn[] {
+  const turns: AiAssistantConversationTurn[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    const responseMessage = messages[index + 1];
+    if (!responseMessage?.response) continue;
+    turns.push({
+      message: message.text.slice(0, 500),
+      resolvedTool: responseMessage.response.diagnostics.resolvedTool,
+    });
+  }
+  return turns.slice(-4);
 }
 
 function elapsedSince(startedAt: number) {
@@ -464,6 +486,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
       currentPage: contextOverride?.currentPage ?? currentContextPage,
       limit: contextOverride?.limit ?? 8,
     };
+    const conversation = recentConversation(messages);
 
     const startedAt = performance.now();
     const userMessageId = makeMessageId();
@@ -491,6 +514,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         message: messageText,
         tool,
         context,
+        conversation,
       });
       const assistantResponse = normalizeKodyAssistantResponse(response.assistant);
       track("kody_response", {
@@ -633,7 +657,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         data-testid="kody-launcher"
       >
         <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-quotefly-blue text-white">
-          <Bot size={18} />
+          <KodySparkIcon size={20} />
         </span>
         <span className="hidden sm:inline">Ask Kody</span>
       </button>
@@ -654,7 +678,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
                 <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-950 text-white">
-                  <Bot size={18} />
+                  <KodySparkIcon size={20} />
                 </span>
                 Kody
               </h2>
@@ -701,7 +725,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
             {!messages.length ? (
               <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">
-                  <Sparkles size={22} />
+                  <KodySparkIcon size={24} />
                 </span>
                 <p className="mt-3 text-base font-semibold text-slate-900">What should Kody help with?</p>
                 <p className="mt-1 max-w-md text-sm leading-6 text-slate-600">{starterText}</p>
@@ -736,7 +760,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                 >
                   {message.role === "kody" ? (
                     <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white">
-                      <Bot size={16} />
+                      <KodySparkIcon size={18} thinking={message.pending} />
                     </span>
                   ) : null}
                   <div

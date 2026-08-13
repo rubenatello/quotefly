@@ -12,12 +12,14 @@ import { env } from "../config/env";
 import type { AccessContext } from "./access-policy";
 import { hasCapability } from "./access-policy";
 import { addUtcDays, hashSourceReference, sha256Text } from "./ai-data-governance";
+import { mergeAiUsageTelemetry, type AiUsageTelemetry } from "./ai-usage";
 import {
   AI_DATA_POLICY_VERSION,
   AI_RETRIEVABLE_FIELD_POLICY,
   type AiRetrievableField,
 } from "./data-classification";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope, tenantActiveScope } from "./query-scope";
+import { withTenantRlsContext, type TenantRlsClient } from "./tenant-rls";
 
 const RETRIEVAL_AUDIT_RETENTION_DAYS = 90;
 const MAX_SOURCE_CHARS = 2_000;
@@ -31,6 +33,8 @@ type AiRetrievalWriteClient =
   | Pick<PrismaClient, "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">
   | Pick<Prisma.TransactionClient, "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">;
 
+type AiRetrievalTenantClient = AiRetrievalWriteClient & TenantRlsClient;
+
 const CLASSIFICATION_RANK: Record<DataClassification, number> = {
   C0_PUBLIC: 0,
   C1_BUSINESS_INTERNAL: 1,
@@ -42,6 +46,7 @@ const CLASSIFICATION_RANK: Record<DataClassification, number> = {
 export type AiEmbeddingResult = Readonly<{
   embedding: number[];
   model: string;
+  telemetry?: AiUsageTelemetry | null;
 }>;
 
 export type AiEmbeddingProvider = (text: string) => Promise<AiEmbeddingResult>;
@@ -85,6 +90,7 @@ export type AiRetrievalResult = Readonly<{
     classification: DataClassification;
   }>;
   auditEventId: string;
+  telemetry: AiUsageTelemetry | null;
 }>;
 
 let openaiClient: OpenAI | undefined;
@@ -159,7 +165,20 @@ export async function createAiRetrievalEmbedding(text: string): Promise<AiEmbedd
   return {
     embedding,
     model: env.OPENAI_EMBEDDING_MODEL,
+    telemetry: {
+      requestCount: 1,
+      promptTokens: response.usage.prompt_tokens,
+      completionTokens: 0,
+      totalTokens: response.usage.total_tokens,
+      estimatedCostUsd: Number(
+        ((response.usage.prompt_tokens / 1_000_000) * env.OPENAI_EMBEDDING_COST_PER_1M_USD).toFixed(6),
+      ),
+    },
   };
+}
+
+function configuredEmbeddingModel() {
+  return env.OPENAI_API_KEY ? env.OPENAI_EMBEDDING_MODEL : FALLBACK_EMBEDDING_MODEL;
 }
 
 function maxClassification(values: readonly DataClassification[]): DataClassification {
@@ -222,7 +241,7 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
 }
 
 export async function markAiRetrievalSourceDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     sourceType: string;
@@ -231,8 +250,9 @@ export async function markAiRetrievalSourceDeleted(
   },
 ) {
   const now = params.now ?? new Date();
-  await Promise.all([
-    prisma.aiRetrievalChunk.updateMany({
+  await withTenantRlsContext(prisma, params.tenantId, async (tx) => {
+    await Promise.all([
+    tx.aiRetrievalChunk.updateMany({
       where: {
         tenantId: params.tenantId,
         sourceType: params.sourceType,
@@ -241,7 +261,7 @@ export async function markAiRetrievalSourceDeleted(
       },
       data: { deletedAtUtc: now },
     }),
-    prisma.aiRetrievalDocument.updateMany({
+    tx.aiRetrievalDocument.updateMany({
       where: {
         tenantId: params.tenantId,
         sourceType: params.sourceType,
@@ -254,11 +274,12 @@ export async function markAiRetrievalSourceDeleted(
         indexedAtUtc: now,
       },
     }),
-  ]);
+    ]);
+  });
 }
 
 async function markAiRetrievalSourcesDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     sources: Array<{ sourceType: string; sourceIds: string[] }>;
@@ -283,12 +304,13 @@ async function markAiRetrievalSourcesDeleted(
     deletedAtUtc: null,
   } satisfies Prisma.AiRetrievalChunkWhereInput;
 
+  return withTenantRlsContext(prisma, params.tenantId, async (tx) => {
   const [chunks, documents] = await Promise.all([
-    prisma.aiRetrievalChunk.updateMany({
+    tx.aiRetrievalChunk.updateMany({
       where,
       data: { deletedAtUtc: now },
     }),
-    prisma.aiRetrievalDocument.updateMany({
+    tx.aiRetrievalDocument.updateMany({
       where,
       data: {
         status: "DELETED",
@@ -298,10 +320,11 @@ async function markAiRetrievalSourcesDeleted(
     }),
   ]);
   return { documentCount: documents.count, chunkCount: chunks.count };
+  });
 }
 
 export async function markQuoteAiRetrievalSourcesDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     quoteIds: readonly string[];
@@ -329,7 +352,7 @@ export async function markQuoteAiRetrievalSourcesDeleted(
 }
 
 export async function markCustomerAiRetrievalSourcesDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     customerIds: readonly string[];
@@ -380,7 +403,7 @@ export async function markCustomerAiRetrievalSourcesDeleted(
 }
 
 export async function markWorkPresetAiRetrievalSourceDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     workPresetIds: readonly string[];
@@ -395,7 +418,7 @@ export async function markWorkPresetAiRetrievalSourceDeleted(
 }
 
 export async function markTenantAiRetrievalSourceTypeDeleted(
-  prisma: AiRetrievalWriteClient,
+  prisma: AiRetrievalTenantClient,
   params: {
     tenantId: string;
     sourceTypes: readonly string[];
@@ -406,8 +429,9 @@ export async function markTenantAiRetrievalSourceTypeDeleted(
   const sourceTypes = Array.from(new Set(params.sourceTypes.map((value) => value.trim()).filter(Boolean)));
   if (sourceTypes.length === 0) return { documentCount: 0, chunkCount: 0 };
 
+  return withTenantRlsContext(prisma, params.tenantId, async (tx) => {
   const [chunks, documents] = await Promise.all([
-    prisma.aiRetrievalChunk.updateMany({
+    tx.aiRetrievalChunk.updateMany({
       where: {
         tenantId: params.tenantId,
         sourceType: { in: sourceTypes },
@@ -415,7 +439,7 @@ export async function markTenantAiRetrievalSourceTypeDeleted(
       },
       data: { deletedAtUtc: now },
     }),
-    prisma.aiRetrievalDocument.updateMany({
+    tx.aiRetrievalDocument.updateMany({
       where: {
         tenantId: params.tenantId,
         sourceType: { in: sourceTypes },
@@ -430,6 +454,7 @@ export async function markTenantAiRetrievalSourceTypeDeleted(
   ]);
 
   return { documentCount: documents.count, chunkCount: chunks.count };
+  });
 }
 
 export async function upsertAiRetrievalSource(
@@ -455,7 +480,91 @@ export async function upsertAiRetrievalSource(
       sourceId,
       now,
     });
-    return { indexed: false, chunkCount: 0 };
+    return { indexed: false, reused: false, chunkCount: 0, telemetry: null };
+  }
+
+  const documentContentHash = sha256Text(
+    JSON.stringify(sourceChunks.map((chunk) => [chunk.sourceField, chunk.contentHash])),
+  );
+  const documentClassification = maxClassification(sourceChunks.map((chunk) => chunk.classification));
+
+  // Production/default embeddings can be reused safely when the governed text,
+  // policy, model, and chunk layout are unchanged. Test/custom providers are
+  // intentionally not assumed to have stable model semantics.
+  if (!options?.embedText) {
+    const existing = await withTenantRlsContext(prisma, source.tenantId, (tx) => tx.aiRetrievalDocument.findUnique({
+      where: {
+        tenantId_sourceType_sourceId: {
+          tenantId: source.tenantId,
+          sourceType,
+          sourceId,
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+        deletedAtUtc: true,
+        contentHash: true,
+        policyVersion: true,
+        chunks: {
+          where: { tenantId: source.tenantId, deletedAtUtc: null },
+          orderBy: { chunkIndex: "asc" },
+          select: {
+            id: true,
+            chunkIndex: true,
+            contentHash: true,
+            sourceField: true,
+            embeddingModel: true,
+          },
+        },
+      },
+    }));
+    const expectedModel = configuredEmbeddingModel();
+    const canReuse = Boolean(
+      existing &&
+      existing.status === "ACTIVE" &&
+      !existing.deletedAtUtc &&
+      existing.contentHash === documentContentHash &&
+      existing.policyVersion === AI_DATA_POLICY_VERSION &&
+      existing.chunks.length === sourceChunks.length &&
+      existing.chunks.every((chunk, index) => {
+        const sourceChunk = sourceChunks[index];
+        return Boolean(
+          sourceChunk &&
+          chunk.chunkIndex === sourceChunk.chunkIndex &&
+          chunk.contentHash === sourceChunk.contentHash &&
+          chunk.sourceField === sourceChunk.sourceField &&
+          chunk.embeddingModel === expectedModel,
+        );
+      }),
+    );
+
+    if (existing && canReuse) {
+      await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
+        await tx.aiRetrievalDocument.update({
+          where: { id_tenantId: { id: existing.id, tenantId: source.tenantId } },
+          data: {
+            sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
+            maxClassification: documentClassification,
+            citationLabel: source.citationLabel.slice(0, 160),
+            metadata: source.metadata ?? Prisma.JsonNull,
+          },
+        });
+        for (const [index, chunk] of existing.chunks.entries()) {
+          const sourceChunk = sourceChunks[index];
+          if (!sourceChunk) continue;
+          await tx.aiRetrievalChunk.update({
+            where: { id: chunk.id },
+            data: {
+              citationLabel: sourceChunk.citationLabel,
+              metadata: sourceChunk.metadata ?? Prisma.JsonNull,
+              sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
+            },
+          });
+        }
+      });
+      return { indexed: false, reused: true, chunkCount: sourceChunks.length, telemetry: null };
+    }
   }
 
   const embedText = options?.embedText ?? createAiRetrievalEmbedding;
@@ -468,12 +577,7 @@ export async function upsertAiRetrievalSource(
     embeddedChunks.push({ ...chunk, embedding });
   }
 
-  const documentContentHash = sha256Text(
-    JSON.stringify(embeddedChunks.map((chunk) => [chunk.sourceField, chunk.contentHash])),
-  );
-  const documentClassification = maxClassification(embeddedChunks.map((chunk) => chunk.classification));
-
-  await prisma.$transaction(async (tx) => {
+  await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
     const document = await tx.aiRetrievalDocument.upsert({
       where: {
         tenantId_sourceType_sourceId: {
@@ -568,7 +672,12 @@ export async function upsertAiRetrievalSource(
     });
   });
 
-  return { indexed: true, chunkCount: embeddedChunks.length };
+  return {
+    indexed: true,
+    reused: false,
+    chunkCount: embeddedChunks.length,
+    telemetry: mergeAiUsageTelemetry(...embeddedChunks.map((chunk) => chunk.embedding.telemetry)),
+  };
 }
 
 function cosineSimilarity(left: readonly number[], right: readonly number[]) {
@@ -600,6 +709,85 @@ function formatRetrievedContext(chunks: readonly RetrievedAiChunk[]) {
   ].join("\n\n");
 }
 
+type RetrievalCandidate = Readonly<{
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  sourceField: string;
+  citationLabel: string;
+  classification: DataClassification;
+  content: string;
+  contentHash: string;
+  embedding: number[];
+}>;
+
+function fieldContentHashes(field: AiRetrievableField, content: string | null | undefined) {
+  return new Set(splitIntoChunks(content ?? "").map((chunk) => sha256Text(`${field}:${chunk}`)));
+}
+
+async function currentRetrievalContentHashes(
+  prisma: PrismaClient,
+  tenantId: string,
+  candidates: readonly RetrievalCandidate[],
+) {
+  const sourceIds = (sourceType: string) => Array.from(new Set(
+    candidates.filter((candidate) => candidate.sourceType === sourceType).map((candidate) => candidate.sourceId),
+  ));
+  const [customers, activities, quotes, lineItems, presets] = await Promise.all([
+    prisma.customer.findMany({
+      where: { id: { in: sourceIds("Customer") }, ...tenantActiveCustomerScope(tenantId) },
+      select: { id: true, notes: true },
+    }),
+    prisma.customerActivityEvent.findMany({
+      where: {
+        id: { in: sourceIds("CustomerActivityEvent") },
+        tenantId,
+        deletedAtUtc: null,
+        customer: tenantActiveCustomerScope(tenantId),
+      },
+      select: { id: true, title: true, detail: true },
+    }),
+    prisma.quote.findMany({
+      where: { id: { in: sourceIds("Quote") }, ...tenantActiveQuoteScope(tenantId) },
+      select: { id: true, title: true, scopeText: true },
+    }),
+    prisma.quoteLineItem.findMany({
+      where: {
+        id: { in: sourceIds("QuoteLineItem") },
+        ...tenantActiveScope(tenantId),
+        quote: tenantActiveQuoteScope(tenantId),
+      },
+      select: { id: true, description: true },
+    }),
+    prisma.workPreset.findMany({
+      where: { id: { in: sourceIds("WorkPreset") }, ...tenantActiveScope(tenantId) },
+      select: { id: true, name: true, description: true },
+    }),
+  ]);
+
+  const current = new Map<string, Set<string>>();
+  const add = (sourceType: string, sourceId: string, field: AiRetrievableField, content: string | null | undefined) => {
+    current.set(`${sourceType}:${sourceId}:${field}`, fieldContentHashes(field, content));
+  };
+  for (const customer of customers) add("Customer", customer.id, "Customer.notes", customer.notes);
+  for (const activity of activities) {
+    add("CustomerActivityEvent", activity.id, "CustomerActivityEvent.title", activity.title);
+    add("CustomerActivityEvent", activity.id, "CustomerActivityEvent.detail", activity.detail);
+  }
+  for (const quote of quotes) {
+    add("Quote", quote.id, "Quote.title", quote.title);
+    add("Quote", quote.id, "Quote.scopeText", quote.scopeText);
+  }
+  for (const lineItem of lineItems) {
+    add("QuoteLineItem", lineItem.id, "QuoteLineItem.description", lineItem.description);
+  }
+  for (const preset of presets) {
+    add("WorkPreset", preset.id, "WorkPreset.name", preset.name);
+    add("WorkPreset", preset.id, "WorkPreset.description", preset.description);
+  }
+  return current;
+}
+
 export async function retrieveAiContextFromIndex(
   prisma: PrismaClient,
   params: {
@@ -610,6 +798,7 @@ export async function retrieveAiContextFromIndex(
     limit?: number;
     model?: string | null;
     embedText?: AiEmbeddingProvider;
+    preferredSources?: readonly { sourceType: string; sourceId: string }[];
     now?: Date;
   },
 ): Promise<AiRetrievalResult> {
@@ -620,12 +809,13 @@ export async function retrieveAiContextFromIndex(
   const maxAllowedClassification = maxClassification(allowedClassifications);
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_RETRIEVAL_LIMIT, 1), 20);
 
-  const candidates = await prisma.aiRetrievalChunk.findMany({
+  const candidates = await withTenantRlsContext(prisma, params.access.tenantId, (tx) => tx.aiRetrievalChunk.findMany({
     where: {
       tenantId: params.access.tenantId,
       deletedAtUtc: null,
       policyVersion: AI_DATA_POLICY_VERSION,
       embeddingDimensions: queryEmbedding.embedding.length,
+      embeddingModel: queryEmbedding.model,
       classification: { in: allowedClassifications },
       document: {
         tenantId: params.access.tenantId,
@@ -643,15 +833,26 @@ export async function retrieveAiContextFromIndex(
       citationLabel: true,
       classification: true,
       content: true,
+      contentHash: true,
       embedding: true,
     },
-  });
+  }));
+
+  const currentHashes = await currentRetrievalContentHashes(prisma, params.access.tenantId, candidates);
+  const preferredSources = new Set(
+    (params.preferredSources ?? []).map((source) => `${source.sourceType}:${source.sourceId}`),
+  );
 
   const ranked = candidates
     .filter((candidate) => canRetrieveField(candidate.sourceField as AiRetrievableField, params.purpose))
+    .filter((candidate) => currentHashes
+      .get(`${candidate.sourceType}:${candidate.sourceId}:${candidate.sourceField}`)
+      ?.has(candidate.contentHash) === true)
     .map((candidate) => ({
       candidate,
-      score: cosineSimilarity(queryEmbedding.embedding, candidate.embedding),
+      score:
+        cosineSimilarity(queryEmbedding.embedding, candidate.embedding) +
+        (preferredSources.has(`${candidate.sourceType}:${candidate.sourceId}`) ? 1 : 0),
     }))
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
@@ -675,7 +876,7 @@ export async function retrieveAiContextFromIndex(
     citationKey: chunk.citationKey,
   }));
 
-  const auditEvent = await prisma.aiRetrievalAuditEvent.create({
+  const auditEvent = await withTenantRlsContext(prisma, params.access.tenantId, (tx) => tx.aiRetrievalAuditEvent.create({
     data: {
       tenantId: params.access.tenantId,
       actorUserId: params.access.userId,
@@ -686,13 +887,14 @@ export async function retrieveAiContextFromIndex(
       sourceTypes: Array.from(new Set(chunks.map((chunk) => chunk.sourceType))).slice(0, 16),
       sourceRefs: sourceRefs.length ? sourceRefs : Prisma.JsonNull,
       resultCount: chunks.length,
+      inputTokenCount: queryEmbedding.telemetry?.promptTokens ?? null,
       queryHash,
       policyVersion: AI_DATA_POLICY_VERSION,
       status: AiRetrievalAuditStatus.SUCCEEDED,
       retentionExpiresAtUtc: addUtcDays(now, RETRIEVAL_AUDIT_RETENTION_DAYS),
     },
     select: { id: true },
-  });
+  }));
 
   return {
     context: formatRetrievedContext(chunks),
@@ -705,6 +907,7 @@ export async function retrieveAiContextFromIndex(
       classification: chunk.classification,
     })),
     auditEventId: auditEvent.id,
+    telemetry: queryEmbedding.telemetry ?? null,
   };
 }
 
@@ -870,13 +1073,15 @@ export async function refreshQuoteAiRetrievalIndex(
 
   let indexed = 0;
   let chunks = 0;
+  let telemetry: AiUsageTelemetry | null = null;
   for (const source of sources) {
     const result = await upsertAiRetrievalSource(prisma, source, { embedText });
     if (result.indexed) indexed += 1;
     chunks += result.chunkCount;
+    telemetry = mergeAiUsageTelemetry(telemetry, result.telemetry);
   }
 
-  return { sourceCount: sources.length, indexedSourceCount: indexed, chunkCount: chunks };
+  return { sourceCount: sources.length, indexedSourceCount: indexed, chunkCount: chunks, telemetry };
 }
 
 export async function buildGovernedQuoteAiContext(
@@ -893,7 +1098,7 @@ export async function buildGovernedQuoteAiContext(
     embedText?: AiEmbeddingProvider;
   },
 ) {
-  await refreshQuoteAiRetrievalIndex(prisma, {
+  const refresh = await refreshQuoteAiRetrievalIndex(prisma, {
     tenantId: params.access.tenantId,
     serviceType: params.serviceType,
     customerId: params.customerId,
@@ -901,12 +1106,20 @@ export async function buildGovernedQuoteAiContext(
     embedText: params.embedText,
   });
 
-  return retrieveAiContextFromIndex(prisma, {
+  const retrieval = await retrieveAiContextFromIndex(prisma, {
     access: params.access,
     query: params.query,
     purpose: params.purpose,
     requestId: params.requestId,
     model: params.model,
     embedText: params.embedText,
+    preferredSources: [
+      ...(params.customerId ? [{ sourceType: "Customer", sourceId: params.customerId }] : []),
+      ...(params.quoteId ? [{ sourceType: "Quote", sourceId: params.quoteId }] : []),
+    ],
   });
+  return {
+    ...retrieval,
+    telemetry: mergeAiUsageTelemetry(refresh.telemetry, retrieval.telemetry),
+  };
 }

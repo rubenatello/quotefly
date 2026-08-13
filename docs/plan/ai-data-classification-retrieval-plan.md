@@ -44,9 +44,9 @@ The implementation should support two distinct capabilities:
 | 0 | Policy and threat-model freeze | In progress | Product + Security |
 | 1 | Classification and field-level authorization | In progress | Engineering + Security |
 | 2 | AI minimization, audit, and retention | In progress | Engineering + Privacy |
-| 3 | Structured insight service | Not started | Engineering + Product |
-| 4 | Neon pgvector retrieval and RLS | Not started | Engineering + Operations + Security |
-| 5 | Insight product UX | Not started | Product + Engineering |
+| 3 | Structured insight service | In progress | Engineering + Product |
+| 4 | Neon retrieval and RLS hardening | In progress | Engineering + Operations + Security |
+| 5 | Insight product UX | In progress | Product + Engineering |
 | 6 | Production rollout and operations | Not started | Operations + Product |
 
 ## 2. Non-goals
@@ -74,13 +74,11 @@ The implementation should support two distinct capabilities:
 
 - PostgreSQL Row-Level Security is not enabled.
 - The runtime database role and migration role are not documented as separate least-privilege roles.
-- There is no centralized field-classification registry.
-- There is no centralized capability policy for sensitive response fields.
+- A centralized field-classification registry and live-role capability policy now govern AI retrieval; remaining non-AI response projection work is tracked in Phase 1.
 - Ordinary `member` users can currently receive unit costs, internal subtotals, and full AI prompt traces for their tenant.
 - `AiUsageEvent.promptText` is required and has no explicit expiration.
 - The internal AI-quality summary processes full prompts across tenants to derive trade-level metrics.
-- There is no retrieval audit event that records purpose, classification, and source references without copying content.
-- There is no pgvector index, index lifecycle worker, or stale-index deletion contract.
+- Content-free retrieval audits, application-scoped retrieval documents/chunks, lifecycle retirement, and read-time stale-source rejection are implemented. Neon pgvector, forced RLS, and a background indexing worker remain production-hardening work.
 
 ## 4. Proposed policy decisions
 
@@ -94,11 +92,11 @@ These defaults are recommended and should be recorded in the decision log before
 | Owner/admin access to AI run history | Redacted audit details; raw prompt only through exceptional audited support path | Redacted access implemented; exceptional raw path remains disabled |
 | Provider credentials and raw webhook payloads | Never returned to browser or LLM | Approved implementation default |
 | AI structured insights | Fixed server-owned queries only | Approved implementation default |
-| RAG storage | Neon PostgreSQL with pgvector and RLS | Approved architecture; not yet implemented |
+| RAG storage | Tenant-scoped PostgreSQL retrieval documents/chunks now; Neon pgvector plus forced RLS remains the production target | Partial implementation |
 | Raw AI prompt retention | 30 days by default | Engineering default; legal/privacy review required before purge or launch |
 | Redacted AI operational trace retention | 90 days by default | Implemented for new events; legal/privacy review required |
 | Aggregate token/cost telemetry retention | 13 months by default | Proposed; requires Product/legal review |
-| Index deletion after source archive/delete | Within 24 hours, with immediate retrieval exclusion | Approved architecture; not yet implemented |
+| Index deletion after source archive/delete | Immediate route retirement plus read-time source/hash revalidation | Implemented for current customer, quote, activity, line-item, and saved-job sources |
 | Per-user customer/job assignments | Deferred until explicitly requested | Approved implementation default |
 
 ## 5. Data classification standard
@@ -426,7 +424,8 @@ Exit gate: field-level authorization passes two-tenant and three-role integratio
 | AIDR-202 | Add deterministic prompt redaction and hashing | Engineering | Completed | Email, phone, provider-secret, bearer-token, labeled-secret, URL-token, known-value, hash, and truncation tests pass |
 | AIDR-203 | Stop returning raw prompts to ordinary quote AI-run endpoints | Engineering | Completed | Member/owner/admin and historical-raw/cross-tenant integration cases pass |
 | AIDR-204 | Store derived trade/quality metadata at write time | Engineering | Completed | New events store `serviceType`; internal quality summary no longer selects or parses raw prompts |
-| AIDR-205 | Add retrieval audit service | Engineering | In progress | Quote AI events write content-free audit envelopes with hashed refs; structured-insight/RAG paths remain |
+| AIDR-205 | Add retrieval audit service | Engineering | Completed | Quote AI and Kody RAG write tenant-scoped content-free audit envelopes with hashed refs, classifications, purpose, result counts, and embedding input-token telemetry |
+| AIDR-208 | Add bounded Kody conversation context | Engineering | Completed | Browser submits at most four prior user/tool turns; server strictly validates, trims, re-redacts, and never persists them as a raw transcript or trusts them for authorization |
 | AIDR-206 | Add retention purge command in dry-run/apply modes | Engineering + Operations | Not started | Dry-run report, exact target guard, idempotency, and apply test |
 | AIDR-207 | Update privacy/data-handling copy after review | Product + Legal/Privacy | Not started | Product behavior and published copy agree |
 
@@ -436,10 +435,10 @@ Exit gate: new AI calls are minimized, redacted, auditable, and expiration-aware
 
 | ID | Work item | Owner | Status | Acceptance evidence |
 |---|---|---|---|---|
-| AIDR-301 | Create server-owned insight tool registry | Engineering | Not started | No arbitrary SQL/tool names; Zod validation for every argument |
-| AIDR-302 | Implement pipeline/conversion/aging/follow-up tools | Engineering | Not started | Results match direct SQL fixtures across date boundaries |
-| AIDR-303 | Implement revenue/pricing/margin tools with capability gates | Engineering | Not started | Members cannot access C3 tools or infer C3 results |
-| AIDR-304 | Add source envelopes and deterministic calculations | Engineering | Not started | Model never calculates authoritative totals |
+| AIDR-301 | Create server-owned insight tool registry | Engineering | Completed | Fixed typed Kody tools; no arbitrary SQL/tool names |
+| AIDR-302 | Implement pipeline/conversion/aging/follow-up tools | Engineering | In progress | Pipeline, follow-up, no-quote, and scenario tools implemented; broader date-boundary fixture coverage remains |
+| AIDR-303 | Implement revenue/pricing/margin tools with capability gates | Engineering | Completed | Profitability is server-calculated and C3 capability-gated; members receive a denial path |
+| AIDR-304 | Add source envelopes and deterministic calculations | Engineering | Completed | Authoritative totals are calculated by tenant-scoped server queries and returned with citations |
 | AIDR-305 | Add insight eval dataset | Engineering | Not started | Accuracy, refusal, insufficient-data, and injection cases meet threshold |
 
 Exit gate: numeric insights are reproducible from cited PostgreSQL results and cannot cross tenant/role boundaries.
@@ -449,12 +448,12 @@ Exit gate: numeric insights are reproducible from cited PostgreSQL results and c
 | ID | Work item | Owner | Status | Acceptance evidence |
 |---|---|---|---|---|
 | AIDR-401 | Validate Neon extension, runtime role, and production-like branch plan | Operations + Engineering | Not started | Extension/role/RLS preflight evidence |
-| AIDR-402 | Add `AiKnowledgeChunk` and `AiIndexJob` migration | Engineering | Not started | Additive migration, indexes, constraints, and reviewed SQL |
-| AIDR-403 | Add forced RLS policies and transaction tenant context | Engineering + Security | Not started | No-context and wrong-context DB tests fail closed |
-| AIDR-404 | Build deterministic sanitizer/chunker | Engineering | Not started | Stable hashes/versions; excluded fields never enter chunk input |
-| AIDR-405 | Build idempotent indexing worker | Engineering | Not started | Create/update/delete/retry/lease tests pass |
-| AIDR-406 | Build tenant/role/classification-filtered vector query | Engineering | Not started | Better cross-tenant match is never returned |
-| AIDR-407 | Revalidate vector results against current source rows | Engineering | Not started | Stale, archived, deleted, or reclassified records are rejected |
+| AIDR-402 | Add retrieval document/chunk storage and future index-job migration | Engineering | In progress | Additive tenant-scoped document/chunk storage exists; background job model remains |
+| AIDR-403 | Add forced RLS policies and transaction tenant context | Engineering + Security | In progress | Migration, non-owner runtime role, `SET LOCAL` transaction context, readiness probe, and fail-closed integration coverage implemented locally; production-like Neon role/migration rehearsal remains |
+| AIDR-404 | Build deterministic sanitizer/chunker | Engineering | Completed | Stable field/content hashes, policy version, bounded chunks, and C4 rejection are implemented |
+| AIDR-405 | Build idempotent indexing worker | Engineering | In progress | Request-time refresh now reuses unchanged content/model hashes and retires route changes; background retry/lease worker remains |
+| AIDR-406 | Build tenant/role/classification-filtered vector query | Engineering | In progress | Application query is tenant/capability/purpose filtered with isolation coverage; pgvector/RLS hardening remains |
+| AIDR-407 | Revalidate vector results against current source rows | Engineering | Completed | Read-time tenant/lifecycle/content-hash revalidation rejects stale, archived, deleted, or directly changed sources |
 | AIDR-408 | Benchmark exact versus approximate index behavior | Engineering | Not started | Recall/latency evidence on representative tenant sizes |
 
 Exit gate: RAG retrieval passes database RLS, application tenant scope, lifecycle, role, classification, and stale-source tests.
@@ -463,10 +462,10 @@ Exit gate: RAG retrieval passes database RLS, application tenant scope, lifecycl
 
 | ID | Work item | Owner | Status | Acceptance evidence |
 |---|---|---|---|---|
-| AIDR-501 | Add explicit insight surfaces and purpose-specific prompts | Product + Engineering | Not started | No generic unrestricted “ask database” entry point |
-| AIDR-502 | Display source citations and freshness | Engineering | Not started | User can open cited tenant records; inaccessible citations never render |
-| AIDR-503 | Display confidence/insufficient-data states | Product + Engineering | Not started | Model does not present guesses as verified metrics |
-| AIDR-504 | Add mobile layout and accessibility coverage | Engineering | Not started | 390px/Pixel/iPhone smoke, keyboard, screen reader, 44px targets |
+| AIDR-501 | Add explicit insight surfaces and purpose-specific prompts | Product + Engineering | In progress | Kody routes only to approved tools and review-only quote drafting; remaining purpose UX polish continues |
+| AIDR-502 | Display source citations and freshness | Engineering | In progress | Kody and Quote Builder display approved source labels; record deep links and freshness remain |
+| AIDR-503 | Display confidence/insufficient-data states | Product + Engineering | In progress | Confidence and empty-state language exist; broader task evals remain |
+| AIDR-504 | Add mobile layout and accessibility coverage | Engineering | In progress | Mobile assistant coverage exists; real-device end-to-end smoke remains |
 | AIDR-505 | Add user feedback and correction loop | Product + Engineering | Not started | Feedback ties to audit ID without copying sensitive prompt text |
 
 Exit gate: the UX clearly distinguishes verified metrics, retrieved sources, model explanation, and unavailable/denied data.
@@ -697,6 +696,8 @@ This initiative is complete only when:
 | 2026-08-11 | AIDR-IMPL-001 | Added typed field classifications, live-role capabilities, deterministic prompt redaction/hashing, no-new-raw-prompt persistence, and content-free retrieval audits | Engineering | Ready for review |
 | 2026-08-11 | AIDR-TEST-001 | Fresh PostgreSQL 16 applied all 31 migrations; AI governance integration passed owner/admin/member projection, stale-role demotion, atomic cross-tenant source rejection, historical raw event/quote exclusion, audit minimization, and cross-tenant 404 | Engineering + Security | Passed |
 | 2026-08-11 | AIDR-TEST-002 | AI governance unit tests passed 4/4; backend build and Prisma validation passed | Engineering | Passed |
+| 2026-08-13 | AIDR-IMPL-002 | Connected Kody quote previews to governed tenant RAG, added bounded/redacted retrieval excerpts for answer composition, review-only grounded Quote Builder handoff, source chips, embedding spend telemetry, content/model-aware embedding reuse, and read-time source hash/lifecycle revalidation | Engineering + Security | Ready for database-backed review |
+| 2026-08-13 | AIDR-TEST-003 | Fresh PostgreSQL 16 applied all 35 migrations; focused Kody and retrieval integration suites passed 16/16, including cross-tenant isolation, role classification, prompt injection containment, direct stale-source rejection, lifecycle retirement, and embedding reuse. Unit 48/48, security 4/4, backend/frontend builds, lint, SEO 6/6, and Prisma validation passed | Engineering + Security | Passed |
 
 ## 18. Primary references
 

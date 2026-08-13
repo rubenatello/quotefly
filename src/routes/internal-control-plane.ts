@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CAPABILITIES, capabilitiesForRole } from "../lib/access-policy";
+import { mapWithConcurrency } from "../lib/bounded-concurrency";
 import {
   getDataClassificationCatalog,
   validateDataGovernanceSchema,
@@ -10,6 +11,7 @@ import {
   recordSuperuserAuditEvent,
   requireSuperuserAccess,
 } from "../lib/superuser-access";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 
 const TenantLifecycleSchema = z.enum(["active", "deleted", "all"]);
 const TenantListQuerySchema = z.object({
@@ -39,6 +41,14 @@ const ValidationRateLimit = {
   config: {
     rateLimit: {
       max: 10,
+      timeWindow: "1 minute",
+    },
+  },
+};
+const RagIndexSummaryRateLimit = {
+  config: {
+    rateLimit: {
+      max: 6,
       timeWindow: "1 minute",
     },
   },
@@ -252,56 +262,105 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.get("/internal/control-plane/rag-index", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.get("/internal/control-plane/rag-index", { ...RagIndexSummaryRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;
 
-    const [
-      documentCount,
-      activeDocumentCount,
-      deletedDocumentCount,
-      chunkCount,
-      activeChunkCount,
-      deletedChunkCount,
-      documentStatusRows,
-      chunkClassificationRows,
-      sourceTypeRows,
-      latestDocument,
-      latestChunk,
-    ] = await Promise.all([
-      app.prisma.aiRetrievalDocument.count(),
-      app.prisma.aiRetrievalDocument.count({ where: { deletedAtUtc: null, status: "ACTIVE" } }),
-      app.prisma.aiRetrievalDocument.count({ where: { OR: [{ deletedAtUtc: { not: null } }, { status: "DELETED" }] } }),
-      app.prisma.aiRetrievalChunk.count(),
-      app.prisma.aiRetrievalChunk.count({ where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } } }),
-      app.prisma.aiRetrievalChunk.count({ where: { deletedAtUtc: { not: null } } }),
-      app.prisma.aiRetrievalDocument.groupBy({
-        by: ["status"],
-        _count: { _all: true },
-        orderBy: { status: "asc" },
-      }),
-      app.prisma.aiRetrievalChunk.groupBy({
-        by: ["classification"],
-        where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } },
-        _count: { _all: true },
-        orderBy: { classification: "asc" },
-      }),
-      app.prisma.aiRetrievalChunk.groupBy({
-        by: ["sourceType"],
-        where: { deletedAtUtc: null, document: { status: "ACTIVE", deletedAtUtc: null } },
-        _count: { _all: true },
-        orderBy: { _count: { sourceType: "desc" } },
-        take: 20,
-      }),
-      app.prisma.aiRetrievalDocument.findFirst({
-        orderBy: { indexedAtUtc: "desc" },
-        select: { indexedAtUtc: true, policyVersion: true },
-      }),
-      app.prisma.aiRetrievalChunk.findFirst({
-        orderBy: { indexedAtUtc: "desc" },
-        select: { indexedAtUtc: true, policyVersion: true },
-      }),
-    ]);
+    const tenantIds = await app.prisma.tenant.findMany({ select: { id: true } });
+    const summaries = await mapWithConcurrency(tenantIds, 4, ({ id: tenantId }) => withTenantRlsContext(
+      app.prisma,
+      tenantId,
+      async (tx) => {
+        const activeChunkWhere = {
+          deletedAtUtc: null,
+          document: { status: "ACTIVE" as const, deletedAtUtc: null },
+        };
+        const [
+          documentCount,
+          activeDocumentCount,
+          deletedDocumentCount,
+          chunkCount,
+          activeChunkCount,
+          deletedChunkCount,
+          documentsByStatus,
+          activeChunksByClassification,
+          activeChunksBySourceType,
+          latestDocument,
+          latestChunk,
+        ] = await Promise.all([
+          tx.aiRetrievalDocument.count(),
+          tx.aiRetrievalDocument.count({ where: { status: "ACTIVE", deletedAtUtc: null } }),
+          tx.aiRetrievalDocument.count({ where: { OR: [{ status: "DELETED" }, { deletedAtUtc: { not: null } }] } }),
+          tx.aiRetrievalChunk.count(),
+          tx.aiRetrievalChunk.count({ where: activeChunkWhere }),
+          tx.aiRetrievalChunk.count({ where: { deletedAtUtc: { not: null } } }),
+          tx.aiRetrievalDocument.groupBy({ by: ["status"], _count: { _all: true } }),
+          tx.aiRetrievalChunk.groupBy({
+            by: ["classification"],
+            where: activeChunkWhere,
+            _count: { _all: true },
+          }),
+          tx.aiRetrievalChunk.groupBy({
+            by: ["sourceType"],
+            where: activeChunkWhere,
+            _count: { _all: true },
+          }),
+          tx.aiRetrievalDocument.findFirst({
+            orderBy: { indexedAtUtc: "desc" },
+            select: { indexedAtUtc: true, policyVersion: true },
+          }),
+          tx.aiRetrievalChunk.findFirst({
+            orderBy: { indexedAtUtc: "desc" },
+            select: { indexedAtUtc: true, policyVersion: true },
+          }),
+        ]);
+        return {
+          documentCount,
+          activeDocumentCount,
+          deletedDocumentCount,
+          chunkCount,
+          activeChunkCount,
+          deletedChunkCount,
+          documentsByStatus,
+          activeChunksByClassification,
+          activeChunksBySourceType,
+          latestRecord: [latestDocument, latestChunk]
+            .filter((row): row is NonNullable<typeof row> => Boolean(row))
+            .sort((left, right) => right.indexedAtUtc.getTime() - left.indexedAtUtc.getTime())[0] ?? null,
+        };
+      },
+    ));
+
+    const documentCount = summaries.reduce((sum, summary) => sum + summary.documentCount, 0);
+    const activeDocumentCount = summaries.reduce((sum, summary) => sum + summary.activeDocumentCount, 0);
+    const deletedDocumentCount = summaries.reduce((sum, summary) => sum + summary.deletedDocumentCount, 0);
+    const chunkCount = summaries.reduce((sum, summary) => sum + summary.chunkCount, 0);
+    const activeChunkCount = summaries.reduce((sum, summary) => sum + summary.activeChunkCount, 0);
+    const deletedChunkCount = summaries.reduce((sum, summary) => sum + summary.deletedChunkCount, 0);
+    const sumGroupedCounts = <T extends string>(rows: readonly { key: T; count: number }[]) => rows.reduce<Record<string, number>>(
+      (counts, row) => {
+        counts[row.key] = (counts[row.key] ?? 0) + row.count;
+        return counts;
+      },
+      {},
+    );
+    const documentsByStatus = sumGroupedCounts(summaries.flatMap((summary) => summary.documentsByStatus.map(
+      (row) => ({ key: row.status, count: row._count._all ?? 0 }),
+    )));
+    const activeChunksByClassification = sumGroupedCounts(summaries.flatMap((summary) => summary.activeChunksByClassification.map(
+      (row) => ({ key: row.classification, count: row._count._all ?? 0 }),
+    )));
+    const activeChunksBySourceType = Object.entries(sumGroupedCounts(summaries.flatMap((summary) => summary.activeChunksBySourceType.map(
+      (row) => ({ key: row.sourceType, count: row._count._all ?? 0 }),
+    ))))
+      .map(([sourceType, count]) => ({ sourceType, chunkCount: count }))
+      .sort((left, right) => right.chunkCount - left.chunkCount)
+      .slice(0, 20);
+    const latestRecord = summaries.map((summary) => summary.latestRecord).filter(
+      (row): row is NonNullable<typeof row> => Boolean(row),
+    ).sort(
+      (left, right) => right.indexedAtUtc.getTime() - left.indexedAtUtc.getTime(),
+    )[0] ?? null;
 
     await recordSuperuserAuditEvent(app.prisma, {
       actorUserId: claims.userId,
@@ -317,7 +376,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
 
     return {
       generatedAtUtc: new Date(),
-      policyVersion: latestChunk?.policyVersion ?? latestDocument?.policyVersion ?? null,
+      policyVersion: latestRecord?.policyVersion ?? null,
       totals: {
         documents: documentCount,
         activeDocuments: activeDocumentCount,
@@ -326,17 +385,10 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
         activeChunks: activeChunkCount,
         deletedChunks: deletedChunkCount,
       },
-      documentsByStatus: Object.fromEntries(
-        documentStatusRows.map((row) => [row.status, row._count._all ?? 0]),
-      ),
-      activeChunksByClassification: Object.fromEntries(
-        chunkClassificationRows.map((row) => [row.classification, row._count._all ?? 0]),
-      ),
-      activeChunksBySourceType: sourceTypeRows.map((row) => ({
-        sourceType: row.sourceType,
-        chunkCount: row._count._all ?? 0,
-      })),
-      latestIndexedAtUtc: latestChunk?.indexedAtUtc ?? latestDocument?.indexedAtUtc ?? null,
+      documentsByStatus,
+      activeChunksByClassification,
+      activeChunksBySourceType,
+      latestIndexedAtUtc: latestRecord?.indexedAtUtc ?? null,
       fieldsExcluded: [
         "chunk content",
         "embedding vectors",

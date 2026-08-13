@@ -4,7 +4,12 @@ import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
 import { assistantToolConsumesAiBudget, resolveAssistantTool, runAiAssistant } from "../lib/ai-assistant";
 import { hashSourceReference } from "../lib/ai-data-governance";
-import { AssistantRequestSchema, normalizeAssistantContext, type AssistantRequestPayload } from "../lib/ai-assistant-request";
+import {
+  AssistantRequestSchema,
+  normalizeAssistantContext,
+  normalizeAssistantConversation,
+  type AssistantRequestPayload,
+} from "../lib/ai-assistant-request";
 import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { measureRequestPerformance } from "../lib/request-performance";
@@ -71,7 +76,8 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     }
     const context = normalizeAssistantContext(payload.context);
-    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context);
+    const conversation = normalizeAssistantConversation(payload.conversation);
+    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context, conversation);
 
     const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -113,6 +119,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         message: payload.message,
         tool: payload.tool,
         context,
+        conversation,
         usageSnapshot: snapshot,
       }));
     } catch (error) {

@@ -17,6 +17,7 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1),
+  DIRECT_DATABASE_URL: z.string().min(1).optional(),
   JWT_SECRET: z.string().min(32),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
@@ -25,6 +26,7 @@ const EnvSchema = z.object({
   OPENAI_ASSISTANT_COMPOSITION_ENABLED: BooleanFromEnv.default(true),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
   OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
+  OPENAI_EMBEDDING_COST_PER_1M_USD: z.coerce.number().nonnegative().default(0.02),
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_PRICE_ID_STARTER: z.string().default(""),
@@ -53,6 +55,30 @@ const EnvSchema = z.object({
 }).superRefine((value, ctx) => {
   if (value.NODE_ENV !== "production") return;
 
+  let runtimeDatabaseUrl: URL | null = null;
+  try {
+    runtimeDatabaseUrl = new URL(value.DATABASE_URL);
+  } catch {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DATABASE_URL"],
+      message: "DATABASE_URL must be a valid PostgreSQL connection URL.",
+    });
+  }
+  if (runtimeDatabaseUrl?.username !== "quotefly_runtime") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DATABASE_URL"],
+      message: "Production DATABASE_URL must use the dedicated quotefly_runtime role so AI retrieval RLS cannot be bypassed.",
+    });
+  }
+  if (value.DIRECT_DATABASE_URL?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DIRECT_DATABASE_URL"],
+      message: "DIRECT_DATABASE_URL must not be present in the production API runtime; provide it only to the isolated migration job.",
+    });
+  }
   if (value.JWT_SECRET === DEFAULT_JWT_SECRET || value.JWT_SECRET.includes("change-me")) {
     ctx.addIssue({
       code: "custom",

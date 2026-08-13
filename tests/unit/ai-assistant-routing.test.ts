@@ -34,3 +34,44 @@ test("deterministic operational tools do not consume the external AI budget", as
   assert.equal(assistantToolConsumesAiBudget("SEARCH_CUSTOMERS"), true);
   assert.equal(assistantToolConsumesAiBudget("DRAFT_QUOTE"), true);
 });
+
+test("bounded conversation hints route genuine follow-ups but never override explicit intent", async () => {
+  const { resolveAssistantTool } = await import("../../src/lib/ai-assistant");
+  const conversation = [{
+    message: "Summarize my sales pipeline for the last 90 days.",
+    resolvedTool: "SUMMARIZE_PIPELINE" as const,
+  }];
+
+  assert.equal(
+    resolveAssistantTool("What about last month?", "AUTO", { currentPage: "quotes" }, conversation),
+    "SUMMARIZE_PIPELINE",
+  );
+  assert.equal(
+    resolveAssistantTool("Find customer Smith", "AUTO", { currentPage: "analytics" }, conversation),
+    "SEARCH_CUSTOMERS",
+  );
+});
+
+test("relative business-insight dates are deterministic and bounded", async () => {
+  const { inferAssistantRelativeDateRange } = await import("../../src/lib/ai-assistant");
+  const now = new Date("2026-08-13T12:00:00.000Z");
+
+  assert.deepEqual(inferAssistantRelativeDateRange("Show the last 90 days", now), {
+    from: new Date("2026-05-15T12:00:00.000Z"),
+    to: now,
+  });
+  assert.equal(inferAssistantRelativeDateRange("Show the last 999 days", now), null);
+  assert.equal(inferAssistantRelativeDateRange("Show recent work", now), null);
+});
+
+test("assistant request conversation is strict and hard-bounded", async () => {
+  const { AssistantRequestSchema } = await import("../../src/lib/ai-assistant-request");
+  const turn = { message: "What about last month?", resolvedTool: "SUMMARIZE_PIPELINE" };
+
+  assert.equal(AssistantRequestSchema.safeParse({ message: "And this month?", conversation: [turn] }).success, true);
+  assert.equal(AssistantRequestSchema.safeParse({ message: "And this month?", conversation: Array(5).fill(turn) }).success, false);
+  assert.equal(AssistantRequestSchema.safeParse({
+    message: "And this month?",
+    conversation: [{ ...turn, tenantId: "forged-tenant" }],
+  }).success, false);
+});

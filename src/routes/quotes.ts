@@ -3,7 +3,12 @@ import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
-import { assertAiUsageAvailable, buildAiUsageResponse, createAiUsageEvent } from "../lib/ai-usage";
+import {
+  accumulateAiUsageTelemetry,
+  assertAiUsageAvailable,
+  buildAiUsageResponse,
+  createAiUsageEvent,
+} from "../lib/ai-usage";
 import {
   buildGovernedQuoteAiContext,
   markQuoteAiRetrievalSourcesDeleted,
@@ -3437,6 +3442,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         customerId: selectedCustomer?.id ?? null,
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
       });
+      accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
     } catch (retrievalErr) {
       request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] governed retrieval context unavailable");
     }
@@ -3571,6 +3577,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           customerId: selectedCustomer.id,
           quoteId: existingQuote?.id ?? payload.quoteId ?? null,
         });
+        accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
       } catch (retrievalErr) {
         request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] customer-specific retrieval context unavailable");
       }

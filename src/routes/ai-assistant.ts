@@ -2,7 +2,11 @@ import type { FastifyPluginAsync } from "fastify";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
 import { assistantToolConsumesAiBudget, resolveAssistantTool, runAiAssistant } from "../lib/ai-assistant";
-import { AssistantRequestSchema, normalizeAssistantContext } from "../lib/ai-assistant-request";
+import {
+  AssistantRequestSchema,
+  normalizeAssistantContext,
+  normalizeAssistantConversation,
+} from "../lib/ai-assistant-request";
 import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { getJwtClaims } from "../lib/auth";
@@ -19,7 +23,8 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
     const access = buildAccessContext(request);
     const payload = AssistantRequestSchema.parse(request.body);
     const context = normalizeAssistantContext(payload.context);
-    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context);
+    const conversation = normalizeAssistantConversation(payload.conversation);
+    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context, conversation);
 
     const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -49,6 +54,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       message: payload.message,
       tool: payload.tool,
       context,
+      conversation,
       usageSnapshot: snapshot,
     }));
 

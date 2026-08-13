@@ -446,14 +446,15 @@ model AiUsageEvent {
   patchRemoved          Int?
   sourceCount           Int?
   retentionExpiresAtUtc DateTime?              @db.Timestamptz(3)
-  retrievalAuditEventId String?                @unique
+  retrievalAuditEventId String?
+  retrievalAuditTenantId String?
   createdAt             DateTime               @default(now()) @db.Timestamptz(3)
   deletedAtUtc          DateTime?              @db.Timestamptz(3)
   tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quote                 Quote?                 @relation(fields: [quoteId], references: [id], onDelete: SetNull)
   customer              Customer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
   actorUser             User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-  retrievalAuditEvent   AiRetrievalAuditEvent? @relation(fields: [retrievalAuditEventId], references: [id], onDelete: SetNull)
+  retrievalAuditEvent   AiRetrievalAuditEvent? @relation(fields: [retrievalAuditEventId, retrievalAuditTenantId], references: [id, tenantId], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([tenantId, eventType, createdAt])
@@ -462,6 +463,8 @@ model AiUsageEvent {
   @@index([tenantId, purpose, createdAt])
   @@index([tenantId, retentionExpiresAtUtc])
   @@index([tenantId, deletedAtUtc])
+  @@index([retrievalAuditTenantId])
+  @@unique([retrievalAuditEventId, retrievalAuditTenantId])
 }
 
 model AiRetrievalAuditEvent {
@@ -488,6 +491,7 @@ model AiRetrievalAuditEvent {
   actorUser             User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   usageEvent            AiUsageEvent?
 
+  @@unique([id, tenantId])
   @@index([tenantId, createdAt])
   @@index([tenantId, actorUserId, createdAt])
   @@index([tenantId, purpose, createdAt])

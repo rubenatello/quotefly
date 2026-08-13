@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
@@ -128,28 +129,42 @@ describe("AI retrieval index", () => {
       { embedText },
     );
 
+    const financialQuote = await prisma.quote.create({
+      data: {
+        tenantId: alpha.tenant.id,
+        customerId: alphaCustomer.id,
+        serviceType: "ROOFING",
+        title: "Internal pricing test quote",
+        scopeText: "margin secret roof leak internal note",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 0,
+        totalAmount: 200,
+      },
+    });
+    const financialContent = financialQuote.scopeText;
     const manualDocument = await prisma.aiRetrievalDocument.create({
       data: {
         tenantId: alpha.tenant.id,
         sourceType: "Quote",
-        sourceId: "alpha-financial-source",
+        sourceId: financialQuote.id,
         maxClassification: "C3_FINANCIAL_CONFIDENTIAL",
         contentHash: "a".repeat(64),
         citationLabel: "Internal pricing note",
         policyVersion: "2026-08-11",
       },
     });
-    const financialEmbedding = deterministicEmbedding("margin secret roof leak");
+    const financialEmbedding = deterministicEmbedding(financialContent);
     await prisma.aiRetrievalChunk.create({
       data: {
         tenantId: alpha.tenant.id,
         documentId: manualDocument.id,
         sourceType: "Quote",
-        sourceId: "alpha-financial-source",
-        sourceField: "Customer.notes",
+        sourceId: financialQuote.id,
+        sourceField: "Quote.scopeText",
         chunkIndex: 0,
-        content: "margin secret roof leak internal note",
-        contentHash: "b".repeat(64),
+        content: financialContent,
+        contentHash: createHash("sha256").update(`Quote.scopeText:${financialContent}`, "utf8").digest("hex"),
         embedding: financialEmbedding.embedding,
         embeddingModel: financialEmbedding.model,
         embeddingDimensions: financialEmbedding.embedding.length,
@@ -358,5 +373,74 @@ describe("AI retrieval index", () => {
       },
     });
     expect(retired).toBeGreaterThanOrEqual(4);
+  });
+
+  test("read-time source revalidation rejects directly changed content before a reindex", async () => {
+    const alpha = await signUp("rag-read-revalidate");
+    const customer = await prisma.customer.create({
+      data: {
+        tenantId: alpha.tenant.id,
+        fullName: "Read Revalidation Customer",
+        phone: "555-919-2020",
+        phoneDigits: "5559192020",
+        notes: "Original cedar shake leak above the garage.",
+      },
+    });
+    await upsertAiRetrievalSource(prisma, {
+      tenantId: alpha.tenant.id,
+      sourceType: "Customer",
+      sourceId: customer.id,
+      citationLabel: "Customer notes: Read Revalidation Customer",
+      sourceUpdatedAtUtc: customer.updatedAt,
+      fields: [{ field: "Customer.notes", content: customer.notes }],
+    }, { embedText });
+
+    await prisma.customer.update({
+      where: { id_tenantId: { id: customer.id, tenantId: alpha.tenant.id } },
+      data: { notes: "Replacement content that has not been indexed yet." },
+    });
+
+    const result = await retrieveAiContextFromIndex(prisma, {
+      access: accessFor({ tenantId: alpha.tenant.id, userId: alpha.user.id, role: "owner" }),
+      query: "cedar shake leak garage",
+      purpose: "QUOTE_DRAFT",
+      requestId: "read-revalidation",
+      embedText,
+    });
+    expect(result.context).not.toContain("Original cedar shake leak");
+    expect(result.context).not.toContain("Replacement content");
+  });
+
+  test("unchanged governed source text reuses the current embedding model", async () => {
+    const alpha = await signUp("rag-idempotent");
+    const customer = await prisma.customer.create({
+      data: {
+        tenantId: alpha.tenant.id,
+        fullName: "Idempotent Customer",
+        phone: "555-414-3030",
+        phoneDigits: "5554143030",
+        notes: "Standing seam roof measurement notes.",
+      },
+    });
+    const source = {
+      tenantId: alpha.tenant.id,
+      sourceType: "Customer",
+      sourceId: customer.id,
+      citationLabel: "Customer notes: Idempotent Customer",
+      sourceUpdatedAtUtc: customer.updatedAt,
+      fields: [{ field: "Customer.notes" as const, content: customer.notes }],
+    };
+
+    const first = await upsertAiRetrievalSource(prisma, source);
+    const second = await upsertAiRetrievalSource(prisma, source);
+
+    expect(first).toMatchObject({ indexed: true, reused: false, chunkCount: 1 });
+    expect(second).toMatchObject({ indexed: false, reused: true, chunkCount: 1, telemetry: null });
+    await expect(prisma.aiRetrievalDocument.count({
+      where: { tenantId: alpha.tenant.id, sourceType: "Customer", sourceId: customer.id },
+    })).resolves.toBe(1);
+    await expect(prisma.aiRetrievalChunk.count({
+      where: { tenantId: alpha.tenant.id, sourceType: "Customer", sourceId: customer.id, deletedAtUtc: null },
+    })).resolves.toBe(1);
   });
 });

@@ -37,7 +37,8 @@ npm run verify:launch
 
 | Variable | API | Web | Staging Example | Production Notes |
 | --- | --- | --- | --- | --- |
-| `DATABASE_URL` | Required | No | Managed Postgres staging URL | Use managed Postgres with backups enabled |
+| `DATABASE_URL` | Required | No | pooled Neon URL using `quotefly_runtime` | API-only runtime role; must not own tables or have `BYPASSRLS` |
+| `DIRECT_DATABASE_URL` | No (release job only) | No | direct Neon URL using migration owner | Isolated release/migration commands only; never add to the API service, web app, or browser |
 | `JWT_SECRET` | Required | No | 32+ char random secret | Unique per environment; rotate through provider env |
 | `APP_URL` | Required | No | `https://staging.quotefly.us` | Production web URL, for redirects and CORS inputs |
 | `API_URL` | Required | No | `https://api-staging.quotefly.us` | Production API URL |
@@ -58,6 +59,7 @@ npm run verify:launch
 | `OPENAI_API_KEY` | Required for AI | No | staging key or empty | Empty disables real provider calls; AI stays beta |
 | `OPENAI_MODEL` | Optional | No | `gpt-4o-mini` | Track quality and spend before launch expansion |
 | `OPENAI_EMBEDDING_MODEL` | Optional | No | `text-embedding-3-small` | Keep consistent with indexed RAG chunks; changing it requires reindexing |
+| `OPENAI_EMBEDDING_COST_PER_1M_USD` | Optional | No | `0.02` | Estimated input cost used for tenant AI spend metering; keep aligned with the configured embedding model |
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
@@ -76,14 +78,20 @@ Railway/Render settings:
 - Runtime: Node 22.
 - Root directory: repository root.
 - Build command: `npm ci && npm run prisma:generate && npm run build`.
-- Start command: `npm run start:prod`.
+- Start command: `npm run start:prod` (runtime only; production env validation rejects any `DIRECT_DATABASE_URL`).
+- Run `npm run prisma:migrate:deploy` from a dedicated release job or CI environment that has `DIRECT_DATABASE_URL`. Do not add the owner URL to the Railway API service variables. Railway pre-deploy commands run separately, but inherit the service environment, so a separate migration service/job or deployment workflow is required for true credential separation.
 - Process liveness: `GET /v1/health`.
 - Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
 - Keep the API service region physically close to the managed Postgres region. For Railway + Neon, choose matching or nearest available US regions before optimizing code.
 - Use the Neon pooled connection string for API runtime traffic and a direct connection only for Prisma CLI/migration work.
+- After the RLS migration creates the `NOLOGIN` role, set a generated password with the Neon owner connection, enable `LOGIN`, and use that role only in Railway's pooled `DATABASE_URL`. Keep the owner URL as `DIRECT_DATABASE_URL` only in the separate release/migration job. Never use `neondb_owner`, `postgres`, or another table owner as the running API role; Neon documents that owner/superuser-style roles can bypass RLS.
 - Disable Neon scale-to-zero, or set a production-safe suspend timeout, before selling accounts that expect mobile-app-like response times.
 
-`start:prod` runs `prisma migrate deploy` before starting the API. For safer production rollouts, run migrations as a release/predeploy command and start with `node dist/server.js` after migrations succeed.
+`start:prod` never runs migrations, and production startup fails if `DIRECT_DATABASE_URL` is present. A deployment must run `npm run prisma:migrate:deploy` successfully in the isolated migration job before routing the new API release.
+
+This forced-RLS migration is forward-only: the previous API does not set `app.tenant_id`. Rehearse the migration on a Neon branch, confirm the new API and quote workflows, and use a forward fix or temporarily disable AI retrieval if rollback is needed. Do not roll the API back behind migration `20260813170000` and assume AI index/audit writes will continue.
+
+Before routing traffic, `/v1/ready` must confirm enabled and forced RLS on `AiRetrievalDocument`, `AiRetrievalChunk`, and `AiRetrievalAuditEvent`. If Railway starts with the owner URL or the migration/policy is absent, production environment validation/readiness must fail closed.
 
 ## Performance Operations
 

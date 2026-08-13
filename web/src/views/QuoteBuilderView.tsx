@@ -180,6 +180,9 @@ type KodyQuoteDraftHandoff = {
   hasStructuredDraft: boolean;
   hasQuickCustomerDraft: boolean;
   pricingNeedsReview: boolean;
+  useWorkspaceContext: boolean;
+  retrievedSourceCount: number;
+  retrievedSourceLabels: string[];
   receivedAtUtc: string;
 };
 
@@ -214,6 +217,14 @@ function cleanKodyDraftLongText(value: unknown, maxLength: number): string | nul
 function readKodyDraftNumber(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readKodySourceLabels(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 6).flatMap((candidate) => {
+    const label = cleanKodyDraftText(candidate, 160);
+    return label ? [label] : [];
+  });
 }
 
 function readKodyDraftLineItems(value: unknown): KodyQuoteDraftHandoff["lineItems"] {
@@ -279,6 +290,12 @@ function readKodyQuoteDraftState(value: unknown): KodyQuoteDraftHandoff | null {
   const lineItems = readKodyDraftLineItems(draft.lineItems);
   const estimatedTotalAmount = readKodyDraftNumber(draft.estimatedTotalAmount);
   const estimatedTaxAmount = readKodyDraftNumber(draft.estimatedTaxAmount);
+  const useWorkspaceContext = draft.useWorkspaceContext === true;
+  const retrievedSourceLabels = readKodySourceLabels(draft.retrievedSourceLabels);
+  const retrievedSourceCount = Math.max(
+    0,
+    Math.min(Math.floor(readKodyDraftNumber(draft.retrievedSourceCount) ?? retrievedSourceLabels.length), 20),
+  );
   const promptParts = [
     prompt ?? "",
     customerName ? `Customer: ${customerName}` : "",
@@ -331,6 +348,9 @@ function readKodyQuoteDraftState(value: unknown): KodyQuoteDraftHandoff | null {
     hasStructuredDraft,
     hasQuickCustomerDraft,
     pricingNeedsReview: editableLines.some((line) => Number(line.unitPrice) <= 0 || Number(line.unitCost) <= 0),
+    useWorkspaceContext,
+    retrievedSourceCount,
+    retrievedSourceLabels,
     receivedAtUtc: new Date().toISOString(),
   };
 }
@@ -654,7 +674,7 @@ export function QuoteBuilderView() {
       setChatPrompt(draft.prompt);
     }
     setKodyDraftHandoff(draft);
-    setAiModalOpen(!canApplyKodyContext || !draft.hasStructuredDraft);
+    setAiModalOpen(draft.useWorkspaceContext || !canApplyKodyContext || !draft.hasStructuredDraft);
     setMobilePane("editor");
     setNotice(
       canApplyKodyContext
@@ -1337,9 +1357,17 @@ export function QuoteBuilderView() {
             {aiInsight.riskNote ? <span className="text-xs text-slate-600">{aiInsight.riskNote}</span> : null}
           </div>
           {aiInsight.sources.length ? (
-            <p className="mt-2 text-xs text-slate-500">
-              Context used: {aiInsight.sources.map((source) => source.label).join(" • ")}
-            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span className="font-semibold text-slate-700">Context used:</span>
+              {aiInsight.sources.map((source, index) => (
+                <span
+                  key={`${source.type}-${source.label}-${index}`}
+                  className="rounded-full border border-[var(--qf-border)] bg-white px-2.5 py-1"
+                >
+                  {source.label}
+                </span>
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -1872,12 +1900,19 @@ function KodyDraftHandoffBanner({
             <Badge tone="blue" icon={<Sparkles size={12} />}>Kody prepared a draft</Badge>
             <Badge tone="slate">Not saved</Badge>
             <Badge tone="slate">Not sent</Badge>
+            {handoff.useWorkspaceContext ? (
+              <Badge tone="blue" icon={<Sparkles size={12} />}>
+                {handoff.retrievedSourceCount} workspace source{handoff.retrievedSourceCount === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
           </div>
           <h2 className="mt-3 text-base font-semibold text-slate-950">
             Review this AI handoff before creating the quote.
           </h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote.
+            {handoff.useWorkspaceContext
+              ? "Kody found relevant saved jobs, quote details, or customer context. Generate the grounded draft, then review every scope and price before creating it. Nothing is saved or sent automatically."
+              : "Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote."}
           </p>
           {handoff.pricingNeedsReview ? (
             <p className="mt-2 text-sm font-semibold text-amber-700">
@@ -1887,13 +1922,27 @@ function KodyDraftHandoffBanner({
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
           <Button size="sm" onClick={onOpenAiDraft} icon={<Sparkles size={14} />}>
-            Open AI Draft
+            {handoff.useWorkspaceContext ? "Generate grounded draft" : "Open AI Draft"}
           </Button>
           <Button size="sm" variant="ghost" onClick={onDismiss}>
             Dismiss
           </Button>
         </div>
       </div>
+
+      {handoff.retrievedSourceLabels.length ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <span className="font-semibold text-slate-700">Workspace context:</span>
+          {handoff.retrievedSourceLabels.slice(0, 4).map((label) => (
+            <span key={label} className="rounded-full border border-quotefly-blue/15 bg-white/80 px-2.5 py-1">
+              {label}
+            </span>
+          ))}
+          {handoff.retrievedSourceLabels.length > 4 ? (
+            <span>+{handoff.retrievedSourceLabels.length - 4} more</span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2">

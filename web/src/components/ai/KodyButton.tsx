@@ -1,8 +1,8 @@
-import { Bot, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AiAssistantContext, AiAssistantRequestedTool } from "../../lib/api";
 import { useTrack } from "../../lib/analytics";
 import { Button } from "../ui";
+import { KodySparkIcon } from "./KodySparkIcon";
 import { openKody } from "./kody-events";
 
 export function KodyButton({
@@ -10,7 +10,7 @@ export function KodyButton({
   tool = "AUTO",
   context,
   label = "Ask Kody",
-  icon = <Sparkles size={14} />,
+  icon = <KodySparkIcon size={14} />,
   variant = "outline",
   size = "sm",
   className,
@@ -33,7 +33,7 @@ export function KodyButton({
       variant={variant}
       size={size}
       className={className}
-      icon={icon ?? <Bot size={14} />}
+      icon={icon ?? <KodySparkIcon size={14} />}
       disabled={disabled}
       onClick={() => {
         track("kody_context_open", { tool, currentPage: context?.currentPage ?? "unknown" });

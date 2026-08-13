@@ -123,7 +123,7 @@ Do not route ambiguous architecture, security-boundary, migration-strategy, or p
 
 - API:
   - Build with `npm install`, `npm run prisma:generate`, and `npm run build`.
-  - Start with `npm run start:prod` so `prisma migrate deploy` runs before `node dist/server.js`.
+  - Run `npm run prisma:migrate:deploy` first from an isolated release job with `DIRECT_DATABASE_URL`, then start the API with `npm run start:prod` using only the least-privileged runtime `DATABASE_URL`.
   - Configure process liveness at `/v1/health` and database-backed readiness at `/v1/ready`.
   - Set production env vars in the host, not in files.
 - Frontend:
