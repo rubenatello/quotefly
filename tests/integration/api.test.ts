@@ -2071,6 +2071,7 @@ describe("QuoteFly API integration", () => {
     const activeParams = stripeProviderMocks.createCheckoutSession.mock.calls[0]?.[0] as Stripe.Checkout.SessionCreateParams;
     expect(activeParams.success_url).toContain("/app/settings?billing=success&session_id={CHECKOUT_SESSION_ID}");
     expect(activeParams.cancel_url).toContain("/app/settings?billing=cancel");
+    expect(activeParams.payment_method_collection).toBe("always");
     expect(activeParams.subscription_data?.trial_end).toBeGreaterThanOrEqual(
       Math.ceil(activeTrialTenant.trialEndsAtUtc!.getTime() / 1000),
     );
@@ -2165,6 +2166,56 @@ describe("QuoteFly API integration", () => {
       reused: true,
     });
     expect(stripeProviderMocks.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  test("resumes the canonical checkout when a reservation conflict finds one", async () => {
+    const session = await signUp("billing-conflict-resume");
+
+    const originalUpdateMany = prisma.tenant.updateMany.bind(prisma.tenant);
+    const checkoutSessionId = `cs_conflict_resume_${Date.now()}`;
+    const updateManySpy = vi.spyOn(prisma.tenant, "updateMany").mockImplementation(async (args) => {
+      const attemptsToReserveCheckout =
+        typeof (args.data as { stripeCheckoutAttemptId?: unknown }).stripeCheckoutAttemptId === "string" &&
+        (args.data as { stripeCheckoutSessionId?: unknown }).stripeCheckoutSessionId === null &&
+        "AND" in (args.where as Record<string, unknown>);
+      if (attemptsToReserveCheckout) {
+        await originalUpdateMany({
+          where: { id: session.tenant.id },
+          data: {
+            stripeCheckoutSessionId: checkoutSessionId,
+            stripeCheckoutSessionExpiresAtUtc: new Date(Date.now() + 50 * 60 * 1000),
+            stripeCheckoutAttemptId: null,
+            stripeCheckoutAttemptExpiresAtUtc: null,
+          },
+        });
+        return { count: 0 };
+      }
+      return originalUpdateMany(args);
+    });
+    stripeProviderMocks.retrieveCheckoutSession.mockResolvedValueOnce({
+      id: checkoutSessionId,
+      status: "open",
+      url: "https://checkout.stripe.test/conflict-resume",
+    });
+    stripeProviderMocks.createCustomer.mockResolvedValueOnce({ id: `cus_conflict_resume_${Date.now()}` });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/billing/checkout-session",
+        headers: authHeaders(session.cookie),
+        payload: { planCode: "starter" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(parseJson<{ checkoutUrl: string; reused: boolean }>(response)).toMatchObject({
+        checkoutUrl: "https://checkout.stripe.test/conflict-resume",
+        reused: true,
+      });
+      expect(stripeProviderMocks.createCheckoutSession).not.toHaveBeenCalled();
+    } finally {
+      updateManySpy.mockRestore();
+    }
   });
 
   test("reuses the durable checkout generation after a post-provider persistence failure", async () => {

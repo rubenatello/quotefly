@@ -526,7 +526,26 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(409).send({ error: "A subscription already exists. Use billing management to change it." });
         }
         if (current.stripeCheckoutSessionId && current.stripeCheckoutSessionExpiresAtUtc && current.stripeCheckoutSessionExpiresAtUtc > now) {
-          return reply.code(409).send({ error: "A checkout is already in progress." });
+          try {
+            const existingCheckout = await stripe.checkout.sessions.retrieve(current.stripeCheckoutSessionId);
+            if (existingCheckout.status === "open" && existingCheckout.url) {
+              return { sessionId: existingCheckout.id, checkoutUrl: existingCheckout.url, reused: true };
+            }
+            if (existingCheckout.status === "complete") {
+              return reply.code(409).send({ error: "Checkout completed. Refresh billing status to continue." });
+            }
+          } catch (error) {
+            request.log.warn(
+              {
+                errorType: safeWebhookError(error),
+                tenantId: tenant.id,
+                checkoutSessionId: current.stripeCheckoutSessionId,
+              },
+              "Unable to resume Stripe checkout session after reservation conflict.",
+            );
+            return reply.code(503).send({ error: "Billing checkout could not be resumed. Please try again shortly." });
+          }
+          return reply.code(409).send({ error: "Billing checkout is no longer active. Please retry." });
         }
         attemptId = current.stripeCheckoutAttemptId;
         attemptExpiresAt = current.stripeCheckoutAttemptExpiresAtUtc;
@@ -581,6 +600,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
         ),
         cancel_url: buildAppUrl(app.env.APP_URL, "/app/settings?billing=cancel"),
         allow_promotion_codes: true,
+        payment_method_collection: "always",
         expires_at: Math.floor(attemptExpiresAt.getTime() / 1000),
         metadata: { tenantId: tenant.id, planCode: payload.planCode },
         subscription_data: {
