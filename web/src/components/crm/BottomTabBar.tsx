@@ -43,7 +43,7 @@ function MobileTabButton({
       type="button"
       onClick={onSelect}
       className={cn(
-        "relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors",
+        "relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors active:scale-[0.98]",
         active ? "text-quotefly-blue" : "text-slate-500 hover:text-slate-700",
       )}
       aria-label={tab.label}
@@ -54,7 +54,9 @@ function MobileTabButton({
       <span
         className={cn(
           "relative inline-flex h-12 w-12 items-center justify-center rounded-[18px] transition",
-          active && "bg-quotefly-blue/[0.12] shadow-[0_8px_20px_rgba(47,111,214,0.14)]",
+          active
+            ? "bg-quotefly-blue/[0.12] shadow-[0_8px_20px_rgba(47,111,214,0.14)] ring-1 ring-quotefly-blue/15"
+            : "hover:bg-slate-100",
         )}
         aria-hidden="true"
         data-testid={`mobile-tab-${tab.id}-icon`}
@@ -93,20 +95,20 @@ export function BottomTabBar() {
   return (
     <nav
       aria-label="Mobile workspace"
-      className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200/90 bg-white/98 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_28px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
+      className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200/90 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_28px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
     >
       <div className="mx-auto grid max-w-[540px] grid-cols-5">
         {PRIMARY_TABS.map(renderTab)}
         <button
           type="button"
           onClick={() => navigate("/app/build")}
-          className="relative flex min-h-[64px] items-center justify-center text-quotefly-blue"
+          className="relative flex min-h-[64px] items-center justify-center text-quotefly-blue active:scale-[0.98]"
           aria-label="New quote"
           title="New quote"
           data-testid="mobile-quick-quote"
         >
           <span
-            className="inline-flex h-[52px] w-[52px] -translate-y-1.5 items-center justify-center rounded-[20px] bg-quotefly-blue text-white shadow-[0_10px_24px_rgba(47,111,214,0.32)] ring-4 ring-white"
+            className="inline-flex h-[54px] w-[54px] -translate-y-1.5 items-center justify-center rounded-[21px] bg-quotefly-blue text-white shadow-[0_12px_26px_rgba(47,111,214,0.34)] ring-4 ring-white"
             aria-hidden="true"
           >
             <FilePlus2 size={22} />

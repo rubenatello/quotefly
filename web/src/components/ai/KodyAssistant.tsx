@@ -548,10 +548,10 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
           track("kody_open", { page: currentContextPage });
         }}
         className={cn(
-          "fixed right-[max(1rem,env(safe-area-inset-right))] z-[55] inline-flex h-[52px] min-h-[52px] items-center gap-2 rounded-2xl border border-quotefly-blue/20 bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_16px_36px_rgba(15,23,42,0.25)] transition hover:-translate-y-0.5 hover:bg-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue lg:bottom-6 lg:right-6",
+          "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-[52px] min-h-[52px] items-center gap-2 rounded-2xl border border-quotefly-blue/20 bg-slate-950 px-3 text-sm font-semibold text-white shadow-[0_16px_36px_rgba(15,23,42,0.25)] transition hover:-translate-y-0.5 hover:bg-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:px-4 lg:bottom-6 lg:right-6",
           hasMobileActionDock
             ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)]"
-            : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.75rem)]",
+            : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)]",
         )}
         aria-label="Ask Kody"
         data-testid="kody-launcher"
@@ -567,7 +567,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         onClose={() => setOpen(false)}
         size="xl"
         ariaLabel="Kody assistant"
-        panelClassName="h-[calc(100dvh-0.75rem)] border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 sm:h-[min(88dvh,760px)]"
+        panelClassName="qf-kody-mobile-sheet h-[calc(100dvh-0.5rem)] border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 sm:h-[min(88dvh,760px)]"
       >
         <ModalHeader
           title={

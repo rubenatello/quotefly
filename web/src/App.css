@@ -15,6 +15,17 @@
   isolation: isolate;
 }
 
+.qf-kody-mobile-sheet {
+  top: auto;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 100vw;
+  max-width: none;
+  max-height: calc(100dvh - 0.5rem);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 @media (max-width: 420px) {
   .qf-mobile-bottom-nav {
     padding-left: max(0.5rem, env(safe-area-inset-left));
@@ -43,5 +54,17 @@
 
   .qf-mobile-action-dock {
     bottom: 1rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .qf-kody-mobile-sheet {
+    top: 50%;
+    bottom: auto;
+    width: calc(100vw - 2rem);
+    max-width: 56rem;
+    max-height: 90vh;
+    transform: translate(-50%, -50%);
+    border-radius: 24px;
   }
 }
