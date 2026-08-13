@@ -15,6 +15,10 @@ import { Alert, Badge, Button, Card, CardHeader, Input, LoadingState, PageHeader
 
 const ASSISTANT_TOOLS: Array<{ value: AiAssistantRequestedTool; label: string }> = [
   { value: "AUTO", label: "Auto route" },
+  { value: "NAVIGATE_WORKSPACE", label: "Navigate workspace" },
+  { value: "FOLLOW_UP_QUEUE", label: "Follow-up queue" },
+  { value: "CUSTOMERS_WITHOUT_QUOTES", label: "Customers without quotes" },
+  { value: "PIPELINE_SCENARIO", label: "Pipeline scenario" },
   { value: "SEARCH_CUSTOMERS", label: "Search customers" },
   { value: "DRAFT_QUOTE", label: "Draft quote" },
   { value: "SUMMARIZE_PIPELINE", label: "Summarize pipeline" },

@@ -25,7 +25,7 @@ const ASSUMPTIONS = {
 };
 
 const TIERS = [
-  { code: "starter", name: "Starter", priceUsd: 19, proposedAiBudgetUsd: 0.6 },
+  { code: "starter", name: "Starter", priceUsd: 19, proposedAiBudgetUsd: 1.25 },
   { code: "professional", name: "Professional", priceUsd: 59, proposedAiBudgetUsd: 11 },
   { code: "enterprise", name: "Enterprise", priceUsd: 249, proposedAiBudgetUsd: 56 },
 ];

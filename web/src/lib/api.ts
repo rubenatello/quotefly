@@ -561,6 +561,10 @@ export type AiBusinessInsight = {
 
 export type AiAssistantRequestedTool =
   | "AUTO"
+  | "NAVIGATE_WORKSPACE"
+  | "FOLLOW_UP_QUEUE"
+  | "CUSTOMERS_WITHOUT_QUOTES"
+  | "PIPELINE_SCENARIO"
   | "SEARCH_CUSTOMERS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
@@ -581,7 +585,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;

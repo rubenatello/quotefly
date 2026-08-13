@@ -25,6 +25,10 @@ import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 
 export const AI_ASSISTANT_TOOLS = [
   "AUTO",
+  "NAVIGATE_WORKSPACE",
+  "FOLLOW_UP_QUEUE",
+  "CUSTOMERS_WITHOUT_QUOTES",
+  "PIPELINE_SCENARIO",
   "SEARCH_CUSTOMERS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
@@ -51,6 +55,7 @@ export type AiAssistantAction = Readonly<{
     | "OPEN_CUSTOMER"
     | "OPEN_QUOTE_DRAFT"
     | "OPEN_ANALYTICS"
+    | "OPEN_WORKSPACE_PAGE"
     | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
@@ -108,12 +113,26 @@ export type AiAssistantInput = Readonly<{
 
 const DEFAULT_CUSTOMER_LIMIT = 5;
 const MAX_CUSTOMER_LIMIT = 8;
+const OPEN_PIPELINE_STATUSES = ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER"] as const;
+const ZERO_AI_TELEMETRY: AiUsageTelemetry = Object.freeze({
+  requestCount: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  estimatedCostUsd: 0,
+});
 const STOP_CUSTOMER_SEARCH_PREFIX =
   /^(?:please\s+)?(?:find|search|look\s+up|show|show\s+me|open)\s+(?:a\s+)?(?:customer|client|contact|customers|clients|contacts)\s*(?:named|called|for|matching|with)?\s*/i;
 const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin|item|items|product|products)\b/i;
 const PIPELINE_INTENT_PATTERN = /\b(pipeline|sales|revenue|win\s*rate|accepted|sent|open\s+quotes?|follow[-\s]*up)\b/i;
 const CUSTOMER_INTENT_PATTERN = /\b(customer|client|contact|phone|email|find|search|look\s+up)\b/i;
 const QUOTE_DRAFT_INTENT_PATTERN = /\b(quote|estimate|draft|bid|proposal|new\s+job|sq\s*ft|sqft|roof|roofing|floor|flooring|hvac|plumb|plumbing|landscap|construction)\b/i;
+const FOLLOW_UP_INTENT_PATTERN = /\bfollow(?:ed|ing)?[-\s]+up\b|\bfollow[-\s]*up\b/i;
+const CUSTOMERS_WITHOUT_QUOTES_PATTERN =
+  /\b(?:customers?|clients?)\b.{0,64}\b(?:do\s+not\s+have|does\s+not\s+have|don't\s+have|doesn't\s+have|have\s+no|has\s+no|without|missing)\b.{0,40}\b(?:quotes?|estimates?|proposals?)\b/i;
+const PIPELINE_SCENARIO_PATTERN =
+  /(?:\b(?:close|closed|convert|converted|win|won|sell|sold|attain|attained|land|landed|realize|realized)\b.{0,64}\b(?:\d{1,3}(?:\.\d+)?\s*(?:%|percent)|open\s+(?:quotes?|pipeline))\b)|(?:\b\d{1,3}(?:\.\d+)?\s*(?:%|percent)\b.{0,64}\b(?:open\s+quotes?|pipeline|revenue)\b)/i;
+const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me)\b/i;
 const SEARCH_STOP_WORDS = new Set([
   "a",
   "an",
@@ -167,10 +186,40 @@ function searchableTokens(search: string) {
     .slice(0, 6);
 }
 
-function resolveTool(message: string, requestedTool?: AiAssistantRequestedTool, context?: AiAssistantContext): AiAssistantTool {
+type AiWorkspaceTarget = "customers" | "quotes" | "products" | "follow-up" | "analytics" | "build";
+
+function navigationTarget(message: string): AiWorkspaceTarget | null {
+  if (!NAVIGATION_VERB_PATTERN.test(message)) return null;
+  if (/\b(?:profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin)\b/i.test(message)) {
+    return null;
+  }
+  if (/\b(?:new|create|draft|build)\s+(?:a\s+)?(?:quote|estimate|proposal)\b/i.test(message)) return "build";
+  if (/\b(?:products?|services?|catalog|pricing)\b/i.test(message)) return "products";
+  if (FOLLOW_UP_INTENT_PATTERN.test(message)) return "follow-up";
+  if (/\b(?:analytics|reports?|insights?|dashboard)\b/i.test(message)) return "analytics";
+  if (
+    /\b(?:go|navigate|take\s+me|bring\s+me|move\s+me)\b.{0,40}\b(?:customers?|clients?|contacts?)\b/i.test(message) ||
+    /\bopen\s+(?:the\s+)?(?:customers?|clients?|contacts?)(?:\s+(?:page|list|tab|screen))?\s*[.!?]*$/i.test(message)
+  ) return "customers";
+  if (
+    /\b(?:go|navigate|take\s+me|bring\s+me|move\s+me)\b.{0,40}\b(?:quotes?|estimates?|proposals?)\b/i.test(message) ||
+    /\bopen\s+(?:the\s+)?(?:quotes?|estimates?|proposals?)(?:\s+(?:page|list|tab|screen))?\s*[.!?]*$/i.test(message)
+  ) return "quotes";
+  return null;
+}
+
+export function resolveAssistantTool(
+  message: string,
+  requestedTool?: AiAssistantRequestedTool,
+  context?: AiAssistantContext,
+): AiAssistantTool {
   if (requestedTool && requestedTool !== "AUTO") return requestedTool;
   const lower = message.toLowerCase();
 
+  if (PIPELINE_SCENARIO_PATTERN.test(lower)) return "PIPELINE_SCENARIO";
+  if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
+  if (FOLLOW_UP_INTENT_PATTERN.test(lower)) return "FOLLOW_UP_QUEUE";
+  if (navigationTarget(lower)) return "NAVIGATE_WORKSPACE";
   if (FINANCIAL_INTENT_PATTERN.test(lower)) return "RANK_PROFITABLE_JOBS";
   if (PIPELINE_INTENT_PATTERN.test(lower)) return "SUMMARIZE_PIPELINE";
   if (CUSTOMER_INTENT_PATTERN.test(lower) || context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
@@ -178,6 +227,15 @@ function resolveTool(message: string, requestedTool?: AiAssistantRequestedTool, 
   if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
 
   return "DRAFT_QUOTE";
+}
+
+export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
+  return ![
+    "NAVIGATE_WORKSPACE",
+    "FOLLOW_UP_QUEUE",
+    "CUSTOMERS_WITHOUT_QUOTES",
+    "PIPELINE_SCENARIO",
+  ].includes(tool);
 }
 
 function defaultExcludedFields(financial = false) {
@@ -193,6 +251,19 @@ function defaultExcludedFields(financial = false) {
 function currency(value: Prisma.Decimal | number | string | null | undefined) {
   if (value === null || value === undefined) return null;
   return Number(value);
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function roundCurrency(value: number) {
+  return Number(value.toFixed(2));
 }
 
 function requestedTool(params: AiAssistantInput): AiAssistantRequestedTool {
@@ -493,6 +564,538 @@ async function runCustomerSearch(
       auditEventId: event.id,
       fieldsExcluded,
       diagnostics: composedDiagnostics(baseDiagnostics, composition),
+    },
+  };
+}
+
+function workspacePageLabel(page: AiWorkspaceTarget) {
+  if (page === "follow-up") return "Follow-up";
+  if (page === "build") return "New quote";
+  return `${page.charAt(0).toUpperCase()}${page.slice(1)}`;
+}
+
+async function runWorkspaceNavigation(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const target = navigationTarget(params.message) ?? (
+    params.context?.currentPage === "customers" ||
+    params.context?.currentPage === "quotes" ||
+    params.context?.currentPage === "products" ||
+    params.context?.currentPage === "analytics"
+      ? params.context.currentPage
+      : "customers"
+  );
+  const label = workspacePageLabel(target);
+  const answer = `I can take you to ${label}. Your Kody conversation will stay open while you move.`;
+  const action: AiAssistantAction = {
+    type: "OPEN_WORKSPACE_PAGE",
+    label: `Open ${label}`,
+    requiresConfirmation: false,
+    payload: { page: target },
+  };
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C1_BUSINESS_INTERNAL",
+    sourceTypes: [],
+    sourceLabels: ["Approved workspace navigation"],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic navigation",
+    riskNote: "No workspace records or external AI provider were used for navigation.",
+  });
+  const baseDiagnostics = diagnostics({
+    input: params,
+    resolvedTool: "NAVIGATE_WORKSPACE",
+    resultCount: 0,
+    citationCount: 0,
+    archivePolicy: "Navigation does not retrieve customer or quote rows.",
+    filters: { targetPage: target },
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "NAVIGATE_WORKSPACE",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      answer,
+      results: [],
+      citations: [],
+      actions: [action],
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: baseDiagnostics,
+    },
+  };
+}
+
+async function createDeniedCustomerToolResult(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+  tool: "FOLLOW_UP_QUEUE" | "CUSTOMERS_WITHOUT_QUOTES",
+): Promise<AiAssistantRunResult> {
+  const answer = "This request requires permission to view customer and quote details.";
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Customer", "Quote"],
+    sourceLabels: [`${tool} denied`],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    riskNote: "Denied before customer data retrieval because the actor lacks viewCustomerPii.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool,
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results: [],
+      citations: [],
+      actions: [{
+        type: "REQUEST_ADMIN_ACCESS",
+        label: "Ask an admin for customer access",
+        requiresConfirmation: true,
+        payload: { capability: "viewCustomerPii" },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: tool,
+        resultCount: 0,
+        citationCount: 0,
+        emptyReason: "Customer retrieval denied before query execution.",
+        archivePolicy: "No customer or quote rows are retrieved when customer PII access is denied.",
+        filters: { includeArchivedEffective: false },
+      }),
+    },
+  };
+}
+
+async function runCustomersWithoutQuotes(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "viewCustomerPii")) {
+    return createDeniedCustomerToolResult(prisma, params, generatedAtUtc, "CUSTOMERS_WITHOUT_QUOTES");
+  }
+
+  const limit = clampLimit(params.context?.limit, MAX_CUSTOMER_LIMIT, DEFAULT_CUSTOMER_LIMIT);
+  const where: Prisma.CustomerWhereInput = {
+    ...tenantActiveCustomerScope(params.access.tenantId),
+    quotes: { none: tenantActiveQuoteScope(params.access.tenantId) },
+  };
+  const [total, customers] = await Promise.all([
+    prisma.customer.count({ where }),
+    prisma.customer.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: limit,
+      select: {
+        id: true,
+        fullName: true,
+        followUpStatus: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+  const results = customers.map((customer) => ({
+    customerId: customer.id,
+    fullName: customer.fullName,
+    followUpStatus: customer.followUpStatus,
+    activeQuoteCount: 0,
+    customerSinceUtc: customer.createdAt.toISOString(),
+  }));
+  const answer = total
+    ? `${total} active customer${total === 1 ? " has" : "s have"} no active quote. Showing ${customers.length}; open a customer to start one.`
+    : "Every active customer currently has at least one active quote.";
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: "Active tenant customers without active quotes",
+    sourceType: "Customer + Quote",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const actions: AiAssistantAction[] = customers.map((customer) => ({
+    type: "OPEN_CUSTOMER",
+    label: `Open ${customer.fullName}`,
+    requiresConfirmation: false,
+    payload: { customerId: customer.id },
+  }));
+  if (!customers.length) {
+    actions.push({
+      type: "OPEN_WORKSPACE_PAGE",
+      label: "Open customers",
+      requiresConfirmation: false,
+      payload: { page: "customers" },
+    });
+  }
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Customer", "Quote"],
+    sourceLabels: [citations[0].label],
+    customerId: customers[0]?.id ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    insightReasons: ["active quote relation count equals zero"],
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "CUSTOMERS_WITHOUT_QUOTES",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [...defaultExcludedFields(false), "archived customers", "archived quotes"],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "CUSTOMERS_WITHOUT_QUOTES",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: total ? null : "No active tenant customers were missing an active quote.",
+        archivePolicy: "Only active customers and active quotes are considered.",
+        filters: { total, limit, includeArchivedEffective: false },
+      }),
+    },
+  };
+}
+
+async function runFollowUpQueue(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "viewCustomerPii")) {
+    return createDeniedCustomerToolResult(prisma, params, generatedAtUtc, "FOLLOW_UP_QUEUE");
+  }
+
+  const limit = clampLimit(params.context?.limit, MAX_CUSTOMER_LIMIT, DEFAULT_CUSTOMER_LIMIT);
+  const quoteOnly = /\b(?:quotes?|estimates?|proposals?)\b/i.test(params.message) &&
+    /\b(?:not|never|haven't|havent|hasn't|hasnt|without|need|needs|due|pending)\b/i.test(params.message);
+  const tenantId = params.access.tenantId;
+  const activeCustomer = tenantActiveCustomerScope(tenantId);
+  const activeQuote = tenantActiveQuoteScope(tenantId);
+
+  const [sentQuotes, afterSaleQuotes] = await Promise.all([
+    prisma.quote.findMany({
+      where: {
+        ...activeQuote,
+        status: "SENT_TO_CUSTOMER",
+        customer: { is: { ...activeCustomer, followUpStatus: "NEEDS_FOLLOW_UP" } },
+      },
+      orderBy: [{ sentAt: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
+      take: limit,
+      select: {
+        id: true,
+        title: true,
+        totalAmount: true,
+        sentAt: true,
+        updatedAt: true,
+        customer: { select: { id: true, fullName: true, followUpStatus: true } },
+      },
+    }),
+    quoteOnly
+      ? Promise.resolve([])
+      : prisma.quote.findMany({
+          where: {
+            ...activeQuote,
+            status: "ACCEPTED",
+            afterSaleFollowUpStatus: "DUE",
+            afterSaleFollowUpDueAtUtc: { lte: generatedAtUtc },
+            customer: { is: activeCustomer },
+          },
+          orderBy: [{ afterSaleFollowUpDueAtUtc: "asc" }, { id: "asc" }],
+          take: limit,
+          select: {
+            id: true,
+            title: true,
+            totalAmount: true,
+            afterSaleFollowUpDueAtUtc: true,
+            customer: { select: { id: true, fullName: true } },
+          },
+        }),
+  ]);
+  const remaining = Math.max(limit - sentQuotes.length - afterSaleQuotes.length, 0);
+  const otherCustomers = quoteOnly || remaining === 0
+    ? []
+    : await prisma.customer.findMany({
+        where: {
+          ...activeCustomer,
+          followUpStatus: "NEEDS_FOLLOW_UP",
+          quotes: {
+            none: { ...activeQuote, status: { in: ["SENT_TO_CUSTOMER", "ACCEPTED"] } },
+          },
+        },
+        orderBy: [{ followUpUpdatedAtUtc: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
+        take: remaining,
+        select: {
+          id: true,
+          fullName: true,
+          followUpStatus: true,
+          updatedAt: true,
+          quotes: {
+            where: activeQuote,
+            orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+            take: 1,
+            select: { id: true, title: true, status: true, totalAmount: true },
+          },
+        },
+      });
+
+  const sentResults = sentQuotes.map((quote) => ({
+      followUpType: "SENT_QUOTE",
+      customerId: quote.customer.id,
+      fullName: quote.customer.fullName,
+      quoteId: quote.id,
+      quoteTitle: quote.title,
+      quoteStatus: "SENT_TO_CUSTOMER",
+      quoteAmount: currency(quote.totalAmount),
+      dueSinceUtc: (quote.sentAt ?? quote.updatedAt).toISOString(),
+    }));
+  const otherSalesResults = otherCustomers.map((customer) => {
+      const quote = customer.quotes[0] ?? null;
+      return {
+        followUpType: quote ? "OPEN_QUOTE" : "NEW_CUSTOMER",
+        customerId: customer.id,
+        fullName: customer.fullName,
+        quoteId: quote?.id ?? null,
+        quoteTitle: quote?.title ?? null,
+        quoteStatus: quote?.status ?? null,
+        quoteAmount: currency(quote?.totalAmount),
+        dueSinceUtc: customer.updatedAt.toISOString(),
+      };
+    });
+  const afterSaleResults = afterSaleQuotes.map((quote) => ({
+    followUpType: "AFTER_SALE",
+    customerId: quote.customer.id,
+    fullName: quote.customer.fullName,
+    quoteId: quote.id,
+    quoteTitle: quote.title,
+    quoteStatus: "ACCEPTED",
+    quoteAmount: currency(quote.totalAmount),
+    dueSinceUtc: quote.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
+  }));
+  const results = quoteOnly
+    ? sentResults.slice(0, limit)
+    : [...sentResults, ...afterSaleResults, ...otherSalesResults].slice(0, limit);
+  const displayedAfterSaleCount = results.filter((result) => result.followUpType === "AFTER_SALE").length;
+  const displayedSalesCount = results.length - displayedAfterSaleCount;
+  const answer = quoteOnly
+    ? sentQuotes.length
+      ? `Showing ${sentQuotes.length} sent quote${sentQuotes.length === 1 ? " that still needs" : "s that still need"} a sales follow-up. Oldest is shown first.`
+      : "No active sent quotes are currently marked as needing a sales follow-up."
+    : results.length
+      ? `Showing ${displayedSalesCount} open sales follow-up${displayedSalesCount === 1 ? "" : "s"} and ${displayedAfterSaleCount} completed-job check-in${displayedAfterSaleCount === 1 ? "" : "s"} due now. Sales follow-ups are status-based and oldest-first because they do not yet have a separate due date.`
+      : "No active sales follow-ups or due completed-job check-ins were found.";
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: quoteOnly ? "Active sent quotes awaiting follow-up" : "Tenant follow-up queue",
+    sourceType: "Customer + Quote",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const actions: AiAssistantAction[] = results.map((result) => ({
+    type: "OPEN_CUSTOMER",
+    label: `Open ${result.fullName}`,
+    requiresConfirmation: false,
+    payload: { customerId: result.customerId },
+  }));
+  actions.unshift({
+    type: "OPEN_WORKSPACE_PAGE",
+    label: "Open follow-up",
+    requiresConfirmation: false,
+    payload: { page: "follow-up" },
+  });
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Customer", "Quote"],
+    sourceLabels: [citations[0].label],
+    quoteId: results[0]?.quoteId ?? null,
+    customerId: results[0]?.customerId ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    insightReasons: [quoteOnly ? "sent quote sales follow-up" : "sales and after-sale follow-up queue"],
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "FOLLOW_UP_QUEUE",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [...defaultExcludedFields(false), "archived customers", "archived quotes"],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "FOLLOW_UP_QUEUE",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: results.length ? null : "No active follow-up rows matched the requested queue.",
+        archivePolicy: "Only active customers and active quotes are considered.",
+        filters: {
+          quoteOnly,
+          salesFollowUpCount: displayedSalesCount,
+          afterSaleDueCount: displayedAfterSaleCount,
+          dueAtOrBeforeUtc: generatedAtUtc.toISOString(),
+          limit,
+        },
+      }),
+    },
+  };
+}
+
+function scenarioWinRate(message: string) {
+  const match = message.match(/\b(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)\b/i);
+  const parsed = match ? Number(match[1]) : 30;
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 100) : 30;
+}
+
+async function runPipelineScenario(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const tenantId = params.access.tenantId;
+  const winRatePercent = scenarioWinRate(params.message);
+  const referenceFromUtc = new Date(generatedAtUtc.getTime() - (90 * 24 * 60 * 60 * 1_000));
+  const serviceFilter = params.context?.serviceType ? { serviceType: params.context.serviceType } : {};
+  const [open, accepted] = await Promise.all([
+    prisma.quote.aggregate({
+      where: {
+        ...tenantActiveQuoteScope(tenantId),
+        status: { in: [...OPEN_PIPELINE_STATUSES] },
+        ...serviceFilter,
+      },
+      _count: { _all: true },
+      _sum: { customerPriceSubtotal: true },
+    }),
+    prisma.quote.aggregate({
+      where: {
+        ...tenantActiveQuoteScope(tenantId),
+        status: "ACCEPTED",
+        closedAtUtc: { gte: referenceFromUtc, lte: generatedAtUtc },
+        ...serviceFilter,
+      },
+      _count: { _all: true },
+      _sum: { customerPriceSubtotal: true },
+    }),
+  ]);
+  const openPipelineRevenue = roundCurrency(Number(open._sum.customerPriceSubtotal ?? 0));
+  const acceptedRevenueLast90Days = roundCurrency(Number(accepted._sum.customerPriceSubtotal ?? 0));
+  const scenarioRevenue = roundCurrency(openPipelineRevenue * (winRatePercent / 100));
+  const revenueBoostPercent = acceptedRevenueLast90Days > 0
+    ? Number(((scenarioRevenue / acceptedRevenueLast90Days) * 100).toFixed(1))
+    : null;
+  const projectedRevenue = roundCurrency(acceptedRevenueLast90Days + scenarioRevenue);
+  const results = [{
+    openQuoteCount: open._count._all,
+    openPipelineRevenue,
+    assumedWinRatePercent: winRatePercent,
+    scenarioRevenue,
+    acceptedQuoteCountLast90Days: accepted._count._all,
+    acceptedRevenueLast90Days,
+    revenueBoostPercent,
+    projectedRevenueWithScenario: projectedRevenue,
+  }];
+  const answer = open._count._all
+    ? acceptedRevenueLast90Days > 0
+      ? `Your active open quote subtotal is ${money(openPipelineRevenue)} across ${open._count._all} quotes. Closing ${winRatePercent}% would add about ${money(scenarioRevenue)}—a ${revenueBoostPercent}% lift over the ${money(acceptedRevenueLast90Days)} accepted in the last 90 days, for about ${money(projectedRevenue)} combined.`
+      : `Your active open quote subtotal is ${money(openPipelineRevenue)} across ${open._count._all} quotes. Closing ${winRatePercent}% would add about ${money(scenarioRevenue)}. There is no accepted revenue in the last 90 days, so a meaningful percentage lift cannot be calculated yet.`
+    : "There are no active open quotes to model right now.";
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: "Tenant quote revenue aggregates",
+    sourceType: "Quote",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Quote"],
+    sourceLabels: [citations[0].label],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    insightReasons: [
+      `winRatePercent=${winRatePercent}`,
+      "active open quote customerPriceSubtotal aggregate",
+      "accepted quote 90-day closedAtUtc aggregate",
+    ],
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "PIPELINE_SCENARIO",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions: [{
+        type: "OPEN_ANALYTICS",
+        label: "Open analytics",
+        requiresConfirmation: false,
+        payload: { winRatePercent, referenceFromUtc: referenceFromUtc.toISOString() },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "PIPELINE_SCENARIO",
+        resultCount: 1,
+        citationCount: citations.length,
+        emptyReason: open._count._all ? null : "No active open quotes matched tenant scope.",
+        archivePolicy: "Archived and deleted quotes are excluded from both aggregates.",
+        filters: {
+          openStatuses: OPEN_PIPELINE_STATUSES.join(","),
+          serviceType: params.context?.serviceType,
+          acceptedReferenceFromUtc: referenceFromUtc.toISOString(),
+          acceptedReferenceToUtc: generatedAtUtc.toISOString(),
+          winRatePercent,
+        },
+      }),
     },
   };
 }
@@ -871,8 +1474,20 @@ export async function runAiAssistant(
   params: AiAssistantInput,
 ): Promise<AiAssistantRunResult> {
   const generatedAtUtc = params.now ?? new Date();
-  const tool = resolveTool(params.message, params.tool, params.context);
+  const tool = resolveAssistantTool(params.message, params.tool, params.context);
 
+  if (tool === "NAVIGATE_WORKSPACE") {
+    return runWorkspaceNavigation(prisma, params, generatedAtUtc);
+  }
+  if (tool === "FOLLOW_UP_QUEUE") {
+    return runFollowUpQueue(prisma, params, generatedAtUtc);
+  }
+  if (tool === "CUSTOMERS_WITHOUT_QUOTES") {
+    return runCustomersWithoutQuotes(prisma, params, generatedAtUtc);
+  }
+  if (tool === "PIPELINE_SCENARIO") {
+    return runPipelineScenario(prisma, params, generatedAtUtc);
+  }
   if (tool === "SEARCH_CUSTOMERS") {
     return runCustomerSearch(prisma, params, generatedAtUtc);
   }

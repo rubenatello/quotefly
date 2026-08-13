@@ -48,3 +48,27 @@ test("normalizes invalid Kody response to a safe non-crashing fallback", () => {
   assert.equal(response.diagnostics.model, null);
   assert.equal(response.auditEventId, "audit-unavailable");
 });
+
+test("accepts only a typed workspace navigation action", () => {
+  const response = normalizeKodyAssistantResponse({
+    tool: "NAVIGATE_WORKSPACE",
+    answer: "I can take you to Products.",
+    actions: [{
+      type: "OPEN_WORKSPACE_PAGE",
+      label: "Open Products",
+      requiresConfirmation: false,
+      payload: { page: "products" },
+    }, {
+      type: "OPEN_ARBITRARY_URL",
+      label: "Unsafe action",
+      requiresConfirmation: false,
+      payload: { url: "https://example.com" },
+    }],
+    diagnostics: { resolvedTool: "NAVIGATE_WORKSPACE" },
+  });
+
+  assert.equal(response.tool, "NAVIGATE_WORKSPACE");
+  assert.equal(response.actions.length, 1);
+  assert.equal(response.actions[0].type, "OPEN_WORKSPACE_PAGE");
+  assert.deepEqual(response.actions[0].payload, { page: "products" });
+});

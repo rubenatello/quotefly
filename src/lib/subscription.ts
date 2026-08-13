@@ -11,6 +11,9 @@ export type TenantAccessReason =
   | "past_due"
   | "inactive";
 
+export const BASIC_AI_SPEND_LIMIT_USD = 1.25;
+export const BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH = 770;
+
 export interface TenantBillingSnapshot {
   subscriptionStatus: string;
   subscriptionPlanCode: string | null;
@@ -50,8 +53,8 @@ const PLAN_DEFINITIONS: Record<PlanCode, PlanDefinition> = {
     name: "Basic",
     limits: {
       quotesPerMonth: 600,
-      aiQuotesPerMonth: 30,
-      aiSpendUsdPerMonth: 0.6,
+      aiQuotesPerMonth: BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH,
+      aiSpendUsdPerMonth: BASIC_AI_SPEND_LIMIT_USD,
       teamMembers: 7,
       quoteHistoryDays: 30,
     },
@@ -273,15 +276,25 @@ export function buildTenantEntitlements(
 ): TenantEntitlements {
   const access = resolveTenantAccess(snapshot, now, context);
   const definition = PLAN_DEFINITIONS[access.planCode];
+  const trial = isActiveTrial(snapshot, now) && !isSuperuser(context);
+  const limits = trial
+    ? {
+        ...definition.limits,
+        // Trials keep full feature access, but use the launch Basic AI budget so
+        // an unpaid workspace cannot create Enterprise-level provider spend.
+        aiQuotesPerMonth: BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH,
+        aiSpendUsdPerMonth: BASIC_AI_SPEND_LIMIT_USD,
+      }
+    : definition.limits;
 
   return {
     planCode: access.planCode,
     planName: definition.name,
-    isTrial: isActiveTrial(snapshot, now) && !isSuperuser(context),
+    isTrial: trial,
     hasWorkspaceAccess: access.hasWorkspaceAccess,
     billingRequired: access.billingRequired,
     accessReason: access.accessReason,
-    limits: definition.limits,
+    limits,
     features: definition.features,
   };
 }

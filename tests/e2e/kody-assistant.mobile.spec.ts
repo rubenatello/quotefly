@@ -7,6 +7,81 @@ import {
   signUpViaApi,
 } from "./helpers";
 
+test("Kody navigates on mobile while keeping the conversation open", async ({ context, page, request }) => {
+  test.setTimeout(60_000);
+  const account = await signUpViaApi(request, "kody-navigation-mobile");
+
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    const body = route.request().postDataJSON() as { tool?: string; message?: string };
+    expect(body.tool).toBe("AUTO");
+    expect(body.message).toBe("Take me to products");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assistant: {
+          tool: "NAVIGATE_WORKSPACE",
+          generatedAtUtc: "2026-08-13T18:00:00.000Z",
+          policyVersion: "2026-08-12",
+          maxClassification: "C1_BUSINESS_INTERNAL",
+          answer: "I can take you to Products. Your Kody conversation will stay open while you move.",
+          results: [],
+          citations: [],
+          actions: [{
+            type: "OPEN_WORKSPACE_PAGE",
+            label: "Open Products",
+            requiresConfirmation: false,
+            payload: { page: "products" },
+          }],
+          auditEventId: "audit-kody-navigation-mobile",
+          fieldsExcluded: ["tenant ids", "deleted rows"],
+          diagnostics: {
+            requestedTool: "AUTO",
+            resolvedTool: "NAVIGATE_WORKSPACE",
+            resultCount: 0,
+            citationCount: 0,
+            emptyReason: null,
+            archivePolicy: "Navigation does not retrieve customer or quote rows.",
+            filters: { targetPage: "products" },
+            answerMode: "DETERMINISTIC",
+            model: null,
+          },
+        },
+        usage: {
+          consumedCredits: 0,
+          consumedSpendUsd: 0,
+          monthlyCreditsUsed: 0,
+          monthlyCreditsLimit: 770,
+          monthlyCreditsRemaining: 770,
+          monthlySpendUsedUsd: 0,
+          monthlySpendLimitUsd: 1.25,
+          monthlySpendRemainingUsd: 1.25,
+          monthlySpendUsagePercent: 0,
+          estimatedPromptCostUsd: 0.001615,
+          estimatedPromptsRemaining: 773,
+          renewsAtUtc: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    });
+  });
+
+  await addSessionCookie(context, account);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/customers");
+  await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("kody-launcher").click();
+  const kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill("Take me to products");
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(kody.getByText("I can take you to Products.", { exact: false })).toBeVisible();
+  await kody.getByRole("button", { name: "Open Products" }).click();
+  await expect(page).toHaveURL(/\/app\/products$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Products & services", exact: true })).toBeVisible();
+  await expect(kody).toBeVisible();
+  await expect(kody.getByText("Take me to products", { exact: true })).toBeVisible();
+  await expect(kody.getByText("Your Kody conversation will stay open", { exact: false })).toBeVisible();
+});
+
 test("Kody mobile assistant shows data guardrails and hands off review-first actions", async ({
   context,
   page,

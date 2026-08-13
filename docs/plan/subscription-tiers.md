@@ -14,7 +14,8 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
   - Up to 7 team members
   - 30-day quote history
 - Included capabilities:
-  - AI-assisted quote drafting with monthly AI budget up to `$0.60`
+  - Kody assistance and AI quote drafting with a monthly provider-cost budget up to `$1.25`
+  - Approximately 770 typical short AI requests at the current planning estimate; actual usage varies with request size and model calls
   - Fast customer intake and lead pipeline
   - Branded PDF quote generation
   - QuickBooks-friendly invoice CSV export
@@ -60,9 +61,11 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 ## AI Usage Notes
 
 - AI is metered by token spend and prompt usage, not by quotes sent.
-- Each AI draft or AI revision consumes monthly AI budget.
+- Kody answers, AI drafts, and AI revisions consume monthly AI budget when they call an AI provider.
 - Manual quote edits do not consume AI budget.
 - Operationally, enforce a per-tenant monthly AI spend cap as the primary margin guardrail.
+- The 14-day trial keeps full workflow feature access but uses the Basic `$1.25` AI spend ceiling.
+- Customer-facing UI shows usage percentage and an estimated number of requests remaining, not internal provider-cost details.
 - Recalculate spend caps using `scripts/tier-unit-economics.mjs` before changing tier prices or AI budget allocations.
 
 ## Stripe Product Setup

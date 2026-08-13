@@ -18,7 +18,7 @@
     "prisma:validate": "prisma validate",
     "test:integration": "vitest run --config vitest.config.ts",
     "test:security": "tsx --test scripts/security-boundary.test.ts",
-    "test:unit": "tsx --test tests/unit/ai-data-governance.test.ts tests/unit/ai-assistant-composer.test.ts tests/unit/data-governance-catalog.test.ts tests/unit/request-performance.test.ts tests/unit/brand-logo.test.ts tests/unit/onboarding-branding-preservation.test.ts tests/unit/quote-brand-asset.test.ts tests/unit/quote-pdf.renderer.test.ts web/scripts/api-telemetry.test.ts web/scripts/kody-response-normalization.test.ts web/scripts/quote-draft-storage.test.ts web/scripts/quote-form-validation.test.ts",
+    "test:unit": "tsx --test tests/unit/ai-data-governance.test.ts tests/unit/ai-assistant-composer.test.ts tests/unit/ai-assistant-routing.test.ts tests/unit/data-governance-catalog.test.ts tests/unit/request-performance.test.ts tests/unit/subscription-ai-budget.test.ts tests/unit/brand-logo.test.ts tests/unit/onboarding-branding-preservation.test.ts tests/unit/quote-brand-asset.test.ts tests/unit/quote-pdf.renderer.test.ts web/scripts/api-telemetry.test.ts web/scripts/kody-response-normalization.test.ts web/scripts/quote-draft-storage.test.ts web/scripts/quote-form-validation.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "audit:all": "node --test scripts/dependency-audit-policy.test.mjs && node scripts/audit-dependencies.mjs",

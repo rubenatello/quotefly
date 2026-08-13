@@ -4,7 +4,7 @@ export const BASIC_PLAN = {
   monthlyPriceUsd: 19,
   trialDays: 14,
   quotesPerMonth: 600,
-  estimatedAiPromptsPerMonth: 370,
+  estimatedAiPromptsPerMonth: 770,
   teamMembers: 7,
   quoteHistoryDays: 30,
 } as const;

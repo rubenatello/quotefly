@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
-import { runAiAssistant } from "../lib/ai-assistant";
+import { assistantToolConsumesAiBudget, resolveAssistantTool, runAiAssistant } from "../lib/ai-assistant";
 import { hashSourceReference } from "../lib/ai-data-governance";
 import { AssistantRequestSchema, normalizeAssistantContext, type AssistantRequestPayload } from "../lib/ai-assistant-request";
 import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
@@ -70,6 +70,8 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       });
       throw error;
     }
+    const context = normalizeAssistantContext(payload.context);
+    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context);
 
     const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -83,7 +85,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       claims.tenantId,
       entitlements,
     ));
-    if (blocked) {
+    if (blocked && assistantToolConsumesAiBudget(resolvedTool)) {
       await recordSuperuserAuditEvent(app.prisma, {
         actorUserId: claims.userId,
         requestId: request.id,
@@ -110,7 +112,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         actor,
         message: payload.message,
         tool: payload.tool,
-        context: normalizeAssistantContext(payload.context),
+        context,
         usageSnapshot: snapshot,
       }));
     } catch (error) {

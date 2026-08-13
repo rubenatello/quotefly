@@ -90,16 +90,23 @@ function elapsedSince(startedAt: number) {
 }
 
 function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO") {
-  if (elapsedMs < 900) return "Checking approved workspace tools...";
-  if (elapsedMs >= 8_000) return "Still working. AI and retrieval can take a few more seconds on larger workspaces.";
-  if (elapsedMs >= 3_500) return "Preparing a cited answer and checking guardrails...";
+  if (elapsedMs < 900) return "Thinking...";
 
-  if (tool === "SEARCH_CUSTOMERS") return "Searching tenant-scoped customers and quote activity...";
-  if (tool === "DRAFT_QUOTE") return "Loading allowed customer, product, and quote context...";
-  if (tool === "SUMMARIZE_PIPELINE") return "Summarizing your tenant-scoped sales pipeline...";
-  if (tool === "RANK_PROFITABLE_JOBS") return "Filtering profitability data to your role permissions...";
+  if (elapsedMs < 2_700) {
+    if (tool === "SEARCH_CUSTOMERS") return "Looking through your customers...";
+    if (tool === "NAVIGATE_WORKSPACE") return "Finding the right page...";
+    if (tool === "FOLLOW_UP_QUEUE") return "Checking your follow-ups...";
+    if (tool === "CUSTOMERS_WITHOUT_QUOTES") return "Checking who still needs a quote...";
+    if (tool === "PIPELINE_SCENARIO") return "Crunching the numbers...";
+    if (tool === "DRAFT_QUOTE") return "Gathering quote details...";
+    if (tool === "SUMMARIZE_PIPELINE") return "Gathering pipeline info...";
+    if (tool === "RANK_PROFITABLE_JOBS") return "Comparing job performance...";
+    return "Gathering info...";
+  }
 
-  return "Retrieving only the data Kody is allowed to use...";
+  if (elapsedMs < 4_500) return "Preparing your response...";
+  if (elapsedMs < 8_000) return "Double-checking the details...";
+  return "Still working through it...";
 }
 
 function getString(value: unknown) {
@@ -571,6 +578,22 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
 
     if (action.type === "OPEN_ANALYTICS") {
       navigate("/app/analytics", { state: { kodyInsight: action.payload } });
+      return;
+    }
+
+    if (action.type === "OPEN_WORKSPACE_PAGE") {
+      const page = getString(action.payload.page);
+      const routes: Record<string, string> = {
+        customers: "/app/customers",
+        quotes: "/app/quotes",
+        products: "/app/products",
+        "follow-up": "/app/follow-up",
+        analytics: "/app/analytics",
+        build: "/app/build",
+      };
+      const path = page ? routes[page] : null;
+      if (!path) return;
+      navigate(path);
       return;
     }
 

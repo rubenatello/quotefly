@@ -1,12 +1,14 @@
 # Launch Improvement Tracker (Target: 2026-05-01)
 
-Last updated: 2026-04-15
+Last updated: 2026-08-13
 Owner: Product + Engineering
 
 ## Current Implementation Status
 
 - AI limiting is enforced by monthly per-tenant spend cap (primary guardrail).
-- Current enforced caps in code: Starter `$0.60`, Professional `$11.00`, Enterprise `$56.00`.
+- Current enforced caps in code: Starter `$1.25`, Professional `$11.00`, Enterprise `$56.00`.
+- Full-feature trials use the Starter `$1.25` AI spend ceiling to bound unpaid provider exposure.
+- Basic customer-facing planning estimate is approximately `770` typical short requests; spend remains the enforced limit.
 - Workspace UI shows AI budget usage progress (USD), not credit count.
 - 50% / 70% / 90% AI budget stage warnings are surfaced in usage hints.
 - Remaining prompt estimate uses blended average prompt cost (`$0.001615`).
@@ -78,15 +80,17 @@ Current planning assumptions:
 
 Budget ceiling output from baseline:
 
-- Starter max AI budget: `~$0.63`
+- Starter max AI budget at the prior 58% contribution target: `~$0.63`
 - Professional max AI budget: `~$11.14`
 - Enterprise max AI budget: `~$56.18`
 
 Launch working caps aligned to baseline:
 
-- Starter: `$0.60`
+- Starter: `$1.25` (owner-approved launch cap; about 6.6% of the `$19` plan price)
 - Professional: `$11.00`
 - Enterprise: `$56.00`
+
+At the current calculator assumption of `$150/month` infrastructure across 25 paying tenants, infrastructure is `$6.00` per tenant, above the desired `$4.75` Basic allocation. The `$1.25` AI cap therefore produces about a 54.7% modeled Basic contribution margin under that conservative early-stage cost load, or about 61.3% once infrastructure reaches the `$4.75` target allocation.
 
 ## AI Policy (Launch Direction)
 
@@ -150,7 +154,7 @@ Open follow-up:
 
 | Item | Owner | Status | Due | Notes |
 |---|---|---|---|---|
-| Confirm final AI spend caps by tier from margin targets | Owner | In progress | 2026-04-16 | Current caps: `$0.60 / $11 / $56` |
+| Confirm final AI spend caps by tier from margin targets | Owner | Completed | 2026-08-13 | Owner selected `$1.25 / $11 / $56`; Basic/trial cap favors usable Kody volume while bounding provider spend |
 | Confirm production OpenAI key + runtime model in Railway | Owner | Pending | 2026-04-16 | `OPENAI_API_KEY` required for non-regex runtime |
 | Spend-based AI meter + 50/70/90 warnings | Engineering | Completed | 2026-04-14 | Shipped in workspace usage surfaces |
 | Mobile AI icon-only treatment in quote actions | Engineering | Completed | 2026-04-14 | Mobile icon-only, desktop labeled CTA |
@@ -198,6 +202,6 @@ Open follow-up:
 
 ## Next 3 Steps (Recommended This Week)
 
-1. Finalize whether Starter stays at `$0.60` or moves to `$0.65` after re-running the economics script with latest tenant-count assumptions.
+1. Measure actual Basic AI cost per successful Kody task and revisit the `$1.25` cap after the first full paid billing cohort.
 2. Run the full responsive QA pass across iPhone and Android widths and capture any remaining launch-blocker UI regressions.
 3. Confirm production OpenAI key/model in Railway and close remaining owner launch blockers.

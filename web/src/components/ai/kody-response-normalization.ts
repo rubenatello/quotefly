@@ -20,6 +20,10 @@ const DATA_CLASSIFICATIONS: DataClassification[] = [
 ];
 
 const ASSISTANT_TOOLS: AiAssistantTool[] = [
+  "NAVIGATE_WORKSPACE",
+  "FOLLOW_UP_QUEUE",
+  "CUSTOMERS_WITHOUT_QUOTES",
+  "PIPELINE_SCENARIO",
   "SEARCH_CUSTOMERS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
@@ -65,6 +69,7 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
     value === "OPEN_CUSTOMER" ||
     value === "OPEN_QUOTE_DRAFT" ||
     value === "OPEN_ANALYTICS" ||
+    value === "OPEN_WORKSPACE_PAGE" ||
     value === "REQUEST_ADMIN_ACCESS"
   );
 }
@@ -73,6 +78,7 @@ function actionLabelForType(type: AiAssistantAction["type"]) {
   if (type === "OPEN_CUSTOMER") return "Open customer";
   if (type === "OPEN_QUOTE_DRAFT") return "Review quote draft";
   if (type === "OPEN_ANALYTICS") return "Open analytics";
+  if (type === "OPEN_WORKSPACE_PAGE") return "Open page";
   return "Request access";
 }
 
