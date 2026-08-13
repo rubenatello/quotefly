@@ -1,35 +1,20 @@
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
-import { AI_ASSISTANT_TOOLS, runAiAssistant } from "../lib/ai-assistant";
+import { runAiAssistant } from "../lib/ai-assistant";
+import { AssistantRequestSchema, normalizeAssistantContext } from "../lib/ai-assistant-request";
+import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { getJwtClaims } from "../lib/auth";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { loadTenantEntitlements } from "../lib/subscription";
 
-const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
-
-const AssistantContextSchema = z.object({
-  currentPage: z.enum(["quotes", "customers", "analytics", "products", "dashboard"]).optional(),
-  customerId: z.string().trim().min(1).optional(),
-  quoteId: z.string().trim().min(1).optional(),
-  search: z.string().trim().min(1).max(120).optional(),
-  serviceType: ServiceTypeSchema.optional(),
-  dateFrom: z.coerce.date().optional(),
-  dateTo: z.coerce.date().optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-  includeArchived: z.boolean().optional(),
-});
-
-const AssistantRequestSchema = z.object({
-  message: z.string().trim().min(3).max(2_000),
-  tool: z.enum(AI_ASSISTANT_TOOLS).default("AUTO"),
-  context: AssistantContextSchema.optional(),
-});
-
 export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/ai/assistant", { preHandler: [app.authenticate] }, async (request, reply) => {
+  const AssistantRateLimit = {
+    config: authenticatedAiRateLimit("ai-assistant", app.env.NODE_ENV === "test" ? 10_000 : 20),
+  } as const;
+
+  app.post("/ai/assistant", { ...AssistantRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const payload = AssistantRequestSchema.parse(request.body);
@@ -61,19 +46,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       actor,
       message: payload.message,
       tool: payload.tool,
-      context: payload.context
-        ? {
-            currentPage: payload.context.currentPage,
-            customerId: payload.context.customerId,
-            quoteId: payload.context.quoteId,
-            search: payload.context.search,
-            serviceType: payload.context.serviceType,
-            dateFrom: payload.context.dateFrom ?? null,
-            dateTo: payload.context.dateTo ?? null,
-            limit: payload.context.limit,
-            includeArchived: payload.context.includeArchived,
-          }
-        : undefined,
+      context: normalizeAssistantContext(payload.context),
       usageSnapshot: snapshot,
     }));
 
@@ -81,7 +54,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       assistant: result.assistant,
       usage: buildAiUsageResponse(snapshot, {
         consumedCredits: result.consumedCredits,
-        consumedSpendUsd: 0,
+        consumedSpendUsd: result.consumedSpendUsd,
       }),
     };
   });

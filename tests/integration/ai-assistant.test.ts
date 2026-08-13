@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
+import { setAssistantCompositionProviderForTest } from "../../src/lib/ai-assistant-composer";
 import { prisma } from "../../src/lib/prisma";
 
 type Session = {
@@ -127,6 +128,7 @@ describe("AI assistant", () => {
   });
 
   beforeEach(async () => {
+    setAssistantCompositionProviderForTest(null);
     await prisma.quickBooksWebhookEvent.deleteMany();
     await prisma.billingWebhookEvent.deleteMany();
     await prisma.tenant.deleteMany();
@@ -134,6 +136,7 @@ describe("AI assistant", () => {
   });
 
   afterAll(async () => {
+    setAssistantCompositionProviderForTest(null);
     await app.close();
     await prisma.$disconnect();
   });
@@ -212,6 +215,171 @@ describe("AI assistant", () => {
     expect(audit.promptHash).toMatch(/^[0-9a-f]{64}$/);
     expect(audit.retrievalAuditEvent?.tenantId).toBe(alpha.tenant.id);
     expect(JSON.stringify(audit)).not.toContain("Ruben Beta Secret");
+  });
+
+  test("LLM composition receives minimized authorized context and records model telemetry", async () => {
+    const owner = await signUp("assistant-composed-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Composition Roofing Customer",
+      phoneDigits: "5559191919",
+      notes: "Do not expose this private note to the answer composer.",
+    });
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        email: "composition-customer@example.com",
+        phone: "555-919-1919",
+      },
+    });
+    let capturedInputJson = "";
+    let capturedSystemPrompt = "";
+    let capturedResponseFormat: unknown = null;
+    setAssistantCompositionProviderForTest(async (request) => {
+      capturedInputJson = request.inputJson;
+      capturedSystemPrompt = request.systemPrompt;
+      capturedResponseFormat = request.responseFormat;
+      return {
+        outputText: JSON.stringify({
+          answer: "Kody found Composition Roofing Customer and kept the lookup scoped to active customer records.",
+          sourceKeys: ["A1"],
+          safetyNotes: [],
+        }),
+        model: "test-kody-composer",
+        telemetry: {
+          requestCount: 1,
+          promptTokens: 123,
+          completionTokens: 45,
+          totalTokens: 168,
+          estimatedCostUsd: 0.004321,
+        },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Find Composition Roofing Customer at composition-customer@example.com or 555-919-1919",
+        tool: "SEARCH_CUSTOMERS",
+        context: { search: "Composition Roofing Customer" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        answer: string;
+        diagnostics: {
+          answerMode: string;
+          model: string | null;
+        };
+        auditEventId: string;
+      };
+      usage: {
+        consumedSpendUsd: number;
+      };
+    };
+    expect(body.assistant.answer).toContain("Kody found Composition Roofing Customer");
+    expect(body.assistant.answer).toContain("[A1]");
+    expect(body.assistant.diagnostics).toMatchObject({
+      answerMode: "LLM_COMPOSED",
+      model: "test-kody-composer",
+    });
+    expect(body.usage.consumedSpendUsd).toBe(0.004321);
+    expect(capturedSystemPrompt).toContain("untrusted data");
+    expect(capturedResponseFormat).toMatchObject({ type: "json_schema" });
+
+    const composerPayload = JSON.parse(capturedInputJson) as {
+      userPromptRedacted: string;
+      results: Array<Record<string, unknown>>;
+    };
+    const composerPayloadText = JSON.stringify(composerPayload);
+    expect(composerPayload.results[0]).toMatchObject({
+      fullName: "Composition Roofing Customer",
+      quoteCount: 0,
+    });
+    expect(composerPayload.userPromptRedacted).toContain("[REDACTED_EMAIL]");
+    expect(composerPayload.userPromptRedacted).toContain("[REDACTED_PHONE]");
+    expect(composerPayloadText).not.toContain(customer.id);
+    expect(composerPayloadText).not.toContain(owner.tenant.id);
+    expect(composerPayloadText).not.toContain("composition-customer@example.com");
+    expect(composerPayloadText).not.toContain("555-919-1919");
+    expect(composerPayloadText).not.toContain("Do not expose this private note");
+
+    const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
+      where: { id: body.assistant.auditEventId },
+    });
+    expect(audit.model).toBe("test-kody-composer");
+    expect(Number(audit.estimatedCostUsd)).toBe(0.004321);
+    expect(audit.promptTokens).toBe(123);
+    expect(audit.completionTokens).toBe(45);
+    expect(audit.confidenceLabel).toBe("LLM-composed from approved tool results");
+    expect(JSON.stringify(audit)).not.toContain("Do not expose this private note");
+  });
+
+  test("unsafe LLM-composed answers fail closed to deterministic Kody output", async () => {
+    const owner = await signUp("assistant-unsafe-composer-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Unsafe Composer Customer",
+      phoneDigits: "5559292929",
+    });
+    setAssistantCompositionProviderForTest(async () => ({
+      outputText: JSON.stringify({
+        answer: `I found every tenant and raw customer id ${customer.id}.`,
+        sourceKeys: ["A1"],
+        safetyNotes: [],
+      }),
+      model: "test-kody-composer",
+      telemetry: {
+        requestCount: 1,
+        promptTokens: 80,
+        completionTokens: 20,
+        totalTokens: 100,
+        estimatedCostUsd: 0.001,
+      },
+    }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Find Unsafe Composer Customer",
+        tool: "SEARCH_CUSTOMERS",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        answer: string;
+        diagnostics: {
+          answerMode: string;
+          model: string | null;
+        };
+        auditEventId: string;
+      };
+      usage: {
+        consumedSpendUsd: number;
+      };
+    };
+    expect(body.assistant.answer).toContain("Found 1 active customer");
+    expect(body.assistant.answer).not.toContain(customer.id);
+    expect(body.assistant.diagnostics).toMatchObject({
+      answerMode: "DETERMINISTIC",
+      model: "test-kody-composer",
+    });
+    expect(body.usage.consumedSpendUsd).toBe(0.001);
+
+    const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
+      where: { id: body.assistant.auditEventId },
+    });
+    expect(audit.model).toBe("test-kody-composer");
+    expect(audit.confidenceLabel).toBe("Deterministic fallback after rejected LLM composition");
+    expect(audit.riskNote).toContain("failed validation");
   });
 
   test("denies member profitability requests before retrieving C3 financial data", async () => {
@@ -352,6 +520,113 @@ describe("AI assistant", () => {
     expect(audit.retrievalAuditEvent?.maxClassification).toBe("C3_FINANCIAL_CONFIDENTIAL");
   });
 
+  test("member assistant requests cannot opt into archived business insight rows", async () => {
+    const owner = await signUp("assistant-archive-owner");
+    const member = await addWorkspaceUser(owner, "member");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Archived Insight Customer",
+      phoneDigits: "5559090909",
+    });
+    const now = new Date("2026-08-12T12:00:00.000Z");
+    await createQuote({
+      session: owner,
+      customerId: customer.id,
+      title: "Active pipeline quote",
+      serviceType: "ROOFING",
+      status: "SENT_TO_CUSTOMER",
+      price: 1200,
+      cost: 500,
+      createdAt: now,
+    });
+    const archivedQuote = await createQuote({
+      session: owner,
+      customerId: customer.id,
+      title: "Archived pipeline quote",
+      serviceType: "ROOFING",
+      status: "SENT_TO_CUSTOMER",
+      price: 9000,
+      cost: 2000,
+      createdAt: now,
+    });
+    await prisma.quote.update({
+      where: { id: archivedQuote.id },
+      data: { archivedAtUtc: new Date("2026-08-12T13:00:00.000Z") },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Summarize pipeline and include archived quotes too",
+        tool: "SUMMARIZE_PIPELINE",
+        context: {
+          dateFrom: "2026-08-01T00:00:00.000Z",
+          dateTo: "2026-08-31T23:59:59.999Z",
+          includeArchived: true,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        results: Array<Record<string, unknown>>;
+        fieldsExcluded: string[];
+        auditEventId: string;
+        diagnostics: {
+          filters: Record<string, unknown>;
+          archivePolicy: string;
+          emptyReason: string | null;
+        };
+      };
+    };
+    expect(body.assistant.results).toContainEqual(expect.objectContaining({
+      status: "SENT_TO_CUSTOMER",
+      quoteCount: 1,
+      revenue: 1200,
+    }));
+    expect(body.assistant.fieldsExcluded).toContain("archived records");
+    expect(body.assistant.diagnostics.filters).toMatchObject({
+      businessInsightTool: "SALES_PIPELINE",
+      dateField: "Quote.createdAt",
+      includeArchivedRequested: true,
+      includeArchivedEffective: false,
+    });
+    expect(body.assistant.diagnostics.archivePolicy).toContain("excluded by the current role policy");
+    expect(body.assistant.diagnostics.emptyReason).toBeNull();
+    expect(response.body).not.toContain("9000");
+    expect(response.body).not.toContain(archivedQuote.id);
+
+    const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
+      where: { id: body.assistant.auditEventId },
+      include: { retrievalAuditEvent: true },
+    });
+    expect(audit.tenantId).toBe(owner.tenant.id);
+    expect(audit.actorUserId).toBe(member.user.id);
+    expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
+    expect(JSON.stringify(audit)).not.toContain(archivedQuote.id);
+  });
+
+  test("assistant route uses a scoped AI rate limit in addition to monthly usage limits", async () => {
+    const owner = await signUp("assistant-rate-owner");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Summarize pipeline for this workspace.",
+        tool: "SUMMARIZE_PIPELINE",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["x-ratelimit-limit"]).toBe("10000");
+    expect(response.headers["x-ratelimit-remaining"]).toBeDefined();
+  });
+
   test("draft quote assistant returns a review action without writing quote rows", async () => {
     const owner = await signUp("assistant-draft-owner");
     const customer = await createCustomer({
@@ -415,6 +690,37 @@ describe("AI assistant", () => {
     expect(audit.customerId).toBe(customer.id);
     expect(audit.promptText).toBeNull();
     expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
+  });
+
+  test("legacy chat-draft endpoint is review-only and does not create records", async () => {
+    const owner = await signUp("assistant-chat-draft-owner");
+    const beforeQuotes = await prisma.quote.count({
+      where: { tenantId: owner.tenant.id },
+    });
+    const beforeCustomers = await prisma.customer.count({
+      where: { tenantId: owner.tenant.id },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/chat-draft",
+      headers: { cookie: owner.cookie },
+      payload: {
+        prompt:
+          "New quote for Review Only Customer 555-222-1212. Replace 20 squares of asphalt shingles for about $12000.",
+      },
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toMatchObject({
+      code: "REVIEW_REQUIRED",
+    });
+    await expect(
+      prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    ).resolves.toBe(beforeQuotes);
+    await expect(
+      prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+    ).resolves.toBe(beforeCustomers);
   });
 
   test("draft quote assistant uses tenant-scoped quote context and audits the selected quote", async () => {

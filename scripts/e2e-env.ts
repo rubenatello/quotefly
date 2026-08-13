@@ -2,6 +2,15 @@ import { config } from "dotenv";
 
 config({ quiet: true });
 
+function appendEnvList(name: string, values: string[]) {
+  const existing = (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const merged = Array.from(new Set([...existing, ...values]));
+  process.env[name] = merged.join(",");
+}
+
 export function applyE2eEnv() {
   const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -31,6 +40,10 @@ export function applyE2eEnv() {
   process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
   process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
   process.env.ENABLE_TWILIO_SMS ||= "false";
+  appendEnvList("SUPERUSER_EMAILS", [
+    "superuser-e2e@example.com",
+    "superuser-integration@example.com",
+  ]);
 }
 
 export function assertTestDatabaseUrl() {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { CheckIcon, ClockIcon, CustomerIcon, DeleteIcon, InvoiceIcon, QuoteIcon, SendIcon } from "../components/Icons";
 import { AppLoadingScreen } from "../components/AppLoadingScreen";
 import {
@@ -32,7 +33,6 @@ import {
   type ServiceType,
   type TenantEntitlements,
 } from "../lib/api";
-import { formatAiUsageNotice } from "../lib/ai-credits";
 import { setSEOMetadata } from "../lib/seo";
 import { formatUsPhoneDisplay, formatUsPhoneInput, toPhoneHrefValue } from "../lib/phone";
 
@@ -205,6 +205,7 @@ function mapSendChannelToOutboundChannel(channel: SendChannel): QuoteOutboundCha
 }
 
 export function DashboardPage({ session }: DashboardPageProps) {
+  const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
@@ -524,31 +525,17 @@ export function DashboardPage({ session }: DashboardPageProps) {
       return;
     }
 
-    setSaving(true);
     setError(null);
-    try {
-      const { quote, parsed, usage } = await api.quotes.createFromChat({ prompt });
-      setChatParsed(parsed);
-      setChatPrompt("");
-      setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
-      await Promise.all([loadCustomers(), loadQuotes()]);
-      focusQuoteDesk(quote.id);
-      await loadQuoteDetail(quote.id);
-      if (canViewQuoteHistory) {
-        const { revisions } = await api.quotes.getHistory(quote.id, { limit: 30 });
-        setQuoteHistory(revisions);
-      }
-
-      const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
-      const usageSummary = formatAiUsageNotice(usage);
-      setNotice(
-        `Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`,
-      );
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");
-    } finally {
-      setSaving(false);
-    }
+    setChatParsed(null);
+    setChatPrompt("");
+    setNotice("Opening the quote builder. Generate and review the AI draft there before creating anything.");
+    navigate("/app/build", {
+      state: {
+        kodyQuoteDraft: {
+          prompt,
+        },
+      },
+    });
   }
 
   async function applyTradeSetup(event: FormEvent) {
@@ -1074,7 +1061,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
                   </button>
                 </div>
                 <p className="text-xs text-slate-600">
-                  Describe customer, scope, and pricing in one message. QuoteFly will build the customer, quote, and labor/material lines.
+                  Describe customer, scope, and pricing in one message. QuoteFly opens the builder so your team can review every customer, cost, price, and line before creating the quote.
                 </p>
                 <p className="text-[11px] text-blue-700">
                   AI quote generations this month: {aiQuoteLimit === null ? "Unlimited" : aiQuoteLimit}. Manual revisions stay unlimited.
@@ -1106,7 +1093,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
                   disabled={saving}
                   className="w-full rounded-lg bg-quotefly-blue px-4 py-2 text-sm font-semibold text-white"
                 >
-                  {saving ? "Generating..." : "Generate Draft Quote"}
+                  {saving ? "Opening..." : "Open Builder Review"}
                 </button>
               </form>
             ) : (

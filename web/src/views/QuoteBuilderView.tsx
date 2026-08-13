@@ -46,6 +46,7 @@ import {
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
+  splitQuoteLineDescription,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
@@ -159,6 +160,28 @@ type BuilderDraftData = {
   lastAppliedAiRunId: string | null;
 };
 type StoredBuilderDraft = BuilderDraftData & { version: 1; savedAtUtc: string };
+type KodyQuoteDraftHandoff = {
+  prompt: string;
+  customerId: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  serviceType: BuilderDraftData["quote"]["serviceType"] | null;
+  title: string | null;
+  scopeText: string | null;
+  estimatedTotalAmount: number | null;
+  estimatedTaxAmount: number | null;
+  lineItems: Array<{
+    description: string;
+    quantity: number | null;
+    sectionType: "INCLUDED" | "ALTERNATE" | null;
+  }>;
+  editableLines: EditableQuoteLine[];
+  hasStructuredDraft: boolean;
+  hasQuickCustomerDraft: boolean;
+  pricingNeedsReview: boolean;
+  receivedAtUtc: string;
+};
 
 const EMPTY_QUICK_CUSTOMER_FORM: QuickCustomerForm = { fullName: "", phone: "", email: "", notes: "" };
 const SERVICE_TYPE_SET = new Set(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
@@ -171,26 +194,144 @@ function isDraftString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength;
 }
 
-function readKodyQuoteDraftState(value: unknown): null | {
-  prompt: string;
-  customerId: string | null;
-  serviceType: BuilderDraftData["quote"]["serviceType"] | null;
-} {
+function cleanKodyDraftText(value: unknown, maxLength: number): string | null {
+  if (!isDraftString(value, maxLength)) return null;
+  const normalized = value.normalize("NFKC").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function cleanKodyDraftLongText(value: unknown, maxLength: number): string | null {
+  if (!isDraftString(value, maxLength)) return null;
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/\r\n/g, "\n")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function readKodyDraftNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readKodyDraftLineItems(value: unknown): KodyQuoteDraftHandoff["lineItems"] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 8).flatMap((candidate) => {
+    if (!isRecord(candidate)) return [];
+    const description = cleanKodyDraftText(candidate.description, 500);
+    if (!description) return [];
+    const sectionType =
+      candidate.sectionType === "INCLUDED" || candidate.sectionType === "ALTERNATE"
+        ? candidate.sectionType
+        : null;
+    return [{
+      description,
+      quantity: readKodyDraftNumber(candidate.quantity),
+      sectionType,
+    }];
+  });
+}
+
+function buildEditableKodyDraftLines(
+  lineItems: KodyQuoteDraftHandoff["lineItems"],
+  estimatedTotalAmount: number | null,
+  estimatedTaxAmount: number | null,
+): EditableQuoteLine[] {
+  if (!lineItems.length) return [];
+  const includedLineIndexes = lineItems
+    .map((lineItem, index) => (lineItem.sectionType === "ALTERNATE" ? null : index))
+    .filter((index): index is number => index !== null);
+  const singlePricedLineIndex = includedLineIndexes.length === 1 ? includedLineIndexes[0] : null;
+  const estimatedSubtotal =
+    estimatedTotalAmount !== null
+      ? Math.max(estimatedTotalAmount - (estimatedTaxAmount ?? 0), 0)
+      : null;
+
+  return lineItems.map((lineItem, index) => {
+    const quantity = lineItem.quantity && lineItem.quantity > 0 ? lineItem.quantity : 1;
+    const shouldSeedEstimate = singlePricedLineIndex === index && estimatedSubtotal !== null && estimatedSubtotal > 0;
+    const { title, details } = splitQuoteLineDescription(lineItem.description);
+
+    return makeEditableQuoteLine({
+      title: title || lineItem.description,
+      details,
+      sectionType: lineItem.sectionType ?? "INCLUDED",
+      sectionLabel: lineItem.sectionType === "ALTERNATE" ? "Alternate Scope" : "",
+      quantity: String(quantity),
+      unitCost: "0.00",
+      unitPrice: shouldSeedEstimate ? (estimatedSubtotal / quantity).toFixed(2) : "0.00",
+      presetPromptHandled: true,
+    });
+  });
+}
+
+function readKodyQuoteDraftState(value: unknown): KodyQuoteDraftHandoff | null {
   if (!isRecord(value) || !isRecord(value.kodyQuoteDraft)) return null;
   const draft = value.kodyQuoteDraft;
+  const prompt = cleanKodyDraftLongText(draft.prompt, 2_000);
+  const title = cleanKodyDraftText(draft.title, 500);
+  const scopeText = cleanKodyDraftLongText(draft.scopeText, 4_000);
+  const customerName = cleanKodyDraftText(draft.customerName, 500);
+  const customerPhone = cleanKodyDraftText(draft.customerPhone, 100);
+  const customerEmail = cleanKodyDraftText(draft.customerEmail, 500);
+  const lineItems = readKodyDraftLineItems(draft.lineItems);
+  const estimatedTotalAmount = readKodyDraftNumber(draft.estimatedTotalAmount);
+  const estimatedTaxAmount = readKodyDraftNumber(draft.estimatedTaxAmount);
   const promptParts = [
-    isDraftString(draft.prompt, 2_000) ? draft.prompt.trim() : "",
-    isDraftString(draft.title, 500) ? `Title: ${draft.title.trim()}` : "",
-    isDraftString(draft.scopeText, 4_000) ? `Scope: ${draft.scopeText.trim()}` : "",
+    prompt ?? "",
+    customerName ? `Customer: ${customerName}` : "",
+    title ? `Title: ${title}` : "",
+    scopeText ? `Scope: ${scopeText}` : "",
+    lineItems.length
+      ? [
+          "Suggested line items:",
+          ...lineItems.map((lineItem, index) => {
+            const quantity = lineItem.quantity ? ` | Qty: ${lineItem.quantity}` : "";
+            const section = lineItem.sectionType === "ALTERNATE" ? " | Alternate" : "";
+            return `Line ${index + 1}: ${lineItem.description}${quantity}${section}`;
+          }),
+        ].join("\n")
+      : "",
+    estimatedTotalAmount !== null ? `Estimated customer total: ${estimatedTotalAmount}` : "",
   ].filter(Boolean);
   const serviceType = isDraftString(draft.serviceType, 32) && SERVICE_TYPE_SET.has(draft.serviceType)
     ? draft.serviceType as BuilderDraftData["quote"]["serviceType"]
     : null;
+  const customerId = isDraftString(draft.customerId, 200) && draft.customerId.trim() ? draft.customerId.trim() : null;
+  const editableLines = buildEditableKodyDraftLines(lineItems, estimatedTotalAmount, estimatedTaxAmount);
+  const hasQuickCustomerDraft = Boolean(!customerId && (customerName || customerPhone || customerEmail));
+  const hasStructuredDraft = Boolean(
+    customerId ||
+      customerName ||
+      customerPhone ||
+      customerEmail ||
+      serviceType ||
+      title ||
+      scopeText ||
+      lineItems.length ||
+      estimatedTotalAmount !== null ||
+      estimatedTaxAmount !== null,
+  );
 
   return {
     prompt: promptParts.join("\n\n"),
-    customerId: isDraftString(draft.customerId, 200) && draft.customerId.trim() ? draft.customerId.trim() : null,
+    customerId,
+    customerName,
+    customerPhone,
+    customerEmail,
     serviceType,
+    title,
+    scopeText,
+    estimatedTotalAmount,
+    estimatedTaxAmount,
+    lineItems,
+    editableLines,
+    hasStructuredDraft,
+    hasQuickCustomerDraft,
+    pricingNeedsReview: editableLines.some((line) => Number(line.unitPrice) <= 0 || Number(line.unitCost) <= 0),
+    receivedAtUtc: new Date().toISOString(),
   };
 }
 
@@ -315,6 +456,7 @@ export function QuoteBuilderView() {
   const latestDraftRef = useRef<BuilderDraftData | null>(null);
   const quoteCreationCompletedRef = useRef(false);
   const draftRecoveryStorageKeyRef = useRef<string | null>(null);
+  const handledKodyDraftStateRef = useRef<unknown>(null);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
@@ -331,6 +473,7 @@ export function QuoteBuilderView() {
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
   const [lastAppliedAiRunId, setLastAppliedAiRunId] = useState<string | null>(null);
+  const [kodyDraftHandoff, setKodyDraftHandoff] = useState<KodyQuoteDraftHandoff | null>(null);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
@@ -479,22 +622,43 @@ export function QuoteBuilderView() {
   useEffect(() => {
     const draft = readKodyQuoteDraftState(location.state);
     if (!draft) return;
+    if (handledKodyDraftStateRef.current === location.state) return;
+    handledKodyDraftStateRef.current = location.state;
 
     const canApplyKodyContext = !hasMeaningfulDraft;
     if (canApplyKodyContext && draft.customerId) {
       selectQuoteCustomer(draft.customerId);
     }
-    if (canApplyKodyContext && draft.serviceType) {
-      setQuoteForm((current) => ({ ...current, serviceType: draft.serviceType ?? current.serviceType }));
+    if (canApplyKodyContext && !draft.customerId && draft.hasQuickCustomerDraft) {
+      setQuickCustomerForm((current) => ({
+        ...current,
+        fullName: draft.customerName ?? current.fullName,
+        phone: draft.customerPhone ?? current.phone,
+        email: draft.customerEmail ?? current.email,
+      }));
+      setQuickCustomerOpen(true);
+    }
+    if (canApplyKodyContext && (draft.serviceType || draft.title || draft.scopeText || draft.estimatedTaxAmount !== null)) {
+      setQuoteForm((current) => ({
+        ...current,
+        serviceType: draft.serviceType ?? current.serviceType,
+        title: draft.title ?? current.title,
+        scopeText: draft.scopeText ?? current.scopeText,
+        taxAmount: draft.estimatedTaxAmount !== null ? String(draft.estimatedTaxAmount) : current.taxAmount,
+      }));
+    }
+    if (canApplyKodyContext && draft.editableLines.length) {
+      setDraftLines(draft.editableLines);
     }
     if (draft.prompt) {
       setChatPrompt(draft.prompt);
     }
-    setAiModalOpen(true);
+    setKodyDraftHandoff(draft);
+    setAiModalOpen(!canApplyKodyContext || !draft.hasStructuredDraft);
     setMobilePane("editor");
     setNotice(
       canApplyKodyContext
-        ? "Kody prepared a quote prompt. Review it, then generate and apply the quote suggestion."
+        ? "Kody prepared a review draft in the builder. Review customer, scope, line pricing, and totals before creating anything."
         : "Kody prepared a quote prompt without changing your existing draft. Review it, then generate and apply the quote suggestion.",
     );
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
@@ -737,6 +901,7 @@ export function QuoteBuilderView() {
       setDraftLines((current) => applyAiQuoteLinePatch(current, patch));
       setAiInsight(insight);
       setLastAppliedAiRunId(aiRunId);
+      setKodyDraftHandoff(null);
       void loadCustomers();
       setAiModalOpen(false);
       setMobilePane("editor");
@@ -939,6 +1104,7 @@ export function QuoteBuilderView() {
     setAiModalOpen(false);
     setAiInsight(null);
     setLastAppliedAiRunId(null);
+    setKodyDraftHandoff(null);
     setChatPrompt("");
     setChatParsed(null);
     setPresetPromptLine(null);
@@ -1062,6 +1228,14 @@ export function QuoteBuilderView() {
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
       {draftRecoveryMessage ? (
         <Alert tone="warning" onDismiss={() => setDraftRecoveryMessage(null)}>{draftRecoveryMessage}</Alert>
+      ) : null}
+      {kodyDraftHandoff ? (
+        <KodyDraftHandoffBanner
+          handoff={kodyDraftHandoff}
+          activeCustomerName={activeCustomer?.fullName ?? null}
+          onOpenAiDraft={() => setAiModalOpen(true)}
+          onDismiss={() => setKodyDraftHandoff(null)}
+        />
       ) : null}
       {conflictingStoredDraft ? (
         <div
@@ -1662,6 +1836,114 @@ function SummaryRow({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function serviceTypeLabel(serviceType: KodyQuoteDraftHandoff["serviceType"]) {
+  if (!serviceType) return "Trade not locked";
+  if (serviceType === "HVAC") return "HVAC";
+  return serviceType.charAt(0) + serviceType.slice(1).toLowerCase();
+}
+
+function KodyDraftHandoffBanner({
+  handoff,
+  activeCustomerName,
+  onOpenAiDraft,
+  onDismiss,
+}: {
+  handoff: KodyQuoteDraftHandoff;
+  activeCustomerName: string | null;
+  onOpenAiDraft: () => void;
+  onDismiss: () => void;
+}) {
+  const customerLabel = activeCustomerName ?? handoff.customerName ?? "Customer not selected";
+  const visibleLines = handoff.lineItems.slice(0, 3);
+  const extraLineCount = Math.max(0, handoff.lineItems.length - visibleLines.length);
+
+  return (
+    <div
+      data-testid="kody-draft-handoff"
+      className="rounded-2xl border border-quotefly-blue/20 bg-[linear-gradient(135deg,rgba(47,111,214,0.08),rgba(255,255,255,0.96))] px-4 py-4 shadow-[0_12px_30px_rgba(47,111,214,0.06)]"
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="blue" icon={<Sparkles size={12} />}>Kody prepared a draft</Badge>
+            <Badge tone="slate">Not saved</Badge>
+            <Badge tone="slate">Not sent</Badge>
+          </div>
+          <h2 className="mt-3 text-base font-semibold text-slate-950">
+            Review this AI handoff before creating the quote.
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote.
+          </p>
+          {handoff.pricingNeedsReview ? (
+            <p className="mt-2 text-sm font-semibold text-amber-700">
+              Pricing still needs review. Kody does not finalize costs, margins, taxes, or customer price without your confirmation.
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
+          <Button size="sm" onClick={onOpenAiDraft} icon={<Sparkles size={14} />}>
+            Open AI Draft
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Customer</p>
+          <p className="mt-1 truncate font-semibold text-slate-900">{customerLabel}</p>
+        </div>
+        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Trade</p>
+          <p className="mt-1 font-semibold text-slate-900">{serviceTypeLabel(handoff.serviceType)}</p>
+        </div>
+        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2 sm:col-span-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Title</p>
+          <p className="mt-1 truncate font-semibold text-slate-900">{handoff.title ?? "Kody will generate a title from the prompt"}</p>
+        </div>
+      </div>
+
+      {handoff.scopeText || visibleLines.length || handoff.estimatedTotalAmount !== null ? (
+        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
+          <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scope preview</p>
+            <p className="mt-1 line-clamp-3 text-sm leading-6 text-slate-700">
+              {handoff.scopeText ?? "Kody will generate scope details from the prompt."}
+            </p>
+          </div>
+          <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested work</p>
+            {visibleLines.length ? (
+              <ul className="mt-1 space-y-1 text-sm text-slate-700">
+                {visibleLines.map((lineItem, index) => (
+                  <li key={`${lineItem.description}-${index}`} className="flex gap-2">
+                    <span className="text-slate-400">{index + 1}.</span>
+                    <span className="min-w-0">
+                      {lineItem.description}
+                      {lineItem.quantity ? <span className="text-slate-500"> · Qty {lineItem.quantity}</span> : null}
+                    </span>
+                  </li>
+                ))}
+                {extraLineCount ? <li className="text-xs font-semibold text-slate-500">+{extraLineCount} more in prompt</li> : null}
+              </ul>
+            ) : (
+              <p className="mt-1 text-sm text-slate-600">No line preview supplied yet.</p>
+            )}
+            {handoff.estimatedTotalAmount !== null ? (
+              <p className="mt-2 text-xs font-semibold text-slate-600">
+                Kody estimate: {money(handoff.estimatedTotalAmount)}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

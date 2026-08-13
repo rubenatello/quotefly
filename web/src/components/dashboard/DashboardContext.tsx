@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { ReactNode, FormEvent } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   api,
   ApiError,
@@ -27,7 +27,6 @@ import {
   sharePdfBlobNatively,
 } from "../../lib/quote-pdf-actions";
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
-import { formatAiUsageNotice } from "../../lib/ai-credits";
 import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
 
 /* ─────────────── Types ─────────────── */
@@ -429,6 +428,7 @@ export function DashboardProvider({
   onNavigateToBuilder?: () => void;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const routeQuoteId = useMemo(() => {
     const match = location.pathname.match(/^\/app\/quotes\/([^/]+)\/?$/);
     if (!match?.[1]) return null;
@@ -772,23 +772,18 @@ export function DashboardProvider({
     if (!canUseChatToQuote) { setError("Chat to Quote is not available on your current plan."); return; }
     const prompt = chatPrompt.trim();
     if (!prompt) { setError("Enter a prompt before generating a quote."); return; }
-    setSaving(true); setError(null);
-    try {
-      const { quote, parsed, usage } = await api.quotes.createFromChat({ prompt });
-      setChatParsed(parsed);
-      setChatPrompt("");
-      setQuoteForm((prev) => ({ ...prev, customerId: quote.customerId }));
-      focusQuoteDesk(quote.id);
-      navigateToQuote(quote.id);
-      void loadCustomers();
-      void loadQuotes();
-      const customerName = quote.customer?.fullName ?? parsed.customerName ?? "customer";
-      const usageSummary = formatAiUsageNotice(usage);
-      setNotice(`Draft quote created for ${customerName}. ${usageSummary} Review details, then use Email App, Text App, or PDF actions.`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed creating quote from prompt.");
-    } finally { setSaving(false); }
-  }, [canUseChatToQuote, chatPrompt, focusQuoteDesk, loadCustomers, loadQuotes, navigateToQuote]);
+    setError(null);
+    setChatParsed(null);
+    setChatPrompt("");
+    setNotice("Opening the quote builder. Generate and review the AI draft there before creating anything.");
+    navigate("/app/build", {
+      state: {
+        kodyQuoteDraft: {
+          prompt,
+        },
+      },
+    });
+  }, [canUseChatToQuote, chatPrompt, navigate]);
 
   const applyTradeSetup = useCallback(async (event: FormEvent) => {
     event.preventDefault();

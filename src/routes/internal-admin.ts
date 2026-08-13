@@ -1,5 +1,14 @@
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { buildAccessContext } from "../lib/access-policy";
+import { resolveActivityActor } from "../lib/activity";
+import { runAiAssistant } from "../lib/ai-assistant";
+import { hashSourceReference } from "../lib/ai-data-governance";
+import { AssistantRequestSchema, normalizeAssistantContext, type AssistantRequestPayload } from "../lib/ai-assistant-request";
+import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
+import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
+import { measureRequestPerformance } from "../lib/request-performance";
+import { loadTenantEntitlements } from "../lib/subscription";
 import { recordSuperuserAuditEvent, requireSuperuserAccess } from "../lib/superuser-access";
 
 const AiQualitySummaryQuerySchema = z.object({
@@ -24,7 +33,131 @@ function roundPercent(value: number): number {
   return Number(value.toFixed(2));
 }
 
+function assistantTestAuditMetadata(
+  payload: AssistantRequestPayload | null,
+  extra: Record<string, string | number | boolean | null>,
+) {
+  return {
+    requestedTool: payload?.tool ?? "UNKNOWN",
+    includeArchivedRequested: Boolean(payload?.context?.includeArchived),
+    promptRefHash: payload ? hashSourceReference("AiAssistantPrompt", payload.message) : null,
+    ...extra,
+  };
+}
+
 export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
+  const AssistantTestRateLimit = {
+    config: authenticatedAiRateLimit("internal-ai-quality-assistant-test", app.env.NODE_ENV === "test" ? 10_000 : 12),
+  } as const;
+
+  app.post("/internal/ai-quality/assistant-test", { ...AssistantTestRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = requireSuperuserAccess(request, reply);
+    if (!claims) return reply;
+    const access = buildAccessContext(request);
+    let payload: AssistantRequestPayload;
+    try {
+      payload = AssistantRequestSchema.parse(request.body);
+    } catch (error) {
+      await recordSuperuserAuditEvent(app.prisma, {
+        actorUserId: claims.userId,
+        requestId: request.id,
+        action: "AI_QUALITY_ASSISTANT_TEST_REJECTED",
+        targetType: "AiAssistantTest",
+        metadata: assistantTestAuditMetadata(null, {
+          status: "REJECTED",
+          reason: "INVALID_REQUEST_BODY",
+        }),
+      });
+      throw error;
+    }
+
+    const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
+      userEmail: claims.email,
+    }));
+    if (!entitlements) {
+      return reply.code(404).send({ error: "Tenant not found for account." });
+    }
+
+    const { blocked, blockedBy, snapshot } = await measureRequestPerformance(request, "db", () => assertAiUsageAvailable(
+      app.prisma,
+      claims.tenantId,
+      entitlements,
+    ));
+    if (blocked) {
+      await recordSuperuserAuditEvent(app.prisma, {
+        actorUserId: claims.userId,
+        requestId: request.id,
+        action: "AI_QUALITY_ASSISTANT_TEST_BLOCKED",
+        targetType: "AiAssistantTest",
+        metadata: assistantTestAuditMetadata(payload, {
+          status: "BLOCKED",
+          blockedBy,
+        }),
+      });
+      return reply.code(402).send({
+        code: "AI_USAGE_LIMIT_REACHED",
+        error: "This workspace has reached its AI usage limit for the current billing period.",
+        feature: blockedBy,
+        usage: buildAiUsageResponse(snapshot, { consumedCredits: 0, consumedSpendUsd: 0 }),
+      });
+    }
+
+    const actor = await measureRequestPerformance(request, "db", () => resolveActivityActor(app.prisma, claims));
+    let result;
+    try {
+      result = await measureRequestPerformance(request, "ai", () => runAiAssistant(app.prisma, {
+        access,
+        actor,
+        message: payload.message,
+        tool: payload.tool,
+        context: normalizeAssistantContext(payload.context),
+        usageSnapshot: snapshot,
+      }));
+    } catch (error) {
+      await recordSuperuserAuditEvent(app.prisma, {
+        actorUserId: claims.userId,
+        requestId: request.id,
+        action: "AI_QUALITY_ASSISTANT_TEST_FAILED",
+        targetType: "AiAssistantTest",
+        metadata: assistantTestAuditMetadata(payload, {
+          status: "FAILED",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }),
+      });
+      throw error;
+    }
+
+    await recordSuperuserAuditEvent(app.prisma, {
+      actorUserId: claims.userId,
+      requestId: request.id,
+      action: "AI_QUALITY_ASSISTANT_TEST_RUN",
+      targetType: "AiUsageEvent",
+      targetRefHash: hashSourceReference("AiUsageEvent", result.assistant.auditEventId),
+      metadata: {
+        requestedTool: payload.tool,
+        resolvedTool: result.assistant.tool,
+        maxClassification: result.assistant.maxClassification,
+        answerMode: result.assistant.diagnostics.answerMode,
+        answerModel: result.assistant.diagnostics.model,
+        includeArchivedRequested: Boolean(payload.context?.includeArchived),
+        resultCount: result.assistant.results.length,
+        citationCount: result.assistant.citations.length,
+        actionCount: result.assistant.actions.length,
+        consumedSpendUsd: result.consumedSpendUsd,
+        emptyResult: result.assistant.results.length === 0,
+        promptRefHash: hashSourceReference("AiAssistantPrompt", payload.message),
+      },
+    });
+
+    return {
+      assistant: result.assistant,
+      usage: buildAiUsageResponse(snapshot, {
+        consumedCredits: result.consumedCredits,
+        consumedSpendUsd: result.consumedSpendUsd,
+      }),
+    };
+  });
+
   app.get("/internal/ai-quality/summary", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;

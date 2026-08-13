@@ -42,6 +42,7 @@ export function apiTelemetryRoute(path: string): string {
 
   if (pathname === "/v1/auth/me") return "/v1/auth/me";
   if (pathname.startsWith("/v1/auth/")) return "/v1/auth/:action";
+  if (pathname.startsWith("/v1/internal/ai-quality/assistant-test")) return "/v1/internal/ai-quality/assistant-test";
   if (pathname.startsWith("/v1/ai/assistant")) return "/v1/ai/assistant";
   if (pathname.startsWith("/v1/ai/business-insights")) return "/v1/ai/business-insights";
   if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/activity")) return "/v1/customers/:id/activity";
@@ -547,6 +548,15 @@ export type AiBusinessInsight = {
   }>;
   auditEventId: string;
   fieldsExcluded: string[];
+  answerMode: "DETERMINISTIC" | "LLM_COMPOSED";
+  model: string | null;
+  telemetry: {
+    requestCount: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  } | null;
 };
 
 export type AiAssistantRequestedTool =
@@ -596,6 +606,17 @@ export type AiAssistantResponse = {
     actions: AiAssistantAction[];
     auditEventId: string;
     fieldsExcluded: string[];
+    diagnostics: {
+      requestedTool: AiAssistantRequestedTool;
+      resolvedTool: AiAssistantTool;
+      resultCount: number;
+      citationCount: number;
+      emptyReason: string | null;
+      archivePolicy: string;
+      filters: Record<string, string | number | boolean | null>;
+      answerMode: "DETERMINISTIC" | "LLM_COMPOSED";
+      model: string | null;
+    };
   };
   usage: AiUsageSummary;
 };
@@ -913,12 +934,6 @@ export type AiUsageSummary = {
   estimatedPromptCostUsd: number;
   estimatedPromptsRemaining: number | null;
   renewsAtUtc: string;
-};
-
-export type ChatToQuoteResult = {
-  quote: Quote;
-  parsed: ChatToQuoteParsed;
-  usage: AiUsageSummary;
 };
 
 export type AiQuoteSuggestion = {
@@ -1349,6 +1364,14 @@ export const api = {
       ),
     },
     aiQuality: {
+      assistantTest: (body: {
+        message: string;
+        tool?: AiAssistantRequestedTool;
+        context?: AiAssistantContext;
+      }) => request<AiAssistantResponse>("/v1/internal/ai-quality/assistant-test", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
       summary: (query?: { days?: number }) =>
         request<InternalAiQualitySummary>(
           `/v1/internal/ai-quality/summary${toQueryString({
@@ -1768,17 +1791,6 @@ export const api = {
       }>;
     }) =>
       request<{ quote: Quote }>(`/v1/quotes`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-
-    createFromChat: (body: {
-      prompt: string;
-      customerName?: string;
-      customerPhone?: string;
-      customerEmail?: string;
-    }) =>
-      request<ChatToQuoteResult>(`/v1/quotes/chat-draft`, {
         method: "POST",
         body: JSON.stringify(body),
       }),

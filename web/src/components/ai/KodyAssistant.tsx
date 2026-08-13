@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
@@ -12,12 +12,13 @@ import {
   Sparkles,
   TrendingUp,
   UserRound,
+  X,
 } from "lucide-react";
 import { ApiError, api, type AiAssistantAction, type AiAssistantResponse, type AiAssistantTool, type DataClassification } from "../../lib/api";
 import { formatAiUsageNotice } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
-import { Alert, Badge, Button, LoadingState, Modal, ModalBody, ModalHeader, Textarea } from "../ui";
+import { Alert, Badge, Button, ConfirmModal, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
 
@@ -216,6 +217,31 @@ function compactAuditId(auditEventId: string) {
   return auditEventId.length > 10 ? auditEventId.slice(-10) : auditEventId;
 }
 
+function actionConfirmationCopy(action: AiAssistantAction) {
+  if (action.type === "OPEN_QUOTE_DRAFT") {
+    return {
+      title: "Review Kody's quote draft?",
+      description:
+        "Kody will open this in the quote builder. Nothing will be saved or sent until you review the customer, scope, pricing, and click Create Quote.",
+      confirmLabel: "Open review draft",
+    };
+  }
+  if (action.type === "REQUEST_ADMIN_ACCESS") {
+    return {
+      title: "Open access settings?",
+      description:
+        "Kody will take you to workspace settings so an owner or admin can review the required permission.",
+      confirmLabel: "Open settings",
+    };
+  }
+  return {
+    title: "Continue with Kody action?",
+    description:
+      "Kody will move you to the matching workspace page. Review anything important before saving or sending.",
+    confirmLabel: "Continue",
+  };
+}
+
 function KodyResultCard({
   result,
   index,
@@ -269,6 +295,9 @@ function KodyResponse({
           <Badge tone="blue" icon={<CheckCircle2 size={12} />}>
             Cited answer
           </Badge>
+          <Badge tone={response.diagnostics.answerMode === "LLM_COMPOSED" ? "emerald" : "slate"}>
+            {response.diagnostics.answerMode === "LLM_COMPOSED" ? "AI composed" : "Deterministic"}
+          </Badge>
         </div>
         <p className="text-sm leading-6 text-slate-700">{response.answer}</p>
       </div>
@@ -308,7 +337,7 @@ function KodyResponse({
             <p className="mt-1">{meta.description}</p>
           </div>
         </div>
-        <dl className="mt-2 grid gap-1.5 sm:grid-cols-3">
+        <dl className="mt-2 grid gap-1.5 sm:grid-cols-4">
           <div>
             <dt className="font-semibold text-slate-500">Sources</dt>
             <dd className="mt-0.5 text-slate-700">{compactSourceList(response.citations)}</dd>
@@ -316,6 +345,10 @@ function KodyResponse({
           <div>
             <dt className="font-semibold text-slate-500">Hidden</dt>
             <dd className="mt-0.5 text-slate-700">{compactHiddenList(response.fieldsExcluded)}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold text-slate-500">Answer</dt>
+            <dd className="mt-0.5 text-slate-700">{response.diagnostics.model ?? response.diagnostics.answerMode.toLowerCase()}</dd>
           </div>
           <div>
             <dt className="font-semibold text-slate-500">Audit</dt>
@@ -342,6 +375,9 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingTool, setLoadingTool] = useState<AiAssistantTool | "AUTO">("AUTO");
   const [error, setError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<AiAssistantAction | null>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
   const pendingMessageIdRef = useRef<string | null>(null);
@@ -353,6 +389,12 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
     if (messages.length) return "Ask a follow-up or choose another Kody action.";
     return "Ask Kody to find customers, draft quotes, summarize pipeline, or rank profitable work.";
   }, [messages.length]);
+
+  const closeKody = useCallback((source: "button" | "keyboard") => {
+    setOpen(false);
+    track("kody_close", { source, page: currentContextPage });
+    window.setTimeout(() => launcherRef.current?.focus(), 0);
+  }, [currentContextPage, track]);
 
   useEffect(() => {
     const handleOpenKody = (event: Event) => {
@@ -373,6 +415,26 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
     window.addEventListener(KODY_OPEN_EVENT, handleOpenKody);
     return () => window.removeEventListener(KODY_OPEN_EVENT, handleOpenKody);
   }, [currentContextPage, track]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const activeElement = document.activeElement;
+      if (activeElement && panelRef.current && !panelRef.current.contains(activeElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeKody("keyboard");
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeKody, open]);
 
   useEffect(() => {
     if (loadingStartedAt === null) return undefined;
@@ -511,49 +573,58 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
-  function handleAction(action: AiAssistantAction) {
-    track("kody_action", { type: action.type });
+  function executeAction(action: AiAssistantAction, source: "direct" | "confirmed") {
+    track("kody_action", { type: action.type, source, requiresConfirmation: action.requiresConfirmation });
     if (action.type === "OPEN_CUSTOMER") {
       const customerId = getString(action.payload.customerId);
       if (!customerId) return;
-      setOpen(false);
       navigate("/app/customers", { state: { kodyCustomerId: customerId } });
       return;
     }
 
     if (action.type === "OPEN_QUOTE_DRAFT") {
-      setOpen(false);
       navigate("/app/build", { state: { kodyQuoteDraft: action.payload } });
       return;
     }
 
     if (action.type === "OPEN_ANALYTICS") {
-      setOpen(false);
       navigate("/app/analytics", { state: { kodyInsight: action.payload } });
       return;
     }
 
     if (action.type === "REQUEST_ADMIN_ACCESS") {
-      setOpen(false);
       navigate("/app/settings/users");
     }
   }
 
+  function handleAction(action: AiAssistantAction) {
+    if (action.requiresConfirmation) {
+      setPendingAction(action);
+      track("kody_action_confirmation_requested", { type: action.type });
+      return;
+    }
+    executeAction(action, "direct");
+  }
+
+  const pendingActionCopy = pendingAction ? actionConfirmationCopy(pendingAction) : null;
+
   return (
     <>
       <button
+        ref={launcherRef}
         type="button"
         onClick={() => {
           setOpen(true);
           track("kody_open", { page: currentContextPage });
         }}
         className={cn(
-          "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-[52px] min-h-[52px] items-center gap-2 rounded-2xl border border-quotefly-blue/20 bg-slate-950 px-3 text-sm font-semibold text-white shadow-[0_16px_36px_rgba(15,23,42,0.25)] transition hover:-translate-y-0.5 hover:bg-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:px-4 lg:bottom-6 lg:right-6",
+          "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-[52px] min-h-[52px] items-center gap-2 rounded-2xl border border-quotefly-blue/20 bg-slate-950 px-3 text-sm font-semibold text-white shadow-[0_16px_36px_rgba(15,23,42,0.25)] transition hover:-translate-y-0.5 hover:bg-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue sm:px-4 lg:right-6",
           hasMobileActionDock
-            ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)]"
-            : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)]",
+            ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)] lg:bottom-[7rem] xl:bottom-6"
+            : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)] lg:bottom-6",
         )}
         aria-label="Ask Kody"
+        aria-expanded={open}
         data-testid="kody-launcher"
       >
         <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-quotefly-blue text-white">
@@ -562,27 +633,41 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         <span className="hidden sm:inline">Ask Kody</span>
       </button>
 
-      <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        size="xl"
-        ariaLabel="Kody assistant"
-        panelClassName="qf-kody-mobile-sheet h-[calc(100dvh-0.5rem)] border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 sm:h-[min(88dvh,760px)]"
-      >
-        <ModalHeader
-          title={
-            <span className="flex items-center gap-2">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-950 text-white">
-                <Bot size={18} />
-              </span>
-              Kody
-            </span>
-          }
-          description="QuoteFly assistant for customer lookup, quote drafting, pipeline, and profitability."
-          className="bg-white/90 backdrop-blur"
-          onClose={() => setOpen(false)}
-        />
-        <ModalBody className="flex flex-col gap-4 bg-slate-50">
+      {open ? (
+        <section
+          ref={panelRef}
+          aria-label="Kody assistant"
+          aria-modal="false"
+          role="dialog"
+          data-testid="kody-chat-panel"
+          className={cn(
+            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[24px] border border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 shadow-[0_24px_64px_rgba(15,23,42,0.22)]",
+            hasMobileActionDock && "qf-kody-chat-panel--with-dock",
+          )}
+        >
+          <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur sm:px-5">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                  <Bot size={18} />
+                </span>
+                Kody
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                Ask, keep working, or let Kody move you to the right page.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => closeKody("button")}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+              aria-label="Close Kody"
+            >
+              <X size={18} />
+            </button>
+          </header>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-3 bg-slate-50 p-3 sm:p-4">
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
             {QUICK_PROMPTS.map((quickPrompt) => (
               <button
@@ -715,8 +800,23 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
               </Button>
             </div>
           </form>
-        </ModalBody>
-      </Modal>
+          </div>
+        </section>
+      ) : null}
+
+      <ConfirmModal
+        open={Boolean(pendingAction)}
+        onClose={() => setPendingAction(null)}
+        onConfirm={() => {
+          const action = pendingAction;
+          setPendingAction(null);
+          if (action) executeAction(action, "confirmed");
+        }}
+        title={pendingActionCopy?.title ?? "Continue with Kody action?"}
+        description={pendingActionCopy?.description}
+        confirmLabel={pendingActionCopy?.confirmLabel ?? "Continue"}
+        confirmVariant="primary"
+      />
     </>
   );
 }

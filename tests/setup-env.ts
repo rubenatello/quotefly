@@ -2,6 +2,15 @@ import { config } from "dotenv";
 
 config({ quiet: true });
 
+function appendEnvList(name: string, values: string[]) {
+  const existing = (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const merged = Array.from(new Set([...existing, ...values]));
+  process.env[name] = merged.join(",");
+}
+
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 process.env.JWT_SECRET ||= "test-jwt-secret-for-quotefly-integration-suite";
@@ -20,7 +29,7 @@ process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
 process.env.ENABLE_TWILIO_SMS = "true";
 process.env.TWILIO_WEBHOOK_AUTH_TOKEN ||= "twilio-integration-webhook-auth-token";
-process.env.SUPERUSER_EMAILS ||= "superuser-integration@example.com";
+appendEnvList("SUPERUSER_EMAILS", ["superuser-integration@example.com"]);
 
 const databaseUrl = process.env.DATABASE_URL;
 

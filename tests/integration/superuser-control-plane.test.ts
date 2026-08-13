@@ -195,6 +195,120 @@ describe("superuser data-governance control plane", () => {
     expect(auditText).not.toContain(privateProviderId);
   });
 
+  test("audits superuser Kody diagnostic runs without raw prompt content", async () => {
+    const superuser = await signUp("superuser-integration@example.com", "Superuser");
+    await prisma.customer.create({
+      data: {
+        tenantId: superuser.tenant.id,
+        fullName: "Diagnostic Customer Sentinel",
+        email: "diagnostic-customer-sentinel@example.com",
+        phone: "555-616-0101",
+        phoneDigits: "5556160101",
+        notes: "This note must not be copied into superuser audit metadata.",
+      },
+    });
+
+    const prompt = "Find customer Diagnostic Customer Sentinel and explain the match.";
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/internal/ai-quality/assistant-test",
+      headers: { cookie: superuser.cookie },
+      payload: {
+        message: prompt,
+        tool: "SEARCH_CUSTOMERS",
+        context: { currentPage: "customers", search: "Diagnostic Customer Sentinel" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        auditEventId: string;
+        tool: string;
+        results: unknown[];
+        diagnostics: {
+          filters: Record<string, unknown>;
+          archivePolicy: string;
+          answerMode: string;
+          model: string | null;
+        };
+      };
+    };
+    expect(body.assistant.tool).toBe("SEARCH_CUSTOMERS");
+    expect(body.assistant.results).toHaveLength(1);
+    expect(body.assistant.diagnostics.filters).toMatchObject({
+      currentPage: "customers",
+      searchProvided: true,
+      includeArchivedEffective: false,
+    });
+    expect(body.assistant.diagnostics.archivePolicy).toContain("active customers only");
+    expect(body.assistant.diagnostics.answerMode).toBe("DETERMINISTIC");
+    expect(body.assistant.diagnostics.model).toBeNull();
+
+    const superuserAudit = await prisma.superuserAuditEvent.findFirstOrThrow({
+      where: {
+        action: "AI_QUALITY_ASSISTANT_TEST_RUN",
+        actorUserId: superuser.user.id,
+      },
+    });
+    expect(superuserAudit.targetType).toBe("AiUsageEvent");
+    expect(superuserAudit.targetRefHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(superuserAudit.metadata).toMatchObject({
+      requestedTool: "SEARCH_CUSTOMERS",
+      resolvedTool: "SEARCH_CUSTOMERS",
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answerMode: "DETERMINISTIC",
+      answerModel: null,
+      resultCount: 1,
+      citationCount: 1,
+      actionCount: 1,
+      consumedSpendUsd: 0,
+      emptyResult: false,
+    });
+    const superuserAuditText = JSON.stringify(superuserAudit);
+    expect(superuserAuditText).not.toContain(prompt);
+    expect(superuserAuditText).not.toContain("Diagnostic Customer Sentinel");
+    expect(superuserAuditText).not.toContain("diagnostic-customer-sentinel@example.com");
+    expect(superuserAuditText).not.toContain("This note must not");
+
+    const aiAudit = await prisma.aiUsageEvent.findUniqueOrThrow({
+      where: { id: body.assistant.auditEventId },
+      include: { retrievalAuditEvent: true },
+    });
+    expect(aiAudit.tenantId).toBe(superuser.tenant.id);
+    expect(aiAudit.retrievalAuditEvent?.tenantId).toBe(superuser.tenant.id);
+  });
+
+  test("audits rejected superuser Kody diagnostic request bodies without raw prompt content", async () => {
+    const superuser = await signUp("superuser-integration@example.com", "Superuser");
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/internal/ai-quality/assistant-test",
+      headers: { cookie: superuser.cookie },
+      payload: {
+        message: "x",
+        tool: "SEARCH_CUSTOMERS",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const rejectedAudit = await prisma.superuserAuditEvent.findFirstOrThrow({
+      where: {
+        action: "AI_QUALITY_ASSISTANT_TEST_REJECTED",
+        actorUserId: superuser.user.id,
+      },
+    });
+    expect(rejectedAudit.targetType).toBe("AiAssistantTest");
+    expect(rejectedAudit.metadata).toMatchObject({
+      requestedTool: "UNKNOWN",
+      includeArchivedRequested: false,
+      promptRefHash: null,
+      status: "REJECTED",
+      reason: "INVALID_REQUEST_BODY",
+    });
+    expect(JSON.stringify(rejectedAudit)).not.toContain('"x"');
+  });
+
   test("persists deterministic validation evidence and the operator audit atomically", async () => {
     const superuser = await signUp("superuser-integration@example.com", "Superuser");
     const response = await app.inject({

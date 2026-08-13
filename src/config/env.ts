@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  OPENAI_ASSISTANT_MODEL: z.string().default(""),
+  OPENAI_ASSISTANT_COMPOSITION_ENABLED: BooleanFromEnv.default(true),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
   OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
   STRIPE_SECRET_KEY: z.string().default(""),

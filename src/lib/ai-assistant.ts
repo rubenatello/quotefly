@@ -2,9 +2,15 @@ import { Prisma, type DataClassification, type PrismaClient, type ServiceCategor
 import type { AccessContext } from "./access-policy";
 import { hasCapability } from "./access-policy";
 import type { ActivityActor } from "./activity";
+import {
+  composeAssistantAnswer,
+  type AiAssistantAnswerMode,
+  type AiAssistantCompositionResult,
+} from "./ai-assistant-composer";
 import { governAiPrompt, hashSourceReference } from "./ai-data-governance";
 import {
   createAiUsageEvent,
+  type AiUsageTelemetry,
   type MonthlyAiUsageSnapshot,
 } from "./ai-usage";
 import {
@@ -69,11 +75,25 @@ export type AiAssistantResult = Readonly<{
   actions: AiAssistantAction[];
   auditEventId: string;
   fieldsExcluded: string[];
+  diagnostics: AiAssistantDiagnostics;
 }>;
 
 export type AiAssistantRunResult = Readonly<{
   assistant: AiAssistantResult;
   consumedCredits: number;
+  consumedSpendUsd: number;
+}>;
+
+export type AiAssistantDiagnostics = Readonly<{
+  requestedTool: AiAssistantRequestedTool;
+  resolvedTool: AiAssistantTool;
+  resultCount: number;
+  citationCount: number;
+  emptyReason: string | null;
+  archivePolicy: string;
+  filters: Readonly<Record<string, string | number | boolean | null>>;
+  answerMode: AiAssistantAnswerMode;
+  model: string | null;
 }>;
 
 export type AiAssistantInput = Readonly<{
@@ -175,6 +195,47 @@ function currency(value: Prisma.Decimal | number | string | null | undefined) {
   return Number(value);
 }
 
+function requestedTool(params: AiAssistantInput): AiAssistantRequestedTool {
+  return params.tool ?? "AUTO";
+}
+
+function diagnostics(params: {
+  input: AiAssistantInput;
+  resolvedTool: AiAssistantTool;
+  resultCount: number;
+  citationCount: number;
+  emptyReason?: string | null;
+  archivePolicy: string;
+  filters?: Record<string, string | number | boolean | null | undefined>;
+}): AiAssistantDiagnostics {
+  const filters = Object.fromEntries(
+    Object.entries(params.filters ?? {}).map(([key, value]) => [key, value ?? null]),
+  ) as Record<string, string | number | boolean | null>;
+
+  return {
+    requestedTool: requestedTool(params.input),
+    resolvedTool: params.resolvedTool,
+    resultCount: params.resultCount,
+    citationCount: params.citationCount,
+    emptyReason: params.emptyReason ?? null,
+    archivePolicy: params.archivePolicy,
+    filters,
+    answerMode: "DETERMINISTIC",
+    model: null,
+  };
+}
+
+function composedDiagnostics(
+  base: AiAssistantDiagnostics,
+  composition: AiAssistantCompositionResult,
+): AiAssistantDiagnostics {
+  return {
+    ...base,
+    answerMode: composition.answerMode,
+    model: composition.model,
+  };
+}
+
 async function createAssistantUsageEvent(
   prisma: PrismaClient,
   params: {
@@ -190,7 +251,12 @@ async function createAssistantUsageEvent(
     serviceType?: ServiceCategory | null;
     creditsConsumed?: number;
     riskNote?: string;
+    confidenceLevel?: string;
+    confidenceLabel?: string;
+    insightReasons?: string[];
     retrievalAuditEventId?: string | null;
+    model?: string | null;
+    telemetry?: AiUsageTelemetry | null;
   },
 ) {
   return createAiUsageEvent(prisma, {
@@ -205,6 +271,8 @@ async function createAssistantUsageEvent(
     requestId: params.access.requestId,
     serviceType: params.serviceType ?? null,
     creditsConsumed: params.creditsConsumed ?? 1,
+    model: params.model ?? null,
+    telemetry: params.telemetry ?? null,
     sensitiveValues: [params.message],
     retrievalAuditEventId: params.retrievalAuditEventId ?? null,
     trace: {
@@ -212,11 +280,12 @@ async function createAssistantUsageEvent(
       insightReasons: [
         "assistant tool registry execution",
         `toolClassification=${params.classification}`,
+        ...(params.insightReasons ?? []),
       ],
       insightSourceLabels: params.sourceLabels,
       sourceTypes: params.sourceTypes,
-      confidenceLevel: "high",
-      confidenceLabel: "Deterministic approved tool",
+      confidenceLevel: params.confidenceLevel ?? "high",
+      confidenceLabel: params.confidenceLabel ?? "Deterministic approved tool",
       riskNote: params.riskNote ?? "Tenant-scoped assistant response generated without exposing raw prompts.",
     },
   });
@@ -243,6 +312,7 @@ async function runCustomerSearch(
 
     return {
       consumedCredits: 0,
+      consumedSpendUsd: 0,
       assistant: {
         tool: "SEARCH_CUSTOMERS",
         generatedAtUtc,
@@ -254,6 +324,19 @@ async function runCustomerSearch(
         actions: [{ type: "REQUEST_ADMIN_ACCESS", label: "Ask an admin for customer access", requiresConfirmation: true, payload: { capability: "viewCustomerPii" } }],
         auditEventId: event.id,
         fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "SEARCH_CUSTOMERS",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "Customer lookup denied before retrieval because the role lacks customer PII access.",
+          archivePolicy: "No customer rows are retrieved when customer PII access is denied.",
+          filters: {
+            includeArchivedRequested: Boolean(params.context?.includeArchived),
+            includeArchivedEffective: false,
+            limit: clampLimit(params.context?.limit, MAX_CUSTOMER_LIMIT, DEFAULT_CUSTOMER_LIMIT),
+          },
+        }),
       },
     };
   }
@@ -319,50 +402,97 @@ async function runCustomerSearch(
   const answer = customers.length
     ? `Found ${customers.length} active customer${customers.length === 1 ? "" : "s"} matching "${search || "recent customers"}".`
     : `I did not find active customers matching "${search}".`;
+  const includeArchivedRequested = Boolean(params.context?.includeArchived);
+  const results = customers.map((customer) => {
+    const latestQuote = customer.quotes[0] ?? null;
+    return {
+      customerId: customer.id,
+      fullName: customer.fullName,
+      email: customer.email ?? null,
+      phone: customer.phone,
+      followUpStatus: customer.followUpStatus,
+      quoteCount: customer._count.quotes,
+      latestQuoteTitle: latestQuote?.title ?? null,
+      latestQuoteStatus: latestQuote?.status ?? null,
+      latestQuoteTotalAmount: currency(latestQuote?.totalAmount) ?? null,
+      latestQuoteUpdatedAtUtc: latestQuote?.updatedAt.toISOString() ?? null,
+    };
+  });
+  const citations: AiAssistantCitation[] = [{ key: "A1", label: "Active tenant customer lookup", sourceType: "Customer", classification: "C2_CUSTOMER_CONFIDENTIAL" }];
+  const actions = customers.map((customer) => ({
+    type: "OPEN_CUSTOMER" as const,
+    label: `Open ${customer.fullName}`,
+    requiresConfirmation: false,
+    payload: { customerId: customer.id },
+  }));
+  const fieldsExcluded = [
+    ...defaultExcludedFields(false),
+    "archived customers",
+    "deleted customers",
+    ...(includeArchivedRequested ? ["includeArchived ignored for customer lookup"] : []),
+  ];
+  const baseDiagnostics = diagnostics({
+    input: params,
+    resolvedTool: "SEARCH_CUSTOMERS",
+    resultCount: customers.length,
+    citationCount: citations.length,
+    emptyReason: customers.length ? null : "No active customer rows matched tenant scope and search filters.",
+    archivePolicy: "Customer lookup searches active customers only; archived/deleted customers are excluded.",
+    filters: {
+      currentPage: params.context?.currentPage,
+      searchProvided: Boolean(search),
+      searchTokenCount: tokens.length,
+      phoneSearchUsed: Boolean(phoneDigits && phoneDigits.length >= 3),
+      scopedCustomer: Boolean(scopedCustomerId),
+      limit,
+      includeArchivedRequested,
+      includeArchivedEffective: false,
+    },
+  });
+  const composition = await composeAssistantAnswer({
+    userMessage: params.message,
+    tool: "SEARCH_CUSTOMERS",
+    deterministicAnswer: answer,
+    maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+    results,
+    citations,
+    actions,
+    fieldsExcluded,
+    diagnostics: baseDiagnostics,
+    sensitiveValues: [params.actor.actorEmail, params.actor.actorName],
+  });
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
     actor: params.actor,
     message: params.message,
-    answer,
+    answer: composition.answer,
     classification: "C2_CUSTOMER_CONFIDENTIAL",
     sourceTypes: ["Customer", "Quote"],
     sourceLabels: ["Active tenant customer lookup"],
     customerId: customers[0]?.id ?? null,
-    riskNote: "Customer lookup is tenant-scoped and excludes archived/deleted customers.",
+    model: composition.model,
+    telemetry: composition.telemetry,
+    confidenceLevel: composition.confidenceLevel,
+    confidenceLabel: composition.confidenceLabel,
+    insightReasons: composition.insightReasons,
+    riskNote: composition.riskNote,
   });
 
   return {
     consumedCredits: 1,
+    consumedSpendUsd: composition.telemetry?.estimatedCostUsd ?? 0,
     assistant: {
       tool: "SEARCH_CUSTOMERS",
       generatedAtUtc,
       policyVersion: AI_DATA_POLICY_VERSION,
       maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
-      answer,
-      results: customers.map((customer) => {
-        const latestQuote = customer.quotes[0] ?? null;
-        return {
-          customerId: customer.id,
-          fullName: customer.fullName,
-          email: customer.email ?? null,
-          phone: customer.phone,
-          followUpStatus: customer.followUpStatus,
-          quoteCount: customer._count.quotes,
-          latestQuoteTitle: latestQuote?.title ?? null,
-          latestQuoteStatus: latestQuote?.status ?? null,
-          latestQuoteTotalAmount: currency(latestQuote?.totalAmount) ?? null,
-          latestQuoteUpdatedAtUtc: latestQuote?.updatedAt.toISOString() ?? null,
-        };
-      }),
-      citations: [{ key: "A1", label: "Active tenant customer lookup", sourceType: "Customer", classification: "C2_CUSTOMER_CONFIDENTIAL" }],
-      actions: customers.map((customer) => ({
-        type: "OPEN_CUSTOMER" as const,
-        label: `Open ${customer.fullName}`,
-        requiresConfirmation: false,
-        payload: { customerId: customer.id },
-      })),
+      answer: composition.answer,
+      results,
+      citations,
+      actions,
       auditEventId: event.id,
-      fieldsExcluded: [...defaultExcludedFields(false), "archived customers", "deleted customers"],
+      fieldsExcluded,
+      diagnostics: composedDiagnostics(baseDiagnostics, composition),
     },
   };
 }
@@ -417,6 +547,7 @@ async function createDeniedFinancialAudit(
 
   return {
     consumedCredits: 0,
+    consumedSpendUsd: 0,
     assistant: {
       tool: "RANK_PROFITABLE_JOBS" as const,
       generatedAtUtc,
@@ -428,6 +559,19 @@ async function createDeniedFinancialAudit(
       actions: [{ type: "REQUEST_ADMIN_ACCESS" as const, label: "Ask an admin for profitability access", requiresConfirmation: true, payload: { capabilities: ["viewInternalCosts", "viewMargins"] } }],
       auditEventId: event.id,
       fieldsExcluded: [...defaultExcludedFields(false), "internal cost aggregates", "margin aggregates"],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "RANK_PROFITABLE_JOBS",
+        resultCount: 0,
+        citationCount: 1,
+        emptyReason: "Profitability retrieval denied before C3 financial aggregate access.",
+        archivePolicy: "No quote rows are retrieved when profitability access is denied.",
+        filters: {
+          currentPage: params.context?.currentPage,
+          includeArchivedRequested: Boolean(params.context?.includeArchived),
+          includeArchivedEffective: false,
+        },
+      }),
     },
   };
 }
@@ -458,6 +602,7 @@ async function runBusinessInsightTool(
 
     return {
       consumedCredits: 1,
+      consumedSpendUsd: insight.telemetry?.estimatedCostUsd ?? 0,
       assistant: {
         tool,
         generatedAtUtc,
@@ -479,6 +624,31 @@ async function runBusinessInsightTool(
         }],
         auditEventId: insight.auditEventId,
         fieldsExcluded: insight.fieldsExcluded,
+        diagnostics: {
+          ...diagnostics({
+            input: params,
+            resolvedTool: tool,
+            resultCount: insight.rows.length,
+            citationCount: insight.citations.length,
+            emptyReason: insight.rows.length ? null : "No active quote aggregates matched tenant scope and effective filters.",
+            archivePolicy: insight.filters.includeArchived
+              ? "Archived quote aggregates were included because the current role policy allowed it."
+              : "Archived/deleted quote aggregates were excluded by the current role policy.",
+            filters: {
+              currentPage: params.context?.currentPage,
+              businessInsightTool: businessTool,
+              dateField: "Quote.createdAt",
+              dateFrom: insight.dateRange.from.toISOString(),
+              dateTo: insight.dateRange.to.toISOString(),
+              serviceType: insight.filters.serviceType,
+              limit: params.context?.limit ?? null,
+              includeArchivedRequested: Boolean(params.context?.includeArchived),
+              includeArchivedEffective: insight.filters.includeArchived,
+            },
+          }),
+          answerMode: insight.answerMode,
+          model: insight.model,
+        },
       },
     };
   } catch (error) {
@@ -509,6 +679,7 @@ async function runDraftQuotePreview(
     });
     return {
       consumedCredits: 0,
+      consumedSpendUsd: 0,
       assistant: {
         tool: "DRAFT_QUOTE",
         generatedAtUtc,
@@ -520,6 +691,21 @@ async function runDraftQuotePreview(
         actions: [{ type: "REQUEST_ADMIN_ACCESS", label: "Ask an admin for AI quote drafting", requiresConfirmation: true, payload: { capability: "useAiQuoteDrafting" } }],
         auditEventId: event.id,
         fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "DRAFT_QUOTE",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "Quote drafting denied before prompt parsing because the role lacks AI quote drafting access.",
+          archivePolicy: "No quote rows are retrieved when quote drafting access is denied.",
+          filters: {
+            currentPage: params.context?.currentPage,
+            scopedCustomer: Boolean(params.context?.customerId),
+            scopedQuote: Boolean(params.context?.quoteId),
+            includeArchivedRequested: Boolean(params.context?.includeArchived),
+            includeArchivedEffective: false,
+          },
+        }),
       },
     };
   }
@@ -560,11 +746,89 @@ async function runDraftQuotePreview(
   const includeInternalCost = hasCapability(params.access, "viewInternalCosts") && draft.estimatedInternalCostAmount !== null;
   const maxClassification: DataClassification = includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL";
   const answer = `Prepared a preview for a ${serviceType.toLowerCase()} quote: ${title}. Review it before creating or sending anything.`;
+  const results = [{
+    title,
+    serviceType,
+    customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
+    squareFeetEstimate: draft.squareFeetEstimate,
+    estimatedTotalAmount: draft.estimatedTotalAmount,
+    estimatedTaxAmount: draft.estimatedTaxAmount,
+    estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
+    lineItemCount: draft.lineItems.length,
+  }];
+  const citations: AiAssistantCitation[] = [{ key: "A1", label: "Parsed quote drafting prompt", sourceType: "Quote", classification: maxClassification }];
+  const actions = [{
+    type: "OPEN_QUOTE_DRAFT" as const,
+    label: "Review quote draft",
+    requiresConfirmation: true,
+    payload: {
+      prompt: params.message,
+      customerId: selectedCustomer?.id ?? null,
+      customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
+      customerEmail: selectedCustomer?.email ?? draft.customerEmail ?? null,
+      customerPhone: selectedCustomer?.phone ?? draft.customerPhone ?? null,
+      quoteId: selectedQuote?.id ?? null,
+      serviceType,
+      title,
+      scopeText,
+      squareFeetEstimate: draft.squareFeetEstimate,
+      squareFeetEstimateLow: draft.squareFeetEstimateLow,
+      squareFeetEstimateHigh: draft.squareFeetEstimateHigh,
+      estimatedTotalAmount: draft.estimatedTotalAmount,
+      estimatedTaxAmount: draft.estimatedTaxAmount,
+      estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
+      lineItems: draft.lineItems.map((lineItem) => ({
+        description: lineItem.description,
+        quantity: lineItem.quantity,
+        sectionType: lineItem.sectionType ?? "INCLUDED",
+        sectionLabel: lineItem.sectionLabel ?? null,
+      })),
+    },
+  }];
+  const fieldsExcluded = [
+    ...defaultExcludedFields(includeInternalCost),
+    ...(includeInternalCost ? [] : ["user-supplied internal cost estimate"]),
+  ];
+  const baseDiagnostics = diagnostics({
+    input: params,
+    resolvedTool: "DRAFT_QUOTE",
+    resultCount: 1,
+    citationCount: citations.length,
+    emptyReason: selectedCustomer || selectedQuote ? null : "No selected active customer or quote context was found; preview was derived from the prompt only.",
+    archivePolicy: "Quote drafting context uses active tenant customers and quotes only.",
+    filters: {
+      currentPage: params.context?.currentPage,
+      scopedCustomer: Boolean(selectedCustomerId),
+      selectedCustomerFound: Boolean(selectedCustomer),
+      scopedQuote: Boolean(params.context?.quoteId),
+      selectedQuoteFound: Boolean(selectedQuote),
+      includeArchivedRequested: Boolean(params.context?.includeArchived),
+      includeArchivedEffective: false,
+    },
+  });
+  const composition = await composeAssistantAnswer({
+    userMessage: params.message,
+    tool: "DRAFT_QUOTE",
+    deterministicAnswer: answer,
+    maxClassification,
+    results,
+    citations,
+    actions,
+    fieldsExcluded,
+    diagnostics: baseDiagnostics,
+    sensitiveValues: [
+      params.actor.actorEmail,
+      params.actor.actorName,
+      selectedCustomer?.fullName,
+      selectedCustomer?.email,
+      selectedCustomer?.phone,
+    ],
+  });
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
     actor: params.actor,
     message: params.message,
-    answer,
+    answer: composition.answer,
     classification: maxClassification,
     sourceTypes: selectedCustomer ? ["Customer", "Quote"] : ["Quote"],
     sourceLabels: selectedQuote
@@ -575,61 +839,29 @@ async function runDraftQuotePreview(
     quoteId: selectedQuote?.id ?? null,
     customerId: selectedCustomer?.id ?? null,
     serviceType,
-    riskNote: "Assistant quote drafting is preview-only; no quote row is created or sent without user confirmation.",
+    model: composition.model,
+    telemetry: composition.telemetry,
+    confidenceLevel: composition.confidenceLevel,
+    confidenceLabel: composition.confidenceLabel,
+    insightReasons: composition.insightReasons,
+    riskNote: composition.riskNote,
   });
 
   return {
     consumedCredits: 1,
+    consumedSpendUsd: composition.telemetry?.estimatedCostUsd ?? 0,
     assistant: {
       tool: "DRAFT_QUOTE",
       generatedAtUtc,
       policyVersion: AI_DATA_POLICY_VERSION,
       maxClassification,
-      answer,
-      results: [{
-        title,
-        serviceType,
-        customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
-        squareFeetEstimate: draft.squareFeetEstimate,
-        estimatedTotalAmount: draft.estimatedTotalAmount,
-        estimatedTaxAmount: draft.estimatedTaxAmount,
-        estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
-        lineItemCount: draft.lineItems.length,
-      }],
-      citations: [{ key: "A1", label: "Parsed quote drafting prompt", sourceType: "Quote", classification: maxClassification }],
-      actions: [{
-        type: "OPEN_QUOTE_DRAFT",
-        label: "Review quote draft",
-        requiresConfirmation: true,
-        payload: {
-          prompt: params.message,
-          customerId: selectedCustomer?.id ?? null,
-          customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
-          customerEmail: selectedCustomer?.email ?? draft.customerEmail ?? null,
-          customerPhone: selectedCustomer?.phone ?? draft.customerPhone ?? null,
-          quoteId: selectedQuote?.id ?? null,
-          serviceType,
-          title,
-          scopeText,
-          squareFeetEstimate: draft.squareFeetEstimate,
-          squareFeetEstimateLow: draft.squareFeetEstimateLow,
-          squareFeetEstimateHigh: draft.squareFeetEstimateHigh,
-          estimatedTotalAmount: draft.estimatedTotalAmount,
-          estimatedTaxAmount: draft.estimatedTaxAmount,
-          estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
-          lineItems: draft.lineItems.map((lineItem) => ({
-            description: lineItem.description,
-            quantity: lineItem.quantity,
-            sectionType: lineItem.sectionType ?? "INCLUDED",
-            sectionLabel: lineItem.sectionLabel ?? null,
-          })),
-        },
-      }],
+      answer: composition.answer,
+      results,
+      citations,
+      actions,
       auditEventId: event.id,
-      fieldsExcluded: [
-        ...defaultExcludedFields(includeInternalCost),
-        ...(includeInternalCost ? [] : ["user-supplied internal cost estimate"]),
-      ],
+      fieldsExcluded,
+      diagnostics: composedDiagnostics(baseDiagnostics, composition),
     },
   };
 }

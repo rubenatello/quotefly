@@ -1,7 +1,12 @@
 import { Prisma, type DataClassification, type PrismaClient, type QuoteStatus, type ServiceCategory } from "@prisma/client";
 import type { AccessContext } from "./access-policy";
 import { hasCapability } from "./access-policy";
+import {
+  composeAssistantAnswer,
+  type AiAssistantAnswerMode,
+} from "./ai-assistant-composer";
 import { createAiUsageEvent } from "./ai-usage";
+import type { AiUsageTelemetry } from "./ai-usage";
 import { hashSourceReference } from "./ai-data-governance";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import { tenantActiveScope } from "./query-scope";
@@ -75,6 +80,9 @@ export type AiBusinessInsightResult = Readonly<{
   }>;
   auditEventId: string;
   fieldsExcluded: string[];
+  answerMode: AiAssistantAnswerMode;
+  model: string | null;
+  telemetry: AiUsageTelemetry | null;
 }>;
 
 export class AiBusinessInsightForbiddenError extends Error {
@@ -90,6 +98,35 @@ function roundCurrency(value: number) {
 
 function roundPercent(value: number | null) {
   return value === null || !Number.isFinite(value) ? null : Number(value.toFixed(2));
+}
+
+function money(value: number | null | undefined) {
+  return `$${(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function percent(value: number | null | undefined) {
+  return value === null || value === undefined ? "n/a" : `${value}%`;
+}
+
+function formatInsightDate(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function formatQuoteStatus(value: string) {
+  return value
+    .toLowerCase()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function rowString(row: Record<string, string | number | null> | undefined, key: string) {
+  const value = row?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function rowNumber(row: Record<string, string | number | null> | undefined, key: string) {
+  const value = row?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function marginPercent(revenue: number, cost: number) {
@@ -126,11 +163,19 @@ function requiresFinancialAccess(tool: AiBusinessInsightTool) {
   return tool === "SERVICE_PROFITABILITY" || tool === "ITEM_PROFITABILITY" || tool === "LOW_MARGIN_QUOTES";
 }
 
+function canIncludeArchivedRecords(access: AccessContext) {
+  return hasCapability(access, "viewAiRunAudit");
+}
+
+function shouldIncludeArchivedRecords(params: AiBusinessInsightInput) {
+  return Boolean(params.includeArchived && canIncludeArchivedRecords(params.access));
+}
+
 function quoteWhere(params: AiBusinessInsightInput, range: { from: Date; to: Date }): Prisma.QuoteWhereInput {
   return {
     tenantId: params.access.tenantId,
     deletedAtUtc: null,
-    ...(params.includeArchived ? {} : { archivedAtUtc: null }),
+    ...(shouldIncludeArchivedRecords(params) ? {} : { archivedAtUtc: null }),
     ...(params.serviceType ? { serviceType: params.serviceType } : {}),
     createdAt: {
       gte: range.from,
@@ -166,22 +211,36 @@ function emptyStatusCounts(): Record<QuoteStatus, { count: number; revenue: numb
 
 function buildAnswer(params: {
   tool: AiBusinessInsightTool;
-  maxClassification: DataClassification;
+  dateRange: { from: Date; to: Date };
+  includeArchived: boolean;
   summary: AiBusinessInsightResult["summary"];
-  rowCount: number;
+  rows: AiBusinessInsightResult["rows"];
 }) {
+  const dateScope = `${formatInsightDate(params.dateRange.from)} to ${formatInsightDate(params.dateRange.to)}`;
+  const archiveScope = params.includeArchived ? "including archived quotes" : "excluding archived quotes";
+  const rowCount = params.rows.length;
   if (params.tool === "SALES_PIPELINE") {
+    const topStatus = params.rows[0];
+    const topStatusText = topStatus
+      ? `Largest bucket: ${formatQuoteStatus(rowString(topStatus, "status") ?? "unknown")} at ${money(rowNumber(topStatus, "revenue"))}.`
+      : "No active pipeline rows matched that range.";
     return [
-      `Sales pipeline: ${params.summary.quoteCount} quotes in range.`,
-      `Accepted revenue is $${params.summary.acceptedRevenue.toLocaleString()}; open pipeline is $${params.summary.pipelineRevenue.toLocaleString()}.`,
+      `Sales pipeline for quotes created ${dateScope}, ${archiveScope}: ${params.summary.quoteCount} quotes found.`,
+      `Accepted revenue is ${money(params.summary.acceptedRevenue)}; open pipeline is ${money(params.summary.pipelineRevenue)}.`,
+      topStatusText,
       params.summary.winRatePercent === null ? null : `Win rate is ${params.summary.winRatePercent}%.`,
     ].filter(Boolean).join(" ");
   }
 
   if (params.tool === "SERVICE_PROFITABILITY") {
+    const topService = params.rows[0];
+    const topServiceText = topService
+      ? `Top service: ${rowString(topService, "serviceType") ?? "unknown"} with ${money(rowNumber(topService, "grossProfit"))} gross profit on ${money(rowNumber(topService, "revenue"))} revenue (${percent(rowNumber(topService, "grossMarginPercent"))} margin).`
+      : "No accepted quotes matched that range.";
     return [
-      `Service profitability ranked ${params.rowCount} service categories.`,
-      `Accepted revenue is $${params.summary.acceptedRevenue.toLocaleString()} with gross profit $${params.summary.grossProfit?.toLocaleString() ?? "0"}.`,
+      `Service profitability for accepted quotes created ${dateScope}, ${archiveScope}: ranked ${rowCount} service categor${rowCount === 1 ? "y" : "ies"}.`,
+      topServiceText,
+      `Overall accepted revenue is ${money(params.summary.acceptedRevenue)} with ${money(params.summary.grossProfit)} gross profit.`,
       params.summary.grossMarginPercent === null || params.summary.grossMarginPercent === undefined
         ? null
         : `Gross margin is ${params.summary.grossMarginPercent}%.`,
@@ -189,10 +248,18 @@ function buildAnswer(params: {
   }
 
   if (params.tool === "ITEM_PROFITABILITY") {
-    return `Item profitability ranked ${params.rowCount} line-item groups using accepted quotes only.`;
+    const topItem = params.rows[0];
+    const topItemText = topItem
+      ? `Top item: ${rowString(topItem, "item") ?? "unknown"} with ${money(rowNumber(topItem, "grossProfit"))} gross profit (${percent(rowNumber(topItem, "grossMarginPercent"))} margin).`
+      : "No accepted quote line items matched that range.";
+    return `Item profitability for accepted quotes created ${dateScope}, ${archiveScope}: ranked ${rowCount} line-item group${rowCount === 1 ? "" : "s"}. ${topItemText}`;
   }
 
-  return `Low-margin review found ${params.rowCount} accepted quotes below ${LOW_MARGIN_THRESHOLD_PERCENT}% gross margin.`;
+  const lowestMargin = params.rows[0];
+  const lowestMarginText = lowestMargin
+    ? `Lowest margin: ${rowString(lowestMargin, "title") ?? "selected quote"} at ${percent(rowNumber(lowestMargin, "grossMarginPercent"))}.`
+    : "No accepted quotes fell below the margin threshold.";
+  return `Low-margin review for accepted quotes created ${dateScope}, ${archiveScope}: found ${rowCount} quote${rowCount === 1 ? "" : "s"} below ${LOW_MARGIN_THRESHOLD_PERCENT}% gross margin. ${lowestMarginText}`;
 }
 
 async function loadQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
@@ -439,6 +506,7 @@ export async function generateAiBusinessInsight(
   const generatedAtUtc = params.now ?? new Date();
   const dateRange = normalizeRange({ from: params.dateFrom, to: params.dateTo, now: generatedAtUtc });
   const maxClassification: DataClassification = financial ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL";
+  const includeArchived = shouldIncludeArchivedRecords(params);
   const data = params.tool === "SALES_PIPELINE"
     ? await buildSalesPipeline(prisma, params, dateRange)
     : params.tool === "SERVICE_PROFITABILITY"
@@ -448,9 +516,54 @@ export async function generateAiBusinessInsight(
         : await buildLowMarginQuotes(prisma, params, dateRange);
   const answer = buildAnswer({
     tool: params.tool,
-    maxClassification,
+    dateRange,
+    includeArchived,
     summary: data.summary,
-    rowCount: data.rows.length,
+    rows: data.rows,
+  });
+  const fieldsExcluded = [
+    "tenant ids",
+    "raw row ids",
+    "customer contact data",
+    "provider identifiers",
+    "raw prompts",
+    ...(params.includeArchived && !includeArchived ? ["archived records"] : []),
+    ...(financial ? [] : ["internal costs", "gross profit", "margins"]),
+  ];
+  const statuses: QuoteStatus[] = params.tool === "SALES_PIPELINE"
+    ? ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"]
+    : ["ACCEPTED"];
+  const composition = await composeAssistantAnswer({
+    userMessage: params.prompt,
+    tool: params.tool,
+    deterministicAnswer: answer,
+    maxClassification,
+    results: data.rows,
+    citations: data.citations,
+    actions: [],
+    fieldsExcluded,
+    sensitiveValues: [
+      params.actor.actorEmail,
+      params.actor.actorName,
+      ...(params.sensitiveValues ?? []),
+    ],
+    diagnostics: {
+      resultCount: data.rows.length,
+      citationCount: data.citations.length,
+      emptyReason: data.rows.length ? null : "No quote aggregates matched tenant scope and effective filters.",
+      archivePolicy: includeArchived
+        ? "Archived quote aggregates were included because the current role policy allowed it."
+        : "Archived/deleted quote aggregates were excluded by the current role policy.",
+      filters: {
+        businessInsightTool: params.tool,
+        dateField: "Quote.createdAt",
+        dateFrom: dateRange.from.toISOString(),
+        dateTo: dateRange.to.toISOString(),
+        serviceType: params.serviceType ?? null,
+        includeArchivedRequested: Boolean(params.includeArchived),
+        includeArchivedEffective: includeArchived,
+      },
+    },
   });
 
   const event = await createAiUsageEvent(prisma, {
@@ -462,21 +575,22 @@ export async function generateAiBusinessInsight(
     promptText: params.prompt,
     requestId: params.access.requestId,
     creditsConsumed: 1,
+    model: composition.model,
+    telemetry: composition.telemetry,
     sensitiveValues: params.sensitiveValues,
     trace: {
-      insightSummary: answer,
+      insightSummary: composition.answer,
       insightReasons: [
         `tool=${params.tool}`,
         `dateRange=${dateRange.from.toISOString()}..${dateRange.to.toISOString()}`,
         `classification=${maxClassification}`,
+        ...composition.insightReasons,
       ],
       insightSourceLabels: data.citations.map((citation) => citation.label),
       sourceTypes: data.citations.map((citation) => citation.sourceType),
-      confidenceLevel: "high",
-      confidenceLabel: "Deterministic aggregate",
-      riskNote: financial
-        ? "Includes C3 internal cost and margin aggregates; restricted to admin/owner capabilities."
-        : "Revenue-only C2 aggregate; internal costs and margins excluded.",
+      confidenceLevel: composition.confidenceLevel,
+      confidenceLabel: composition.confidenceLabel,
+      riskNote: composition.riskNote,
     },
   });
 
@@ -488,21 +602,17 @@ export async function generateAiBusinessInsight(
     dateRange,
     filters: {
       serviceType: params.serviceType ?? null,
-      includeArchived: Boolean(params.includeArchived),
-      statuses: params.tool === "SALES_PIPELINE" ? ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"] : ["ACCEPTED"],
+      includeArchived,
+      statuses,
     },
-    answer,
+    answer: composition.answer,
     summary: data.summary,
     rows: data.rows,
     citations: data.citations,
     auditEventId: event.id,
-    fieldsExcluded: [
-      "tenant ids",
-      "raw row ids",
-      "customer contact data",
-      "provider identifiers",
-      "raw prompts",
-      ...(financial ? [] : ["internal costs", "gross profit", "margins"]),
-    ],
+    fieldsExcluded,
+    answerMode: composition.answerMode,
+    model: composition.model,
+    telemetry: composition.telemetry,
   };
 }

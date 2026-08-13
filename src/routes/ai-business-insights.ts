@@ -6,6 +6,7 @@ import {
   AiBusinessInsightForbiddenError,
   generateAiBusinessInsight,
 } from "../lib/ai-business-insights";
+import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { resolveActivityActor } from "../lib/activity";
 import { getJwtClaims } from "../lib/auth";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
@@ -24,7 +25,10 @@ const BusinessInsightSchema = z.object({
 });
 
 export const aiBusinessInsightRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/ai/business-insights", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/ai/business-insights", {
+    preHandler: [app.authenticate],
+    config: authenticatedAiRateLimit("ai-business-insights", app.env.NODE_ENV === "test" ? 10_000 : 12),
+  }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const payload = BusinessInsightSchema.parse(request.body);
@@ -67,7 +71,10 @@ export const aiBusinessInsightRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         insight,
-        usage: buildAiUsageResponse(snapshot),
+        usage: buildAiUsageResponse(snapshot, {
+          consumedCredits: 1,
+          consumedSpendUsd: insight.telemetry?.estimatedCostUsd ?? 0,
+        }),
       };
     } catch (error) {
       if (error instanceof AiBusinessInsightForbiddenError) {
