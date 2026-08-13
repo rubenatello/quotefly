@@ -293,6 +293,95 @@ export function SkeletonCard() {
 
 /* ─────────────────────────── ALERT ─────────────────────────── */
 
+export function LoadingState({
+  title = "Loading",
+  description,
+  rows = 4,
+  variant = "list",
+  className = "",
+}: {
+  title?: string;
+  description?: string;
+  rows?: number;
+  variant?: "list" | "cards" | "table" | "compact";
+  className?: string;
+}) {
+  const safeRows = Math.max(1, Math.min(rows, 8));
+  const rowItems = Array.from({ length: safeRows }, (_, index) => index);
+
+  if (variant === "compact") {
+    return (
+      <div role="status" aria-live="polite" className={cn("rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", className)}>
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-quotefly-blue shadow-sm">
+            <Spinner size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-slate-800">{title}</p>
+            {description ? <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p> : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div role="status" aria-live="polite" className={cn("rounded-xl border border-slate-200 bg-slate-50/80 p-4", className)}>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-800">{title}</p>
+          {description ? <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p> : null}
+        </div>
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-quotefly-blue shadow-sm">
+          <Spinner size={15} />
+        </span>
+      </div>
+
+      {variant === "table" ? (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+          {rowItems.map((row) => (
+            <div key={row} className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-slate-100 px-4 py-4 last:border-b-0">
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="ml-auto h-8 w-20 rounded-full" />
+            </div>
+          ))}
+        </div>
+      ) : variant === "cards" ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {rowItems.map((row) => (
+            <SkeletonCard key={row} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {rowItems.map((row) => (
+            <div key={row} className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+                <Skeleton className="hidden h-8 w-20 rounded-full sm:block" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <span className="sr-only">{title}</span>
+    </div>
+  );
+}
+
 type AlertTone = "error" | "success" | "info" | "warning";
 
 interface AlertProps {

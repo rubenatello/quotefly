@@ -3,8 +3,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
   Bot,
+  CheckCircle2,
   FilePlus2,
-  LoaderCircle,
   LockKeyhole,
   Search,
   Send,
@@ -17,7 +17,7 @@ import { ApiError, api, type AiAssistantAction, type AiAssistantResponse, type A
 import { formatAiUsageNotice } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
-import { Alert, Badge, Button, Modal, ModalBody, ModalHeader, Textarea } from "../ui";
+import { Alert, Badge, Button, LoadingState, Modal, ModalBody, ModalHeader, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
 
@@ -225,8 +225,13 @@ function KodyResultCard({
 }) {
   const entries = visibleResultEntries(result);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-      <p className="text-sm font-semibold text-slate-900">{resultTitle(result, `Result ${index + 1}`)}</p>
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-quotefly-blue/25 hover:shadow-md">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-quotefly-blue/[0.08] text-[11px] font-bold text-quotefly-blue">
+          {index + 1}
+        </span>
+        <p className="min-w-0 text-sm font-semibold text-slate-900">{resultTitle(result, `Result ${index + 1}`)}</p>
+      </div>
       {entries.length ? (
         <dl className="mt-2 grid gap-1.5 text-xs text-slate-600">
           {entries.map(([key, value]) => (
@@ -253,16 +258,20 @@ function KodyResponse({
   const meta = classificationMeta(response.maxClassification);
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={classificationTone(response.maxClassification)}>
-          {meta.label}
-        </Badge>
-        <Badge tone="slate" icon={<ShieldCheck size={12} />}>
-          Tenant-scoped
-        </Badge>
+      <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <Badge tone={classificationTone(response.maxClassification)}>
+            {meta.label}
+          </Badge>
+          <Badge tone="slate" icon={<ShieldCheck size={12} />}>
+            Tenant-scoped
+          </Badge>
+          <Badge tone="blue" icon={<CheckCircle2 size={12} />}>
+            Cited answer
+          </Badge>
+        </div>
+        <p className="text-sm leading-6 text-slate-700">{response.answer}</p>
       </div>
-
-      <p className="text-sm leading-6 text-slate-700">{response.answer}</p>
 
       {response.results.length ? (
         <div className="grid gap-2">
@@ -289,7 +298,7 @@ function KodyResponse({
       ) : null}
 
       <div
-        className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+        className="rounded-2xl border border-quotefly-blue/15 bg-quotefly-blue/[0.04] px-3 py-2 text-xs text-slate-600"
         data-testid="kody-data-guardrails"
       >
         <div className="flex items-start gap-2">
@@ -334,6 +343,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   const [loadingTool, setLoadingTool] = useState<AiAssistantTool | "AUTO">("AUTO");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const pendingMessageIdRef = useRef<string | null>(null);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
@@ -382,6 +392,18 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
     const timer = window.setInterval(updatePendingMessage, 900);
     return () => window.clearInterval(timer);
   }, [loadingStartedAt, loadingTool]);
+
+  useEffect(() => {
+    if (!open) return;
+    const conversation = conversationRef.current;
+    if (!conversation) return;
+    window.requestAnimationFrame(() => {
+      conversation.scrollTo({
+        top: conversation.scrollHeight,
+        behavior: messages.length > 2 ? "smooth" : "auto",
+      });
+    });
+  }, [open, messages.length, loading]);
 
   async function submitPrompt(options?: { prompt?: string; tool?: AiAssistantTool | "AUTO" }) {
     const messageText = (options?.prompt ?? prompt).trim();
@@ -545,7 +567,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         onClose={() => setOpen(false)}
         size="xl"
         ariaLabel="Kody assistant"
-        panelClassName="h-[calc(100dvh-1rem)] sm:h-[min(88dvh,760px)]"
+        panelClassName="h-[calc(100dvh-0.75rem)] border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 sm:h-[min(88dvh,760px)]"
       >
         <ModalHeader
           title={
@@ -557,6 +579,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
             </span>
           }
           description="QuoteFly assistant for customer lookup, quote drafting, pipeline, and profitability."
+          className="bg-white/90 backdrop-blur"
           onClose={() => setOpen(false)}
         />
         <ModalBody className="flex flex-col gap-4 bg-slate-50">
@@ -582,7 +605,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
             ))}
           </div>
 
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-3 sm:p-4">
+          <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-3 shadow-inner sm:p-4">
             {!messages.length ? (
               <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">
@@ -593,6 +616,21 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                 <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
                   <LockKeyhole size={13} />
                   Backend-only AI. Tenant-scoped data.
+                </div>
+                <div className="mt-4 grid w-full max-w-xl gap-2 text-left sm:grid-cols-3">
+                  {["Find customers due for follow-up", "Draft a quote from job notes", "Rank profitable jobs"].map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => {
+                        setPrompt(example);
+                        window.setTimeout(() => inputRef.current?.focus(), 0);
+                      }}
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium leading-5 text-slate-600 shadow-sm transition hover:border-quotefly-blue/30 hover:text-slate-900"
+                    >
+                      {example}
+                    </button>
+                  ))}
                 </div>
               </div>
             ) : (
@@ -612,21 +650,20 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                   <div
                     className={cn(
                       "max-w-[92%] rounded-3xl px-4 py-3 sm:max-w-[82%]",
-                      message.role === "user"
-                        ? "bg-quotefly-blue text-white"
-                        : "border border-slate-200 bg-slate-50 text-slate-800",
+                      message.pending
+                        ? "w-full p-0 sm:max-w-[78%]"
+                        : message.role === "user"
+                          ? "bg-quotefly-blue text-white"
+                          : "border border-slate-200 bg-slate-50 text-slate-800",
                     )}
                   >
                     {message.pending ? (
-                      <div className="flex items-start gap-2 text-sm leading-6 text-slate-700" aria-live="polite">
-                        <LoaderCircle size={16} className="mt-1 shrink-0 animate-spin text-quotefly-blue" />
-                        <div>
-                          <p>{message.text}</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">
-                            Backend-only AI. Tenant-scoped retrieval. No browser API key.
-                          </p>
-                        </div>
-                      </div>
+                      <LoadingState
+                        title={message.text}
+                        description="Backend-only AI. Tenant-scoped retrieval. No browser API key."
+                        variant="compact"
+                        className="border-quotefly-blue/20 bg-quotefly-blue/[0.04]"
+                      />
                     ) : message.response ? (
                       <KodyResponse response={message.response} usageNotice={message.usageNotice} onAction={handleAction} />
                     ) : (

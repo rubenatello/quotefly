@@ -41,6 +41,7 @@ import {
   ConfirmModal,
   EmptyState,
   Input,
+  LoadingState,
   Modal,
   ModalBody,
   ModalFooter,
@@ -1654,7 +1655,12 @@ export function QuoteDeskView() {
 
                 <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 xl:flex">
                   {presetsLoading ? (
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work...</div>
+                    <LoadingState
+                      title="Loading common work"
+                      description="Fetching saved tenant work presets for this trade."
+                      variant="compact"
+                      className="min-w-[260px] bg-white"
+                    />
                   ) : availablePresets.length ? (
                     availablePresets.slice(0, 10).map((preset) => (
                       <button
@@ -2026,7 +2032,12 @@ export function QuoteDeskView() {
               </div>
 
               {aiRunsLoading ? (
-                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading AI runs...</p>
+                <LoadingState
+                  title="Loading AI runs"
+                  description="Retrieving redacted prompts, confidence labels, and guarded AI activity."
+                  variant="list"
+                  rows={3}
+                />
               ) : aiRuns.length === 0 ? (
                 <EmptyState title="No AI runs yet" description="Privacy-safe AI activity appears here after draft or revise actions." />
               ) : (
@@ -2119,7 +2130,12 @@ export function QuoteDeskView() {
                     ) : null}
                   </div>
                   {historyLoading ? (
-                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading history...</p>
+                    <LoadingState
+                      title="Loading history"
+                      description="Getting quote versions, totals, and restore checkpoints."
+                      variant="list"
+                      rows={4}
+                    />
                   ) : quoteHistory.length === 0 ? (
                     <EmptyState title="No history yet" description="History entries appear after the quote changes." />
                   ) : (
@@ -2177,7 +2193,12 @@ export function QuoteDeskView() {
               actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
             />
             {outboundEventsLoading ? (
-              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">Loading send log...</p>
+              <LoadingState
+                title="Loading send log"
+                description="Checking email, SMS, copy, and download events."
+                variant="list"
+                rows={3}
+              />
             ) : outboundEvents.length === 0 ? (
               <EmptyState title="No send log yet" description="Send activity appears after an email, text, or copy action is confirmed." />
             ) : (

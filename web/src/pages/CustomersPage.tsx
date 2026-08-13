@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Alert, Button, Card, ConfirmModal, EmptyState, Input, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
+import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
 import { usePageView } from "../lib/analytics";
@@ -797,7 +797,14 @@ export function CustomersPage() {
 
         <div className="-mx-4 -mb-4 mt-4 border-t border-slate-200 sm:-mx-5 sm:-mb-5">
           {customerLoading ? (
-            <div className="px-5 py-8 text-sm text-slate-600">Loading customers...</div>
+            <div className="p-4">
+              <LoadingState
+                title="Loading customers"
+                description="Getting the latest tenant-scoped customer list, quote stage, and contact summary."
+                variant="table"
+                rows={5}
+              />
+            </div>
           ) : customerRows.length === 0 ? (
             <div className="p-5">
               <EmptyState
@@ -1044,7 +1051,14 @@ export function CustomersPage() {
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 {activityLoading ? (
-                  <div className="px-4 py-6 text-sm text-slate-600">Loading activity...</div>
+                  <div className="p-4">
+                    <LoadingState
+                      title="Loading activity"
+                      description="Pulling recent customer notes, contact events, and quote movement."
+                      variant="list"
+                      rows={4}
+                    />
+                  </div>
                 ) : activityItems.length ? (
                   activityItems.map((item, index) => {
                     const tone = activityTone(item);

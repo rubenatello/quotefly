@@ -20,6 +20,7 @@ import {
   CardHeader,
   ConfirmModal,
   Input,
+  LoadingState,
   Modal,
   ModalBody,
   ModalHeader,
@@ -1377,7 +1378,12 @@ export function QuoteBuilderView() {
 
               <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                 {presetsLoading ? (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">Loading common work…</div>
+                  <LoadingState
+                    title="Loading common work"
+                    description="Fetching your tenant product presets for faster line-item setup."
+                    variant="compact"
+                    className="min-w-[260px] bg-white"
+                  />
                 ) : availablePresets.length ? (
                   availablePresets.slice(0, 10).map((preset) => {
                     const active = preset.id === selectedPresetId;

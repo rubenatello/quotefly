@@ -12,7 +12,7 @@ import {
   Send,
   UserRoundCheck,
 } from "lucide-react";
-import { Alert, Badge, Button, Card, EmptyState, PageHeader } from "../components/ui";
+import { Alert, Badge, Button, Card, EmptyState, LoadingState, PageHeader } from "../components/ui";
 import { QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { KodyButton } from "../components/ai/KodyButton";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
@@ -835,7 +835,14 @@ export function AnalyticsPage() {
       >
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           {loading ? (
-            <div className="px-4 py-8 text-sm text-slate-600">Loading analytics...</div>
+            <div className="p-4">
+              <LoadingState
+                title="Loading analytics"
+                description="Calculating quote outcomes, response speed, and revenue trends for this window."
+                variant="table"
+                rows={4}
+              />
+            </div>
           ) : recentQuotes.length === 0 ? (
             <div className="p-4">
               <EmptyState title="No quote activity in this range" description="Choose a wider timeframe or wait for more quote changes." />

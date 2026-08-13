@@ -16,7 +16,7 @@ import {
   type LeadCardItem,
   type QuoteMathSummary,
 } from "../components/dashboard/DashboardUi";
-import { ConfirmModal, Modal, ModalBody, ModalFooter, ModalHeader } from "../components/ui";
+import { ConfirmModal, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader } from "../components/ui";
 import {
   api,
   ApiError,
@@ -1493,9 +1493,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     </div>
 
                     {historyLoading ? (
-                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                        Loading revision history...
-                      </p>
+                      <LoadingState
+                        title="Loading revision history"
+                        description="Retrieving recent quote versions and changes."
+                        variant="compact"
+                        className="bg-white"
+                      />
                     ) : quoteHistory.length === 0 ? (
                       <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
                         No history entries for this filter yet.
@@ -1564,9 +1567,12 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     </div>
 
                     {outboundEventsLoading ? (
-                      <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                        Loading send activity...
-                      </p>
+                      <LoadingState
+                        title="Loading send activity"
+                        description="Checking delivery and copy events for this quote."
+                        variant="compact"
+                        className="bg-white"
+                      />
                     ) : outboundEvents.length === 0 ? (
                       <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
                         No send actions logged yet.

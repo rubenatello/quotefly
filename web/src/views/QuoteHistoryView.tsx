@@ -1,6 +1,6 @@
 import { useDashboard, money, formatDateTime } from "../components/dashboard/DashboardContext";
 import { FeatureLockedCard, QuoteStatusPill, HistoryEventPill, OutboundChannelPill } from "../components/dashboard/DashboardUi";
-import { Card, CardHeader, Button, EmptyState, Alert } from "../components/ui";
+import { Card, CardHeader, Button, EmptyState, Alert, LoadingState } from "../components/ui";
 import { usePageView } from "../lib/analytics";
 
 export function QuoteHistoryView() {
@@ -58,9 +58,12 @@ export function QuoteHistoryView() {
           </div>
 
           {historyLoading ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-600">
-              Loading revision history...
-            </p>
+            <LoadingState
+              title="Loading revision history"
+              description="Retrieving quote versions, changed fields, and user activity."
+              variant="list"
+              rows={4}
+            />
           ) : quoteHistory.length === 0 ? (
             <EmptyState title="No history" description="No history entries for this filter yet." />
           ) : (
@@ -116,7 +119,12 @@ export function QuoteHistoryView() {
           {!selectedQuote ? (
             <EmptyState title="No quote selected" description="Select a quote from the Builder or Quote Desk to see communication logs." />
           ) : outboundEventsLoading ? (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-600">Loading send activity...</p>
+            <LoadingState
+              title="Loading send activity"
+              description="Checking email, SMS, copy, and download events for this quote."
+              variant="list"
+              rows={3}
+            />
           ) : outboundEvents.length === 0 ? (
             <EmptyState title="No activity" description="No send actions logged yet for this quote." />
           ) : (

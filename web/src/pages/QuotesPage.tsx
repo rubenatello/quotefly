@@ -9,6 +9,7 @@ import {
   ConfirmModal,
   EmptyState,
   Input,
+  LoadingState,
   Modal,
   ModalBody,
   ModalFooter,
@@ -718,7 +719,14 @@ export function QuotesPage() {
 
         <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {loading ? (
-            <div className="px-4 py-8 text-sm text-slate-600">Loading quotes...</div>
+            <div className="p-4">
+              <LoadingState
+                title="Loading quotes"
+                description="Building the quote board with current status, customer, PDF, and accounting context."
+                variant="table"
+                rows={5}
+              />
+            </div>
           ) : filteredQuotes.length === 0 ? (
             <div className="p-4">
               <EmptyState
