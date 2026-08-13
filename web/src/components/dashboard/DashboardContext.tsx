@@ -157,6 +157,18 @@ const QUOTE_EDIT_FIELDS: Array<keyof QuoteEditForm> = [
   "taxAmount",
 ];
 
+const WORKSPACE_COLLECTION_PATHS = new Set([
+  "/app/analytics",
+  "/app/build",
+  "/app/follow-up",
+  "/app/quotes",
+]);
+
+function shouldEagerLoadWorkspaceCollections(pathname: string): boolean {
+  const normalizedPath = pathname.replace(/\/+$/, "") || pathname;
+  return WORKSPACE_COLLECTION_PATHS.has(normalizedPath) || normalizedPath.startsWith("/app/quotes/");
+}
+
 /* ─────────────── Helpers ─────────────── */
 
 const USD_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -477,6 +489,11 @@ export function DashboardProvider({
   const [setupSqFtUnitCost, setSetupSqFtUnitCost] = useState("");
   const [setupSqFtUnitPrice, setSetupSqFtUnitPrice] = useState("");
   const [recommendedPresetCount, setRecommendedPresetCount] = useState(0);
+  const hasLoadedWorkspaceCollectionsRef = useRef(false);
+  const shouldLoadWorkspaceCollections = useMemo(
+    () => shouldEagerLoadWorkspaceCollections(location.pathname),
+    [location.pathname],
+  );
 
   const canUseChatToQuote = session?.entitlements?.features.aiAutomation ?? true;
   const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
@@ -503,12 +520,17 @@ export function DashboardProvider({
   /* ─── Data loaders ─── */
 
   useEffect(() => {
+    if (!shouldLoadWorkspaceCollections) {
+      setRecommendedPresetCount(0);
+      return;
+    }
+
     let mounted = true;
     api.onboarding.getRecommendedPresets(setupTrade)
       .then((result) => { if (mounted) setRecommendedPresetCount(result.presets.length); })
       .catch(() => { if (mounted) setRecommendedPresetCount(0); });
     return () => { mounted = false; };
-  }, [setupTrade]);
+  }, [setupTrade, shouldLoadWorkspaceCollections]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -522,6 +544,7 @@ export function DashboardProvider({
       setCustomers(customerRes.customers);
       setQuotes(quoteRes.quotes);
       setBranding(brandingRes?.branding ?? null);
+      hasLoadedWorkspaceCollectionsRef.current = true;
       setQuoteForm((prev) => {
         const nextCustomerId =
           prev.customerId && customerRes.customers.some((customer) => customer.id === prev.customerId)
@@ -533,7 +556,7 @@ export function DashboardProvider({
       const nextQuoteId = routeQuoteIdRef.current
         ?? (currentQuoteId && quoteRes.quotes.some((quote) => quote.id === currentQuoteId)
           ? currentQuoteId
-          : quoteRes.quotes[0]?.id ?? null);
+          : null);
       selectQuoteId(nextQuoteId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading dashboard data.");
@@ -542,7 +565,14 @@ export function DashboardProvider({
     }
   }, [selectQuoteId, session?.tenantId]);
 
-  useEffect(() => { void loadAll(); }, [loadAll]);
+  useEffect(() => {
+    if (!shouldLoadWorkspaceCollections) {
+      setLoading(false);
+      return;
+    }
+    if (hasLoadedWorkspaceCollectionsRef.current) return;
+    void loadAll();
+  }, [loadAll, shouldLoadWorkspaceCollections]);
 
   const loadQuotes = useCallback(async () => {
     try {
@@ -556,7 +586,7 @@ export function DashboardProvider({
       const nextQuoteId = routeQuoteIdRef.current
         ?? (currentQuoteId && res.quotes.some((quote) => quote.id === currentQuoteId)
           ? currentQuoteId
-          : res.quotes[0]?.id ?? null);
+          : null);
       selectQuoteId(nextQuoteId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading quotes.");

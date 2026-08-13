@@ -647,9 +647,12 @@ export function AnalyticsPage() {
     return (
       <div className="space-y-5 sm:space-y-6">
         <PageHeader title="Analytics" subtitle="Track response speed, quote volume, and recent activity." />
-        <Card variant="default" padding="md">
-          <div className="py-10 text-center text-sm text-slate-600" role="status">Loading workspace analytics...</div>
-        </Card>
+        <LoadingState
+          title="Loading workspace analytics"
+          description="Calculating quote volume, response speed, revenue, and recent activity."
+          variant="cards"
+          rows={4}
+        />
       </div>
     );
   }

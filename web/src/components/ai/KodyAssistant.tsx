@@ -21,6 +21,7 @@ import { cn } from "../../lib/utils";
 import { Alert, Badge, Button, ConfirmModal, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
+import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
 
 type KodyMessage = {
   id: string;
@@ -504,22 +505,23 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
         tool,
         context,
       });
+      const assistantResponse = normalizeKodyAssistantResponse(response.assistant);
       track("kody_response", {
         tool,
         page: currentContextPage,
         ok: true,
         durationMs: elapsedSince(startedAt),
-        resultCount: response.assistant.results.length,
-        citationCount: response.assistant.citations.length,
-        maxClassification: response.assistant.maxClassification,
+        resultCount: assistantResponse.results.length,
+        citationCount: assistantResponse.citations.length,
+        maxClassification: assistantResponse.maxClassification,
       });
       setMessages((current) => {
         const replacement: KodyMessage = {
           id: pendingMessageId,
           role: "kody",
-          text: response.assistant.answer,
+          text: assistantResponse.answer,
           pending: false,
-          response: response.assistant,
+          response: assistantResponse,
           usageNotice: formatAiUsageNotice(response.usage),
         };
         return current.some((message) => message.id === pendingMessageId)

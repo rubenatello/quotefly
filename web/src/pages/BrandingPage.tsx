@@ -29,7 +29,7 @@ import {
 } from "../lib/api";
 import { isSupportedBrandLogoDataUrl, resizeBrandLogoFile } from "../lib/brand-logo";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
-import { Badge, Button, ConfirmModal, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
+import { Badge, Button, ConfirmModal, Input, LoadingState, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 import { BrandingSectionCard, BrandingSummaryTile } from "../components/branding/BrandingSectionCard";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -748,10 +748,12 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             <p className="mt-2 text-sm text-slate-500">Your saved business details, logo, and PDF styling will appear here.</p>
           </div>
         ) : isLoading ? (
-          <div className="rounded-[28px] border border-slate-200 bg-white p-8 text-center shadow-sm" aria-live="polite">
-            <p className="text-sm font-semibold text-slate-700">Loading saved branding settings...</p>
-            <p className="mt-2 text-xs text-slate-500">Editing and saving stay disabled until the saved version is ready.</p>
-          </div>
+          <LoadingState
+            title="Loading saved branding settings"
+            description="Editing and saving stay disabled until the saved version is ready."
+            variant="cards"
+            rows={4}
+          />
         ) : loadErrorMessage || !hasLoaded ? (
           <div className="rounded-[28px] border border-red-200 bg-white p-8 text-center shadow-sm" role="alert">
             <h2 className="font-display text-xl font-semibold text-slate-900">Branding settings did not load</h2>

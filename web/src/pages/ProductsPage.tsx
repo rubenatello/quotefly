@@ -18,6 +18,7 @@ import {
   ConfirmModal,
   EmptyState,
   Input,
+  LoadingState,
   Modal,
   ModalBody,
   ModalFooter,
@@ -593,7 +594,12 @@ export function ProductsPage() {
       </Card>
 
       {loading ? (
-        <Card><div className="space-y-3"><div className="h-14 animate-pulse rounded-xl bg-slate-100" /><div className="h-14 animate-pulse rounded-xl bg-slate-100" /><div className="h-14 animate-pulse rounded-xl bg-slate-100" /></div></Card>
+        <LoadingState
+          title="Loading products"
+          description="Fetching reusable work, pricing, and margin defaults for this trade."
+          variant="table"
+          rows={3}
+        />
       ) : visibleProducts.length === 0 ? (
         <Card>
           <EmptyState
