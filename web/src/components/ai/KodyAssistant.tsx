@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
   Bot,
-  CheckCircle2,
   FilePlus2,
   LockKeyhole,
   Search,
@@ -18,7 +17,7 @@ import { ApiError, api, type AiAssistantAction, type AiAssistantResponse, type A
 import { formatAiUsageNotice } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
-import { Alert, Badge, Button, ConfirmModal, LoadingState, Textarea } from "../ui";
+import { Alert, Button, ConfirmModal, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
 import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
@@ -152,13 +151,6 @@ function resultTitle(result: Record<string, string | number | boolean | null>, f
   );
 }
 
-function classificationTone(classification: string): "amber" | "blue" | "slate" | "emerald" {
-  if (classification.startsWith("C3")) return "amber";
-  if (classification.startsWith("C2")) return "blue";
-  if (classification.startsWith("C1")) return "slate";
-  return "emerald";
-}
-
 function classificationMeta(classification: DataClassification) {
   if (classification === "C4_RESTRICTED") {
     return {
@@ -214,8 +206,11 @@ function compactHiddenList(fieldsExcluded: string[]) {
   return `${visible.join(", ")}${remaining > 0 ? `, +${remaining} more` : ""}`;
 }
 
-function compactAuditId(auditEventId: string) {
-  return auditEventId.length > 10 ? auditEventId.slice(-10) : auditEventId;
+function formatVisibleAnswer(answer: string) {
+  return answer
+    .replace(/\s*\[(?:[A-Z]\d+(?:\s*,\s*)?)+\]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function actionConfirmationCopy(action: AiAssistantAction) {
@@ -283,24 +278,29 @@ function KodyResponse({
   onAction: (action: AiAssistantAction) => void;
 }) {
   const meta = classificationMeta(response.maxClassification);
+  const visibleAnswer = formatVisibleAnswer(response.answer);
   return (
     <div className="space-y-3">
-      <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Badge tone={classificationTone(response.maxClassification)}>
-            {meta.label}
-          </Badge>
-          <Badge tone="slate" icon={<ShieldCheck size={12} />}>
-            Tenant-scoped
-          </Badge>
-          <Badge tone="blue" icon={<CheckCircle2 size={12} />}>
-            Cited answer
-          </Badge>
-          <Badge tone={response.diagnostics.answerMode === "LLM_COMPOSED" ? "emerald" : "slate"}>
-            {response.diagnostics.answerMode === "LLM_COMPOSED" ? "AI composed" : "Deterministic"}
-          </Badge>
-        </div>
-        <p className="text-sm leading-6 text-slate-700">{response.answer}</p>
+      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
+          {visibleAnswer || "Kody returned a response, but there was no answer text to show."}
+        </p>
+
+        {response.actions.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {response.actions.slice(0, 4).map((action, index) => (
+              <Button
+                key={`${action.type}-${index}`}
+                type="button"
+                size="sm"
+                variant={action.type === "REQUEST_ADMIN_ACCESS" ? "outline" : "primary"}
+                onClick={() => onAction(action)}
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {response.results.length ? (
@@ -311,54 +311,33 @@ function KodyResponse({
         </div>
       ) : null}
 
-      {response.actions.length ? (
-        <div className="flex flex-wrap gap-2">
-          {response.actions.slice(0, 4).map((action, index) => (
-            <Button
-              key={`${action.type}-${index}`}
-              type="button"
-              size="sm"
-              variant={action.type === "REQUEST_ADMIN_ACCESS" ? "outline" : "primary"}
-              onClick={() => onAction(action)}
-            >
-              {action.label}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-
-      <div
-        className="rounded-2xl border border-quotefly-blue/15 bg-quotefly-blue/[0.04] px-3 py-2 text-xs text-slate-600"
+      <details
+        className="group rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600 shadow-sm"
         data-testid="kody-data-guardrails"
       >
-        <div className="flex items-start gap-2">
-          <ShieldCheck size={14} className="mt-0.5 shrink-0 text-quotefly-blue" />
-          <div className="min-w-0">
-            <p className="font-semibold text-slate-700">Data guardrails</p>
-            <p className="mt-1">{meta.description}</p>
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-slate-600 marker:hidden">
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <ShieldCheck size={14} className="shrink-0 text-quotefly-blue" />
+            <span className="font-semibold text-slate-700">Sources & safety</span>
+          </span>
+          <span className="text-[11px] text-slate-500 group-open:hidden">Workspace-only</span>
+        </summary>
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+          <p>{meta.description}</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <p className="font-semibold text-slate-500">Sources</p>
+              <p className="mt-0.5 text-slate-700">{compactSourceList(response.citations)}</p>
+            </div>
+            <div>
+              <p className="font-semibold text-slate-500">Hidden for safety</p>
+              <p className="mt-0.5 text-slate-700">{compactHiddenList(response.fieldsExcluded)}</p>
+            </div>
           </div>
+          {usageNotice ? <p>{usageNotice}</p> : null}
         </div>
-        <dl className="mt-2 grid gap-1.5 sm:grid-cols-4">
-          <div>
-            <dt className="font-semibold text-slate-500">Sources</dt>
-            <dd className="mt-0.5 text-slate-700">{compactSourceList(response.citations)}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold text-slate-500">Hidden</dt>
-            <dd className="mt-0.5 text-slate-700">{compactHiddenList(response.fieldsExcluded)}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold text-slate-500">Answer</dt>
-            <dd className="mt-0.5 text-slate-700">{response.diagnostics.model ?? response.diagnostics.answerMode.toLowerCase()}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold text-slate-500">Audit</dt>
-            <dd className="mt-0.5 font-mono text-[11px] text-slate-700">#{compactAuditId(response.auditEventId)}</dd>
-          </div>
-        </dl>
-        {usageNotice ? <p className="mt-1">{usageNotice}</p> : null}
         <p className="sr-only">Policy class {response.maxClassification}</p>
-      </div>
+      </details>
     </div>
   );
 }
@@ -385,6 +364,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
+  const showQuickPrompts = messages.length === 0;
 
   const starterText = useMemo(() => {
     if (messages.length) return "Ask a follow-up or choose another Kody action.";
@@ -670,27 +650,29 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 bg-slate-50 p-3 sm:p-4">
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-            {QUICK_PROMPTS.map((quickPrompt) => (
-              <button
-                key={quickPrompt.label}
-                type="button"
-                onClick={() => handleQuickPrompt(quickPrompt)}
-                disabled={loading}
-                data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
-                className={cn(
-                  "rounded-2xl border bg-white p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-quotefly-blue/40 disabled:cursor-not-allowed disabled:opacity-60",
-                  selectedTool === quickPrompt.tool ? "border-quotefly-blue ring-2 ring-quotefly-blue/10" : "border-slate-200",
-                )}
-              >
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-quotefly-blue/[0.08] text-quotefly-blue">
-                  {quickPrompt.icon}
-                </span>
-                <span className="mt-2 block text-sm font-semibold text-slate-900">{quickPrompt.label}</span>
-                <span className="mt-0.5 block text-xs leading-5 text-slate-500">{quickPrompt.description}</span>
-              </button>
-            ))}
-          </div>
+          {showQuickPrompts ? (
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {QUICK_PROMPTS.map((quickPrompt) => (
+                <button
+                  key={quickPrompt.label}
+                  type="button"
+                  onClick={() => handleQuickPrompt(quickPrompt)}
+                  disabled={loading}
+                  data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
+                  className={cn(
+                    "rounded-2xl border bg-white p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-quotefly-blue/40 disabled:cursor-not-allowed disabled:opacity-60",
+                    selectedTool === quickPrompt.tool ? "border-quotefly-blue ring-2 ring-quotefly-blue/10" : "border-slate-200",
+                  )}
+                >
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-quotefly-blue/[0.08] text-quotefly-blue">
+                    {quickPrompt.icon}
+                  </span>
+                  <span className="mt-2 block text-sm font-semibold text-slate-900">{quickPrompt.label}</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-slate-500">{quickPrompt.description}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-3 shadow-inner sm:p-4">
             {!messages.length ? (

@@ -193,7 +193,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await kodyDialog.getByRole("button", { name: "Send", exact: true }).click();
   await expect(kodyDialog.getByText(`Found ${customer.fullName} in this workspace.`)).toBeVisible();
   const guardrails = kodyDialog.getByTestId("kody-data-guardrails");
-  await expect(guardrails).toContainText("Customer and quote context");
+  await expect(guardrails).toContainText("Sources & safety");
+  await expect(guardrails).toContainText("Workspace-only");
+  await expect(guardrails).not.toContainText("AI composed");
+  await guardrails.getByText("Sources & safety").click();
   await expect(guardrails).toContainText("Customer and quote context is limited to your signed-in workspace.");
   await expect(guardrails).toContainText("tenant boundary fields");
   await expect(guardrails).toContainText("archived records");
@@ -234,7 +237,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
     .fill(`Draft a quote for ${customer.fullName}: 20 squares asphalt shingle roof replacement around $12,000.`);
   await draftDialog.getByRole("button", { name: "Send", exact: true }).click();
   await expect(draftDialog.getByText("Prepared a preview for a roofing quote.")).toBeVisible();
-  await expect(draftDialog.getByTestId("kody-data-guardrails")).toContainText("Customer and quote context");
+  await expect(draftDialog.getByTestId("kody-data-guardrails")).toContainText("Sources & safety");
   await draftDialog.getByRole("button", { name: "Review quote draft" }).click();
   const confirmKodyDraft = page.getByRole("dialog", { name: "Review Kody's quote draft?" });
   await expect(confirmKodyDraft).toContainText("Nothing will be saved or sent");
