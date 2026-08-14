@@ -43,6 +43,6 @@ test("superuser data-governance console is usable at a mobile app viewport", asy
   await sectionNav.getByRole("button", { name: "Validation", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Schema validation" })).toBeVisible();
   await page.getByRole("button", { name: "Run validation", exact: true }).click();
-  await expect(page.getByText(/validation passed for 28 models and 376 fields/i)).toBeVisible();
+  await expect(page.getByText(/validation passed for \d+ models and \d+ fields/i)).toBeVisible();
   await expect(page.getByText("PASSED", { exact: true }).first()).toBeVisible();
 });

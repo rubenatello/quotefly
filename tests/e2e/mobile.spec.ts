@@ -41,7 +41,7 @@ test.describe("mobile launch smoke", () => {
     const mobileDrawer = page.getByRole("dialog", { name: "Workspace navigation" });
     const closeMobileMenu = mobileDrawer.getByRole("button", { name: "Close navigation" });
     await expect(closeMobileMenu).toBeFocused();
-    const firstDrawerAction = mobileDrawer.getByRole("button", { name: "Go to customers" });
+    const firstDrawerAction = mobileDrawer.getByRole("button", { name: "Go to workspace home" });
     await firstDrawerAction.focus();
     await page.keyboard.press("Shift+Tab");
     await expect(mobileDrawer.getByRole("button", { name: "Sign out" })).toBeFocused();
