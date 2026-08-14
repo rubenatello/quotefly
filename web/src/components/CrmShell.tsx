@@ -163,7 +163,7 @@ export function CrmShell({
     document.title = `${pageMeta.label} | QuoteFly`;
   }, [pageMeta.label]);
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="qf-workspace qf-theme-scope min-h-screen bg-qf-canvas text-qf-text">
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         backgroundInert={mobileOpen}
@@ -224,7 +224,7 @@ export function CrmShell({
           inert={mobileOpen || undefined}
           className="min-w-0"
         >
-          <div className="sticky top-0 z-30 hidden border-b border-slate-200/80 bg-white/96 lg:block">
+          <div className="sticky top-0 z-30 hidden border-b border-qf-border/80 bg-qf-surface/95 backdrop-blur-xl lg:block">
             <div className="flex w-full items-center justify-between gap-4 px-5 py-2 xl:px-8 2xl:px-10">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
@@ -248,7 +248,7 @@ export function CrmShell({
                 <button
                   type="button"
                   onClick={() => setCommandOpen(true)}
-                  className="inline-flex min-w-[176px] items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-white hover:text-slate-900 xl:min-w-[196px] 2xl:min-w-[216px]"
+                      className="inline-flex min-w-[176px] items-center gap-3 rounded-xl border border-qf-border bg-qf-surface-muted px-3.5 py-2 text-sm font-medium text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-qf-surface hover:text-qf-text xl:min-w-[196px] 2xl:min-w-[216px]"
                 >
                   <span className="inline-flex items-center gap-2">
                     <Search size={15} />
@@ -260,7 +260,7 @@ export function CrmShell({
                   <DropdownMenuPrimitive.Trigger asChild>
                     <button
                       type="button"
-                      className="inline-flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition hover:border-slate-300"
+                      className="inline-flex items-center gap-3 rounded-xl border border-qf-border bg-qf-surface px-2.5 py-1.5 transition hover:border-[var(--qf-border-strong)]"
                     >
                       <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-quotefly-blue text-sm font-semibold text-white">
                         {(fullName ?? "Q")
@@ -280,7 +280,7 @@ export function CrmShell({
                     <DropdownMenuPrimitive.Content
                       align="end"
                       sideOffset={12}
-                      className="z-[130] min-w-[240px] rounded-[24px] border border-slate-200 bg-white p-2 shadow-[0_20px_44px_rgba(15,23,42,0.18)]"
+                      className="qf-theme-scope z-[130] min-w-[240px] rounded-[24px] border border-qf-border bg-qf-surface p-2 text-qf-text shadow-[var(--qf-shadow-md)]"
                     >
                       <div className="rounded-[18px] bg-slate-50 px-3 py-3">
                         <p className="text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</p>

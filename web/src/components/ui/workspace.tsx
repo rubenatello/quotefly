@@ -30,12 +30,12 @@ export function WorkspaceJumpBar({
             type="button"
             onClick={() => jumpToWorkspaceSection(link.id)}
             title={link.hint ?? link.label}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+            className="inline-flex items-center gap-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-2.5 py-1.5 text-left text-xs font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)]"
           >
             <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
               {index + 1}
             </span>
-            <span className="font-semibold text-slate-900">{link.label}</span>
+            <span className="font-semibold text-[var(--qf-text)]">{link.label}</span>
           </button>
         ))}
       </div>
@@ -67,8 +67,8 @@ export function WorkspaceSection({
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-quotefly-blue">
             {step}
           </p>
-          <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">{title}</h2>
-          <p className="mt-1 text-sm text-slate-600">{description}</p>
+          <h2 className="mt-1 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{title}</h2>
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{description}</p>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
@@ -91,10 +91,10 @@ export function WorkspaceRailCard({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-2xl border border-slate-200 bg-white p-3.5", className)}>
+    <div className={cn("rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3.5", className)}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{eyebrow}</p>
-      <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
-      <p className="mt-1 text-sm text-slate-600">{description}</p>
+      <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{title}</h3>
+      <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{description}</p>
       {children ? <div className="mt-4">{children}</div> : null}
     </div>
   );

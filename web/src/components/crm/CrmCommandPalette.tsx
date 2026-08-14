@@ -166,7 +166,7 @@ export function CrmCommandPalette({
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-[140] bg-slate-950/45 backdrop-blur-sm" />
-        <DialogPrimitive.Content className="fixed left-1/2 top-[10vh] z-[150] w-[min(680px,calc(100vw-24px))] -translate-x-1/2 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.28)] outline-none">
+        <DialogPrimitive.Content className="qf-theme-scope fixed left-1/2 top-[10vh] z-[150] w-[min(680px,calc(100vw-24px))] -translate-x-1/2 overflow-hidden rounded-[28px] border border-qf-border bg-qf-surface text-qf-text shadow-[0_28px_90px_rgba(15,23,42,0.28)] outline-none">
           <CommandPrimitive loop className="overflow-hidden" label="QuoteFly workspace search">
             <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
               <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">

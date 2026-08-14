@@ -95,7 +95,7 @@ export function BottomTabBar() {
   return (
     <nav
       aria-label="Mobile workspace"
-      className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t border-slate-200/90 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_28px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
+      className="qf-mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t border-qf-border/90 bg-qf-surface/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_28px_rgba(15,23,42,0.09)] backdrop-blur-xl lg:hidden"
     >
       <div className="mx-auto grid max-w-[540px] grid-cols-5">
         {PRIMARY_TABS.map(renderTab)}
@@ -108,7 +108,7 @@ export function BottomTabBar() {
           data-testid="mobile-quick-quote"
         >
           <span
-            className="inline-flex h-[54px] w-[54px] -translate-y-1.5 items-center justify-center rounded-[21px] bg-quotefly-blue text-white shadow-[0_12px_26px_rgba(47,111,214,0.34)] ring-4 ring-white"
+            className="inline-flex h-[54px] w-[54px] -translate-y-1.5 items-center justify-center rounded-[21px] bg-quotefly-blue text-white shadow-[0_12px_26px_rgba(47,111,214,0.34)] ring-4 ring-qf-surface"
             aria-hidden="true"
           >
             <FilePlus2 size={22} />

@@ -6,6 +6,7 @@ import type { AuthEntryMode } from "./components/AuthModal";
 import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
+import { useTheme } from "./components/theme/theme-context";
 import {
   api,
   ApiError,
@@ -163,6 +164,7 @@ function ScrollToRoute() {
 /* ─── Root App ─── */
 
 function AppRoutes() {
+  const { resolvedTheme } = useTheme();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authEntryMode, setAuthEntryMode] = useState<AuthEntryMode>("signup");
   const [session, setSession] = useState<AppSession | null>(null);
@@ -369,7 +371,7 @@ function AppRoutes() {
         </Suspense>
       ) : null}
       <CookieConsentBanner />
-      <Toaster position="top-right" richColors closeButton theme="light" />
+      <Toaster position="top-right" richColors closeButton theme={resolvedTheme} />
     </>
   );
 }

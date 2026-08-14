@@ -134,7 +134,7 @@ function QueueTabs({
   onChange: (tab: QueueTab) => void;
 }) {
   return (
-    <div className="flex overflow-x-auto gap-2 pb-2 -mx-4 px-4 snap-x sm:mx-0 sm:px-0 sm:pb-0 sm:flex-wrap sm:overflow-visible hide-scrollbar relative">
+    <div data-testid="follow-up-queue-tabs" className="hide-scrollbar relative -mx-4 flex w-[calc(100%+2rem)] max-w-[calc(100%+2rem)] snap-x gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:w-full sm:max-w-full sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
       {tabs.map((tab) => {
         const active = tab.key === activeTab;
         return (
@@ -372,7 +372,7 @@ export function PipelineView() {
         subtitle="Keep leads and jobs moving: new customers first, quoted work next, then completed-job check-ins."
         actions={
           <>
-            <Button variant={selectedQuoteId ? "outline" : "primary"} onClick={() => navigateToBuilder()}>
+            <Button className="hidden sm:inline-flex" variant={selectedQuoteId ? "outline" : "primary"} onClick={() => navigateToBuilder()}>
               New quote
             </Button>
             {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
@@ -399,7 +399,7 @@ export function PipelineView() {
                 <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">{activeQueue.title}</h2>
                 <p className="mt-1 text-sm text-slate-600">{activeQueue.subtitle}</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 max-w-full lg:w-auto">
                 <QueueTabs tabs={queueTabs} activeTab={activeTab} onChange={setActiveTab} />
               </div>
             </div>

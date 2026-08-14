@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --color-quotefly-primary: #2f6fd6;
@@ -16,6 +17,17 @@
 
 :root {
   color-scheme: light;
+  --qf-canvas-rgb: 244 247 251;
+  --qf-panel-rgb: 255 255 255;
+  --qf-panel-muted-rgb: 245 247 251;
+  --qf-panel-subtle-rgb: 237 243 255;
+  --qf-border-rgb: 215 226 239;
+  --qf-text-rgb: 15 23 42;
+  --qf-text-soft-rgb: 71 85 105;
+  --qf-text-muted-rgb: 96 112 138;
+  --qf-canvas: rgb(var(--qf-canvas-rgb));
+  --qf-text: rgb(var(--qf-text-rgb));
+  --qf-text-soft: rgb(var(--qf-text-soft-rgb));
   --qf-brand-blue: #2f6fd6;
   --qf-brand-orange: #f28c28;
   --qf-brand-blue-soft: rgba(47, 111, 214, 0.08);
@@ -31,6 +43,34 @@
   --qf-shell-shadow: 0 20px 48px rgba(15, 23, 42, 0.07);
   --qf-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
   --qf-shadow-md: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+html.dark {
+  color-scheme: dark;
+  --qf-canvas-rgb: 7 15 29;
+  --qf-panel-rgb: 15 25 43;
+  --qf-panel-muted-rgb: 21 33 53;
+  --qf-panel-subtle-rgb: 19 36 67;
+  --qf-border-rgb: 43 58 82;
+  --qf-text-rgb: 241 245 249;
+  --qf-text-soft-rgb: 203 213 225;
+  --qf-text-muted-rgb: 148 163 184;
+  --qf-canvas: rgb(var(--qf-canvas-rgb));
+  --qf-text: rgb(var(--qf-text-rgb));
+  --qf-text-soft: rgb(var(--qf-text-soft-rgb));
+  --qf-brand-blue-soft: rgba(83, 145, 255, 0.14);
+  --qf-brand-orange-soft: rgba(242, 140, 40, 0.15);
+  --qf-shell-surface: rgba(15, 25, 43, 0.92);
+  --qf-shell-border: rgba(43, 58, 82, 0.96);
+  --qf-panel: rgb(var(--qf-panel-rgb));
+  --qf-panel-muted: rgb(var(--qf-panel-muted-rgb));
+  --qf-panel-subtle: rgb(var(--qf-panel-subtle-rgb));
+  --qf-border: rgb(var(--qf-border-rgb));
+  --qf-border-strong: #40516b;
+  --qf-text-muted: rgb(var(--qf-text-muted-rgb));
+  --qf-shell-shadow: 0 22px 54px rgba(0, 0, 0, 0.32);
+  --qf-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --qf-shadow-md: 0 14px 32px rgba(0, 0, 0, 0.32);
 }
 
 * {
@@ -61,8 +101,8 @@ body {
   font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   letter-spacing: -0.01em;
   font-feature-settings: "ss01" 1, "cv10" 1, "cv11" 1;
-  color: #0f172a;
-  background: #f4f7fb;
+  color: var(--qf-text);
+  background: var(--qf-canvas);
 }
 
 h1,
@@ -115,10 +155,9 @@ textarea {
     animation-iteration-count: 1 !important;
   }
 }
-
 ::selection {
   background: rgba(47, 111, 214, 0.22);
-  color: #ffffff;
+  color: var(--qf-text);
 }
 
 @keyframes rise {
@@ -206,55 +245,4 @@ textarea {
     animation: none !important;
     transition: none !important;
   }
-}
-
-.crm-light {
-  color: #0f172a;
-}
-
-.crm-light .bg-zinc-950 {
-  background-color: #f8fafc !important;
-}
-
-.crm-light .bg-zinc-900\/60,
-.crm-light .bg-zinc-900\/40,
-.crm-light .bg-zinc-950\/40 {
-  background-color: #ffffff !important;
-}
-
-.crm-light .border-zinc-800,
-.crm-light .border-zinc-700,
-.crm-light .border-zinc-600 {
-  border-color: #dbe3ef !important;
-}
-
-.crm-light .text-zinc-100,
-.crm-light .text-zinc-200,
-.crm-light .text-zinc-300 {
-  color: #0f172a !important;
-}
-
-.crm-light .text-zinc-400 {
-  color: #475569 !important;
-}
-
-.crm-light .text-zinc-500 {
-  color: #64748b !important;
-}
-
-.crm-light .bg-zinc-700\/30 {
-  background-color: #eff6ff !important;
-}
-
-.crm-light .bg-quotefly-blue {
-  background-color: #2a7fd8 !important;
-  color: #ffffff !important;
-}
-
-.crm-light .text-quotefly-blue {
-  color: #1f69b2 !important;
-}
-
-.crm-light .text-quotefly-orange {
-  color: #d46a26 !important;
 }

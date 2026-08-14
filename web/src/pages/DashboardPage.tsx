@@ -930,7 +930,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }
 
   return (
-    <div className="crm-light">
+    <div className="qf-theme-scope">
       <div className="min-h-screen bg-slate-50 p-3 pb-24 sm:p-6 sm:pb-8 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>

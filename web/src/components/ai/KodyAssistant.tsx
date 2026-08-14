@@ -709,7 +709,7 @@ export function KodyAssistant({
           role="dialog"
           data-testid="kody-chat-panel"
           className={cn(
-            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[24px] border border-quotefly-blue/10 bg-gradient-to-b from-white to-slate-50 shadow-[0_24px_64px_rgba(15,23,42,0.22)]",
+            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[24px] border border-quotefly-blue/10 bg-gradient-to-b from-[var(--qf-panel)] to-[var(--qf-panel-muted)] shadow-[0_24px_64px_rgba(15,23,42,0.22)]",
             hasMobileActionDock && "qf-kody-chat-panel--with-dock",
           )}
         >

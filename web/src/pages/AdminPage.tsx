@@ -16,6 +16,7 @@ import { BASIC_PLAN, basicMonthlyPriceLabel } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
+import { ThemeSelector } from "../components/settings/ThemeSelector";
 
 interface AdminPageProps {
   session?: {
@@ -399,6 +400,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc) : null;
   const adminLinks = [
     { id: "admin-overview", label: "Overview", hint: "Plan + status" },
+    { id: "admin-appearance", label: "Appearance", hint: "Light + dark theme" },
     { id: "admin-billing", label: "Billing", hint: "Plans + Stripe" },
     { id: "admin-quickbooks", label: "QuickBooks", hint: "Accounting sync" },
     { id: "admin-team", label: "Team", hint: "Users + roles" },
@@ -648,8 +650,19 @@ export function AdminPage({ session }: AdminPageProps) {
 
           {settingsMode === "org" ? (
           <WorkspaceSection
-            id="admin-billing"
+            id="admin-appearance"
             step="Step 2"
+            title="Appearance"
+            description="Use QuoteFly comfortably in bright daylight, a dim office, or after-hours field work."
+          >
+            <ThemeSelector />
+          </WorkspaceSection>
+          ) : null}
+
+          {settingsMode === "org" ? (
+          <WorkspaceSection
+            id="admin-billing"
+            step="Step 3"
             title="Billing"
             description="Basic is the launch plan. Advanced tiers stay visible here, but they are not for sale yet."
             actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
@@ -724,7 +737,7 @@ export function AdminPage({ session }: AdminPageProps) {
           {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-quickbooks"
-            step="Step 3"
+            step="Step 4"
             title="Accounting"
             description={starterLaunchMode ? "Basic launch is focused on CRM and quoting first. Direct accounting sync stays off-sale until the next release." : "Accounting integrations are being hardened for the next release."}
             actions={<Badge tone="amber">V2 roadmap</Badge>}

@@ -255,7 +255,7 @@ function QuoteActionsMenu({
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
-        <DropdownMenuPrimitive.Content align="end" sideOffset={8} className="z-[130] min-w-[190px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_38px_rgba(15,23,42,0.16)]">
+        <DropdownMenuPrimitive.Content align="end" sideOffset={8} className="qf-theme-scope z-[130] min-w-[190px] rounded-xl border border-qf-border bg-qf-surface p-1.5 text-qf-text shadow-[var(--qf-shadow-md)]">
           <DropdownMenuPrimitive.Item onSelect={() => onOpenPdfActions(quote)} className={itemClass}>
             <FileText size={14} /> Quote PDF and sharing
           </DropdownMenuPrimitive.Item>

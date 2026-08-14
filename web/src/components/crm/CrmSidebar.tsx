@@ -147,7 +147,7 @@ export function CrmSidebar({
         inert={isHidden || undefined}
         tabIndex={-1}
         onKeyDown={handleDrawerKeyDown}
-        className={`fixed inset-y-0 left-0 z-50 w-72 overflow-y-auto border-r border-slate-200 bg-white py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${sidebarWidthClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 overflow-y-auto border-r border-qf-border bg-qf-surface py-3 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${sidebarWidthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >

@@ -160,7 +160,7 @@ export function CrmAppLayout({
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
         onNavigateToBuilder={() => navigate("/app/build")}
       >
-        <main id="main-content" className="qf-workspace-main crm-light min-h-screen bg-slate-50 px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
+        <main id="main-content" className="qf-workspace-main min-h-screen bg-qf-canvas px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
           <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
             <div className="mx-auto w-full max-w-[1840px]">
               {session.isTrial ? (

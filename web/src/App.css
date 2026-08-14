@@ -15,6 +15,180 @@
   isolation: isolate;
 }
 
+.qf-theme-scope {
+  color: var(--qf-text);
+}
+
+.qf-workspace {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--qf-canvas);
+  color: var(--qf-text);
+}
+
+/*
+ * Workspace compatibility bridge. Existing feature screens still use
+ * Tailwind's slate/white utilities, while shared primitives use the semantic
+ * QuoteFly variables directly. Scoping the bridge keeps public marketing
+ * pages intentionally light without allowing workspace surfaces to drift.
+ */
+.dark .qf-theme-scope.bg-white,
+.dark .qf-theme-scope .bg-white,
+.dark .qf-theme-scope .bg-white\/70,
+.dark .qf-theme-scope .bg-white\/75,
+.dark .qf-theme-scope .bg-white\/80,
+.dark .qf-theme-scope .bg-white\/85,
+.dark .qf-theme-scope .bg-white\/90,
+.dark .qf-theme-scope .bg-white\/92,
+.dark .qf-theme-scope .bg-white\/94,
+.dark .qf-theme-scope .bg-white\/95,
+.dark .qf-theme-scope .bg-white\/96,
+.dark .qf-theme-scope .bg-white\/97,
+.dark .qf-theme-scope .bg-white\/98 {
+  background-color: rgb(var(--qf-panel-rgb) / 0.96) !important;
+}
+
+.dark .qf-theme-scope.bg-slate-50,
+.dark .qf-theme-scope .bg-slate-50,
+.dark .qf-theme-scope .bg-slate-50\/70,
+.dark .qf-theme-scope .bg-slate-50\/80,
+.dark .qf-theme-scope .bg-slate-100 {
+  background-color: var(--qf-panel-muted) !important;
+}
+
+.dark .qf-theme-scope .bg-slate-200,
+.dark .qf-theme-scope .bg-slate-200\/95,
+.dark .qf-theme-scope .bg-slate-300,
+.dark .qf-theme-scope .bg-slate-300\/90 {
+  background-color: var(--qf-border) !important;
+}
+
+.dark .qf-theme-scope .border-slate-100,
+.dark .qf-theme-scope .border-slate-200,
+.dark .qf-theme-scope .border-slate-200\/80,
+.dark .qf-theme-scope .border-slate-200\/90,
+.dark .qf-theme-scope .border-slate-300,
+.dark .qf-theme-scope .border-slate-400,
+.dark .qf-theme-scope .border-white,
+.dark .qf-theme-scope .border-white\/70,
+.dark .qf-theme-scope .border-white\/80,
+.dark .qf-theme-scope .border-white\/90 {
+  border-color: var(--qf-border) !important;
+}
+
+.dark .qf-theme-scope .text-slate-950,
+.dark .qf-theme-scope .text-slate-900,
+.dark .qf-theme-scope .text-slate-800 {
+  color: var(--qf-text) !important;
+}
+
+.dark .qf-theme-scope .text-slate-700,
+.dark .qf-theme-scope .text-slate-600 {
+  color: var(--qf-text-soft) !important;
+}
+
+.dark .qf-theme-scope .text-slate-500,
+.dark .qf-theme-scope .text-slate-400 {
+  color: var(--qf-text-muted) !important;
+}
+
+.dark .qf-theme-scope .placeholder\:text-slate-400::placeholder,
+.dark .qf-theme-scope input::placeholder,
+.dark .qf-theme-scope textarea::placeholder {
+  color: var(--qf-text-muted) !important;
+}
+
+.dark .qf-theme-scope .hover\:bg-white:hover {
+  background-color: var(--qf-panel) !important;
+}
+
+.dark .qf-theme-scope .hover\:bg-slate-50:hover,
+.dark .qf-theme-scope .hover\:bg-slate-100:hover {
+  background-color: var(--qf-panel-muted) !important;
+}
+
+.dark .qf-theme-scope .hover\:text-slate-900:hover,
+.dark .qf-theme-scope .hover\:text-slate-700:hover {
+  color: var(--qf-text) !important;
+}
+
+.dark .qf-theme-scope input:not([type="checkbox"]):not([type="radio"]),
+.dark .qf-theme-scope textarea,
+.dark .qf-theme-scope select {
+  color: var(--qf-text);
+}
+
+.dark .qf-theme-scope option {
+  background: var(--qf-panel);
+  color: var(--qf-text);
+}
+
+.dark .qf-theme-scope .bg-red-50,
+.dark .qf-theme-scope .hover\:bg-red-50:hover,
+.dark .qf-theme-scope .hover\:bg-red-100:hover {
+  background-color: rgb(248 113 113 / 0.13) !important;
+}
+
+.dark .qf-theme-scope .border-red-200,
+.dark .qf-theme-scope .border-red-300 {
+  border-color: rgb(248 113 113 / 0.35) !important;
+}
+
+.dark .qf-theme-scope .text-red-600,
+.dark .qf-theme-scope .text-red-700 {
+  color: #fca5a5 !important;
+}
+
+.dark .qf-theme-scope .bg-amber-50,
+.dark .qf-theme-scope .hover\:bg-amber-50:hover,
+.dark .qf-theme-scope .hover\:bg-amber-100:hover {
+  background-color: rgb(251 191 36 / 0.13) !important;
+}
+
+.dark .qf-theme-scope .border-amber-200 {
+  border-color: rgb(251 191 36 / 0.35) !important;
+}
+
+.dark .qf-theme-scope .text-amber-700 {
+  color: #fcd34d !important;
+}
+
+.dark .qf-theme-scope .bg-blue-50,
+.dark .qf-theme-scope .bg-blue-50\/70,
+.dark .qf-theme-scope .hover\:bg-blue-50:hover,
+.dark .qf-theme-scope .hover\:bg-blue-100:hover {
+  background-color: rgb(59 130 246 / 0.14) !important;
+}
+
+.dark .qf-theme-scope .border-blue-200,
+.dark .qf-theme-scope .border-blue-300 {
+  border-color: rgb(96 165 250 / 0.35) !important;
+}
+
+.dark .qf-theme-scope .text-blue-600,
+.dark .qf-theme-scope .text-blue-700,
+.dark .qf-theme-scope .text-blue-800 {
+  color: #93c5fd !important;
+}
+
+.dark .qf-theme-scope .bg-orange-50,
+.dark .qf-theme-scope .bg-orange-50\/70,
+.dark .qf-theme-scope .hover\:bg-orange-50:hover,
+.dark .qf-theme-scope .hover\:bg-orange-100:hover {
+  background-color: rgb(251 146 60 / 0.14) !important;
+}
+
+.dark .qf-theme-scope .border-orange-200,
+.dark .qf-theme-scope .border-orange-300 {
+  border-color: rgb(251 146 60 / 0.35) !important;
+}
+
+.dark .qf-theme-scope .text-orange-600,
+.dark .qf-theme-scope .text-orange-700,
+.dark .qf-theme-scope .text-orange-800 {
+  color: #fdba74 !important;
+}
+
 .qf-kody-chat-panel {
   --qf-kody-panel-bottom: calc(var(--qf-mobile-nav-clearance) + 0.5rem);
 

@@ -126,6 +126,13 @@ test.describe("mobile launch smoke", () => {
 
     await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Follow-up", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible();
+    await expect(page.locator("main").getByRole("button", { name: "New quote", exact: true, includeHidden: true })).toBeHidden();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
+    const queueTabs = page.getByTestId("follow-up-queue-tabs");
+    await expect(queueTabs).toBeVisible();
+    await expect.poll(() => queueTabs.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
     await page.getByRole("button", { name: /Quoted/ }).click();
     const followUpSelect = page.getByLabel("Update follow-up for Mobile Beta Customer");
     await followUpSelect.selectOption("FOLLOWED_UP");
@@ -133,5 +140,23 @@ test.describe("mobile launch smoke", () => {
     await page.reload();
     await page.getByRole("button", { name: /Quoted/ }).click();
     await expect(page.getByLabel("Update follow-up for Mobile Beta Customer")).toHaveValue("FOLLOWED_UP");
+
+    await page.goto("/app/settings");
+    await expect(page.getByRole("heading", { level: 2, name: "Appearance", exact: true })).toBeVisible();
+    await expect(page.getByTestId("theme-option-system")).toBeVisible();
+    await page.getByTestId("theme-option-dark").click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await expect(page.getByTestId("theme-option-dark")).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem("qf_theme_preference"))).toBe("dark");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
+
+    await page.reload();
+    await expect(page.getByTestId("theme-option-dark")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.getByTestId("theme-option-light").click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
 });

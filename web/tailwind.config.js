@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: "class",
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -17,6 +18,14 @@ export default {
         "quotefly-gold": "#4C5FA8",
         "quotefly-success": "#059669",
         "quotefly-warning": "#d97706",
+        "qf-canvas": "rgb(var(--qf-canvas-rgb) / <alpha-value>)",
+        "qf-surface": "rgb(var(--qf-panel-rgb) / <alpha-value>)",
+        "qf-surface-muted": "rgb(var(--qf-panel-muted-rgb) / <alpha-value>)",
+        "qf-surface-subtle": "rgb(var(--qf-panel-subtle-rgb) / <alpha-value>)",
+        "qf-border": "rgb(var(--qf-border-rgb) / <alpha-value>)",
+        "qf-text": "rgb(var(--qf-text-rgb) / <alpha-value>)",
+        "qf-text-soft": "rgb(var(--qf-text-soft-rgb) / <alpha-value>)",
+        "qf-text-muted": "rgb(var(--qf-text-muted-rgb) / <alpha-value>)",
       },
       fontFamily: {
         "sans": ["DM Sans", "sans-serif"],

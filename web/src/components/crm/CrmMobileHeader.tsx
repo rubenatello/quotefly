@@ -33,7 +33,7 @@ export function CrmMobileHeader({
     <header
       aria-hidden={backgroundInert || undefined}
       inert={backgroundInert || undefined}
-      className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/96 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden"
+      className="sticky top-0 z-40 border-b border-qf-border/80 bg-qf-surface/95 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -83,7 +83,7 @@ export function CrmMobileHeader({
               <DropdownMenuPrimitive.Content
                 align="end"
                 sideOffset={10}
-                className="z-[130] min-w-[220px] rounded-3xl border border-slate-200 bg-white p-2 shadow-[0_20px_44px_rgba(15,23,42,0.18)]"
+                className="qf-theme-scope z-[130] min-w-[220px] rounded-3xl border border-qf-border bg-qf-surface p-2 text-qf-text shadow-[var(--qf-shadow-md)]"
               >
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onOpenCommand()}

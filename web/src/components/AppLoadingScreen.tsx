@@ -9,7 +9,7 @@ type AppLoadingScreenProps = {
 
 export function AppLoadingScreen({ message = "Loading...", recovery }: AppLoadingScreenProps) {
   return (
-    <div className="min-h-screen bg-slate-50 px-4">
+    <div className="qf-theme-scope min-h-screen bg-qf-canvas px-4 text-qf-text">
       <div className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-5 text-center">
         {recovery ? (
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-2xl font-bold text-quotefly-blue" aria-hidden="true">

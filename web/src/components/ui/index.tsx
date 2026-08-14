@@ -22,8 +22,8 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   secondary:
     "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)] hover:bg-[#de7b19] active:bg-[#c96b11]",
   outline:
-    "border-[var(--qf-border)] bg-white text-slate-700 hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)] active:bg-slate-100",
-  ghost: "border-transparent bg-transparent text-slate-700 hover:bg-[var(--qf-panel-muted)] active:bg-slate-100",
+    "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)] active:bg-[var(--qf-panel-muted)]",
+  ghost: "border-transparent bg-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-panel-muted)] active:bg-[var(--qf-panel-muted)]",
   danger: "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 active:bg-red-200",
   success: "bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)] border-[color:rgba(47,111,214,0.18)] hover:bg-[color:rgba(47,111,214,0.12)] active:bg-[color:rgba(47,111,214,0.16)]",
   warning: "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 active:bg-amber-200",
@@ -71,7 +71,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="space-y-1">
         {label && (
-          <label htmlFor={inputId} className="block text-xs font-medium text-slate-600">
+          <label htmlFor={inputId} className="block text-xs font-medium text-[var(--qf-text-soft)]">
             {label}
           </label>
         )}
@@ -85,7 +85,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
+              "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-[var(--qf-border)]",
               className,
@@ -116,7 +116,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <div className="space-y-1">
         {label && (
-          <label htmlFor={selectId} className="block text-xs font-medium text-slate-600">
+          <label htmlFor={selectId} className="block text-xs font-medium text-[var(--qf-text-soft)]">
             {label}
           </label>
         )}
@@ -124,7 +124,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
+            "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
             error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
@@ -156,7 +156,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     return (
       <div className="space-y-1">
         {label && (
-          <label htmlFor={areaId} className="block text-xs font-medium text-slate-600">
+          <label htmlFor={areaId} className="block text-xs font-medium text-[var(--qf-text-soft)]">
             {label}
           </label>
         )}
@@ -164,7 +164,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[110px] w-full rounded-lg border bg-white px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+            "min-h-[110px] w-full rounded-lg border bg-[var(--qf-panel)] px-3.5 py-3 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
             error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
@@ -218,8 +218,8 @@ export function CardHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{title}</h2>
-        {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
+        <h2 className="text-base font-semibold tracking-tight text-[var(--qf-text)] sm:text-lg">{title}</h2>
+        {subtitle && <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{subtitle}</p>}
       </div>
       {actions ? <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end [&>*]:w-full sm:[&>*]:w-auto">{actions}</div> : null}
     </div>
@@ -460,7 +460,7 @@ export function Modal({
             if (!closeOnBackdrop) event.preventDefault();
           }}
           className={cn(
-            "fixed left-1/2 top-1/2 z-[110] flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_24px_56px_rgba(15,23,42,0.18)] outline-none sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]",
+            "qf-theme-scope fixed left-1/2 top-1/2 z-[110] flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]",
             MODAL_SIZES[size],
             panelClassName,
           )}
@@ -485,16 +485,16 @@ export function ModalHeader({
   className?: string;
 }) {
   return (
-    <div className={`flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6 ${className}`}>
+    <div className={`flex items-start justify-between gap-4 border-b border-[var(--qf-border)] px-5 py-4 sm:px-6 ${className}`}>
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">{title}</h2>
-        {description ? <p className="mt-1 text-sm text-slate-600">{description}</p> : null}
+        <h2 className="text-lg font-semibold text-[var(--qf-text)] sm:text-xl">{title}</h2>
+        {description ? <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{description}</p> : null}
       </div>
       {onClose ? (
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900 sm:h-9 sm:w-9"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] transition hover:bg-[var(--qf-panel-muted)] hover:text-[var(--qf-text)] sm:h-9 sm:w-9"
           aria-label="Close modal"
         >
           <span className="text-xl leading-none">&times;</span>
@@ -509,7 +509,7 @@ export function ModalBody({ children, className = "" }: { children: ReactNode; c
 }
 
 export function ModalFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4 sm:px-6 ${className}`}>{children}</div>;
+  return <div className={`flex flex-wrap justify-end gap-2 border-t border-[var(--qf-border)] px-5 py-4 sm:px-6 ${className}`}>{children}</div>;
 }
 
 interface ConfirmModalProps {
@@ -609,8 +609,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h1 className="font-display text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900 sm:text-[2.15rem]">{title}</h1>
-        {subtitle && <p className="mt-1 max-w-3xl text-sm text-slate-600">{subtitle}</p>}
+        <h1 className="font-display text-[1.85rem] font-semibold tracking-[-0.04em] text-[var(--qf-text)] sm:text-[2.15rem]">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-3xl text-sm text-[var(--qf-text-soft)]">{subtitle}</p>}
       </div>
       {actions ? (
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end [&>*]:w-full sm:[&>*]:w-auto">
