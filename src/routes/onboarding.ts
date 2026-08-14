@@ -5,6 +5,7 @@ import {
   markTenantAiRetrievalSourceTypeDeleted,
   markWorkPresetAiRetrievalSourceDeleted,
 } from "../lib/ai-retrieval";
+import { enqueueTenantWorkPresetAiIndexJobs } from "../lib/ai-index-jobs";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
@@ -183,6 +184,7 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
         tenantId: tenant.id,
         sourceTypes: ["WorkPreset"],
       });
+      await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
       return setupResult;
     });
 
@@ -209,20 +211,24 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const result = await saveTenantWorkPreset(app.prisma, {
-      tenantId: tenant.id,
-      serviceType: payload.serviceType,
-      name: payload.name,
-      description: payload.description,
-      category: payload.category,
-      unitType: payload.unitType,
-      defaultQuantity: payload.defaultQuantity,
-      unitCost: payload.unitCost,
-      unitPrice: payload.unitPrice,
-    });
-    await markWorkPresetAiRetrievalSourceDeleted(app.prisma, {
-      tenantId: tenant.id,
-      workPresetIds: [result.preset.id],
+    const result = await app.prisma.$transaction(async (transaction) => {
+      const saved = await saveTenantWorkPreset(transaction, {
+        tenantId: tenant.id,
+        serviceType: payload.serviceType,
+        name: payload.name,
+        description: payload.description,
+        category: payload.category,
+        unitType: payload.unitType,
+        defaultQuantity: payload.defaultQuantity,
+        unitCost: payload.unitCost,
+        unitPrice: payload.unitPrice,
+      });
+      await markWorkPresetAiRetrievalSourceDeleted(transaction, {
+        tenantId: tenant.id,
+        workPresetIds: [saved.preset.id],
+      });
+      await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
+      return saved;
     });
 
     return reply.send({

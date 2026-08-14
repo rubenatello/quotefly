@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { JwtClaims } from "./auth";
+import { enqueueAiIndexJob } from "./ai-index-jobs";
 
 export type ActivityActor = {
   actorUserId: string;
@@ -8,9 +9,7 @@ export type ActivityActor = {
 };
 
 type ActorClient = Pick<PrismaClient, "user"> | Pick<Prisma.TransactionClient, "user">;
-type CustomerActivityClient =
-  | Pick<PrismaClient, "customerActivityEvent">
-  | Pick<Prisma.TransactionClient, "customerActivityEvent">;
+type CustomerActivityClient = Prisma.TransactionClient;
 
 export async function resolveActivityActor(
   prisma: ActorClient,
@@ -46,7 +45,7 @@ export async function createCustomerActivityEvent(
     metadata?: Prisma.InputJsonValue;
   },
 ) {
-  return prisma.customerActivityEvent.create({
+  const event = await prisma.customerActivityEvent.create({
     data: {
       tenantId: params.tenantId,
       customerId: params.customerId,
@@ -59,4 +58,12 @@ export async function createCustomerActivityEvent(
       metadata: params.metadata,
     },
   });
+  await enqueueAiIndexJob(prisma, {
+    tenantId: params.tenantId,
+    sourceType: "CustomerActivityEvent",
+    sourceId: event.id,
+    operation: "UPSERT",
+    expectedSourceUpdatedAtUtc: event.createdAt,
+  });
+  return event;
 }

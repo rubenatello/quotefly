@@ -480,7 +480,6 @@ export async function saveTenantWorkPreset(
       where: { id: matchedPreset.id },
       data: payload,
     });
-
     return {
       action: matchedPreset.deletedAtUtc ? "restored" : "updated",
       preset,

@@ -152,13 +152,13 @@ export function CrmSidebar({
         }`}
       >
         <div className={cn("space-y-4", collapsed ? "px-2.5" : "px-3.5")}>
-          <div className={cn("flex items-center border-b border-slate-200 pb-3", collapsed ? "flex-col gap-3" : "justify-between gap-3")}>
+          <div className={cn("flex items-center border-b border-[var(--qf-border)] pb-3", collapsed ? "flex-col gap-3" : "justify-between gap-3")}>
             <button
               type="button"
-              onClick={() => onNavigate("customers")}
+              onClick={() => onNavigate("home")}
               className={cn("inline-flex items-center", collapsed ? "justify-center" : "")}
-              title="QuoteFly Customers"
-              aria-label="Go to customers"
+              title="QuoteFly workspace home"
+              aria-label="Go to workspace home"
             >
               {collapsed ? <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 object-contain" /> : <img src="/logo.png" alt="QuoteFly" className="h-7 w-auto object-contain" />}
             </button>
@@ -166,7 +166,7 @@ export function CrmSidebar({
               type="button"
               onClick={onToggleCollapse}
               className={cn(
-                "hidden items-center justify-center text-slate-400 transition hover:text-slate-700 lg:inline-flex",
+                "hidden items-center justify-center rounded-lg text-[var(--qf-text-muted)] transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-[var(--qf-focus)] lg:inline-flex",
                 collapsed ? "h-7 w-7 self-center" : "h-7 w-7",
               )}
               title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -178,7 +178,7 @@ export function CrmSidebar({
               type="button"
               onClick={onCloseMobile}
               data-mobile-drawer-initial-focus
-              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 lg:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] lg:hidden"
               aria-label="Close navigation"
             >
               <CloseIcon size={18} />
@@ -205,20 +205,20 @@ export function CrmSidebar({
                   className={cn(
                     "group relative flex w-full min-h-[44px] items-center rounded-lg border text-sm font-medium transition-colors sm:min-h-[40px]",
                     active
-                      ? "border-quotefly-blue/10 bg-quotefly-blue/[0.08] text-slate-900"
-                      : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+                      ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-text)]"
+                      : "border-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)]",
                     collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
-                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-quotefly-blue" /> : null}
+                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-[var(--qf-action-primary)]" /> : null}
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
                         "inline-flex items-center justify-center transition",
                         collapsed ? "h-8 w-8" : "h-5 w-5",
                         active
-                          ? "text-quotefly-blue"
-                          : "text-slate-500 group-hover:text-quotefly-blue",
+                          ? "text-[var(--qf-link)]"
+                          : "text-[var(--qf-text-muted)] group-hover:text-[var(--qf-link)]",
                       )}
                     >
                       {link.icon}
@@ -226,7 +226,7 @@ export function CrmSidebar({
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                         <span>{link.label}</span>
-                        {active ? <span className="h-1.5 w-1.5 rounded-full bg-quotefly-blue" /> : null}
+                        {active ? <span className="h-1.5 w-1.5 rounded-full bg-[var(--qf-action-primary)]" /> : null}
                       </span>
                     ) : null}
                   </span>
@@ -256,18 +256,18 @@ export function CrmSidebar({
                   className={cn(
                     "group relative flex w-full min-h-[44px] items-center rounded-lg border transition-colors sm:min-h-[40px]",
                     active
-                      ? "border-quotefly-blue/10 bg-quotefly-blue/[0.08] text-slate-900"
-                      : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+                      ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-text)]"
+                      : "border-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)]",
                     collapsed ? "justify-center px-0 py-2.5" : "justify-between px-3 py-2.5",
                   )}
                 >
-                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-quotefly-blue" /> : null}
+                  {active && !collapsed ? <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-[var(--qf-action-primary)]" /> : null}
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
                         "inline-flex items-center justify-center",
                         collapsed ? "h-8 w-8" : "h-5 w-5",
-                        active ? "text-quotefly-blue" : "text-slate-500 group-hover:text-quotefly-blue",
+                        active ? "text-[var(--qf-link)]" : "text-[var(--qf-text-muted)] group-hover:text-[var(--qf-link)]",
                       )}
                     >
                       {link.icon}
@@ -275,7 +275,7 @@ export function CrmSidebar({
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                         <span>{link.label}</span>
-                        {active ? <span className="h-1.5 w-1.5 rounded-full bg-quotefly-blue" /> : null}
+                        {active ? <span className="h-1.5 w-1.5 rounded-full bg-[var(--qf-action-primary)]" /> : null}
                       </span>
                     ) : null}
                   </span>
@@ -294,7 +294,7 @@ export function CrmSidebar({
 
         <div className={cn("mt-6 space-y-3", collapsed ? "px-2.5" : "px-3")}>
           {!collapsed && aiSpendLimitUsd !== null && usage ? (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                   {showTrialBadge ? "Full trial access" : displayPlanName}
@@ -326,11 +326,11 @@ export function CrmSidebar({
               onClick={onRequestFeature}
               aria-label="Request a feature"
               className={cn(
-                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-quotefly-blue/15 bg-quotefly-blue/[0.06] py-2.5 text-sm font-medium text-slate-700 transition hover:border-quotefly-blue/25 hover:bg-quotefly-blue/[0.1] sm:min-h-[40px]",
+                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] py-2.5 text-sm font-medium text-[var(--qf-info-text)] transition hover:bg-[var(--qf-info-surface-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "px-0" : "gap-2 px-4",
               )}
             >
-              <Lightbulb size={15} className="text-quotefly-blue" aria-hidden="true" />
+              <Lightbulb size={15} aria-hidden="true" />
               {!collapsed && "Request a feature"}
             </button>
           </SidebarTooltip>
@@ -340,7 +340,7 @@ export function CrmSidebar({
               href={SUPPORT_MAILTO}
               aria-label="Contact support"
               className={cn(
-                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 sm:min-h-[40px]",
+                "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] py-2.5 text-sm font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "px-0" : "gap-2 px-4",
               )}
             >
@@ -356,7 +356,7 @@ export function CrmSidebar({
               title="Sign Out"
               aria-label="Sign out"
               className={cn(
-                "min-h-[44px] rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 sm:min-h-[40px]",
+                "min-h-[44px] rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] py-2.5 text-sm font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-danger-border)] hover:bg-[var(--qf-danger-surface)] hover:text-[var(--qf-danger-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "w-full px-0 text-center" : "w-full px-4",
               )}
             >

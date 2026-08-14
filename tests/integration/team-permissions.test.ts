@@ -192,6 +192,42 @@ describe("workspace team permissions", () => {
     expect(memberQuoteDetail.body).not.toContain("unitCost");
     expect(memberQuoteDetail.body).not.toContain("internalCostSubtotal");
 
+    const memberOverview = await app.inject({
+      method: "GET",
+      url: "/v1/workspace/overview",
+      headers: { cookie: member.cookie },
+    });
+    expect(memberOverview.statusCode).toBe(200);
+    expect(memberOverview.json()).toMatchObject({
+      metrics: {
+        activeCustomers: 1,
+        unquotedLeads: 0,
+        activeQuotes: 1,
+      },
+      recentCustomers: [{ id: customer.id, fullName: "Assigned Homeowner" }],
+      recentQuotes: [{ id: stored.id, customer: { id: customer.id } }],
+    });
+    expect(memberOverview.body).not.toContain(privateCustomer.id);
+    expect(memberOverview.body).not.toContain("Office Only Homeowner");
+    expect(memberOverview.body).not.toContain("internalCostSubtotal");
+    expect(memberOverview.body).not.toContain("unitCost");
+
+    const ownerOverview = await app.inject({
+      method: "GET",
+      url: "/v1/workspace/overview",
+      headers: { cookie: owner.cookie },
+    });
+    expect(ownerOverview.statusCode).toBe(200);
+    expect(ownerOverview.json()).toMatchObject({
+      metrics: {
+        activeCustomers: 2,
+        unquotedLeads: 1,
+        activeQuotes: 1,
+      },
+    });
+    expect((ownerOverview.json() as { recentCustomers: Array<{ id: string }> }).recentCustomers.map((entry) => entry.id))
+      .toEqual(expect.arrayContaining([customer.id, privateCustomer.id]));
+
     const privateRead = await app.inject({ method: "GET", url: `/v1/customers/${privateCustomer.id}`, headers: { cookie: member.cookie } });
     expect(privateRead.statusCode).toBe(404);
 

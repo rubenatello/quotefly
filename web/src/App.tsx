@@ -219,7 +219,7 @@ function AppRoutes() {
 
   function navigateAfterHydration(nextSession: AppSession, source: SessionRecovery["source"]) {
     if (source === "post-auth") {
-      navigate(nextSession.onboardingCompletedAtUtc ? "/app/customers" : "/app/setup", { replace: true });
+      navigate(nextSession.onboardingCompletedAtUtc ? "/app" : "/app/setup", { replace: true });
     }
   }
 

@@ -175,6 +175,49 @@ test("assistant composer encodes Kody's collaborative tone and review boundaries
   assert.match(capturedPrompt, /never scold, argue with, blame, or talk down/i);
   assert.match(capturedPrompt, /latest request as authoritative/i);
   assert.match(capturedPrompt, /requiresConfirmation are proposals only/i);
+  assert.match(capturedPrompt, /strictly within QuoteFly work/i);
+  assert.match(capturedPrompt, /never answer general-knowledge or unrelated questions/i);
+});
+
+test("assistant composer rejects a validly shaped answer that leaves the selected QuoteFly tool scope", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  setAssistantCompositionProviderForTest(async () => ({
+    outputText: JSON.stringify({
+      answer: "Paris is the capital of France.",
+      sourceKeys: [],
+      safetyNotes: [],
+    }),
+    model: "test-kody-off-topic",
+    telemetry: null,
+  }));
+  try {
+    const result = await composeAssistantAnswer({
+      userMessage: "Draft a quote for roof repair.",
+      tool: "DRAFT_QUOTE",
+      deterministicAnswer: "I prepared a roof repair quote draft for review.",
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      results: [],
+      citations: [],
+      actions: [],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "AUTO",
+        resolvedTool: "DRAFT_QUOTE",
+        resultCount: 0,
+        citationCount: 0,
+        emptyReason: null,
+        archivePolicy: "No rows read.",
+        filters: {},
+      },
+    });
+
+    assert.equal(result.answerMode, "DETERMINISTIC");
+    assert.equal(result.answer, "I prepared a roof repair quote draft for review.");
+    assert.match(result.insightReasons.join(" "), /outside the selected QuoteFly tool scope/i);
+    assert.match(result.riskNote, /failed validation/i);
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+  }
 });
 
 test("assistant composition bounds and redacts governed retrieval excerpts", async () => {

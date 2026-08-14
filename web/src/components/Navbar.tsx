@@ -63,7 +63,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
           {isLoggedIn ? (
             <div className="flex items-center gap-3">
               <Link
-                to="/app/customers"
+                to="/app"
                 className="inline-flex min-h-11 items-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
               >
                 Dashboard
@@ -130,7 +130,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
               {isLoggedIn ? (
                 <>
                   <Link
-                    to="/app/customers"
+                    to="/app"
                     onClick={() => setMobileMenuOpen(false)}
                     className="flex min-h-11 w-full items-center justify-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   >

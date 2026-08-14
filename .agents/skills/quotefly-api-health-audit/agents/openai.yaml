@@ -1,0 +1,4 @@
+interface:
+  display_name: "QuoteFly API Health Audit"
+  short_description: "Audit endpoint health without mutating production"
+  default_prompt: "Use $quotefly-api-health-audit to inventory QuoteFly endpoints and run safe production and test-environment health checks."

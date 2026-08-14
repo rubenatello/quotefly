@@ -62,17 +62,17 @@ export function ThemeSelector() {
               data-testid={`theme-option-${option.value}`}
               onClick={() => setPreference(option.value)}
               className={cn(
-                "relative flex min-h-[112px] items-start gap-3 rounded-2xl border p-4 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue",
+                "relative flex min-h-[112px] items-start gap-3 rounded-2xl border p-4 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]",
                 selected
-                  ? "border-quotefly-blue bg-quotefly-blue/[0.08] shadow-[var(--qf-shadow-sm)]"
-                  : "border-[var(--qf-border)] bg-[var(--qf-panel)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)]",
+                  ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] shadow-[var(--qf-shadow-sm)]"
+                  : "border-[var(--qf-border)] bg-[var(--qf-panel)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] active:bg-[var(--qf-interactive-active)]",
               )}
             >
               <span
                 className={cn(
                   "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border",
                   selected
-                    ? "border-quotefly-blue/20 bg-quotefly-blue text-white"
+                    ? "border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]"
                     : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]",
                 )}
                 aria-hidden="true"
@@ -82,7 +82,7 @@ export function ThemeSelector() {
               <span className="min-w-0">
                 <span className="flex items-center gap-2 text-sm font-semibold text-[var(--qf-text)]">
                   {option.label}
-                  {selected ? <Check size={15} className="text-quotefly-blue" aria-hidden="true" /> : null}
+                  {selected ? <Check size={15} className="text-[var(--qf-link)]" aria-hidden="true" /> : null}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--qf-text-muted)]">
                   {option.description}

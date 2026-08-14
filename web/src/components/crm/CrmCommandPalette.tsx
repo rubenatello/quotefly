@@ -52,6 +52,13 @@ const COMMAND_ITEMS: CommandItem[] = [
     group: "Actions",
   },
   {
+    label: "Workspace Home",
+    description: "See new leads, quote momentum, follow-ups, and recent work at a glance.",
+    page: "home",
+    icon: <LayoutDashboard size={16} />,
+    group: "Workflow",
+  },
+  {
     label: "Customers",
     description: "See customers in the sales pipeline from new to sold.",
     page: "customers",

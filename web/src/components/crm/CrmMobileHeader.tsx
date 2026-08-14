@@ -41,14 +41,19 @@ export function CrmMobileHeader({
             ref={menuButtonRef}
             type="button"
             onClick={onToggleMobile}
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
             aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
             aria-controls="quotefly-workspace-navigation"
             aria-expanded={mobileOpen}
           >
             {mobileOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
           </button>
-          <div className="min-w-0">
+          <button
+            type="button"
+            onClick={() => onNavigate("home")}
+            className="min-w-0 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+            aria-label="Go to workspace home"
+          >
             <div className="flex items-center gap-2">
               <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 shrink-0 rounded-lg" />
               <p className="truncate text-sm font-semibold text-slate-900">{currentLabel}</p>
@@ -56,14 +61,14 @@ export function CrmMobileHeader({
             <div className="mt-0.5 flex items-center gap-2">
               <p className="truncate text-xs text-slate-500">QuoteFly workspace</p>
             </div>
-          </div>
+          </button>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onOpenCommand}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
             aria-label="Open workspace search"
           >
             <Search size={17} />
@@ -73,7 +78,7 @@ export function CrmMobileHeader({
             <DropdownMenuPrimitive.Trigger asChild>
               <button
                 type="button"
-                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
                 aria-label="Open workspace menu"
               >
                 <MoreHorizontal size={18} />
@@ -87,51 +92,51 @@ export function CrmMobileHeader({
               >
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onOpenCommand()}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <Command size={15} />
                   Search workspace
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onQuickAction("new-customer")}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <UserPlus2 size={15} className="text-quotefly-blue" />
                   New customer
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onQuickAction("new-quote")}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <FilePlus2 size={15} className="text-quotefly-blue" />
                   New quote
                 </DropdownMenuPrimitive.Item>
-                <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
+                <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onNavigate("settings")}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   Open settings
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onNavigate("branding")}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   Open branding
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item asChild>
                   <a
                     href={SUPPORT_MAILTO}
-                    className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                    className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                   >
                     <LifeBuoy size={15} className="text-quotefly-blue" aria-hidden="true" />
                     Contact support
                   </a>
                 </DropdownMenuPrimitive.Item>
-                <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
+                <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onLogout()}
-                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-red-600 outline-none transition hover:bg-red-50")}
+                  className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                 >
                   Sign out
                 </DropdownMenuPrimitive.Item>

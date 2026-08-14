@@ -191,10 +191,10 @@ function lifecycleInitial(stage: QuoteLifecycleStage) {
 
 function lifecycleColorClass(stage: QuoteLifecycleStage, bar = false) {
   if (stage === "DRAFT") return bar ? "bg-slate-700" : "border-slate-700 bg-slate-700 text-white";
-  if (stage === "READY") return bar ? "bg-[#2559b8]" : "border-[#2559b8] bg-[#2559b8] text-white";
-  if (stage === "SENT") return bar ? "bg-[#d97706]" : "border-[#d97706] bg-[#d97706] text-white";
-  if (stage === "DECLINED") return bar ? "bg-red-600" : "border-red-600 bg-red-600 text-white";
-  return bar ? "bg-emerald-600" : "border-emerald-600 bg-emerald-600 text-white";
+  if (stage === "READY") return bar ? "bg-[var(--qf-info-strong)]" : "border-[var(--qf-info-strong)] bg-[var(--qf-info-strong)] text-white";
+  if (stage === "SENT") return bar ? "bg-[var(--qf-warning-strong)]" : "border-[var(--qf-warning-strong)] bg-[var(--qf-warning-strong)] text-white";
+  if (stage === "DECLINED") return bar ? "bg-[var(--qf-danger-strong)]" : "border-[var(--qf-danger-strong)] bg-[var(--qf-danger-strong)] text-white";
+  return bar ? "bg-[var(--qf-success-strong)]" : "border-[var(--qf-success-strong)] bg-[var(--qf-success-strong)] text-white";
 }
 
 function lifecycleCountMap(quotes: Quote[]) {
@@ -304,11 +304,11 @@ function MetricCard({
 }) {
   const toneClasses =
     tone === "blue"
-      ? "border-[#234f98] bg-[#234f98]"
+      ? "border-[var(--qf-info-strong)] bg-[var(--qf-info-strong)]"
       : tone === "orange"
-        ? "border-[#d97706] bg-[#d97706]"
+        ? "border-[var(--qf-warning-strong)] bg-[var(--qf-warning-strong)]"
         : tone === "emerald"
-          ? "border-[#17624b] bg-[#17624b]"
+          ? "border-[var(--qf-success-strong)] bg-[var(--qf-success-strong)]"
           : "border-[#334155] bg-[#334155]";
 
   return (
@@ -441,11 +441,11 @@ function ActivityLog({ items }: { items: ActivityItem[] }) {
           <span
             className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
               item.tone === "blue"
-                ? "bg-[#2559b8] text-white"
+                ? "bg-[var(--qf-info-strong)] text-white"
                 : item.tone === "orange"
-                  ? "bg-[#d97706] text-white"
+                  ? "bg-[var(--qf-warning-strong)] text-white"
                   : item.tone === "emerald"
-                    ? "bg-emerald-600 text-white"
+                    ? "bg-[var(--qf-success-strong)] text-white"
                     : "bg-slate-700 text-white"
             }`}
           >
@@ -506,8 +506,8 @@ function RangeButton({ active, label, onClick }: { active: boolean; label: strin
       onClick={onClick}
       className={`inline-flex min-h-[44px] items-center justify-center rounded-full border px-3 py-2 text-sm font-medium transition ${
         active
-          ? "border-[#2559b8] bg-[#2559b8] text-white shadow-[0_8px_20px_rgba(37,89,184,0.18)]"
-          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+          ? "border-[var(--qf-info-strong)] bg-[var(--qf-info-strong)] text-white shadow-[0_8px_20px_rgba(37,89,184,0.18)]"
+          : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)]"
       }`}
     >
       {label}
@@ -646,7 +646,7 @@ export function AnalyticsPage() {
   if (loading && customers.length === 0 && quotes.length === 0) {
     return (
       <div className="space-y-5 sm:space-y-6">
-        <PageHeader title="Analytics" subtitle="Track response speed, quote volume, and recent activity." />
+        <PageHeader title="Analytics" subtitle="Track response speed, quote volume, and recent activity." mode="actions-only" />
         <LoadingState
           title="Loading workspace analytics"
           description="Calculating quote volume, response speed, revenue, and recent activity."
@@ -662,6 +662,7 @@ export function AnalyticsPage() {
       <PageHeader
         title="Analytics"
         subtitle="Track response speed, quote volume, and recent activity without leaving the operating workflow."
+        mode="actions-only"
         actions={
           <KodyButton
             label="Ask Kody for insight"

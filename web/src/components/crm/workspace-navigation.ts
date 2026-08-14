@@ -1,4 +1,5 @@
 export type WorkspacePage =
+  | "home"
   | "customers"
   | "quotes"
   | "products"
@@ -13,6 +14,7 @@ export type WorkspacePage =
   | "internal-admin";
 
 export type WorkspaceNavigationId =
+  | "home"
   | "customers"
   | "quotes"
   | "products"
@@ -23,6 +25,7 @@ export type WorkspaceNavigationId =
   | "branding";
 
 export type WorkspaceIconKey =
+  | "home"
   | "customers"
   | "quotes"
   | "products"
@@ -40,6 +43,7 @@ export interface WorkspaceNavigationItem {
 }
 
 export const WORKSPACE_OPERATIONS_LINKS: readonly WorkspaceNavigationItem[] = [
+  { id: "home", label: "Home", path: "/app", icon: "home" },
   { id: "customers", label: "Customers", path: "/app/customers", icon: "customers" },
   { id: "quotes", label: "Quotes", path: "/app/quotes", icon: "quotes" },
   { id: "products", label: "Products", path: "/app/products", icon: "products" },
@@ -55,71 +59,95 @@ export const WORKSPACE_SETTINGS_LINKS: readonly WorkspaceNavigationItem[] = [
 
 export const WORKSPACE_PAGE_META: Record<
   WorkspacePage,
-  { label: string; hint: string; activeNavigation: WorkspaceNavigationId }
+  {
+    label: string;
+    hint: string;
+    activeNavigation: WorkspaceNavigationId;
+    headingPlacement: "shell" | "content";
+  }
 > = {
+  home: {
+    label: "Home",
+    hint: "See new leads, quote momentum, and the work that needs attention.",
+    activeNavigation: "home",
+    headingPlacement: "shell",
+  },
   customers: {
     label: "Customers",
     hint: "Track customer progress from new lead to sold work.",
     activeNavigation: "customers",
+    headingPlacement: "shell",
   },
   quotes: {
     label: "Quotes",
     hint: "Review quote status, value, and the work that needs attention.",
     activeNavigation: "quotes",
+    headingPlacement: "shell",
   },
   products: {
     label: "Products & services",
     hint: "Manage reusable work, pricing, costs, and quote-ready descriptions.",
     activeNavigation: "products",
+    headingPlacement: "shell",
   },
   build: {
     label: "New quote",
     hint: "Choose a customer, price the work, review it, and create the quote.",
     activeNavigation: "quotes",
+    headingPlacement: "content",
   },
   "quote-desk": {
     label: "Quote desk",
     hint: "Edit, preview, send, and track this quote from one workspace.",
     activeNavigation: "quotes",
+    headingPlacement: "content",
   },
   "follow-up": {
     label: "Follow-up",
     hint: "Work leads, active jobs, and after-sale check-ins in priority order.",
     activeNavigation: "follow-up",
+    headingPlacement: "shell",
   },
   analytics: {
     label: "Analytics",
     hint: "See quote and pipeline performance at a glance.",
     activeNavigation: "analytics",
+    headingPlacement: "shell",
   },
   setup: {
     label: "Setup",
     hint: "Configure trades, starter jobs, and onboarding defaults.",
     activeNavigation: "settings",
+    headingPlacement: "content",
   },
   branding: {
     label: "Branding",
     hint: "Control templates, sender details, and PDF styling.",
     activeNavigation: "branding",
+    headingPlacement: "shell",
   },
   settings: {
     label: "Settings",
     hint: "Handle organization billing, access, and workspace controls.",
     activeNavigation: "settings",
+    headingPlacement: "shell",
   },
   "settings-users": {
     label: "Team",
     hint: "Manage roles, seats, and member access.",
     activeNavigation: "settings-users",
+    headingPlacement: "shell",
   },
   "internal-admin": {
     label: "Administration",
     hint: "Review internal platform controls and operational quality.",
     activeNavigation: "settings",
+    headingPlacement: "content",
   },
 };
 
 export function workspacePageFromPath(pathname: string): WorkspacePage {
+  if (pathname === "/app" || pathname === "/app/") return "home";
   if (pathname.startsWith("/app/analytics")) return "analytics";
   if (pathname.startsWith("/app/history")) return "analytics";
   if (pathname.startsWith("/app/customers")) return "customers";
@@ -137,7 +165,7 @@ export function workspacePageFromPath(pathname: string): WorkspacePage {
 }
 
 export function workspacePathForNavigation(id: WorkspaceNavigationId): string {
-  return [...WORKSPACE_OPERATIONS_LINKS, ...WORKSPACE_SETTINGS_LINKS].find((item) => item.id === id)?.path ?? "/app/customers";
+  return [...WORKSPACE_OPERATIONS_LINKS, ...WORKSPACE_SETTINGS_LINKS].find((item) => item.id === id)?.path ?? "/app";
 }
 
 export function isWorkspaceNavigationActive(id: WorkspaceNavigationId, page: WorkspacePage): boolean {

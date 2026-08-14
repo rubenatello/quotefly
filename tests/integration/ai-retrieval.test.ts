@@ -61,6 +61,10 @@ function accessFor(params: {
 }
 
 const embedText: AiEmbeddingProvider = async (text) => deterministicEmbedding(text);
+const flatHybridEmbedding: AiEmbeddingProvider = async () => ({
+  embedding: [1, 0],
+  model: "test-hybrid-v1",
+});
 
 describe("AI retrieval index", () => {
   beforeAll(async () => {
@@ -230,6 +234,256 @@ describe("AI retrieval index", () => {
       embedText,
     });
     expect(afterDelete.context).not.toContain("Rear valley roof leak");
+  });
+
+  test("hybrid retrieval promotes exact terms, applies typed filters before content load, and logs content-free timings", async () => {
+    const alpha = await signUp("rag-hybrid");
+    const beta = await signUp("rag-hybrid-beta");
+    const createdAfter = new Date(Date.now() - 60_000);
+    const [exactGarden, semanticGarden, wrongService, otherTenant] = await Promise.all([
+      prisma.workPreset.create({
+        data: {
+          tenantId: alpha.tenant.id,
+          serviceType: "GARDENING",
+          name: "Rare cultivar treatment",
+          description: "Apply ULTRAVERDANT42 soil treatment around the citrus root zone.",
+          category: "MATERIAL",
+          unitType: "FLAT",
+          defaultQuantity: 1,
+          unitCost: 10,
+          unitPrice: 20,
+        },
+      }),
+      prisma.workPreset.create({
+        data: {
+          tenantId: alpha.tenant.id,
+          serviceType: "GARDENING",
+          name: "General garden care",
+          description: "Prune shrubs and refresh mulch around established plants.",
+          category: "SERVICE",
+          unitType: "FLAT",
+          defaultQuantity: 1,
+          unitCost: 30,
+          unitPrice: 60,
+        },
+      }),
+      prisma.workPreset.create({
+        data: {
+          tenantId: alpha.tenant.id,
+          serviceType: "ROOFING",
+          name: "Roof code material",
+          description: "ULTRAVERDANT42 is printed on this unrelated roofing inventory note.",
+          category: "MATERIAL",
+          unitType: "FLAT",
+          defaultQuantity: 1,
+          unitCost: 40,
+          unitPrice: 80,
+        },
+      }),
+      prisma.workPreset.create({
+        data: {
+          tenantId: beta.tenant.id,
+          serviceType: "GARDENING",
+          name: "Other tenant secret",
+          description: "ULTRAVERDANT42 belongs to the other tenant and must never cross over.",
+          category: "MATERIAL",
+          unitType: "FLAT",
+          defaultQuantity: 1,
+          unitCost: 50,
+          unitPrice: 100,
+        },
+      }),
+    ]);
+
+    for (const preset of [exactGarden, semanticGarden, wrongService, otherTenant]) {
+      await upsertAiRetrievalSource(prisma, {
+        tenantId: preset.tenantId,
+        sourceType: "WorkPreset",
+        sourceId: preset.id,
+        citationLabel: `Saved job: ${preset.name}`,
+        sourceUpdatedAtUtc: preset.updatedAt,
+        filterMetadata: {
+          serviceType: preset.serviceType,
+          recordStatus: preset.category,
+          lifecycle: "active",
+          section: "product-catalog",
+          sourceCreatedAtUtc: preset.createdAt,
+        },
+        fields: [{ field: "WorkPreset.description", content: preset.description }],
+      }, { embedText: flatHybridEmbedding });
+    }
+
+    const result = await retrieveAiContextFromIndex(prisma, {
+      access: accessFor({ tenantId: alpha.tenant.id, userId: alpha.user.id, role: "owner" }),
+      query: "ULTRAVERDANT42",
+      purpose: "QUOTE_DRAFT",
+      requestId: "hybrid-filter-rag",
+      embedText: flatHybridEmbedding,
+      filters: {
+        sourceTypes: ["WorkPreset"],
+        serviceTypes: ["GARDENING"],
+        lifecycle: "active",
+        section: "product-catalog",
+        sourceCreatedAfterUtc: createdAfter,
+      },
+    });
+
+    expect(result.chunks[0]?.sourceId).toBe(exactGarden.id);
+    expect(result.context).toContain("ULTRAVERDANT42 soil treatment");
+    expect(result.context).not.toContain("unrelated roofing");
+    expect(result.context).not.toContain("other tenant");
+
+    const audit = await prisma.aiRetrievalAuditEvent.findUniqueOrThrow({
+      where: { id: result.auditEventId },
+    });
+    expect(audit.rankingMode).toBe("postgres_rrf_hybrid_rerank_v2");
+    expect(audit.keywordCandidateCount).toBe(1);
+    expect(audit.semanticCandidateCount).toBe(2);
+    expect(audit.candidateCount).toBe(2);
+    expect(audit.authorizedCandidateCount).toBe(2);
+    expect(audit.totalDurationMs).toBeGreaterThanOrEqual(0);
+    expect(audit.filterSummary).toMatchObject({
+      sourceTypeCount: 1,
+      serviceTypeCount: 1,
+      lifecycleApplied: true,
+      sectionApplied: true,
+      createdRangeApplied: true,
+    });
+    expect(audit.rankingSummary).toMatchObject({
+      reranker: "lexical_coverage_diversity_v1",
+      rewriteMode: "none",
+      rewriteContextTurnCount: 0,
+    });
+    const auditJson = JSON.stringify(audit);
+    expect(auditJson).not.toContain("ULTRAVERDANT42");
+    expect(auditJson).not.toContain(exactGarden.id);
+    expect(auditJson).not.toContain(wrongService.id);
+    expect(auditJson).not.toContain(otherTenant.id);
+
+    const followUp = await retrieveAiContextFromIndex(prisma, {
+      access: accessFor({ tenantId: alpha.tenant.id, userId: alpha.user.id, role: "owner" }),
+      query: "What about that treatment?",
+      priorUserQueries: ["Find the ULTRAVERDANT42 citrus treatment"],
+      purpose: "QUOTE_DRAFT",
+      requestId: "hybrid-follow-up-rag",
+      embedText: flatHybridEmbedding,
+      filters: {
+        sourceTypes: ["WorkPreset"],
+        serviceTypes: ["GARDENING"],
+        lifecycle: "active",
+      },
+    });
+    expect(followUp.chunks[0]?.sourceId).toBe(exactGarden.id);
+    const followUpAudit = await prisma.aiRetrievalAuditEvent.findUniqueOrThrow({
+      where: { id: followUp.auditEventId },
+    });
+    expect(followUpAudit.rankingSummary).toMatchObject({
+      rewriteMode: "same_task_context_v1",
+      rewriteContextTurnCount: 1,
+    });
+    const followUpAuditJson = JSON.stringify(followUpAudit);
+    expect(followUpAuditJson).not.toContain("ULTRAVERDANT42");
+    expect(followUpAuditJson).not.toContain("What about that treatment");
+
+    const betaResult = await retrieveAiContextFromIndex(prisma, {
+      access: accessFor({ tenantId: beta.tenant.id, userId: beta.user.id, role: "owner" }),
+      query: "ULTRAVERDANT42",
+      purpose: "QUOTE_DRAFT",
+      requestId: "hybrid-beta-rag",
+      embedText: flatHybridEmbedding,
+      filters: { sourceTypes: ["WorkPreset"], serviceTypes: ["GARDENING"] },
+    });
+    expect(betaResult.chunks.map((chunk) => chunk.sourceId)).toEqual([otherTenant.id]);
+    const betaAudit = await prisma.aiRetrievalAuditEvent.findUniqueOrThrow({
+      where: { id: betaResult.auditEventId },
+    });
+    expect(betaAudit.queryHash).not.toBe(audit.queryHash);
+
+    const punctuationQuery = await retrieveAiContextFromIndex(prisma, {
+      access: accessFor({ tenantId: alpha.tenant.id, userId: alpha.user.id, role: "owner" }),
+      query: "ruben+roof@example.com OR job-123",
+      purpose: "QUOTE_DRAFT",
+      requestId: "hybrid-punctuation-rag",
+      embedText: flatHybridEmbedding,
+      filters: { sourceTypes: ["WorkPreset"], serviceTypes: ["GARDENING"] },
+    });
+    expect(punctuationQuery.auditEventId).toBeTruthy();
+  });
+
+  test("customer and quote API writes enqueue every affected retrieval source inside the write transaction", async () => {
+    const alpha = await signUp("rag-mutation-queue");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: alpha.cookie },
+      payload: {
+        fullName: "Queued Garden Customer",
+        phone: "555-410-7788",
+        email: "queued-garden@example.com",
+        notes: "Customer asked for native plants along the rear fence.",
+      },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const customer = (customerResponse.json() as { customer: { id: string } }).customer;
+
+    const quoteResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: alpha.cookie },
+      payload: {
+        customerId: customer.id,
+        serviceType: "GARDENING",
+        title: "Native planting quote",
+        scopeText: "Prepare beds and install drought-tolerant native plants.",
+        internalCostSubtotal: 250,
+        customerPriceSubtotal: 500,
+        taxAmount: 0,
+        lineItems: [{
+          description: "Native plants, soil preparation, and installation labor",
+          sectionType: "INCLUDED",
+          quantity: 1,
+          unitCost: 250,
+          unitPrice: 500,
+        }],
+      },
+    });
+    expect(quoteResponse.statusCode).toBe(201);
+    const quote = (quoteResponse.json() as { quote: { id: string } }).quote;
+    const lineItem = await prisma.quoteLineItem.findFirstOrThrow({
+      where: { tenantId: alpha.tenant.id, quoteId: quote.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const activityIds = await prisma.customerActivityEvent.findMany({
+      where: { tenantId: alpha.tenant.id, customerId: customer.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+
+    const jobs = await prisma.aiIndexJob.findMany({
+      where: {
+        tenantId: alpha.tenant.id,
+        OR: [
+          { sourceType: "Customer", sourceId: customer.id },
+          { sourceType: "Quote", sourceId: quote.id },
+          { sourceType: "QuoteLineItem", sourceId: lineItem.id },
+          { sourceType: "CustomerActivityEvent", sourceId: { in: activityIds.map((event) => event.id) } },
+        ],
+      },
+      select: { sourceType: true, sourceId: true, status: true, operation: true },
+    });
+
+    expect(jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "Customer", sourceId: customer.id, status: "PENDING", operation: "UPSERT" }),
+      expect.objectContaining({ sourceType: "Quote", sourceId: quote.id, status: "PENDING", operation: "UPSERT" }),
+      expect.objectContaining({ sourceType: "QuoteLineItem", sourceId: lineItem.id, status: "PENDING", operation: "UPSERT" }),
+    ]));
+    for (const event of activityIds) {
+      expect(jobs).toContainEqual(expect.objectContaining({
+        sourceType: "CustomerActivityEvent",
+        sourceId: event.id,
+        status: "PENDING",
+        operation: "UPSERT",
+      }));
+    }
   });
 
   test("customer, quote, and product writes retire stale indexed sources", async () => {

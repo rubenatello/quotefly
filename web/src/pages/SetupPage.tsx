@@ -293,7 +293,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     setPresetDrafts((current) => current.filter((preset) => preset.id !== presetId));
   }
 
-  async function saveSetup(nextPath?: "/app/customers" | "/app/branding") {
+  async function saveSetup(nextPath?: "/app" | "/app/customers" | "/app/branding") {
     setSaving(true);
     setError(null);
     try {
@@ -362,7 +362,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-quotefly-blue">Fast setup</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Start with proven defaults</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                We prepared {recommendedPresets.length || "your"} starter jobs for {TRADE_LABELS[trade]}. Use them now to reach your customer list, or customize the details below first.
+                We prepared {recommendedPresets.length || "your"} starter jobs for {TRADE_LABELS[trade]}. Use them now to reach your workspace home, or customize the details below first.
               </p>
               {!canSaveSetup && !loading ? (
                 <p className="mt-2 text-xs font-medium text-amber-700">Preparing your starter jobs…</p>
@@ -373,7 +373,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 size="lg"
                 loading={saving}
                 disabled={loading || !canSaveSetup}
-                onClick={() => void saveSetup("/app/customers")}
+                onClick={() => void saveSetup("/app")}
               >
                 Use defaults &amp; continue
               </Button>

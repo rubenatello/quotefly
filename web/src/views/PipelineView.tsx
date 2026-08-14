@@ -45,6 +45,19 @@ function customerInitials(fullName: string) {
     .toUpperCase();
 }
 
+function compactDateTime(value: string) {
+  const date = new Date(value);
+  const today = new Date();
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+  if (sameDay) {
+    return `Today, ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  }
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function nextActionLabel(lead: PipelineLead, actionKind: QueueActionKind) {
   if (actionKind === "job_status") return "Move work forward";
   if (actionKind === "after_sale") return "Ask for review or referral";
@@ -74,12 +87,12 @@ type QueueConfig = {
 function LifecyclePill({ label, tone }: { label: string; tone: "slate" | "blue" | "emerald" | "amber" }) {
   const toneClass =
     tone === "blue"
-      ? "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue"
+      ? "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]"
       : tone === "emerald"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        ? "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]"
         : tone === "amber"
-          ? "border-amber-200 bg-amber-50 text-amber-700"
-          : "border-slate-200 bg-slate-50 text-slate-600";
+          ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]"
+          : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]";
 
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${toneClass}`}>{label}</span>;
 }
@@ -97,29 +110,29 @@ function MetricTile({
 }) {
   const toneClass =
     tone === "blue"
-      ? "bg-quotefly-blue text-white"
+      ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]"
       : tone === "orange"
-        ? "bg-quotefly-orange text-white"
-        : tone === "emerald"
-          ? "bg-emerald-600 text-white"
+        ? "bg-[var(--qf-warning-strong)] text-white"
+      : tone === "emerald"
+          ? "bg-[var(--qf-success-strong)] text-white"
           : "bg-slate-800 text-white";
 
   return (
-    <div className={`rounded-xl px-4 py-3 ${toneClass}`}>
+    <div data-testid="follow-up-metric" className={`min-w-0 rounded-xl px-3 py-3 sm:px-4 ${toneClass}`}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
-      <p className="mt-2 text-2xl font-bold tracking-tight">{currency ? money(value) : value}</p>
+      <p className="mt-2 truncate text-xl font-bold tracking-tight sm:text-2xl">{currency ? money(value) : value}</p>
     </div>
   );
 }
 
 function UtilityRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
-      <div className="inline-flex items-center gap-2 text-sm text-slate-700">
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-slate-50 text-quotefly-blue">{icon}</span>
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3">
+      <div className="inline-flex items-center gap-2 text-sm text-[var(--qf-text-soft)]">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--qf-panel-muted)] text-[var(--qf-link)]">{icon}</span>
         <span>{label}</span>
       </div>
-      <span className="text-sm font-semibold text-slate-900">{value}</span>
+      <span className="text-sm font-semibold text-[var(--qf-text)]">{value}</span>
     </div>
   );
 }
@@ -134,7 +147,7 @@ function QueueTabs({
   onChange: (tab: QueueTab) => void;
 }) {
   return (
-    <div data-testid="follow-up-queue-tabs" className="hide-scrollbar relative -mx-4 flex w-[calc(100%+2rem)] max-w-[calc(100%+2rem)] snap-x gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:w-full sm:max-w-full sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
+    <div data-testid="follow-up-queue-tabs" className="grid w-full grid-cols-3 gap-2 sm:flex sm:flex-wrap">
       {tabs.map((tab) => {
         const active = tab.key === activeTab;
         return (
@@ -142,19 +155,90 @@ function QueueTabs({
             key={tab.key}
             type="button"
             onClick={() => onChange(tab.key)}
-            className={`inline-flex min-h-[44px] shrink-0 snap-start items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition sm:min-h-[36px] sm:py-1.5 ${
+            className={`inline-flex min-h-[44px] min-w-0 items-center justify-center gap-1.5 rounded-xl border px-1.5 py-2 text-[11px] font-medium transition sm:min-h-[36px] sm:flex-none sm:rounded-full sm:px-3 sm:py-1.5 sm:text-sm ${
               active
-                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                ? "border-[var(--qf-selected-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
+                : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
             }`}
           >
-            <span>{tab.label}</span>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${active ? "bg-white text-quotefly-blue" : "bg-slate-100 text-slate-600"}`}>
+            <span className="truncate">{tab.label}</span>
+            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold sm:px-2 sm:text-[11px] ${active ? "bg-[var(--qf-panel)] text-[var(--qf-link)]" : "bg-[var(--qf-panel-muted)] text-[var(--qf-text-muted)]"}`}>
               {tab.count}
             </span>
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function QueueActions({
+  lead,
+  actionKind,
+  saving,
+  mobile = false,
+  onNavigateToQuote,
+  onNavigateToBuilder,
+  onUpdateFollowUp,
+  onUpdateQuoteLifecycle,
+}: {
+  lead: PipelineLead;
+  actionKind: QueueActionKind;
+  saving: boolean;
+  mobile?: boolean;
+  onNavigateToQuote: (quoteId: string) => void;
+  onNavigateToBuilder: (customerId: string) => void;
+  onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
+  onUpdateQuoteLifecycle?: (
+    quoteId: string,
+    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+  ) => void;
+}) {
+  const selectClassName = mobile ? "min-w-0 w-full" : "w-full min-w-[150px] sm:w-auto";
+
+  return (
+    <div className={mobile ? "grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
+      <Button
+        size="sm"
+        variant={lead.quoteId ? "outline" : "primary"}
+        className="w-full sm:w-auto"
+        onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
+      >
+        {lead.quoteId ? "Open quote" : "Draft quote"}
+      </Button>
+
+      {actionKind === "follow_up" ? (
+        <Select
+          aria-label={`Update follow-up for ${lead.customerName}`}
+          value={lead.followUpStatus}
+          disabled={saving}
+          onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
+          options={FOLLOW_UP_OPTIONS}
+          className={selectClassName}
+        />
+      ) : actionKind === "job_status" ? (
+        <Select
+          aria-label={`Update job stage for ${lead.customerName}`}
+          value={lead.jobStatus ?? "NOT_STARTED"}
+          disabled={saving || !lead.quoteId}
+          onChange={(event) =>
+            lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { jobStatus: event.target.value as QuoteJobStatus })
+          }
+          options={JOB_STATUS_OPTIONS}
+          className={selectClassName}
+        />
+      ) : actionKind === "after_sale" ? (
+        <Select
+          aria-label={`Update after-sale for ${lead.customerName}`}
+          value={lead.afterSaleFollowUpStatus ?? "DUE"}
+          disabled={saving || !lead.quoteId}
+          onChange={(event) =>
+            lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus })
+          }
+          options={AFTER_SALE_OPTIONS}
+          className={selectClassName}
+        />
+      ) : null}
     </div>
   );
 }
@@ -166,6 +250,7 @@ function QueueRow({
   saving,
   activeQuoteId,
   onNavigateToQuote,
+  onNavigateToBuilder,
   onUpdateFollowUp,
   onUpdateQuoteLifecycle,
 }: {
@@ -175,6 +260,7 @@ function QueueRow({
   saving: boolean;
   activeQuoteId?: string | null;
   onNavigateToQuote: (quoteId: string) => void;
+  onNavigateToBuilder: (customerId: string) => void;
   onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
   onUpdateQuoteLifecycle?: (
     quoteId: string,
@@ -182,20 +268,86 @@ function QueueRow({
   ) => void;
 }) {
   const touchLabel = lead.afterSaleFollowUpDueAtUtc ? formatDateTime(lead.afterSaleFollowUpDueAtUtc) : formatDateTime(lead.createdAt);
+  const renderStatusPills = () => (
+    <>
+      <FollowUpPill status={lead.followUpStatus} compact />
+      {lead.status ? <QuoteStatusPill status={lead.status} compact /> : <LifecyclePill label="No quote" tone="slate" />}
+      {actionKind === "job_status" && lead.jobStatus ? (
+        <LifecyclePill label={jobStatusLabel(lead.jobStatus)} tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"} />
+      ) : null}
+      {actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
+        <LifecyclePill label={afterSaleLabel(lead.afterSaleFollowUpStatus)} tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"} />
+      ) : null}
+    </>
+  );
 
   return (
-    <article className={`px-4 py-3 transition hover:bg-slate-50/80 ${lead.quoteId && lead.quoteId === activeQuoteId ? "bg-quotefly-blue/[0.04]" : ""}`}>
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] xl:items-center 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
+    <article data-testid="follow-up-queue-row" className={`transition hover:bg-[var(--qf-interactive-hover)] ${lead.quoteId && lead.quoteId === activeQuoteId ? "bg-[var(--qf-selected)]" : ""}`}>
+      <div className="p-4 xl:hidden">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
+            {customerInitials(lead.customerName)}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</p>
+              <span className="shrink-0 rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold text-[var(--qf-text-muted)]">#{index + 1}</span>
+            </div>
+            <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">Added {compactDateTime(lead.createdAt)}</p>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+          <a href={`tel:${lead.phone}`} className="inline-flex min-h-10 min-w-0 items-center gap-2 rounded-xl bg-[var(--qf-panel-muted)] px-3 text-[var(--qf-text-soft)] hover:text-[var(--qf-link)]">
+            <CallIcon size={13} />
+            <span className="truncate">{lead.phone}</span>
+          </a>
+          {lead.email ? (
+            <a href={`mailto:${lead.email}`} className="inline-flex min-h-10 min-w-0 items-center gap-2 rounded-xl bg-[var(--qf-panel-muted)] px-3 text-[var(--qf-text-soft)] hover:text-[var(--qf-link)]">
+              <EmailIcon size={13} />
+              <span className="truncate">{lead.email}</span>
+            </a>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-[var(--qf-text)]">{lead.quoteTitle ?? "No quote drafted yet"}</p>
+            <p className="mt-0.5 text-xs text-[var(--qf-text-muted)]">{nextActionLabel(lead, actionKind)}</p>
+          </div>
+          <span className="shrink-0 text-sm font-semibold text-[var(--qf-text)]">{lead.totalAmount !== undefined ? money(lead.totalAmount) : "—"}</span>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">{renderStatusPills()}</div>
+
+        <div className="my-3 flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)]">
+          <span>Last activity</span>
+          <span className="truncate text-right font-medium text-[var(--qf-text-soft)]">{compactDateTime(lead.afterSaleFollowUpDueAtUtc ?? lead.createdAt)}</span>
+        </div>
+
+        <QueueActions
+          lead={lead}
+          actionKind={actionKind}
+          saving={saving}
+          mobile
+          onNavigateToQuote={onNavigateToQuote}
+          onNavigateToBuilder={onNavigateToBuilder}
+          onUpdateFollowUp={onUpdateFollowUp}
+          onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
+        />
+      </div>
+
+      <div className="hidden gap-3 px-4 py-3 xl:grid xl:grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] xl:items-center 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{index + 1}</span>
-            <span className="text-xs text-slate-500">Created {formatDateTime(lead.createdAt)}</span>
+            <span className="rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{index + 1}</span>
+            <span className="text-xs text-[var(--qf-text-muted)]">Created {formatDateTime(lead.createdAt)}</span>
           </div>
           <div className="mt-1.5 flex items-start gap-3">
-            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">{customerInitials(lead.customerName)}</span>
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">{customerInitials(lead.customerName)}</span>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-slate-900">{lead.customerName}</p>
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--qf-text-soft)]">
                 <span className="inline-flex items-center gap-1"><CallIcon size={12} />{lead.phone}</span>
                 {lead.email ? <span className="inline-flex items-center gap-1"><EmailIcon size={12} />{lead.email}</span> : null}
               </div>
@@ -206,70 +358,30 @@ function QueueRow({
         <div className="min-w-0">
           {lead.quoteTitle ? (
             <>
-              <p className="truncate text-sm font-medium text-slate-900">{lead.quoteTitle}</p>
-              <p className="mt-1 text-xs text-slate-500">{lead.totalAmount !== undefined ? money(lead.totalAmount) : "No total yet"}</p>
+              <p className="truncate text-sm font-medium text-[var(--qf-text)]">{lead.quoteTitle}</p>
+              <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{lead.totalAmount !== undefined ? money(lead.totalAmount) : "No total yet"}</p>
             </>
           ) : (
-            <p className="text-sm text-slate-500">No quote drafted yet.</p>
+            <p className="text-sm text-[var(--qf-text-muted)]">No quote drafted yet.</p>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <FollowUpPill status={lead.followUpStatus} compact />
-          {lead.status ? <QuoteStatusPill status={lead.status} compact /> : <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600">No Quote</span>}
-          {actionKind === "job_status" && lead.jobStatus ? (
-            <LifecyclePill label={jobStatusLabel(lead.jobStatus)} tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"} />
-          ) : null}
-          {actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
-            <LifecyclePill label={afterSaleLabel(lead.afterSaleFollowUpStatus)} tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"} />
-          ) : null}
-        </div>
+        <div className="flex flex-wrap items-center gap-2">{renderStatusPills()}</div>
 
-        <div className="space-y-1 text-xs text-slate-500">
+        <div className="space-y-1 text-xs text-[var(--qf-text-muted)]">
           <p>{touchLabel}</p>
-          <p className="font-medium text-slate-700">{nextActionLabel(lead, actionKind)}</p>
+          <p className="font-medium text-[var(--qf-text-soft)]">{nextActionLabel(lead, actionKind)}</p>
         </div>
 
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end">
-          {lead.quoteId ? (
-            <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => onNavigateToQuote(lead.quoteId!)}>Open Quote</Button>
-          ) : (
-            <Button size="sm" variant="outline" disabled className="w-full sm:w-auto">Draft Needed</Button>
-          )}
-
-          {actionKind === "follow_up" ? (
-            <Select
-              aria-label={`Update follow-up for ${lead.customerName}`}
-              value={lead.followUpStatus}
-              disabled={saving}
-              onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
-              options={FOLLOW_UP_OPTIONS}
-              className="w-full sm:w-auto min-w-[150px]"
-            />
-          ) : actionKind === "job_status" ? (
-            <Select
-              aria-label={`Update job stage for ${lead.customerName}`}
-              value={lead.jobStatus ?? "NOT_STARTED"}
-              disabled={saving || !lead.quoteId}
-              onChange={(event) =>
-                lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { jobStatus: event.target.value as QuoteJobStatus })
-              }
-              options={JOB_STATUS_OPTIONS}
-              className="w-full sm:w-auto min-w-[150px]"
-            />
-          ) : actionKind === "after_sale" ? (
-            <Select
-              aria-label={`Update after-sale for ${lead.customerName}`}
-              value={lead.afterSaleFollowUpStatus ?? "DUE"}
-              disabled={saving || !lead.quoteId}
-              onChange={(event) =>
-                lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus })
-              }
-              options={AFTER_SALE_OPTIONS}
-              className="w-full sm:w-auto min-w-[150px]"
-            />
-          ) : null}
-        </div>
+        <QueueActions
+          lead={lead}
+          actionKind={actionKind}
+          saving={saving}
+          onNavigateToQuote={onNavigateToQuote}
+          onNavigateToBuilder={onNavigateToBuilder}
+          onUpdateFollowUp={onUpdateFollowUp}
+          onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
+        />
       </div>
     </article>
   );
@@ -339,7 +451,7 @@ export function PipelineView() {
     },
     {
       key: "afterSale",
-      label: "After-Sale",
+      label: "Post-job",
       title: `After-Sale Follow-Up (${pipeline.totals.afterSaleLeads})`,
       subtitle: "Completed jobs waiting on review, referral, or post-job check-in.",
       count: pipeline.totals.afterSaleLeads,
@@ -370,55 +482,49 @@ export function PipelineView() {
       <PageHeader
         title="Follow-up"
         subtitle="Keep leads and jobs moving: new customers first, quoted work next, then completed-job check-ins."
-        actions={
-          <>
-            <Button className="hidden sm:inline-flex" variant={selectedQuoteId ? "outline" : "primary"} onClick={() => navigateToBuilder()}>
-              New quote
-            </Button>
-            {selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : null}
-          </>
-        }
+        mode="actions-only"
+        actions={selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : undefined}
       />
 
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_320px]">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.45fr)_320px]">
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div data-testid="follow-up-metrics" className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
             <MetricTile label="Needs attention" value={nextAttentionCount} tone="orange" />
             <MetricTile label="New leads" value={pipeline.totals.newLeads} tone="blue" />
             <MetricTile label="Active work" value={pipeline.totals.closedLeads} tone="emerald" />
             <MetricTile label="Revenue" value={stats.acceptedRevenue} tone="slate" currency />
           </div>
 
-          <Card variant="default" padding="md">
-            <div className="mb-4 flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-end lg:justify-between">
+          <Card variant="default" padding="md" className="overflow-hidden p-0 sm:p-5">
+            <div className="flex flex-col gap-3 border-b border-[var(--qf-border)] p-4 sm:mb-4 sm:p-0 sm:pb-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Lead Queue</p>
-                <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">{activeQueue.title}</h2>
-                <p className="mt-1 text-sm text-slate-600">{activeQueue.subtitle}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Lead queue</p>
+                <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{activeQueue.title}</h2>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeQueue.subtitle}</p>
               </div>
               <div className="min-w-0 max-w-full lg:w-auto">
                 <QueueTabs tabs={queueTabs} activeTab={activeTab} onChange={setActiveTab} />
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div data-testid="follow-up-queue" className="overflow-hidden bg-[var(--qf-panel)] sm:rounded-xl sm:border sm:border-[var(--qf-border)]">
               {activeQueue.leads.length === 0 ? (
                 <div className="p-4">
                   <EmptyState title={activeQueue.emptyTitle} description={activeQueue.emptyDescription} />
                 </div>
               ) : (
                 <>
-                  <div className="hidden grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
+                  <div className="hidden grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
                     <span>Lead</span>
                     <span>Quote</span>
                     <span>Status</span>
                     <span>Touch</span>
                     <span>Action</span>
                   </div>
-                  <div className="divide-y divide-slate-200">
+                  <div className="divide-y divide-[var(--qf-border)]">
                     {activeQueue.leads.map((lead, index) => (
                       <QueueRow
                         key={`${lead.customerId}-${lead.quoteId ?? "row"}`}
@@ -428,6 +534,7 @@ export function PipelineView() {
                         saving={saving}
                         activeQuoteId={selectedQuoteId}
                         onNavigateToQuote={navigateToQuote}
+                        onNavigateToBuilder={navigateToBuilder}
                         onUpdateFollowUp={(customerId, followUpStatus) => void updateLeadFollowUpStatus(customerId, followUpStatus)}
                         onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
                       />
@@ -439,12 +546,12 @@ export function PipelineView() {
           </Card>
         </div>
 
-        <div className="space-y-4">
+        <div className="hidden space-y-4 xl:block">
           <Card variant="default" padding="md">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Queue focus</p>
-                <p className="mt-1 text-sm text-slate-600">Keep one list moving at a time.</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Queue focus</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Keep one list moving at a time.</p>
               </div>
               <Badge tone={sectionToneBadge(activeQueue.tone)}>{activeQueue.count} active</Badge>
             </div>
@@ -466,7 +573,7 @@ export function PipelineView() {
           </Card>
 
           <Card variant="default" padding="md">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recent leads</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Recent leads</p>
             <div className="mt-3 space-y-2.5">
               {pipeline.recentLeads.slice(0, 4).length > 0 ? (
                 pipeline.recentLeads.slice(0, 4).map((lead) => (
@@ -474,19 +581,19 @@ export function PipelineView() {
                     key={`${lead.customerId}-${lead.quoteId ?? "recent"}`}
                     type="button"
                     onClick={() => (lead.quoteId ? navigateToQuote(lead.quoteId) : navigateToBuilder(lead.customerId))}
-                    className="flex w-full items-start gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                    className="flex w-full items-start gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 text-left transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                   >
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
                       {customerInitials(lead.customerName)}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-slate-900">{lead.customerName}</span>
-                      <span className="mt-1 block text-xs text-slate-500">{lead.quoteTitle ?? "No quote yet"}</span>
+                      <span className="block truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</span>
+                      <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{lead.quoteTitle ?? "No quote yet"}</span>
                     </span>
                   </button>
                 ))
               ) : (
-                <p className="rounded-[14px] border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                <p className="rounded-[14px] border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel-muted)] px-3 py-3 text-sm text-[var(--qf-text-muted)]">
                   New leads will appear here.
                 </p>
               )}

@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
   Boxes,
-  FilePlus2,
   PackagePlus,
   Pencil,
   Search,
@@ -593,6 +592,7 @@ export function ProductsPage() {
       <PageHeader
         title="Products & services"
         subtitle="Keep reusable work, pricing, and scope details ready for fast, consistent quotes."
+        mode="actions-only"
         actions={
           <>
             <KodyButton
@@ -605,7 +605,6 @@ export function ProductsPage() {
                 limit: 8,
               }}
             />
-            <Button className="lg:hidden" variant="outline" icon={<FilePlus2 size={16} />} onClick={() => navigate("/app/build")}>New quote</Button>
             <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>Add product</Button>
           </>
         }

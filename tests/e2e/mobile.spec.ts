@@ -69,7 +69,7 @@ test.describe("mobile launch smoke", () => {
       expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     }
     await expect(page.getByTestId("mobile-tab-customers")).toHaveAttribute("aria-current", "page");
-    await expect(page.getByTestId("mobile-tab-customers-icon")).toHaveClass(/bg-quotefly-blue/);
+    await expect(page.getByTestId("mobile-tab-customers-icon")).toHaveClass(/bg-\[var\(--qf-selected\)\]/);
 
     await mobileWorkspace.getByRole("button", { name: "Quotes", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
@@ -132,14 +132,16 @@ test.describe("mobile launch smoke", () => {
       .toBeLessThanOrEqual(1);
     const queueTabs = page.getByTestId("follow-up-queue-tabs");
     await expect(queueTabs).toBeVisible();
-    await expect.poll(() => queueTabs.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await expect
+      .poll(() => queueTabs.evaluate((element) => element.scrollWidth - element.clientWidth))
+      .toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: /Quoted/ }).click();
-    const followUpSelect = page.getByLabel("Update follow-up for Mobile Beta Customer");
+    const followUpSelect = page.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true });
     await followUpSelect.selectOption("FOLLOWED_UP");
     await expect(page.getByText("Follow-up status updated to Followed Up.", { exact: true })).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: /Quoted/ }).click();
-    await expect(page.getByLabel("Update follow-up for Mobile Beta Customer")).toHaveValue("FOLLOWED_UP");
+    await expect(page.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true })).toHaveValue("FOLLOWED_UP");
 
     await page.goto("/app/settings");
     await expect(page.getByRole("heading", { level: 2, name: "Appearance", exact: true })).toBeVisible();

@@ -60,6 +60,8 @@ npm run verify:launch
 | `OPENAI_MODEL` | Optional | No | `gpt-4o-mini` | Track quality and spend before launch expansion |
 | `OPENAI_EMBEDDING_MODEL` | Optional | No | `text-embedding-3-small` | Keep consistent with indexed RAG chunks; changing it requires reindexing |
 | `OPENAI_EMBEDDING_COST_PER_1M_USD` | Optional | No | `0.02` | Estimated input cost used for tenant AI spend metering; keep aligned with the configured embedding model |
+| `ENABLE_AI_INDEX_WORKER` | Optional | No | `false` | Keep false until all canonical mutation paths have transactional enqueue coverage and staging race tests pass |
+| `AI_INDEX_INLINE_REFRESH` | Optional | No | `true` | Keep true during worker warm-up; set false on the API only after the queue drains and freshness smoke tests pass |
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
@@ -91,7 +93,9 @@ Railway/Render settings:
 
 This forced-RLS migration is forward-only: the previous API does not set `app.tenant_id`. Rehearse the migration on a Neon branch, confirm the new API and quote workflows, and use a forward fix or temporarily disable AI retrieval if rollback is needed. Do not roll the API back behind migration `20260813170000` and assume AI index/audit writes will continue.
 
-Before routing traffic, `/v1/ready` must confirm enabled and forced RLS on `AiRetrievalDocument`, `AiRetrievalChunk`, and `AiRetrievalAuditEvent`. If Railway starts with the owner URL or the migration/policy is absent, production environment validation/readiness must fail closed.
+Before routing traffic, `/v1/ready` must confirm enabled and forced RLS on `AiRetrievalDocument`, `AiRetrievalChunk`, `AiRetrievalAuditEvent`, and `AiIndexJob`. If Railway starts with the owner URL or the migration/policy is absent, production environment validation/readiness must fail closed.
+
+The async AI indexer is a separate Railway worker process using `npm run start:ai-index-worker` and the same non-owner `quotefly_runtime` database role. Start with one replica. Keep `ENABLE_AI_INDEX_WORKER=false` until Customer, Quote, QuoteLineItem, CustomerActivityEvent, and WorkPreset mutation coverage has passed database-backed enqueue, deletion, coalescing, and stale-lease tests. The API continues request-time retrieval refresh while the worker is disabled, so this is an expand-only rollout rather than a freshness cutover.
 
 ## Performance Operations
 

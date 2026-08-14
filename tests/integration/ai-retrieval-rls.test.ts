@@ -40,6 +40,15 @@ describe("AI retrieval PostgreSQL RLS", () => {
         policyVersion: "2026-08-11",
       })),
     });
+    await prisma.aiIndexJob.createMany({
+      data: [alpha, beta].map((tenant, index) => ({
+        id: `rls-index-job-${tenant.id}`,
+        tenantId: tenant.id,
+        sourceType: "Customer",
+        sourceId: `job-source-${index}`,
+        operation: "UPSERT",
+      })),
+    });
 
     runtimePrisma = new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl() } } });
     await runtimePrisma.$connect();
@@ -56,6 +65,7 @@ describe("AI retrieval PostgreSQL RLS", () => {
 
   test("missing tenant context returns no protected rows and rejects writes", async () => {
     await expect(runtimePrisma.aiRetrievalDocument.count()).resolves.toBe(0);
+    await expect(runtimePrisma.aiIndexJob.count()).resolves.toBe(0);
     await expect(runtimePrisma.aiRetrievalDocument.create({
       data: {
         tenantId: alphaTenantId,
@@ -67,6 +77,14 @@ describe("AI retrieval PostgreSQL RLS", () => {
         policyVersion: "2026-08-11",
       },
     })).rejects.toThrow();
+    await expect(runtimePrisma.aiIndexJob.create({
+      data: {
+        tenantId: alphaTenantId,
+        sourceType: "Customer",
+        sourceId: "missing-job-context",
+        operation: "UPSERT",
+      },
+    })).rejects.toThrow();
   });
 
   test("tenant context sees only that tenant and wrong-tenant writes fail", async () => {
@@ -74,6 +92,10 @@ describe("AI retrieval PostgreSQL RLS", () => {
       select: { tenantId: true, citationLabel: true },
     }));
     expect(labels).toEqual([{ tenantId: alphaTenantId, citationLabel: "Alpha private" }]);
+    const jobs = await withTenantRlsContext(runtimePrisma, alphaTenantId, (tx) => tx.aiIndexJob.findMany({
+      select: { tenantId: true, sourceId: true },
+    }));
+    expect(jobs).toEqual([{ tenantId: alphaTenantId, sourceId: "job-source-0" }]);
 
     await expect(withTenantRlsContext(runtimePrisma, alphaTenantId, (tx) => tx.aiRetrievalDocument.create({
       data: {
@@ -84,6 +106,14 @@ describe("AI retrieval PostgreSQL RLS", () => {
         contentHash: "b".repeat(64),
         citationLabel: "Must fail",
         policyVersion: "2026-08-11",
+      },
+    }))).rejects.toThrow();
+    await expect(withTenantRlsContext(runtimePrisma, alphaTenantId, (tx) => tx.aiIndexJob.create({
+      data: {
+        tenantId: betaTenantId,
+        sourceType: "Customer",
+        sourceId: "wrong-tenant-job",
+        operation: "UPSERT",
       },
     }))).rejects.toThrow();
   });

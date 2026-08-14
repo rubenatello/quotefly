@@ -434,6 +434,7 @@ export function AdminPage({ session }: AdminPageProps) {
         <PageHeader
           title="Settings"
           subtitle="Manage billing, users, and workspace access without leaving the CRM."
+          mode="actions-only"
         />
         <Card variant="elevated" padding="lg" className="text-sm text-slate-600">
           Loading organization settings...
@@ -449,6 +450,7 @@ export function AdminPage({ session }: AdminPageProps) {
       <PageHeader
         title="Settings"
         subtitle={settingsMode === "users" ? "Manage workspace users, roles, and seat usage." : "Manage organization billing, launch-plan access, and workspace controls."}
+        mode="actions-only"
         actions={
           ownerView && hasPortalAccess ? (
             <Button

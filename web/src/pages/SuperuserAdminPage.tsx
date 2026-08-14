@@ -495,6 +495,20 @@ function OverviewPanel({
               <MetricCompact label="Retired docs" value={ragIndex.totals.deletedDocuments.toLocaleString()} />
               <MetricCompact label="Active chunks" value={ragIndex.totals.activeChunks.toLocaleString()} />
               <MetricCompact label="Retired chunks" value={ragIndex.totals.deletedChunks.toLocaleString()} />
+              <MetricCompact label="Jobs pending" value={(ragIndex.indexingQueue.jobsByStatus.PENDING ?? 0).toLocaleString()} />
+              <MetricCompact label="Jobs failed" value={(ragIndex.indexingQueue.jobsByStatus.DEAD ?? 0).toLocaleString()} />
+              <MetricCompact
+                label="Embedding cache"
+                value={ragIndex.indexingQueue.embeddingCacheHitRate === null
+                  ? "No samples"
+                  : `${Math.round(ragIndex.indexingQueue.embeddingCacheHitRate * 100)}%`}
+              />
+              <MetricCompact
+                label="Average index time"
+                value={ragIndex.indexingQueue.averageSuccessfulDurationMs === null
+                  ? "No samples"
+                  : `${Math.round(ragIndex.indexingQueue.averageSuccessfulDurationMs)} ms`}
+              />
             </div>
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">
@@ -514,6 +528,9 @@ function OverviewPanel({
               </div>
               <p className="text-xs text-slate-500">
                 Latest index write: {ragIndex.latestIndexedAtUtc ? formatDate(ragIndex.latestIndexedAtUtc) : "None"}.
+                {ragIndex.indexingQueue.oldestPendingAtUtc
+                  ? ` Oldest pending job: ${formatDate(ragIndex.indexingQueue.oldestPendingAtUtc)}.`
+                  : " No jobs are waiting."}
                 Excludes {ragIndex.fieldsExcluded.join(", ")}.
               </p>
             </div>

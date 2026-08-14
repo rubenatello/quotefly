@@ -78,6 +78,7 @@ enum AiUsageEventType {
   DRAFT
   REVISE
   BUSINESS_INSIGHT
+  INDEXING
 }
 
 enum AiPurpose {
@@ -103,6 +104,23 @@ enum AiRetrievalAuditStatus {
 enum AiRetrievalDocumentStatus {
   ACTIVE
   DELETED
+}
+
+enum AiIndexJobOperation {
+  UPSERT
+  DELETE
+}
+
+enum AiIndexJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  DEAD
+}
+
+enum AiAssistantFeedbackRating {
+  UP
+  DOWN
 }
 
 enum DataGovernanceValidationStatus {
@@ -205,6 +223,8 @@ model Tenant {
   aiRetrievalAuditEvents            AiRetrievalAuditEvent[]
   aiRetrievalDocuments              AiRetrievalDocument[]
   aiRetrievalChunks                 AiRetrievalChunk[]
+  aiIndexJobs                       AiIndexJob[]
+  aiAssistantFeedback               AiAssistantFeedback[]
   quoteDecisionSessions             QuoteDecisionSession[]
   smsMessages                       SmsMessage[]
   stripeCustomerId                  String?                  @unique
@@ -250,6 +270,7 @@ model User {
   tenantLink                   TenantUser[]
   aiUsageEvents                AiUsageEvent[]
   aiRetrievalAuditEvents       AiRetrievalAuditEvent[]
+  aiAssistantFeedback          AiAssistantFeedback[]
   dataGovernanceValidationRuns DataGovernanceValidationRun[]
   superuserAuditEvents         SuperuserAuditEvent[]
   passwordResetTokens          PasswordResetToken[]
@@ -271,14 +292,14 @@ model PasswordResetToken {
 }
 
 model TenantUser {
-  id           String    @id @default(cuid())
-  tenantId     String
-  userId       String
-  role         String    @default("owner")
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  deletedAtUtc DateTime? @db.Timestamptz(3)
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String     @id @default(cuid())
+  tenantId          String
+  userId            String
+  role              String     @default("owner")
+  createdAt         DateTime   @default(now()) @db.Timestamptz(3)
+  deletedAtUtc      DateTime?  @db.Timestamptz(3)
+  tenant            Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   assignedCustomers Customer[] @relation("CustomerAssignee")
   assignedQuotes    Quote[]    @relation("QuoteAssignee")
 
@@ -423,48 +444,51 @@ model Quote {
 }
 
 model AiUsageEvent {
-  id                    String                 @id @default(cuid())
-  tenantId              String
-  quoteId               String?
-  customerId            String?
-  actorUserId           String?
-  actorEmail            String?
-  actorName             String?
-  eventType             AiUsageEventType
-  purpose               AiPurpose?
-  classification        DataClassification?
-  serviceType           ServiceCategory?
-  creditsConsumed       Int                    @default(1)
-  requestCount          Int                    @default(1)
-  promptTokens          Int?
-  completionTokens      Int?
-  totalTokens           Int?
-  estimatedCostUsd      Decimal?               @db.Decimal(10, 6)
-  promptText            String?                @db.Text
-  promptRedacted        String?                @db.Text
-  promptHash            String?                @db.VarChar(64)
-  model                 String?
-  insightSummary        String?                @db.Text
-  insightReasons        String[]               @default([])
-  insightSourceLabels   String[]               @default([])
-  confidenceLevel       String?
-  confidenceLabel       String?
-  riskNote              String?                @db.Text
-  patchAdded            Int?
-  patchUpdated          Int?
-  patchRemoved          Int?
-  sourceCount           Int?
-  retentionExpiresAtUtc DateTime?              @db.Timestamptz(3)
-  retrievalAuditEventId String?
+  id                     String                 @id @default(cuid())
+  tenantId               String
+  quoteId                String?
+  customerId             String?
+  actorUserId            String?
+  actorEmail             String?
+  actorName              String?
+  eventType              AiUsageEventType
+  purpose                AiPurpose?
+  classification         DataClassification?
+  serviceType            ServiceCategory?
+  creditsConsumed        Int                    @default(1)
+  requestCount           Int                    @default(1)
+  promptTokens           Int?
+  completionTokens       Int?
+  totalTokens            Int?
+  estimatedCostUsd       Decimal?               @db.Decimal(10, 6)
+  promptText             String?                @db.Text
+  promptRedacted         String?                @db.Text
+  promptHash             String?                @db.VarChar(64)
+  model                  String?
+  insightSummary         String?                @db.Text
+  insightReasons         String[]               @default([])
+  insightSourceLabels    String[]               @default([])
+  confidenceLevel        String?
+  confidenceLabel        String?
+  riskNote               String?                @db.Text
+  patchAdded             Int?
+  patchUpdated           Int?
+  patchRemoved           Int?
+  sourceCount            Int?
+  retentionExpiresAtUtc  DateTime?              @db.Timestamptz(3)
+  retrievalAuditEventId  String?
   retrievalAuditTenantId String?
-  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
-  deletedAtUtc          DateTime?              @db.Timestamptz(3)
-  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  quote                 Quote?                 @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  customer              Customer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  actorUser             User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-  retrievalAuditEvent   AiRetrievalAuditEvent? @relation(fields: [retrievalAuditEventId, retrievalAuditTenantId], references: [id, tenantId], onDelete: SetNull)
+  createdAt              DateTime               @default(now()) @db.Timestamptz(3)
+  deletedAtUtc           DateTime?              @db.Timestamptz(3)
+  tenant                 Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quote                  Quote?                 @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  customer               Customer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  actorUser              User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  retrievalAuditEvent    AiRetrievalAuditEvent? @relation(fields: [retrievalAuditEventId, retrievalAuditTenantId], references: [id, tenantId], onDelete: SetNull)
+  assistantFeedback      AiAssistantFeedback[]
 
+  @@unique([id, tenantId])
+  @@unique([retrievalAuditEventId, retrievalAuditTenantId])
   @@index([tenantId, createdAt])
   @@index([tenantId, eventType, createdAt])
   @@index([tenantId, actorUserId, createdAt])
@@ -473,7 +497,26 @@ model AiUsageEvent {
   @@index([tenantId, retentionExpiresAtUtc])
   @@index([tenantId, deletedAtUtc])
   @@index([retrievalAuditTenantId])
-  @@unique([retrievalAuditEventId, retrievalAuditTenantId])
+}
+
+model AiAssistantFeedback {
+  id             String                    @id @default(cuid())
+  tenantId       String
+  aiUsageEventId String
+  actorUserId    String
+  rating         AiAssistantFeedbackRating
+  createdAt      DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime                  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc   DateTime?                 @db.Timestamptz(3)
+  tenant         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  aiUsageEvent   AiUsageEvent              @relation(fields: [aiUsageEventId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  actorUser      User                      @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, aiUsageEventId, actorUserId])
+  @@index([tenantId, rating, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
+  @@index([aiUsageEventId])
+  @@index([deletedAtUtc])
 }
 
 model AiRetrievalAuditEvent {
@@ -493,6 +536,18 @@ model AiRetrievalAuditEvent {
   policyVersion         String                 @db.VarChar(32)
   status                AiRetrievalAuditStatus @default(SUCCEEDED)
   denialCode            String?                @db.VarChar(64)
+  rankingMode           String?                @db.VarChar(64)
+  candidateCount        Int?
+  authorizedCandidateCount Int?
+  semanticCandidateCount Int?
+  keywordCandidateCount Int?
+  embeddingDurationMs   Int?
+  authorizationDurationMs Int?
+  keywordDurationMs     Int?
+  rankingDurationMs     Int?
+  totalDurationMs       Int?
+  filterSummary         Json?
+  rankingSummary        Json?
   retentionExpiresAtUtc DateTime               @db.Timestamptz(3)
   createdAt             DateTime               @default(now()) @db.Timestamptz(3)
   deletedAtUtc          DateTime?              @db.Timestamptz(3)
@@ -520,6 +575,7 @@ model AiRetrievalDocument {
   citationLabel      String                    @db.VarChar(160)
   metadata           Json?
   policyVersion      String                    @db.VarChar(32)
+  chunkerVersion     String                    @default("legacy-char-v1") @db.VarChar(64)
   indexedAtUtc       DateTime                  @default(now()) @db.Timestamptz(3)
   deletedAtUtc       DateTime?                 @db.Timestamptz(3)
   tenant             Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -539,9 +595,19 @@ model AiRetrievalChunk {
   sourceType          String              @db.VarChar(64)
   sourceId            String
   sourceField         String              @db.VarChar(128)
+  customerId          String?
+  quoteId             String?
+  serviceType         ServiceCategory?
+  recordStatus        String?             @db.VarChar(64)
+  lifecycle           String?             @db.VarChar(32)
+  assignedTenantUserId String?
+  section             String?             @db.VarChar(128)
+  pageNumber          Int?
+  sourceCreatedAtUtc  DateTime?           @db.Timestamptz(3)
   chunkIndex          Int
   content             String              @db.Text
   contentHash         String              @db.VarChar(64)
+  embeddingContentHash String?            @db.VarChar(64)
   embedding           Float[]
   embeddingModel      String              @db.VarChar(80)
   embeddingDimensions Int
@@ -549,6 +615,7 @@ model AiRetrievalChunk {
   citationLabel       String              @db.VarChar(160)
   metadata            Json?
   policyVersion       String              @db.VarChar(32)
+  chunkerVersion      String              @default("legacy-char-v1") @db.VarChar(64)
   sourceUpdatedAtUtc  DateTime?           @db.Timestamptz(3)
   indexedAtUtc        DateTime            @default(now()) @db.Timestamptz(3)
   deletedAtUtc        DateTime?           @db.Timestamptz(3)
@@ -559,8 +626,44 @@ model AiRetrievalChunk {
   @@index([tenantId, classification, deletedAtUtc])
   @@index([tenantId, sourceType, sourceId, deletedAtUtc])
   @@index([tenantId, sourceField, deletedAtUtc])
+  @@index([tenantId, customerId, deletedAtUtc])
+  @@index([tenantId, quoteId, deletedAtUtc])
+  @@index([tenantId, assignedTenantUserId, deletedAtUtc])
+  @@index([tenantId, serviceType, lifecycle, recordStatus, deletedAtUtc])
+  @@index([tenantId, sourceCreatedAtUtc, deletedAtUtc])
   @@index([tenantId, indexedAtUtc])
   @@index([tenantId, classification, deletedAtUtc, policyVersion, embeddingDimensions, indexedAtUtc(sort: Desc)])
+  @@index([tenantId, embeddingContentHash, embeddingModel, embeddingDimensions, chunkerVersion, deletedAtUtc], map: "AiRetrievalChunk_embedding_cache_idx")
+}
+
+model AiIndexJob {
+  id                         String              @id @default(cuid())
+  tenantId                   String
+  sourceType                 String              @db.VarChar(64)
+  sourceId                   String
+  operation                  AiIndexJobOperation
+  status                     AiIndexJobStatus    @default(PENDING)
+  generation                 Int                 @default(1)
+  expectedSourceUpdatedAtUtc DateTime?           @db.Timestamptz(3)
+  availableAtUtc             DateTime            @default(now()) @db.Timestamptz(3)
+  attempts                   Int                 @default(0)
+  maxAttempts                Int                 @default(5)
+  lockedAtUtc                DateTime?            @db.Timestamptz(3)
+  lockedBy                   String?              @db.VarChar(128)
+  completedAtUtc             DateTime?            @db.Timestamptz(3)
+  lastErrorCode              String?              @db.VarChar(64)
+  lastDurationMs             Int?
+  lastChunkCount             Int?
+  lastEmbeddingCacheHitCount Int?
+  createdAt                  DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime             @updatedAt @db.Timestamptz(3)
+  tenant                     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, sourceType, sourceId])
+  @@unique([id, tenantId])
+  @@index([tenantId, status, availableAtUtc, createdAt])
+  @@index([tenantId, lockedAtUtc])
+  @@index([status, availableAtUtc])
 }
 
 model DataGovernanceValidationRun {
@@ -611,6 +714,7 @@ model QuoteLineItem {
   unitCost     Decimal              @db.Decimal(10, 2)
   unitPrice    Decimal              @db.Decimal(10, 2)
   createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
   deletedAtUtc DateTime?            @db.Timestamptz(3)
   quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)

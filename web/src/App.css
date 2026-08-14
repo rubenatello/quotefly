@@ -104,12 +104,25 @@
 
 .dark .qf-theme-scope .hover\:bg-slate-50:hover,
 .dark .qf-theme-scope .hover\:bg-slate-100:hover {
-  background-color: var(--qf-panel-muted) !important;
+  background-color: var(--qf-interactive-hover) !important;
+}
+
+.dark .qf-theme-scope .active\:bg-slate-50:active,
+.dark .qf-theme-scope .active\:bg-slate-100:active,
+.dark .qf-theme-scope .active\:bg-slate-200:active,
+.dark .qf-theme-scope .focus\:bg-slate-50:focus,
+.dark .qf-theme-scope .focus\:bg-slate-100:focus {
+  background-color: var(--qf-interactive-active) !important;
 }
 
 .dark .qf-theme-scope .hover\:text-slate-900:hover,
 .dark .qf-theme-scope .hover\:text-slate-700:hover {
   color: var(--qf-text) !important;
+}
+
+.dark .qf-theme-scope .text-quotefly-blue,
+.dark .qf-theme-scope .hover\:text-quotefly-blue:hover {
+  color: var(--qf-link) !important;
 }
 
 .dark .qf-theme-scope input:not([type="checkbox"]):not([type="radio"]),
@@ -126,67 +139,121 @@
 .dark .qf-theme-scope .bg-red-50,
 .dark .qf-theme-scope .hover\:bg-red-50:hover,
 .dark .qf-theme-scope .hover\:bg-red-100:hover {
-  background-color: rgb(248 113 113 / 0.13) !important;
+  background-color: var(--qf-danger-surface) !important;
 }
 
 .dark .qf-theme-scope .border-red-200,
 .dark .qf-theme-scope .border-red-300 {
-  border-color: rgb(248 113 113 / 0.35) !important;
+  border-color: var(--qf-danger-border) !important;
 }
 
 .dark .qf-theme-scope .text-red-600,
 .dark .qf-theme-scope .text-red-700 {
-  color: #fca5a5 !important;
+  color: var(--qf-danger-text) !important;
 }
 
 .dark .qf-theme-scope .bg-amber-50,
 .dark .qf-theme-scope .hover\:bg-amber-50:hover,
 .dark .qf-theme-scope .hover\:bg-amber-100:hover {
-  background-color: rgb(251 191 36 / 0.13) !important;
+  background-color: var(--qf-warning-surface) !important;
 }
 
 .dark .qf-theme-scope .border-amber-200 {
-  border-color: rgb(251 191 36 / 0.35) !important;
+  border-color: var(--qf-warning-border) !important;
 }
 
 .dark .qf-theme-scope .text-amber-700 {
-  color: #fcd34d !important;
+  color: var(--qf-warning-text) !important;
 }
 
 .dark .qf-theme-scope .bg-blue-50,
 .dark .qf-theme-scope .bg-blue-50\/70,
 .dark .qf-theme-scope .hover\:bg-blue-50:hover,
 .dark .qf-theme-scope .hover\:bg-blue-100:hover {
-  background-color: rgb(59 130 246 / 0.14) !important;
+  background-color: var(--qf-info-surface) !important;
 }
 
 .dark .qf-theme-scope .border-blue-200,
 .dark .qf-theme-scope .border-blue-300 {
-  border-color: rgb(96 165 250 / 0.35) !important;
+  border-color: var(--qf-info-border) !important;
 }
 
 .dark .qf-theme-scope .text-blue-600,
 .dark .qf-theme-scope .text-blue-700,
 .dark .qf-theme-scope .text-blue-800 {
-  color: #93c5fd !important;
+  color: var(--qf-info-text) !important;
 }
 
 .dark .qf-theme-scope .bg-orange-50,
 .dark .qf-theme-scope .bg-orange-50\/70,
 .dark .qf-theme-scope .hover\:bg-orange-50:hover,
 .dark .qf-theme-scope .hover\:bg-orange-100:hover {
-  background-color: rgb(251 146 60 / 0.14) !important;
+  background-color: var(--qf-warning-surface) !important;
 }
 
 .dark .qf-theme-scope .border-orange-200,
 .dark .qf-theme-scope .border-orange-300 {
-  border-color: rgb(251 146 60 / 0.35) !important;
+  border-color: var(--qf-warning-border) !important;
 }
 
 .dark .qf-theme-scope .text-orange-600,
 .dark .qf-theme-scope .text-orange-700,
 .dark .qf-theme-scope .text-orange-800 {
-  color: #fdba74 !important;
+  color: var(--qf-warning-text) !important;
+}
+
+.dark .qf-theme-scope .bg-emerald-50,
+.dark .qf-theme-scope .bg-green-50,
+.dark .qf-theme-scope .hover\:bg-emerald-50:hover,
+.dark .qf-theme-scope .hover\:bg-emerald-100:hover,
+.dark .qf-theme-scope .hover\:bg-green-50:hover,
+.dark .qf-theme-scope .hover\:bg-green-100:hover {
+  background-color: var(--qf-success-surface) !important;
+}
+
+.dark .qf-theme-scope .border-emerald-200,
+.dark .qf-theme-scope .border-emerald-300,
+.dark .qf-theme-scope .border-green-200,
+.dark .qf-theme-scope .border-green-300 {
+  border-color: var(--qf-success-border) !important;
+}
+
+.dark .qf-theme-scope .text-emerald-600,
+.dark .qf-theme-scope .text-emerald-700,
+.dark .qf-theme-scope .text-emerald-800,
+.dark .qf-theme-scope .text-green-600,
+.dark .qf-theme-scope .text-green-700,
+.dark .qf-theme-scope .text-green-800 {
+  color: var(--qf-success-text) !important;
+}
+
+.dark .qf-theme-scope .bg-sky-50,
+.dark .qf-theme-scope .bg-cyan-50,
+.dark .qf-theme-scope .bg-indigo-50,
+.dark .qf-theme-scope .bg-violet-50,
+.dark .qf-theme-scope .bg-purple-50 {
+  background-color: var(--qf-info-surface) !important;
+}
+
+.dark .qf-theme-scope .border-sky-200,
+.dark .qf-theme-scope .border-cyan-200,
+.dark .qf-theme-scope .border-indigo-200,
+.dark .qf-theme-scope .border-violet-200,
+.dark .qf-theme-scope .border-purple-200 {
+  border-color: var(--qf-info-border) !important;
+}
+
+.dark .qf-theme-scope .text-sky-600,
+.dark .qf-theme-scope .text-sky-700,
+.dark .qf-theme-scope .text-cyan-600,
+.dark .qf-theme-scope .text-cyan-700,
+.dark .qf-theme-scope .text-indigo-600,
+.dark .qf-theme-scope .text-indigo-700,
+.dark .qf-theme-scope .text-violet-600,
+.dark .qf-theme-scope .text-violet-700,
+.dark .qf-theme-scope .text-purple-600,
+.dark .qf-theme-scope .text-purple-700 {
+  color: var(--qf-info-text) !important;
 }
 
 .qf-kody-chat-panel {
@@ -223,6 +290,20 @@
   .qf-workspace-main select,
   .qf-workspace-main textarea {
     font-size: 16px;
+  }
+
+  /* A contextual Kody action carries better page/customer context than the
+     generic launcher, so mobile only shows the contextual entry point. */
+  html:has(.qf-kody-context-action) [data-testid="kody-launcher"] {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  /* Give the assistant the mobile viewport while it is active and avoid
+     repeating quote actions behind the conversation panel. */
+  html[data-kody-open="true"] .qf-mobile-action-dock {
+    display: none !important;
   }
 }
 

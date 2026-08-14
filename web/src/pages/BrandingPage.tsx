@@ -739,6 +739,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
         <PageHeader
           title="Quote Branding"
           subtitle="Set the sender identity, colors, and template your customers actually see."
+          mode="actions-only"
           actions={hasLoaded ? <Badge tone="blue">{completedSectionCount}/4 ready</Badge> : undefined}
         />
 

@@ -4,10 +4,17 @@ const MAX_TENANT_ID_LENGTH = 191;
 
 export type TenantRlsClient = PrismaClient | Prisma.TransactionClient;
 
+export type TenantRlsTransactionOptions = Readonly<{
+  maxWait?: number;
+  timeout?: number;
+  isolationLevel?: Prisma.TransactionIsolationLevel;
+}>;
+
 export const AI_RETRIEVAL_RLS_TABLES = [
   "AiRetrievalDocument",
   "AiRetrievalChunk",
   "AiRetrievalAuditEvent",
+  "AiIndexJob",
 ] as const;
 
 export type AiRetrievalRlsStatus = Readonly<{
@@ -69,8 +76,12 @@ export async function withTenantRlsContext<T>(
   client: TenantRlsClient,
   tenantId: string,
   operation: (transaction: Prisma.TransactionClient) => Promise<T>,
+  options?: TenantRlsTransactionOptions,
 ): Promise<T> {
   if (!isPrismaClient(client)) {
+    if (options) {
+      throw new Error("Tenant RLS transaction options require a Prisma client.");
+    }
     await setTenantRlsContext(client, tenantId);
     return operation(client);
   }
@@ -78,7 +89,7 @@ export async function withTenantRlsContext<T>(
   return client.$transaction(async (transaction) => {
     await setTenantRlsContext(transaction, tenantId);
     return operation(transaction);
-  });
+  }, options);
 }
 
 export async function inspectAiRetrievalRls(client: PrismaClient): Promise<AiRetrievalRlsStatus[]> {

@@ -2,6 +2,7 @@ import { PresetCategory, PresetUnitType, Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { markWorkPresetAiRetrievalSourceDeleted } from "../lib/ai-retrieval";
+import { enqueueAiIndexJob } from "../lib/ai-index-jobs";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 
@@ -73,7 +74,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
       } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+        const serializationConflict = error instanceof Prisma.PrismaClientKnownRequestError && (
+          error.code === "P2034"
+          || (error.code === "P2010" && error.meta?.code === "40001")
+        );
+        if (serializationConflict) {
           lastSerializationError = error;
           continue;
         }
@@ -205,6 +210,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           workPresetIds: [existingProduct.id],
         });
       }
+      await enqueueAiIndexJob(transaction, {
+        tenantId: claims.tenantId,
+        sourceType: "WorkPreset",
+        sourceId: product.id,
+        operation: "UPSERT",
+        expectedSourceUpdatedAtUtc: product.updatedAt,
+      });
 
       return { kind: "success", product, restored: Boolean(existingProduct) } as const;
     });
@@ -302,6 +314,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         workPresetIds: [existingProduct.id],
       });
+      await enqueueAiIndexJob(transaction, {
+        tenantId: claims.tenantId,
+        sourceType: "WorkPreset",
+        sourceId: product.id,
+        operation: "UPSERT",
+        expectedSourceUpdatedAtUtc: product.updatedAt,
+      });
       return { kind: "success", product } as const;
     });
 
@@ -362,6 +381,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         workPresetIds: [existingProduct.id],
         now,
+      });
+      await enqueueAiIndexJob(transaction, {
+        tenantId: claims.tenantId,
+        sourceType: "WorkPreset",
+        sourceId: existingProduct.id,
+        operation: "DELETE",
+        availableAtUtc: now,
       });
     });
 

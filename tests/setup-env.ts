@@ -17,7 +17,9 @@ process.env.JWT_SECRET ||= "test-jwt-secret-for-quotefly-integration-suite";
 process.env.APP_URL ||= "http://localhost:5173";
 process.env.API_URL ||= "http://localhost:4000";
 process.env.CORS_ALLOWED_ORIGINS ||= "http://localhost:5173";
-process.env.OPENAI_API_KEY ||= "";
+// Integration tests must never inherit a developer or CI provider secret.
+// Provider behavior is injected explicitly where a test needs it.
+process.env.OPENAI_API_KEY = "";
 process.env.STRIPE_SECRET_KEY ||= "sk_test_quotefly_integration";
 process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_integration";
 process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";

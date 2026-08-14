@@ -29,6 +29,7 @@ import { internalControlPlaneRoutes } from "./routes/internal-control-plane";
 import { aiAssistantRoutes } from "./routes/ai-assistant";
 import { aiBusinessInsightRoutes } from "./routes/ai-business-insights";
 import { feedbackRoutes } from "./routes/feedback";
+import { workspaceRoutes } from "./routes/workspace";
 import { swaggerPlugin } from "./plugins/swagger";
 import {
   applyRequestPerformanceHeaders,
@@ -342,6 +343,7 @@ export function buildServer() {
   app.register(healthRoutes, { prefix: "/v1" });
   app.register(authRoutes, { prefix: "/v1" });
   app.register(feedbackRoutes, { prefix: "/v1" });
+  app.register(workspaceRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });

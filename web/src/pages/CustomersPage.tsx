@@ -42,11 +42,11 @@ function stageLabel(stage: CustomerStage) {
 
 function stageDarkClass(stage: CustomerStage) {
   if (stage === "NEW") return "border-slate-700 bg-slate-700 text-white";
-  if (stage === "CONTACTED") return "border-[#2559b8] bg-[#2559b8] text-white";
-  if (stage === "READY") return "border-[#d97706] bg-[#d97706] text-white";
+  if (stage === "CONTACTED") return "border-[var(--qf-info-strong)] bg-[var(--qf-info-strong)] text-white";
+  if (stage === "READY") return "border-[var(--qf-warning-strong)] bg-[var(--qf-warning-strong)] text-white";
   if (stage === "SENT") return "border-[#2b7aa5] bg-[#2b7aa5] text-white";
-  if (stage === "LOST") return "border-red-600 bg-red-600 text-white";
-  return "border-emerald-600 bg-emerald-600 text-white";
+  if (stage === "LOST") return "border-[var(--qf-danger-strong)] bg-[var(--qf-danger-strong)] text-white";
+  return "border-[var(--qf-success-strong)] bg-[var(--qf-success-strong)] text-white";
 }
 
 function stageSoftClass(stage: CustomerStage) {
@@ -761,6 +761,7 @@ export function CustomersPage() {
       <PageHeader
         title="Customers"
         subtitle="Track customers through a simple sales pipeline, then jump into quoting when they are ready."
+        mode="actions-only"
         actions={
           <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>
         }
@@ -1122,11 +1123,11 @@ export function CustomersPage() {
                       <span
                         className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
                           tone === "blue"
-                            ? "bg-[#2559b8] text-white"
+                            ? "bg-[var(--qf-info-strong)] text-white"
                             : tone === "orange"
-                              ? "bg-[#d97706] text-white"
+                              ? "bg-[var(--qf-warning-strong)] text-white"
                               : tone === "emerald"
-                                ? "bg-emerald-600 text-white"
+                                ? "bg-[var(--qf-success-strong)] text-white"
                                 : "bg-slate-700 text-white"
                         }`}
                       >

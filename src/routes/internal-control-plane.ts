@@ -53,6 +53,10 @@ const RagIndexSummaryRateLimit = {
     },
   },
 };
+const RagIndexTransactionOptions = {
+  maxWait: 5_000,
+  timeout: 15_000,
+} as const;
 
 function tenantLifecycleWhere(lifecycle: z.infer<typeof TenantLifecycleSchema>) {
   if (lifecycle === "deleted") return { deletedAtUtc: { not: null } } as const;
@@ -287,6 +291,9 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           activeChunksBySourceType,
           latestDocument,
           latestChunk,
+          indexJobsByStatus,
+          successfulJobMetrics,
+          oldestPendingJob,
         ] = await Promise.all([
           tx.aiRetrievalDocument.count(),
           tx.aiRetrievalDocument.count({ where: { status: "ACTIVE", deletedAtUtc: null } }),
@@ -313,6 +320,24 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
             orderBy: { indexedAtUtc: "desc" },
             select: { indexedAtUtc: true, policyVersion: true },
           }),
+          tx.aiIndexJob.groupBy({
+            by: ["status"],
+            _count: { _all: true },
+          }),
+          tx.aiIndexJob.aggregate({
+            where: { status: "SUCCEEDED" },
+            _count: { _all: true },
+            _sum: {
+              lastChunkCount: true,
+              lastEmbeddingCacheHitCount: true,
+              lastDurationMs: true,
+            },
+          }),
+          tx.aiIndexJob.findFirst({
+            where: { status: "PENDING" },
+            orderBy: [{ availableAtUtc: "asc" }, { createdAt: "asc" }],
+            select: { availableAtUtc: true, createdAt: true },
+          }),
         ]);
         return {
           documentCount,
@@ -324,11 +349,15 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           documentsByStatus,
           activeChunksByClassification,
           activeChunksBySourceType,
+          indexJobsByStatus,
+          successfulJobMetrics,
+          oldestPendingJob,
           latestRecord: [latestDocument, latestChunk]
             .filter((row): row is NonNullable<typeof row> => Boolean(row))
             .sort((left, right) => right.indexedAtUtc.getTime() - left.indexedAtUtc.getTime())[0] ?? null,
         };
       },
+      RagIndexTransactionOptions,
     ));
 
     const documentCount = summaries.reduce((sum, summary) => sum + summary.documentCount, 0);
@@ -356,6 +385,30 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       .map(([sourceType, count]) => ({ sourceType, chunkCount: count }))
       .sort((left, right) => right.chunkCount - left.chunkCount)
       .slice(0, 20);
+    const indexJobsByStatus = sumGroupedCounts(summaries.flatMap((summary) => summary.indexJobsByStatus.map(
+      (row) => ({ key: row.status, count: row._count._all ?? 0 }),
+    )));
+    const successfulJobCount = summaries.reduce(
+      (sum, summary) => sum + (summary.successfulJobMetrics._count._all ?? 0),
+      0,
+    );
+    const indexedChunkCount = summaries.reduce(
+      (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastChunkCount ?? 0),
+      0,
+    );
+    const embeddingCacheHitCount = summaries.reduce(
+      (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastEmbeddingCacheHitCount ?? 0),
+      0,
+    );
+    const successfulJobDurationMs = summaries.reduce(
+      (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastDurationMs ?? 0),
+      0,
+    );
+    const oldestPendingAtUtc = summaries
+      .map((summary) => summary.oldestPendingJob)
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .map((row) => row.availableAtUtc < row.createdAt ? row.availableAtUtc : row.createdAt)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
     const latestRecord = summaries.map((summary) => summary.latestRecord).filter(
       (row): row is NonNullable<typeof row> => Boolean(row),
     ).sort(
@@ -388,6 +441,17 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       documentsByStatus,
       activeChunksByClassification,
       activeChunksBySourceType,
+      indexingQueue: {
+        jobsByStatus: indexJobsByStatus,
+        successfulJobs: successfulJobCount,
+        averageSuccessfulDurationMs: successfulJobCount > 0
+          ? Number((successfulJobDurationMs / successfulJobCount).toFixed(1))
+          : null,
+        embeddingCacheHitRate: indexedChunkCount > 0
+          ? Number((embeddingCacheHitCount / indexedChunkCount).toFixed(4))
+          : null,
+        oldestPendingAtUtc,
+      },
       latestIndexedAtUtc: latestRecord?.indexedAtUtc ?? null,
       fieldsExcluded: [
         "chunk content",

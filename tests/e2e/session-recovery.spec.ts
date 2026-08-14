@@ -143,7 +143,8 @@ test.describe("session recovery", () => {
 
     allowHydration = true;
     await page.getByRole("button", { name: "Retry" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
-    await expect(page).toHaveURL(/\/app\/customers$/);
+    await expect(page.getByTestId("workspace-home")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Home", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/app\/?$/);
   });
 });

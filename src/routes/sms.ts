@@ -4,6 +4,7 @@ import twilio from "twilio";
 import { parseInboundJobText } from "../services/sms-parser";
 import { generateDraftFromSms } from "../services/quote-generator";
 import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
+import { enqueueAiIndexJob, enqueueQuoteAiIndexJobs } from "../lib/ai-index-jobs";
 
 const SEND_REPLY = "1";
 const REVISE_REPLY = "2";
@@ -123,6 +124,12 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
             where: { id: pendingSession.id },
             data: { status: approve ? "APPROVED" : "REVISION_REQUESTED" },
           });
+          await enqueueQuoteAiIndexJobs(tx, {
+            tenantId: tenantPhone.tenantId,
+            quoteId: quote.id,
+            operation: "UPSERT",
+            expectedSourceUpdatedAtUtc: quote.updatedAt,
+          });
 
           const responseMessage = approve
             ? "Quote approved. We will forward to customer now."
@@ -171,6 +178,13 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
                 email: parsed.customerEmail,
               },
             });
+        await enqueueAiIndexJob(tx, {
+          tenantId: tenantPhone.tenantId,
+          sourceType: "Customer",
+          sourceId: customer.id,
+          operation: "UPSERT",
+          expectedSourceUpdatedAtUtc: customer.updatedAt,
+        });
 
         const pricingProfile = await tx.pricingProfile.findFirst({
           where: { tenantId: tenantPhone.tenantId, serviceType: draft.serviceType },
@@ -199,6 +213,12 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
         });
         await tx.quoteDecisionSession.create({
           data: { tenantId: tenantPhone.tenantId, quoteId: quote.id, requesterPhone: from },
+        });
+        await enqueueQuoteAiIndexJobs(tx, {
+          tenantId: tenantPhone.tenantId,
+          quoteId: quote.id,
+          operation: "UPSERT",
+          expectedSourceUpdatedAtUtc: quote.updatedAt,
         });
 
         const confirmationMessage = [

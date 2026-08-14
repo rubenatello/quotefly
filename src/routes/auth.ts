@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { getJwtClaims } from "../lib/auth";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
+import { enqueueTenantWorkPresetAiIndexJobs } from "../lib/ai-index-jobs";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
 import { isSuperuserEmail } from "../lib/superuser";
@@ -194,6 +195,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             primaryTrade: payload.primaryTrade,
             logoUrl: payload.logoUrl,
           });
+          await enqueueTenantWorkPresetAiIndexJobs(tx, { tenantId: newTenant.id });
 
           return [newUser, newTenant] as const;
         });

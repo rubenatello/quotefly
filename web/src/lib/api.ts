@@ -563,6 +563,8 @@ export type AiBusinessInsight = {
 
 export type AiAssistantRequestedTool =
   | "AUTO"
+  | "ASSISTANT_HELP"
+  | "OUT_OF_SCOPE"
   | "NAVIGATE_WORKSPACE"
   | "FOLLOW_UP_QUEUE"
   | "CUSTOMERS_WITHOUT_QUOTES"
@@ -574,6 +576,8 @@ export type AiAssistantRequestedTool =
   | "DRAFT_QUOTE";
 
 export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
+
+export type AiAssistantFeedbackRating = "UP" | "DOWN";
 
 export type AiAssistantConversationTurn = {
   message: string;
@@ -655,6 +659,13 @@ export type InternalRagIndexSummary = {
   documentsByStatus: Record<string, number>;
   activeChunksByClassification: Partial<Record<DataClassification, number>>;
   activeChunksBySourceType: Array<{ sourceType: string; chunkCount: number }>;
+  indexingQueue: {
+    jobsByStatus: Record<string, number>;
+    successfulJobs: number;
+    averageSuccessfulDurationMs: number | null;
+    embeddingCacheHitRate: number | null;
+    oldestPendingAtUtc: string | null;
+  };
   latestIndexedAtUtc: string | null;
   fieldsExcluded: string[];
 };
@@ -1303,7 +1314,65 @@ export type FeatureRequestInput = {
   website?: string;
 };
 
+export type WorkspaceAttentionReason =
+  | "NEEDS_FIRST_QUOTE"
+  | "DRAFT_TO_FINISH"
+  | "READY_TO_SEND"
+  | "AWAITING_RESPONSE"
+  | "AFTER_SALE_DUE";
+
+export type WorkspaceOverview = {
+  generatedAtUtc: string;
+  metrics: {
+    activeCustomers: number;
+    unquotedLeads: number;
+    needsFollowUp: number;
+    activeQuotes: number;
+    openPipelineRevenue: number;
+    acceptedRevenue: number;
+    activeJobs: number;
+    afterSaleDue: number;
+  };
+  quoteStatusCounts: Record<QuoteStatus, number>;
+  attention: Array<{
+    customerId: string;
+    customerName: string;
+    quoteId: string | null;
+    quoteTitle: string | null;
+    quoteStatus: QuoteStatus | null;
+    totalAmount: number | null;
+    reason: WorkspaceAttentionReason;
+    occurredAt: string;
+  }>;
+  recentCustomers: Array<{
+    id: string;
+    fullName: string;
+    followUpStatus: LeadFollowUpStatus;
+    createdAt: string;
+    latestQuote: null | {
+      id: string;
+      title: string;
+      status: QuoteStatus;
+      totalAmount: number;
+      updatedAt: string;
+    };
+  }>;
+  recentQuotes: Array<{
+    id: string;
+    title: string;
+    status: QuoteStatus;
+    jobStatus: QuoteJobStatus;
+    totalAmount: number;
+    updatedAt: string;
+    customer: { id: string; fullName: string };
+  }>;
+};
+
 export const api = {
+  workspace: {
+    overview: () => request<WorkspaceOverview>("/v1/workspace/overview"),
+  },
+
   feedback: {
     submitFeatureRequest: (body: FeatureRequestInput) =>
       request<{ message: string }>("/v1/feedback/feature-requests", {
@@ -1355,6 +1424,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+    submitAssistantFeedback: (auditEventId: string, rating: AiAssistantFeedbackRating) =>
+      request<{ feedback: { rating: AiAssistantFeedbackRating; updatedAt: string } }>(
+        `/v1/ai/assistant/${encodeURIComponent(auditEventId)}/feedback`,
+        {
+          method: "POST",
+          body: JSON.stringify({ rating }),
+        },
+      ),
 
     businessInsight: (body: {
       prompt: string;

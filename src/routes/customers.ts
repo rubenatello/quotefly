@@ -7,6 +7,7 @@ import {
   markCustomerAiRetrievalSourcesDeleted,
   markQuoteAiRetrievalSourcesDeleted,
 } from "../lib/ai-retrieval";
+import { enqueueAiIndexJob, enqueueCustomerAiIndexJobs } from "../lib/ai-index-jobs";
 import { createCustomerActivityEvent, resolveActivityActor } from "../lib/activity";
 import {
   normalizeCustomerPhone,
@@ -591,7 +592,23 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             detail: payload.notes.trim().slice(0, 500),
           });
         }
-        await tx.customerActivityEvent.createMany({ data: activityEvents });
+        for (const event of activityEvents) {
+          await createCustomerActivityEvent(tx, {
+            tenantId: claims.tenantId,
+            customerId: mergedCustomer.id,
+            actor,
+            eventType: event.eventType,
+            title: event.title,
+            detail: event.detail,
+          });
+        }
+        await enqueueAiIndexJob(tx, {
+          tenantId: claims.tenantId,
+          sourceType: "Customer",
+          sourceId: mergedCustomer.id,
+          operation: "UPSERT",
+          expectedSourceUpdatedAtUtc: mergedCustomer.updatedAt,
+        });
 
         return { kind: "merged" as const, customer: mergedCustomer, restored: wasInactive };
       });
@@ -714,7 +731,23 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             detail: payload.notes.trim().slice(0, 500),
           });
         }
-        await tx.customerActivityEvent.createMany({ data: activityEvents });
+        for (const event of activityEvents) {
+          await createCustomerActivityEvent(tx, {
+            tenantId: claims.tenantId,
+            customerId: createdCustomer.id,
+            actor,
+            eventType: event.eventType,
+            title: event.title,
+            detail: event.detail,
+          });
+        }
+        await enqueueAiIndexJob(tx, {
+          tenantId: claims.tenantId,
+          sourceType: "Customer",
+          sourceId: createdCustomer.id,
+          operation: "UPSERT",
+          expectedSourceUpdatedAtUtc: createdCustomer.updatedAt,
+        });
 
         return createdCustomer;
       });
@@ -1275,6 +1308,14 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      await enqueueAiIndexJob(tx, {
+        tenantId: claims.tenantId,
+        sourceType: "Customer",
+        sourceId: updatedCustomer.id,
+        operation: "UPSERT",
+        expectedSourceUpdatedAtUtc: updatedCustomer.updatedAt,
+      });
+
       return updatedCustomer;
     });
 
@@ -1317,6 +1358,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         eventType: "RESTORED",
         title: "Customer restored",
         detail: "Customer was restored to the active workspace. Retained quotes were not restored automatically.",
+      });
+      await enqueueAiIndexJob(tx, {
+        tenantId: claims.tenantId,
+        sourceType: "Customer",
+        sourceId: customer.id,
+        operation: "UPSERT",
+        expectedSourceUpdatedAtUtc: customer.updatedAt,
       });
 
       return customer;
@@ -1404,6 +1452,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         customerIds: [existing.id],
         now,
+      });
+      await enqueueCustomerAiIndexJobs(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        operation: "DELETE",
+        includeQuotes: true,
       });
 
       return true;
@@ -1503,6 +1557,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         customerIds: [existing.id],
         includeQuotes: true,
         now,
+      });
+      await enqueueCustomerAiIndexJobs(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        operation: "DELETE",
+        includeQuotes: true,
       });
 
       return true;

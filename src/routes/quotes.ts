@@ -15,6 +15,7 @@ import {
   markQuoteAiRetrievalSourcesDeleted,
   type AiRetrievalResult,
 } from "../lib/ai-retrieval";
+import { enqueueAiIndexJob, enqueueQuoteAiIndexJobs } from "../lib/ai-index-jobs";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
 import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
 import {
@@ -814,7 +815,7 @@ async function createQuoteRevision(
     new Set([...(params.changedFields ?? []), ...(hasDocumentSnapshot ? ["documentSnapshot"] : [])]),
   );
 
-  return tx.quoteRevision.create({
+  const revision = await tx.quoteRevision.create({
     data: {
       tenantId: params.tenantId,
       quoteId: context.id,
@@ -832,6 +833,19 @@ async function createQuoteRevision(
       snapshot: snapshot as unknown as Prisma.InputJsonValue,
     },
   });
+  await enqueueQuoteAiIndexJobs(tx, {
+    tenantId: params.tenantId,
+    quoteId: context.id,
+    operation: "UPSERT",
+    expectedSourceUpdatedAtUtc: context.updatedAt,
+  });
+  await enqueueAiIndexJob(tx, {
+    tenantId: params.tenantId,
+    sourceType: "Customer",
+    sourceId: context.customer.id,
+    operation: "UPSERT",
+  });
+  return revision;
 }
 
 async function restoreQuoteRevision(
@@ -1173,27 +1187,35 @@ async function findOrCreatePromptCustomer(
     return null;
   }
 
-  if (existing) {
-    return prisma.customer.update({
-      where: { id: existing.id },
-      data: {
-        fullName: params.fullName?.trim() || existing.fullName,
-        phone: params.phone,
-        phoneDigits,
-        email: normalizedEmail ?? existing.email,
-        archivedAtUtc: null,
-      },
-    });
-  }
-
-  return prisma.customer.create({
-    data: {
+  return prisma.$transaction(async (tx) => {
+    const customer = existing
+      ? await tx.customer.update({
+          where: { id: existing.id },
+          data: {
+            fullName: params.fullName?.trim() || existing.fullName,
+            phone: params.phone,
+            phoneDigits,
+            email: normalizedEmail ?? existing.email,
+            archivedAtUtc: null,
+          },
+        })
+      : await tx.customer.create({
+          data: {
+            tenantId,
+            fullName: params.fullName?.trim() || "New Customer",
+            phone: params.phone,
+            phoneDigits,
+            email: normalizedEmail,
+          },
+        });
+    await enqueueAiIndexJob(tx, {
       tenantId,
-      fullName: params.fullName?.trim() || "New Customer",
-      phone: params.phone,
-      phoneDigits,
-      email: normalizedEmail,
-    },
+      sourceType: "Customer",
+      sourceId: customer.id,
+      operation: "UPSERT",
+      expectedSourceUpdatedAtUtc: customer.updatedAt,
+    });
+    return customer;
   });
 }
 
@@ -5209,6 +5231,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         quoteIds: [quote.id],
         now,
       });
+      await enqueueQuoteAiIndexJobs(tx, {
+        tenantId: claims.tenantId,
+        quoteId: quote.id,
+        operation: "DELETE",
+      });
 
       return true;
     });
@@ -5259,6 +5286,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         tenantId: claims.tenantId,
         quoteIds: [quote.id],
         now,
+      });
+      await enqueueQuoteAiIndexJobs(tx, {
+        tenantId: claims.tenantId,
+        quoteId: quote.id,
+        operation: "DELETE",
       });
 
       return true;

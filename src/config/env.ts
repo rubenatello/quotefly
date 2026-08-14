@@ -24,6 +24,8 @@ const EnvSchema = z.object({
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_ASSISTANT_MODEL: z.string().default(""),
   OPENAI_ASSISTANT_COMPOSITION_ENABLED: BooleanFromEnv.default(true),
+  ENABLE_AI_INDEX_WORKER: BooleanFromEnv.default(false),
+  AI_INDEX_INLINE_REFRESH: BooleanFromEnv.default(true),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
   OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
   OPENAI_EMBEDDING_COST_PER_1M_USD: z.coerce.number().nonnegative().default(0.02),

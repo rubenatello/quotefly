@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { AiAssistantContext, AiAssistantRequestedTool } from "../../lib/api";
 import { useTrack } from "../../lib/analytics";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui";
 import { KodySparkIcon } from "./KodySparkIcon";
 import { openKody } from "./kody-events";
@@ -32,7 +33,7 @@ export function KodyButton({
       type="button"
       variant={variant}
       size={size}
-      className={className}
+      className={cn("qf-kody-context-action", className)}
       icon={icon ?? <KodySparkIcon size={14} />}
       disabled={disabled}
       onClick={() => {

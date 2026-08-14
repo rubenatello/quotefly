@@ -14,7 +14,6 @@ import {
   ModalBody,
   ModalFooter,
   ModalHeader,
-  PageHeader,
 } from "../components/ui";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
@@ -104,11 +103,10 @@ function lifecycleIcon(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
 
 function lifecycleDarkClass(stage: QuoteLifecycleStage, rawStatus?: QuoteStatus) {
   if (stage === "DRAFT") return "border-slate-700 bg-slate-700 text-white";
-  if (stage === "READY") return "border-[#2559b8] bg-[#2559b8] text-white";
-  if (stage === "SENT") return "border-[#d97706] bg-[#d97706] text-white";
-  if (stage === "DECLINED" || rawStatus === "REJECTED") return "border-red-600 bg-red-600 text-white";
-  if (stage === "ACCEPTED") return "border-[#17624b] bg-[#17624b] text-white";
-  return "border-emerald-600 bg-emerald-600 text-white";
+  if (stage === "READY") return "border-[var(--qf-info-strong)] bg-[var(--qf-info-strong)] text-white";
+  if (stage === "SENT") return "border-[var(--qf-warning-strong)] bg-[var(--qf-warning-strong)] text-white";
+  if (stage === "DECLINED" || rawStatus === "REJECTED") return "border-[var(--qf-danger-strong)] bg-[var(--qf-danger-strong)] text-white";
+  return "border-[var(--qf-success-strong)] bg-[var(--qf-success-strong)] text-white";
 }
 
 function rawStatusHint(quote: Quote) {
@@ -653,12 +651,6 @@ export function QuotesPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Quotes"
-        subtitle="Create, send, and follow up on every quote from one clear workspace."
-        actions={<Button className="lg:hidden" onClick={() => navigateToBuilder()}>New quote</Button>}
-      />
-
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 

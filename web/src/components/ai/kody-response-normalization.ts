@@ -20,6 +20,8 @@ const DATA_CLASSIFICATIONS: DataClassification[] = [
 ];
 
 const ASSISTANT_TOOLS: AiAssistantTool[] = [
+  "ASSISTANT_HELP",
+  "OUT_OF_SCOPE",
   "NAVIGATE_WORKSPACE",
   "FOLLOW_UP_QUEUE",
   "CUSTOMERS_WITHOUT_QUOTES",
@@ -182,7 +184,7 @@ export function normalizeKodyAssistantResponse(response: unknown): AssistantPayl
     ? raw.tool
     : isAssistantTool(rawDiagnostics.resolvedTool)
       ? rawDiagnostics.resolvedTool
-      : "DRAFT_QUOTE";
+      : "OUT_OF_SCOPE";
   const resolvedTool = isAssistantTool(rawDiagnostics.resolvedTool) ? rawDiagnostics.resolvedTool : tool;
   const rawConversation = isRecord(raw.conversation) ? raw.conversation : {};
   const previousTool = isAssistantTool(rawConversation.previousTool) ? rawConversation.previousTool : null;

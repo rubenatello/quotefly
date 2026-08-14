@@ -171,10 +171,21 @@ const PRODUCT_DRAFT_INTENT_PATTERN =
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me)\b/i;
 const CONVERSATION_FOLLOW_UP_PATTERN =
   /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|them|those)\b)/i;
+const ASSISTANT_HELP_PATTERN =
+  /^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|help|what\s+can\s+you\s+do|how\s+can\s+you\s+help|who\s+are\s+you|what\s+is\s+kody)[\s.!?]*$/i;
+const INSTRUCTION_OVERRIDE_PATTERN =
+  /\b(?:ignore|disregard|override|forget)\b.{0,48}\b(?:instructions?|system|developer|safety\s+rules?|rules?|policy|guardrails?)\b/i;
+const SENSITIVE_SCOPE_ESCAPE_PATTERN =
+  /\b(?:system\s+prompt|developer\s+message|hidden\s+prompt|jailbreak|bypass\s+(?:the\s+)?(?:tenant|policy|guardrails?)|cross[-\s]*tenant|(?:another|other)\s+tenant(?:'s|s)?|api\s+key|secret\s+token)\b/i;
+const OUTSIDE_KNOWLEDGE_PATTERN =
+  /\b(?:weather|forecast|headline|news|politics|election|sports?|celebrity|movie|television|recipe|cooking|joke|poem|story|homework|medical\s+advice|diagnos(?:e|is)|legal\s+advice|stock\s+tip|invest(?:ment|ing)|cryptocurrency|write\s+code|programming)\b/i;
+const CONTEXTUAL_ENTITY_QUERY_PATTERN =
+  /^(?!.*\b(?:what|why|how|when|where|who|tell|explain|write|give|could|would|should)\b)[\p{L}\p{N}][\p{L}\p{N}\s.'@()+&/-]{0,80}$/iu;
 
-type AssistantTopic = "CRM" | "QUOTING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION";
+type AssistantTopic = "CRM" | "QUOTING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION" | "HELP";
 
 function assistantTopic(tool: AiAssistantTool): AssistantTopic {
+  if (tool === "ASSISTANT_HELP" || tool === "OUT_OF_SCOPE") return "HELP";
   if (["SEARCH_CUSTOMERS", "FOLLOW_UP_QUEUE", "CUSTOMERS_WITHOUT_QUOTES"].includes(tool)) return "CRM";
   if (tool === "DRAFT_QUOTE") return "QUOTING";
   if (tool === "DRAFT_PRODUCT") return "PRODUCTS";
@@ -187,14 +198,25 @@ function assistantTopicLabel(topic: AssistantTopic) {
   if (topic === "QUOTING") return "building a quote";
   if (topic === "PRODUCTS") return "setting up a product or service";
   if (topic === "INSIGHTS") return "business insights";
+  if (topic === "HELP") return "QuoteFly help";
   return "workspace navigation";
+}
+
+function previousOperationalTool(conversation: readonly AiAssistantConversationTurn[] | undefined) {
+  return [...(conversation ?? [])]
+    .reverse()
+    .find((turn) => turn.resolvedTool !== "ASSISTANT_HELP" && turn.resolvedTool !== "OUT_OF_SCOPE")
+    ?.resolvedTool ?? null;
 }
 
 export function resolveAssistantConversationState(
   conversation: readonly AiAssistantConversationTurn[] | undefined,
   currentTool: AiAssistantTool,
 ): AiAssistantConversationState {
-  const previousTool = conversation?.at(-1)?.resolvedTool ?? null;
+  const previousTool = previousOperationalTool(conversation);
+  if (currentTool === "ASSISTANT_HELP" || currentTool === "OUT_OF_SCOPE") {
+    return { mode: "NEW", acknowledgement: null, previousTool, currentTool };
+  }
   if (!previousTool) {
     return { mode: "NEW", acknowledgement: null, previousTool: null, currentTool };
   }
@@ -296,12 +318,34 @@ export function resolveAssistantTool(
   context?: AiAssistantContext,
   conversation?: readonly AiAssistantConversationTurn[],
 ): AiAssistantTool {
+  const normalizedMessage = message.normalize("NFKC").trim();
+  if (OUTSIDE_KNOWLEDGE_PATTERN.test(normalizedMessage)) return "OUT_OF_SCOPE";
+  const overrideMatch = INSTRUCTION_OVERRIDE_PATTERN.exec(normalizedMessage);
+  if (overrideMatch?.index === 0) return "OUT_OF_SCOPE";
+  const routingMessage = overrideMatch?.index
+    ? normalizedMessage.slice(0, overrideMatch.index).trim()
+    : normalizedMessage;
+  if (SENSITIVE_SCOPE_ESCAPE_PATTERN.test(routingMessage)) return "OUT_OF_SCOPE";
+
   // A review-only product draft is a stronger intent than a stale UI tool
   // selection. This also protects older clients that opened Kody from a
   // customer-specific button and then replaced the suggested prompt.
-  if (PRODUCT_DRAFT_INTENT_PATTERN.test(message)) return "DRAFT_PRODUCT";
-  if (requestedTool && requestedTool !== "AUTO") return requestedTool;
-  const lower = message.toLowerCase();
+  if (PRODUCT_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_PRODUCT";
+  const lower = routingMessage.toLowerCase();
+  if (requestedTool && requestedTool !== "AUTO") {
+    if (ASSISTANT_HELP_PATTERN.test(routingMessage)) return "ASSISTANT_HELP";
+    const hasQuoteFlyIntent =
+      PIPELINE_SCENARIO_PATTERN.test(lower)
+      || CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)
+      || FOLLOW_UP_INTENT_PATTERN.test(lower)
+      || Boolean(navigationTarget(lower))
+      || FINANCIAL_INTENT_PATTERN.test(lower)
+      || PIPELINE_INTENT_PATTERN.test(lower)
+      || CUSTOMER_INTENT_PATTERN.test(lower)
+      || QUOTE_DRAFT_INTENT_PATTERN.test(lower)
+      || CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage);
+    return hasQuoteFlyIntent ? requestedTool : "OUT_OF_SCOPE";
+  }
 
   if (PIPELINE_SCENARIO_PATTERN.test(lower)) return "PIPELINE_SCENARIO";
   if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
@@ -312,16 +356,20 @@ export function resolveAssistantTool(
   if (CUSTOMER_INTENT_PATTERN.test(lower)) return "SEARCH_CUSTOMERS";
   if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
 
-  const previousTool = conversation?.at(-1)?.resolvedTool;
+  const previousTool = previousOperationalTool(conversation);
   if (previousTool && previousTool !== "NAVIGATE_WORKSPACE" && CONVERSATION_FOLLOW_UP_PATTERN.test(lower.trim())) {
     return previousTool;
   }
 
-  if (context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
-  if (context?.currentPage === "quotes") return "DRAFT_QUOTE";
-  if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
+  if (ASSISTANT_HELP_PATTERN.test(routingMessage)) return "ASSISTANT_HELP";
 
-  return "DRAFT_QUOTE";
+  if (CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)) {
+    if (context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
+    if (context?.currentPage === "quotes") return "DRAFT_QUOTE";
+    if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
+  }
+
+  return "OUT_OF_SCOPE";
 }
 
 export function inferAssistantRelativeDateRange(message: string, now: Date) {
@@ -345,6 +393,8 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
     "DRAFT_PRODUCT",
+    "ASSISTANT_HELP",
+    "OUT_OF_SCOPE",
   ].includes(tool);
 }
 
@@ -472,6 +522,69 @@ async function createAssistantUsageEvent(
       riskNote: params.riskNote ?? "Tenant-scoped assistant response generated without exposing raw prompts.",
     },
   });
+}
+
+async function runNonDataAssistantResponse(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+  tool: "ASSISTANT_HELP" | "OUT_OF_SCOPE",
+): Promise<AiAssistantRunResult> {
+  const isOutOfScope = tool === "OUT_OF_SCOPE";
+  const answer = isOutOfScope
+    ? "I can only help with work inside QuoteFly—customers, quotes, products, follow-ups, pipeline, profitability, and workspace navigation. Try asking, “Which customers need follow-up?” or “Draft a quote for a roof repair.”"
+    : "I can find customers, draft quotes and products, check follow-ups, summarize pipeline revenue, rank job profitability when your role allows it, and move you around QuoteFly. Tell me what you’re trying to get done.";
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C1_BUSINESS_INTERNAL",
+    sourceTypes: ["QuoteFlyAssistant"],
+    sourceLabels: [isOutOfScope ? "QuoteFly scope guard" : "Kody capability guide"],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic QuoteFly scope policy",
+    insightReasons: [isOutOfScope ? "request rejected by deterministic scope guard" : "capability help handled without retrieval"],
+    riskNote: isOutOfScope
+      ? "No model call or workspace retrieval was performed for the out-of-scope request."
+      : "Capability help was generated without a model call or workspace retrieval.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool,
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      answer,
+      results: [],
+      citations: [],
+      actions: [],
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: tool,
+        resultCount: 0,
+        citationCount: 0,
+        emptyReason: isOutOfScope
+          ? "The request is outside Kody's QuoteFly-only scope."
+          : "Capability help does not retrieve workspace records.",
+        archivePolicy: isOutOfScope
+          ? "Out-of-scope requests do not retrieve workspace records or call the language model."
+          : "Capability help does not retrieve workspace records.",
+        filters: {
+          scopeDecision: tool,
+          modelCalled: false,
+          workspaceRowsRetrieved: false,
+        },
+      }),
+    },
+  };
 }
 
 async function runCustomerSearch(
@@ -1692,6 +1805,9 @@ async function runDraftQuotePreview(
       requestId: params.access.requestId,
       customerId: selectedCustomer?.id ?? null,
       quoteId: selectedQuote?.id ?? null,
+      priorUserQueries: params.conversation
+        ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
+        .map((turn) => turn.message),
     });
   } catch {
     // Retrieval is additive. Kody still returns a review-only deterministic
@@ -1874,7 +1990,9 @@ export async function runAiAssistant(
   const tool = resolveAssistantTool(params.message, params.tool, params.context, params.conversation);
   let result: AiAssistantRunResult;
 
-  if (tool === "NAVIGATE_WORKSPACE") {
+  if (tool === "ASSISTANT_HELP" || tool === "OUT_OF_SCOPE") {
+    result = await runNonDataAssistantResponse(prisma, params, generatedAtUtc, tool);
+  } else if (tool === "NAVIGATE_WORKSPACE") {
     result = await runWorkspaceNavigation(prisma, params, generatedAtUtc);
   } else if (tool === "DRAFT_PRODUCT") {
     result = await runProductDraftPreview(prisma, params, generatedAtUtc);

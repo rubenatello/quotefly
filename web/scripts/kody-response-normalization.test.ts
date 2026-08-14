@@ -40,7 +40,7 @@ test("normalizes version-skewed Kody response without diagnostics", () => {
 test("normalizes invalid Kody response to a safe non-crashing fallback", () => {
   const response = normalizeKodyAssistantResponse(undefined);
 
-  assert.equal(response.tool, "DRAFT_QUOTE");
+  assert.equal(response.tool, "OUT_OF_SCOPE");
   assert.equal(response.maxClassification, "C1_BUSINESS_INTERNAL");
   assert.equal(response.results.length, 0);
   assert.equal(response.citations.length, 0);

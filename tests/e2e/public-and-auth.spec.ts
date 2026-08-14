@@ -97,20 +97,22 @@ test.describe("public site and session auth", () => {
     await dialog.getByLabel(/I agree to the Terms of Service/i).check();
     await dialog.getByRole("button", { name: /create account/i }).click();
 
-    await expect(page).toHaveURL(/\/app\/customers/);
-    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/app\/?$/);
+    await expect(page.getByTestId("workspace-home")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Home", exact: true })).toBeVisible();
     await expectSessionCookiePresent(context);
     await expectNoFrontendJwtStorage(page);
 
     await page.reload();
-    await expect(page).toHaveURL(/\/app\/customers/);
-    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/app\/?$/);
+    await expect(page.getByTestId("workspace-home")).toBeVisible({ timeout: 20_000 });
 
     await page.goto("/privacy");
     await expect(page).toHaveURL("/privacy");
     await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/privacy"].heading })).toBeVisible();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
     await page.getByRole("link", { name: "Dashboard" }).click();
+    await expect(page).toHaveURL(/\/app\/?$/);
 
     await page.getByRole("button", { name: /sign out/i }).first().click();
     await expectSessionCookieCleared(context);

@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Clock3, FilePlus2, Lightbulb, MoreHorizontal, PackageSearch, Search } from "lucide-react";
+import { Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Search } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
+import { setSEOMetadata } from "../lib/seo";
 import { cn } from "../lib/utils";
 import {
   AnalyticsIcon,
@@ -43,6 +44,7 @@ interface CrmShellProps {
 }
 
 function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
+  if (icon === "home") return <LayoutDashboard size={15} />;
   if (icon === "customers" || icon === "team") return <CustomerIcon size={15} />;
   if (icon === "quotes") return <QuoteIcon size={15} />;
   if (icon === "products") return <PackageSearch size={15} />;
@@ -160,10 +162,14 @@ export function CrmShell({
     : OPERATIONS_LINKS.filter((link) => link.path !== "products");
 
   useEffect(() => {
-    document.title = `${pageMeta.label} | QuoteFly`;
-  }, [pageMeta.label]);
+    setSEOMetadata({
+      title: pageMeta.label,
+      description: pageMeta.hint,
+    });
+  }, [pageMeta.hint, pageMeta.label]);
   return (
     <div className="qf-workspace qf-theme-scope min-h-screen bg-qf-canvas text-qf-text">
+      {pageMeta.headingPlacement === "shell" ? <h1 className="sr-only">{pageMeta.label}</h1> : null}
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         backgroundInert={mobileOpen}
@@ -215,7 +221,7 @@ export function CrmShell({
             aria-hidden="true"
             tabIndex={-1}
             onClick={() => setMobileOpen(false)}
-            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+            className="fixed inset-0 z-40 bg-[var(--qf-overlay)] lg:hidden"
           />
         )}
 
@@ -239,7 +245,7 @@ export function CrmShell({
                 <button
                   type="button"
                   onClick={() => handleQuickAction("new-quote")}
-                  className="inline-flex items-center gap-2 rounded-xl border border-quotefly-blue bg-quotefly-blue px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-[#256fbf]"
+                  className="inline-flex items-center gap-2 rounded-xl border border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] px-3.5 py-2 text-sm font-semibold text-[var(--qf-action-primary-text)] transition hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-action-primary-active)]"
                 >
                   <FilePlus2 size={15} />
                   New quote
@@ -260,7 +266,7 @@ export function CrmShell({
                   <DropdownMenuPrimitive.Trigger asChild>
                     <button
                       type="button"
-                      className="inline-flex items-center gap-3 rounded-xl border border-qf-border bg-qf-surface px-2.5 py-1.5 transition hover:border-[var(--qf-border-strong)]"
+                      className="inline-flex items-center gap-3 rounded-xl border border-qf-border bg-qf-surface px-2.5 py-1.5 transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
                     >
                       <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-quotefly-blue text-sm font-semibold text-white">
                         {(fullName ?? "Q")
@@ -282,11 +288,12 @@ export function CrmShell({
                       sideOffset={12}
                       className="qf-theme-scope z-[130] min-w-[240px] rounded-[24px] border border-qf-border bg-qf-surface p-2 text-qf-text shadow-[var(--qf-shadow-md)]"
                     >
-                      <div className="rounded-[18px] bg-slate-50 px-3 py-3">
-                        <p className="text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</p>
+                      <div className="rounded-[18px] bg-[var(--qf-panel-muted)] px-3 py-3">
+                        <p className="text-sm font-semibold text-[var(--qf-text)]">{fullName ?? "QuoteFly User"}</p>
                       </div>
                       <div className="mt-2 space-y-1">
                         {([
+                          { label: "Open home", page: "home" },
                           { label: "Open customers", page: "customers" },
                           { label: "Open products", page: "products" },
                           { label: "Open settings", page: "settings" },
@@ -295,24 +302,24 @@ export function CrmShell({
                           <DropdownMenuPrimitive.Item
                             key={item.page}
                             onSelect={() => handleNavigate(item.page)}
-                            className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                            className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] focus:text-[var(--qf-text)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                           >
                             {item.label}
                           </DropdownMenuPrimitive.Item>
                         ))}
                       </div>
-                      <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
+                      <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                       <DropdownMenuPrimitive.Item
                         onSelect={handleRequestFeature}
-                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50")}
+                        className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                       >
                         <Lightbulb size={15} className="text-quotefly-blue" aria-hidden="true" />
                         Request a feature
                       </DropdownMenuPrimitive.Item>
-                      <DropdownMenuPrimitive.Separator className="my-2 h-px bg-slate-200" />
+                      <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                       <DropdownMenuPrimitive.Item
                         onSelect={() => onLogout()}
-                        className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-red-600 outline-none transition hover:bg-red-50")}
+                        className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                       >
                         Sign out
                       </DropdownMenuPrimitive.Item>

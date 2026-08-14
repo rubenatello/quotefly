@@ -43,8 +43,8 @@ function MobileTabButton({
       type="button"
       onClick={onSelect}
       className={cn(
-        "relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden transition-colors active:scale-[0.98]",
-        active ? "text-quotefly-blue" : "text-slate-500 hover:text-slate-700",
+        "relative flex min-h-[64px] min-w-0 items-center justify-center overflow-hidden rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-[var(--qf-focus)] active:scale-[0.98]",
+        active ? "text-[var(--qf-link)]" : "text-[var(--qf-text-muted)] hover:text-[var(--qf-text)]",
       )}
       aria-label={tab.label}
       aria-current={active ? "page" : undefined}
@@ -55,16 +55,16 @@ function MobileTabButton({
         className={cn(
           "relative inline-flex h-12 w-12 items-center justify-center rounded-[18px] transition",
           active
-            ? "bg-quotefly-blue/[0.12] shadow-[0_8px_20px_rgba(47,111,214,0.14)] ring-1 ring-quotefly-blue/15"
-            : "hover:bg-slate-100",
+            ? "bg-[var(--qf-selected)] shadow-[0_8px_20px_rgba(47,111,214,0.14)] ring-1 ring-[var(--qf-info-border)]"
+            : "hover:bg-[var(--qf-interactive-hover)]",
         )}
         aria-hidden="true"
         data-testid={`mobile-tab-${tab.id}-icon`}
       >
         {active ? (
           <>
-            <span className="absolute -top-1 h-1.5 w-1.5 rounded-full bg-quotefly-blue shadow-[0_0_0_4px_rgba(47,111,214,0.08)]" />
-            <span className="absolute inset-1 rounded-[15px] border border-quotefly-blue/10" />
+            <span className="absolute -top-1 h-1.5 w-1.5 rounded-full bg-[var(--qf-action-primary)] shadow-[0_0_0_4px_var(--qf-focus-ring)]" />
+            <span className="absolute inset-1 rounded-[15px] border border-[var(--qf-info-border)]" />
           </>
         ) : null}
         <span className="relative">{tab.icon}</span>
@@ -102,13 +102,13 @@ export function BottomTabBar() {
         <button
           type="button"
           onClick={() => navigate("/app/build")}
-          className="relative flex min-h-[64px] items-center justify-center text-quotefly-blue active:scale-[0.98]"
+          className="relative flex min-h-[64px] items-center justify-center rounded-xl text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-[var(--qf-focus)] active:scale-[0.98]"
           aria-label="New quote"
           title="New quote"
           data-testid="mobile-quick-quote"
         >
           <span
-            className="inline-flex h-[54px] w-[54px] -translate-y-1.5 items-center justify-center rounded-[21px] bg-quotefly-blue text-white shadow-[0_12px_26px_rgba(47,111,214,0.34)] ring-4 ring-qf-surface"
+            className="inline-flex h-[54px] w-[54px] -translate-y-1.5 items-center justify-center rounded-[21px] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[0_12px_26px_rgba(47,111,214,0.34)] ring-4 ring-qf-surface transition hover:bg-[var(--qf-action-primary-hover)]"
             aria-hidden="true"
           >
             <FilePlus2 size={22} />

@@ -40,6 +40,7 @@ describe("health and readiness routes", () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       return [
+        { tableName: "AiIndexJob", enabled: true, forced: true },
         { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
         { tableName: "AiRetrievalChunk", enabled: true, forced: true },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
@@ -129,6 +130,7 @@ describe("health and readiness routes", () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       return [
+        { tableName: "AiIndexJob", enabled: true, forced: true },
         { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
         { tableName: "AiRetrievalChunk", enabled: true, forced: false },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
@@ -149,6 +151,7 @@ describe("health and readiness routes", () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       if (queryRaw.mock.calls.length === 2) {
         return [
+          { tableName: "AiIndexJob", enabled: true, forced: true },
           { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },
@@ -177,6 +180,7 @@ describe("health and readiness routes", () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       if (queryRaw.mock.calls.length === 2) {
         return [
+          { tableName: "AiIndexJob", enabled: true, forced: true },
           { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },

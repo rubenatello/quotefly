@@ -18,15 +18,15 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "border-[var(--qf-brand-blue)] bg-[var(--qf-brand-blue)] text-white shadow-[var(--qf-shadow-sm)] hover:bg-[#285fbb] active:bg-[#214fa6]",
+    "border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] active:border-[var(--qf-action-primary-active)] active:bg-[var(--qf-action-primary-active)]",
   secondary:
-    "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)] hover:bg-[#de7b19] active:bg-[#c96b11]",
+    "border-[var(--qf-action-secondary)] bg-[var(--qf-action-secondary)] text-[var(--qf-action-secondary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-secondary-hover)] hover:bg-[var(--qf-action-secondary-hover)] active:border-[var(--qf-action-secondary-active)] active:bg-[var(--qf-action-secondary-active)]",
   outline:
-    "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)] active:bg-[var(--qf-panel-muted)]",
-  ghost: "border-transparent bg-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-panel-muted)] active:bg-[var(--qf-panel-muted)]",
-  danger: "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 active:bg-red-200",
-  success: "bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)] border-[color:rgba(47,111,214,0.18)] hover:bg-[color:rgba(47,111,214,0.12)] active:bg-[color:rgba(47,111,214,0.16)]",
-  warning: "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 active:bg-amber-200",
+    "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
+  ghost: "border-transparent bg-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
+  danger: "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)] hover:bg-[var(--qf-danger-surface-hover)] active:bg-[var(--qf-danger-border)]",
+  success: "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)] hover:bg-[var(--qf-success-surface-hover)] active:bg-[var(--qf-success-border)]",
+  warning: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)] hover:bg-[var(--qf-warning-surface-hover)] active:bg-[var(--qf-warning-border)]",
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
@@ -41,7 +41,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center rounded-lg border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center rounded-lg border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:border-[var(--qf-border)] disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] disabled:shadow-none disabled:opacity-70",
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         fullWidth && "w-full",
@@ -85,7 +85,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
+              "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:ring-4 focus:ring-[var(--qf-focus-ring)] focus:outline-none disabled:cursor-not-allowed disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] sm:min-h-[38px]",
               icon && "pl-10",
               error ? "border-red-300 focus:border-red-500 focus:ring-red-200" : "border-[var(--qf-border)]",
               className,
@@ -124,7 +124,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none sm:min-h-[38px]",
+            "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] transition-all hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:ring-4 focus:ring-[var(--qf-focus-ring)] focus:outline-none disabled:cursor-not-allowed disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] sm:min-h-[38px]",
             error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
@@ -164,7 +164,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={areaId}
           className={cn(
-            "min-h-[110px] w-full rounded-lg border bg-[var(--qf-panel)] px-3.5 py-3 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all focus:border-[var(--qf-brand-blue)] focus:ring-4 focus:ring-[color:rgba(47,111,214,0.12)] focus:outline-none",
+            "min-h-[110px] w-full rounded-lg border bg-[var(--qf-panel)] px-3.5 py-3 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:ring-4 focus:ring-[var(--qf-focus-ring)] focus:outline-none disabled:cursor-not-allowed disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)]",
             error ? "border-red-300" : "border-[var(--qf-border)]",
             className,
           )}
@@ -238,17 +238,17 @@ interface BadgeProps {
 }
 
 const BADGE_TONES: Record<BadgeTone, string> = {
-  blue: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
-  orange: "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)]",
-  emerald: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
-  red: "text-red-600 border-red-200 bg-red-50",
-  amber: "text-amber-700 border-amber-200 bg-amber-50",
-  slate: "text-slate-600 border-slate-200 bg-slate-50",
-  purple: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
-  cyan: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
-  indigo: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
-  violet: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
-  sky: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
+  blue: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  orange: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",
+  emerald: "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]",
+  red: "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)]",
+  amber: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",
+  slate: "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]",
+  purple: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  cyan: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  indigo: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  violet: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  sky: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
 };
 
 export function Badge({ tone = "slate", icon, children, className = "" }: BadgeProps) {
@@ -264,12 +264,12 @@ export function Badge({ tone = "slate", icon, children, className = "" }: BadgeP
 
 export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 px-5 py-8 text-center">
-      {icon && <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel-muted)] px-5 py-8 text-center">
+      {icon && <span className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--qf-interactive-active)] text-[var(--qf-text-muted)]">
         {icon}
       </span>}
-      <p className="text-sm font-medium text-slate-600">{title}</p>
-      {description && <p className="mt-1 text-xs text-slate-500">{description}</p>}
+      <p className="text-sm font-medium text-[var(--qf-text-soft)]">{title}</p>
+      {description && <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -278,12 +278,12 @@ export function EmptyState({ icon, title, description, action }: { icon?: ReactN
 /* ─────────────────────────── SKELETON ─────────────────────────── */
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-2xl bg-slate-200", className)} />;
+  return <div className={cn("animate-pulse rounded-2xl bg-[var(--qf-interactive-active)]", className)} />;
 }
 
 export function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4">
       <Skeleton className="mb-3 h-4 w-24" />
       <Skeleton className="mb-2 h-3 w-full" />
       <Skeleton className="h-3 w-3/4" />
@@ -311,14 +311,14 @@ export function LoadingState({
 
   if (variant === "compact") {
     return (
-      <div role="status" aria-live="polite" className={cn("rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", className)}>
+      <div role="status" aria-live="polite" className={cn("rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3", className)}>
         <div className="flex items-start gap-3">
-          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-quotefly-blue shadow-sm">
+          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel)] text-[var(--qf-link)] shadow-[var(--qf-shadow-sm)]">
             <Spinner size={15} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-slate-800">{title}</p>
-            {description ? <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p> : null}
+            <p className="text-sm font-semibold text-[var(--qf-text)]">{title}</p>
+            {description ? <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{description}</p> : null}
           </div>
         </div>
       </div>
@@ -326,26 +326,26 @@ export function LoadingState({
   }
 
   return (
-    <div role="status" aria-live="polite" className={cn("rounded-xl border border-slate-200 bg-slate-50/80 p-4", className)}>
+    <div role="status" aria-live="polite" className={cn("rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4", className)}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-800">{title}</p>
-          {description ? <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p> : null}
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{title}</p>
+          {description ? <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{description}</p> : null}
         </div>
-        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-quotefly-blue shadow-sm">
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel)] text-[var(--qf-link)] shadow-[var(--qf-shadow-sm)]">
           <Spinner size={15} />
         </span>
       </div>
 
       {variant === "table" ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+        <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
+          <div className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
             <Skeleton className="h-3 w-24" />
             <Skeleton className="h-3 w-20" />
             <Skeleton className="h-3 w-16" />
           </div>
           {rowItems.map((row) => (
-            <div key={row} className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-slate-100 px-4 py-4 last:border-b-0">
+            <div key={row} className="grid grid-cols-[1.1fr_0.8fr_0.7fr] gap-3 border-b border-[var(--qf-border)] px-4 py-4 last:border-b-0">
               <div className="space-y-2">
                 <Skeleton className="h-4 w-3/4" />
                 <Skeleton className="h-3 w-1/2" />
@@ -364,7 +364,7 @@ export function LoadingState({
       ) : (
         <div className="grid gap-2">
           {rowItems.map((row) => (
-            <div key={row} className="rounded-xl border border-slate-200 bg-white p-3">
+            <div key={row} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
               <div className="flex items-center gap-3">
                 <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
                 <div className="min-w-0 flex-1 space-y-2">
@@ -391,10 +391,10 @@ interface AlertProps {
 }
 
 const ALERT_TONES: Record<AlertTone, string> = {
-  error: "border-red-200 bg-red-50 text-red-700",
-  success: "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue",
-  info: "border-quotefly-blue/20 bg-quotefly-blue/[0.06] text-quotefly-blue",
-  warning: "border-amber-200 bg-amber-50 text-amber-700",
+  error: "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)]",
+  success: "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]",
+  info: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+  warning: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",
 };
 
 export function Alert({ tone, children, onDismiss }: AlertProps) {
@@ -454,7 +454,7 @@ export function Modal({
       }}
     >
       <DialogPrimitive.Portal>
-        {modal ? <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-slate-950/65 backdrop-blur-sm" /> : null}
+        {modal ? <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-[var(--qf-overlay)] backdrop-blur-sm" /> : null}
         <DialogPrimitive.Content
           onPointerDownOutside={(event) => {
             if (!closeOnBackdrop) event.preventDefault();
@@ -590,14 +590,14 @@ export function ProgressBar({
   return (
     <div className={`space-y-1.5 ${className}`}>
       {(label || hint) && (
-        <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500">
+        <div className="flex items-center justify-between gap-2 text-xs font-medium text-[var(--qf-text-muted)]">
           <span>{label}</span>
           {hint ? <span>{hint}</span> : null}
         </div>
       )}
-      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+      <div className="h-2 overflow-hidden rounded-full bg-[var(--qf-interactive-active)]">
         <div
-          className="h-full rounded-full bg-quotefly-blue transition-[width] duration-500 ease-out"
+          className="h-full rounded-full bg-[var(--qf-action-primary)] transition-[width] duration-500 ease-out"
           style={{ width: `${clampedValue}%` }}
         />
       </div>
@@ -605,7 +605,30 @@ export function ProgressBar({
   );
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
+export function PageHeader({
+  title,
+  subtitle,
+  actions,
+  mode = "full",
+}: {
+  title: string;
+  subtitle?: string;
+  actions?: ReactNode;
+  mode?: "full" | "actions-only";
+}) {
+  if (mode === "actions-only") {
+    if (!actions) return null;
+
+    return (
+      <div
+        aria-label={`${title} actions`}
+        className="flex w-full flex-wrap items-center justify-end gap-2 [&>*]:w-full sm:[&>*]:w-auto"
+      >
+        {actions}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">

@@ -82,6 +82,86 @@ test("Kody navigates on mobile while keeping the conversation open", async ({ co
   await expect(kody.getByText("Your Kody conversation will stay open", { exact: false })).toBeVisible();
 });
 
+test("Kody feedback controls are mobile-friendly and persist thumbs changes", async ({ context, page, request }) => {
+  test.setTimeout(60_000);
+  const account = await signUpViaApi(request, "kody-feedback-mobile");
+  const ratings: string[] = [];
+
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assistant: {
+          tool: "ASSISTANT_HELP",
+          generatedAtUtc: "2026-08-14T18:00:00.000Z",
+          policyVersion: "2026-08-11",
+          maxClassification: "C1_BUSINESS_INTERNAL",
+          answer: "I can help with customers, quotes, products, follow-ups, pipeline, and profitability inside QuoteFly.",
+          results: [],
+          citations: [],
+          actions: [],
+          auditEventId: "audit-kody-feedback-mobile",
+          fieldsExcluded: ["tenant ids", "deleted rows"],
+          diagnostics: {
+            requestedTool: "AUTO",
+            resolvedTool: "ASSISTANT_HELP",
+            resultCount: 0,
+            citationCount: 0,
+            emptyReason: null,
+            archivePolicy: "Capability help does not retrieve workspace records.",
+            filters: { modelCalled: false },
+            answerMode: "DETERMINISTIC",
+            model: null,
+          },
+        },
+        usage: {
+          consumedCredits: 0,
+          consumedSpendUsd: 0,
+          monthlyCreditsUsed: 0,
+          monthlyCreditsLimit: 770,
+          monthlyCreditsRemaining: 770,
+          monthlySpendUsedUsd: 0,
+          monthlySpendLimitUsd: 1.25,
+          monthlySpendRemainingUsd: 1.25,
+          monthlySpendUsagePercent: 0,
+          estimatedPromptCostUsd: 0.001615,
+          estimatedPromptsRemaining: 773,
+          renewsAtUtc: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    });
+  });
+  await page.route(`${apiBaseUrl}/v1/ai/assistant/audit-kody-feedback-mobile/feedback`, async (route) => {
+    const body = route.request().postDataJSON() as { rating?: string };
+    ratings.push(body.rating ?? "");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ feedback: { rating: body.rating, updatedAt: "2026-08-14T18:01:00.000Z" } }),
+    });
+  });
+
+  await addSessionCookie(context, account);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/customers");
+  await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("kody-launcher").click();
+  const kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill("What can you do?");
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+
+  const thumbsDown = kody.getByRole("button", { name: "Poor response" });
+  const thumbsUp = kody.getByRole("button", { name: "Good response" });
+  await expect(thumbsDown).toHaveCSS("height", "44px");
+  await thumbsDown.click();
+  await expect(thumbsDown).toHaveAttribute("aria-pressed", "true");
+  await expect(kody.getByText("Thanks—this helps Kody improve.")).toBeVisible();
+  await thumbsUp.click();
+  await expect(thumbsUp).toHaveAttribute("aria-pressed", "true");
+  expect(ratings).toEqual(["DOWN", "UP"]);
+});
+
 test("Kody turns a product request into a review-only mobile catalog draft", async ({ context, page, request }) => {
   test.setTimeout(60_000);
   const account = await signUpViaApi(request, "kody-product-mobile");
@@ -348,7 +428,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyDialog).toHaveAttribute("role", "dialog");
   await expect(kodyDialog).toHaveAttribute("aria-modal", "false");
   await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
-  await expect(kodyLauncher).toHaveAttribute("aria-expanded", "true");
+  await expect(kodyLauncher).toHaveCount(0);
   await mobileNav.getByRole("button", { name: "Quotes" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
   await expect(kodyDialog).toBeVisible();
@@ -371,18 +451,21 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyDialog.getByText("Policy class C2_CUSTOMER_CONFIDENTIAL")).toHaveClass(/sr-only/);
 
   await kodyDialog.getByRole("button", { name: `Open ${customer.fullName}` }).click();
-  await expect(page.getByRole("heading", { name: `${customer.fullName} activity` })).toBeVisible();
-  await expect(kodyDialog).toBeVisible();
-  await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
-  await expect(page.getByRole("dialog", { name: "Customer details and activity" }).getByRole("button", { name: "Ask Kody" })).toHaveClass(/bg-\[var\(--qf-brand-orange\)\]/);
-  await page.getByRole("dialog", { name: "Customer details and activity" }).getByRole("button", { name: "Close modal" }).click();
-  await kodyDialog.getByTestId("kody-prompt").focus();
-  await page.keyboard.press("Escape");
+  const customerDialog = page.getByRole("dialog", { name: "Customer details and activity" });
+  await expect(customerDialog.getByRole("heading", { name: `${customer.fullName} activity` })).toBeVisible();
   await expect(kodyDialog).toBeHidden();
+  await expect(kodyLauncher).toBeHidden();
+  await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
+  const customerKodyAction = customerDialog.getByRole("button", { name: "Ask Kody" });
+  await expect(customerKodyAction).toBeVisible();
+  await expect(customerKodyAction).toHaveClass(/bg-\[var\(--qf-action-secondary\)\]/);
+  await customerDialog.getByRole("button", { name: "Close modal" }).click();
+  await expect(kodyLauncher).toBeVisible();
   await expect(kodyLauncher).toHaveAttribute("aria-expanded", "false");
   await kodyLauncher.click();
   await expect(kodyDialog.getByText(`Found ${customer.fullName} in this workspace.`)).toBeVisible();
-  await kodyDialog.getByRole("button", { name: "Close Kody" }).click();
+  await kodyDialog.getByTestId("kody-prompt").focus();
+  await page.keyboard.press("Escape");
   await expect(kodyDialog).toBeHidden();
 
   await page.goto("/app/build");
@@ -391,16 +474,16 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await page.getByRole("button", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") }).click();
   await page.getByLabel("Quote title").fill("Existing mobile draft should stay");
   await expect(page.locator(".qf-mobile-action-dock")).toBeVisible();
-  const buildKodyBox = await page.getByTestId("kody-launcher").boundingBox();
-  const buildActionDockBox = await page.locator(".qf-mobile-action-dock").boundingBox();
-  expect((buildKodyBox?.y ?? 0) + (buildKodyBox?.height ?? 0)).toBeLessThanOrEqual((buildActionDockBox?.y ?? 0) - 4);
-
-  await page.getByTestId("kody-launcher").click();
+  await expect(page.getByTestId("kody-launcher")).toBeHidden();
+  const contextualDraftAction = page.getByRole("button", { name: "Draft with Kody" });
+  await expect(contextualDraftAction).toBeVisible();
+  await contextualDraftAction.click();
   const draftDialog = page.getByTestId("kody-chat-panel");
   await expect(draftDialog).toBeVisible();
+  await expect(page.locator(".qf-mobile-action-dock")).toBeHidden();
   const draftPanelBox = await draftDialog.boundingBox();
-  const visibleBuildActionDockBox = await page.locator(".qf-mobile-action-dock").boundingBox();
-  expect((draftPanelBox?.y ?? 0) + (draftPanelBox?.height ?? 0)).toBeLessThanOrEqual((visibleBuildActionDockBox?.y ?? 0) - 4);
+  const visibleMobileNavBox = await mobileNav.boundingBox();
+  expect((draftPanelBox?.y ?? 0) + (draftPanelBox?.height ?? 0)).toBeLessThanOrEqual((visibleMobileNavBox?.y ?? 0) - 4);
   await draftDialog.getByTestId("kody-quick-draft_quote").click();
   await draftDialog
     .getByTestId("kody-prompt")
@@ -549,7 +632,10 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
 
-  await page.getByTestId("kody-launcher").click();
+  await expect(page.getByTestId("kody-launcher")).toBeHidden();
+  const contextualDraftAction = page.getByRole("button", { name: "Draft with Kody" });
+  await expect(contextualDraftAction).toBeVisible();
+  await contextualDraftAction.click();
   const kodyDialog = page.getByTestId("kody-chat-panel");
   await expect(kodyDialog).toBeVisible();
   await kodyDialog.getByTestId("kody-quick-draft_quote").click();

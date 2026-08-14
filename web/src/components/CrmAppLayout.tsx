@@ -26,6 +26,7 @@ const AnalyticsPage = lazy(() => import("../pages/AnalyticsPage").then((module) 
 const QuoteBuilderView = lazy(() => import("../views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
 const QuoteDeskView = lazy(() => import("../views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
 const PipelineView = lazy(() => import("../views/PipelineView").then((module) => ({ default: module.PipelineView })));
+const WorkspaceHomePage = lazy(() => import("../pages/WorkspaceHomePage").then((module) => ({ default: module.WorkspaceHomePage })));
 
 function toDashboardSession(s: AppSession): DashboardSession {
   return {
@@ -170,7 +171,7 @@ export function CrmAppLayout({
                 />
               ) : null}
               <Routes>
-                <Route index element={<Navigate to="/app/customers" replace />} />
+                <Route index element={<WorkspaceHomePage />} />
                 <Route path="customers" element={<CustomersPage />} />
                 <Route path="follow-up" element={<PipelineView />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
@@ -206,7 +207,7 @@ export function CrmAppLayout({
                       : <Navigate to="/app/settings" replace />
                   }
                 />
-                <Route path="*" element={<Navigate to="/app/customers" replace />} />
+                <Route path="*" element={<Navigate to="/app" replace />} />
               </Routes>
             </div>
           </Suspense>

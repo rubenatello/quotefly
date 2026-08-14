@@ -11,8 +11,22 @@ import {
 import { env } from "../config/env";
 import type { AccessContext } from "./access-policy";
 import { hasCapability } from "./access-policy";
-import { addUtcDays, hashSourceReference, sha256Text } from "./ai-data-governance";
+import { addUtcDays, sha256Text } from "./ai-data-governance";
 import { mergeAiUsageTelemetry, type AiUsageTelemetry } from "./ai-usage";
+import {
+  AI_CHUNKER_VERSION,
+  normalizeAiSourceText,
+  splitAiFieldIntoChunks,
+} from "./ai-chunking";
+import {
+  AI_RETRIEVAL_KEYWORD_WEIGHT,
+  AI_RETRIEVAL_RANKING_MODE,
+  AI_RETRIEVAL_RRF_K,
+  AI_RETRIEVAL_SEMANTIC_WEIGHT,
+  aiRetrievalLexicalTokens,
+  rerankAiRetrievalCandidates,
+  resolveAiRetrievalQuery,
+} from "./ai-retrieval-ranking";
 import {
   AI_DATA_POLICY_VERSION,
   AI_RETRIEVABLE_FIELD_POLICY,
@@ -22,16 +36,20 @@ import { tenantActiveCustomerScope, tenantActiveQuoteScope, tenantActiveScope } 
 import { withTenantRlsContext, type TenantRlsClient } from "./tenant-rls";
 
 const RETRIEVAL_AUDIT_RETENTION_DAYS = 90;
-const MAX_SOURCE_CHARS = 2_000;
-const MAX_CHUNK_CHARS = 900;
 const MAX_CANDIDATE_CHUNKS = 200;
 const DEFAULT_RETRIEVAL_LIMIT = 8;
 const FALLBACK_EMBEDDING_MODEL = "local-hash-embedding-v1";
 const FALLBACK_EMBEDDING_DIMENSIONS = 64;
+const OPENAI_EMBEDDING_TIMEOUT_MS = 90_000;
+const OPENAI_EMBEDDING_DIMENSIONS: Readonly<Record<string, number>> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
 
 type AiRetrievalWriteClient =
-  | Pick<PrismaClient, "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">
-  | Pick<Prisma.TransactionClient, "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">;
+  | Pick<PrismaClient, "aiIndexJob" | "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">
+  | Pick<Prisma.TransactionClient, "aiIndexJob" | "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">;
 
 type AiRetrievalTenantClient = AiRetrievalWriteClient & TenantRlsClient;
 
@@ -51,10 +69,49 @@ export type AiEmbeddingResult = Readonly<{
 
 export type AiEmbeddingProvider = (text: string) => Promise<AiEmbeddingResult>;
 
+export type AiIndexPersistenceFence = Readonly<{
+  jobId: string;
+  generation: number;
+  leaseToken: string;
+  startedAtMs: number;
+  completedAtUtc?: Date;
+}>;
+
 export type AiRetrievalSourceField = Readonly<{
   field: AiRetrievableField;
   content: string | null | undefined;
   metadata?: Prisma.InputJsonValue;
+  filterMetadata?: AiRetrievalTypedMetadata;
+}>;
+
+export type AiRetrievalLifecycle = "active" | "archived" | "deleted";
+
+export type AiRetrievalTypedMetadata = Readonly<{
+  customerId?: string | null;
+  quoteId?: string | null;
+  serviceType?: ServiceCategory | null;
+  recordStatus?: string | null;
+  lifecycle?: AiRetrievalLifecycle | null;
+  assignedTenantUserId?: string | null;
+  section?: string | null;
+  pageNumber?: number | null;
+  sourceCreatedAtUtc?: Date | null;
+}>;
+
+export type AiRetrievalFilters = Readonly<{
+  sourceTypes?: readonly string[];
+  serviceTypes?: readonly ServiceCategory[];
+  recordStatuses?: readonly string[];
+  lifecycle?: AiRetrievalLifecycle;
+  customerId?: string;
+  quoteId?: string;
+  assignedTenantUserId?: string;
+  section?: string;
+  pageNumber?: number;
+  sourceCreatedAfterUtc?: Date;
+  sourceCreatedBeforeUtc?: Date;
+  sourceUpdatedAfterUtc?: Date;
+  sourceUpdatedBeforeUtc?: Date;
 }>;
 
 export type AiRetrievalSourceInput = Readonly<{
@@ -64,6 +121,7 @@ export type AiRetrievalSourceInput = Readonly<{
   citationLabel: string;
   sourceUpdatedAtUtc?: Date | null;
   metadata?: Prisma.InputJsonValue;
+  filterMetadata?: AiRetrievalTypedMetadata;
   fields: readonly AiRetrievalSourceField[];
 }>;
 
@@ -97,34 +155,17 @@ let openaiClient: OpenAI | undefined;
 
 function getOpenAI() {
   if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    openaiClient = new OpenAI({
+      apiKey: env.OPENAI_API_KEY,
+      timeout: OPENAI_EMBEDDING_TIMEOUT_MS,
+      maxRetries: 1,
+    });
   }
   return openaiClient;
 }
 
 function normalizeSourceText(value: string) {
-  return value
-    .normalize("NFKC")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_SOURCE_CHARS);
-}
-
-function splitIntoChunks(value: string): string[] {
-  const text = normalizeSourceText(value);
-  if (!text) return [];
-  if (text.length <= MAX_CHUNK_CHARS) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > 0 && chunks.length < 8) {
-    const slice = remaining.slice(0, MAX_CHUNK_CHARS);
-    const boundary = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("; "), slice.lastIndexOf(", "));
-    const cut = boundary >= 240 ? boundary + 1 : slice.length;
-    chunks.push(slice.slice(0, cut).trim());
-    remaining = remaining.slice(cut).trim();
-  }
-  return chunks.filter(Boolean);
+  return normalizeAiSourceText(value);
 }
 
 function hashToken(value: string) {
@@ -150,35 +191,51 @@ export function deterministicEmbedding(text: string): AiEmbeddingResult {
 }
 
 export async function createAiRetrievalEmbedding(text: string): Promise<AiEmbeddingResult> {
+  const results = await createAiRetrievalEmbeddings([text]);
+  const first = results[0];
+  if (!first) throw new Error("AI retrieval embedding input is required.");
+  return first;
+}
+
+export async function createAiRetrievalEmbeddings(texts: readonly string[]): Promise<AiEmbeddingResult[]> {
+  if (texts.length === 0) return [];
   if (!env.OPENAI_API_KEY) {
-    return deterministicEmbedding(text);
+    return texts.map((text) => deterministicEmbedding(text));
   }
 
   const response = await getOpenAI().embeddings.create({
     model: env.OPENAI_EMBEDDING_MODEL,
-    input: text,
+    input: [...texts],
   });
-  const embedding = response.data[0]?.embedding ?? [];
-  if (!embedding.length) {
+  if (response.data.length !== texts.length || response.data.some((row) => !row.embedding.length)) {
     throw new Error("OpenAI returned an empty embedding.");
   }
-  return {
-    embedding,
-    model: env.OPENAI_EMBEDDING_MODEL,
-    telemetry: {
-      requestCount: 1,
-      promptTokens: response.usage.prompt_tokens,
-      completionTokens: 0,
-      totalTokens: response.usage.total_tokens,
-      estimatedCostUsd: Number(
-        ((response.usage.prompt_tokens / 1_000_000) * env.OPENAI_EMBEDDING_COST_PER_1M_USD).toFixed(6),
-      ),
-    },
+  const telemetry: AiUsageTelemetry = {
+    requestCount: 1,
+    promptTokens: response.usage.prompt_tokens,
+    completionTokens: 0,
+    totalTokens: response.usage.total_tokens,
+    estimatedCostUsd: Number(
+      ((response.usage.prompt_tokens / 1_000_000) * env.OPENAI_EMBEDDING_COST_PER_1M_USD).toFixed(6),
+    ),
   };
+  return response.data
+    .slice()
+    .sort((left, right) => left.index - right.index)
+    .map((row, index) => ({
+      embedding: row.embedding,
+      model: env.OPENAI_EMBEDDING_MODEL,
+      telemetry: index === 0 ? telemetry : null,
+    }));
 }
 
 function configuredEmbeddingModel() {
   return env.OPENAI_API_KEY ? env.OPENAI_EMBEDDING_MODEL : FALLBACK_EMBEDDING_MODEL;
+}
+
+function configuredEmbeddingDimensions() {
+  if (!env.OPENAI_API_KEY) return FALLBACK_EMBEDDING_DIMENSIONS;
+  return OPENAI_EMBEDDING_DIMENSIONS[env.OPENAI_EMBEDDING_MODEL];
 }
 
 function maxClassification(values: readonly DataClassification[]): DataClassification {
@@ -210,9 +267,11 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
     chunkIndex: number;
     content: string;
     contentHash: string;
+    embeddingContentHash: string;
     classification: DataClassification;
     citationLabel: string;
     metadata: Prisma.InputJsonValue | null;
+    filterMetadata: ReturnType<typeof normalizeTypedMetadata>;
   }> = [];
 
   for (const field of source.fields) {
@@ -223,21 +282,95 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
     if ((policy.classification as DataClassification) === "C4_RESTRICTED") {
       throw new Error(`${field.field} is restricted and cannot be indexed for RAG.`);
     }
-    const fieldChunks = splitIntoChunks(field.content ?? "");
+    const fieldChunks = splitAiFieldIntoChunks(field.field, field.content ?? "");
     for (const content of fieldChunks) {
       chunks.push({
         sourceField: field.field,
         chunkIndex: chunks.length,
         content,
         contentHash: sha256Text(`${field.field}:${content}`),
+        embeddingContentHash: sha256Text(content),
         classification: policy.classification,
         citationLabel: source.citationLabel.slice(0, 160),
         metadata: field.metadata ?? null,
+        filterMetadata: normalizeTypedMetadata({
+          ...source.filterMetadata,
+          ...field.filterMetadata,
+        }),
       });
     }
   }
 
   return chunks;
+}
+
+function normalizeOptionalString(value: string | null | undefined, maxLength = 191) {
+  const normalized = value?.trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizeTypedMetadata(metadata?: AiRetrievalTypedMetadata) {
+  const pageNumber = metadata?.pageNumber;
+  return {
+    customerId: normalizeOptionalString(metadata?.customerId),
+    quoteId: normalizeOptionalString(metadata?.quoteId),
+    serviceType: metadata?.serviceType ?? null,
+    recordStatus: normalizeOptionalString(metadata?.recordStatus, 64),
+    lifecycle: metadata?.lifecycle ?? null,
+    assignedTenantUserId: normalizeOptionalString(metadata?.assignedTenantUserId),
+    section: normalizeOptionalString(metadata?.section, 128),
+    pageNumber: Number.isInteger(pageNumber) && Number(pageNumber) > 0 ? Number(pageNumber) : null,
+    sourceCreatedAtUtc: metadata?.sourceCreatedAtUtc ?? null,
+  };
+}
+
+async function lockAiIndexPersistenceFence(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  fence: AiIndexPersistenceFence | undefined,
+) {
+  if (!fence) return;
+  const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "AiIndexJob"
+    WHERE "id" = ${fence.jobId}
+      AND "tenantId" = ${tenantId}
+      AND "generation" = ${fence.generation}
+      AND "status" = 'PROCESSING'::"AiIndexJobStatus"
+      AND "lockedBy" = ${fence.leaseToken}
+    FOR UPDATE
+  `);
+  if (!rows[0]) throw new Error("AI_INDEX_JOB_STALE");
+}
+
+async function completeAiIndexPersistenceFence(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  fence: AiIndexPersistenceFence | undefined,
+  result: { chunkCount: number; embeddingCacheHitCount: number },
+) {
+  if (!fence) return;
+  const completedAtUtc = fence.completedAtUtc ?? new Date();
+  const completed = await tx.aiIndexJob.updateMany({
+    where: {
+      id: fence.jobId,
+      tenantId,
+      generation: fence.generation,
+      status: "PROCESSING",
+      lockedBy: fence.leaseToken,
+    },
+    data: {
+      status: "SUCCEEDED",
+      completedAtUtc,
+      lockedAtUtc: null,
+      lockedBy: null,
+      lastErrorCode: null,
+      lastDurationMs: Math.max(0, Date.now() - fence.startedAtMs),
+      lastChunkCount: result.chunkCount,
+      lastEmbeddingCacheHitCount: result.embeddingCacheHitCount,
+    },
+  });
+  if (completed.count !== 1) throw new Error("AI_INDEX_JOB_STALE");
 }
 
 export async function markAiRetrievalSourceDeleted(
@@ -458,11 +591,13 @@ export async function markTenantAiRetrievalSourceTypeDeleted(
 }
 
 export async function upsertAiRetrievalSource(
-  prisma: PrismaClient,
+  prisma: AiRetrievalTenantClient,
   source: AiRetrievalSourceInput,
   options?: {
     embedText?: AiEmbeddingProvider;
     now?: Date;
+    persistenceFence?: AiIndexPersistenceFence;
+    onEmbeddingTelemetry?: (telemetry: AiUsageTelemetry) => Promise<void>;
   },
 ) {
   const now = options?.now ?? new Date();
@@ -474,17 +609,38 @@ export async function upsertAiRetrievalSource(
 
   const sourceChunks = buildSourceChunks(source);
   if (sourceChunks.length === 0) {
-    await markAiRetrievalSourceDeleted(prisma, {
-      tenantId: source.tenantId,
-      sourceType,
-      sourceId,
-      now,
+    await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
+      await lockAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence);
+      await Promise.all([
+        tx.aiRetrievalChunk.updateMany({
+          where: { tenantId: source.tenantId, sourceType, sourceId, deletedAtUtc: null },
+          data: { deletedAtUtc: now },
+        }),
+        tx.aiRetrievalDocument.updateMany({
+          where: { tenantId: source.tenantId, sourceType, sourceId, deletedAtUtc: null },
+          data: { status: "DELETED", deletedAtUtc: now, indexedAtUtc: now },
+        }),
+      ]);
+      await completeAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence, {
+        chunkCount: 0,
+        embeddingCacheHitCount: 0,
+      });
     });
-    return { indexed: false, reused: false, chunkCount: 0, telemetry: null };
+    return {
+      indexed: false,
+      reused: false,
+      chunkCount: 0,
+      embeddingCacheHitCount: 0,
+      embeddingModel: null,
+      telemetry: null,
+    };
   }
 
   const documentContentHash = sha256Text(
-    JSON.stringify(sourceChunks.map((chunk) => [chunk.sourceField, chunk.contentHash])),
+    JSON.stringify([
+      AI_CHUNKER_VERSION,
+      ...sourceChunks.map((chunk) => [chunk.sourceField, chunk.contentHash]),
+    ]),
   );
   const documentClassification = maxClassification(sourceChunks.map((chunk) => chunk.classification));
 
@@ -506,6 +662,7 @@ export async function upsertAiRetrievalSource(
         deletedAtUtc: true,
         contentHash: true,
         policyVersion: true,
+        chunkerVersion: true,
         chunks: {
           where: { tenantId: source.tenantId, deletedAtUtc: null },
           orderBy: { chunkIndex: "asc" },
@@ -515,17 +672,21 @@ export async function upsertAiRetrievalSource(
             contentHash: true,
             sourceField: true,
             embeddingModel: true,
+            embeddingDimensions: true,
+            chunkerVersion: true,
           },
         },
       },
     }));
     const expectedModel = configuredEmbeddingModel();
+    const expectedDimensions = configuredEmbeddingDimensions();
     const canReuse = Boolean(
       existing &&
       existing.status === "ACTIVE" &&
       !existing.deletedAtUtc &&
       existing.contentHash === documentContentHash &&
       existing.policyVersion === AI_DATA_POLICY_VERSION &&
+      existing.chunkerVersion === AI_CHUNKER_VERSION &&
       existing.chunks.length === sourceChunks.length &&
       existing.chunks.every((chunk, index) => {
         const sourceChunk = sourceChunks[index];
@@ -534,13 +695,16 @@ export async function upsertAiRetrievalSource(
           chunk.chunkIndex === sourceChunk.chunkIndex &&
           chunk.contentHash === sourceChunk.contentHash &&
           chunk.sourceField === sourceChunk.sourceField &&
-          chunk.embeddingModel === expectedModel,
+          chunk.embeddingModel === expectedModel &&
+          (expectedDimensions === undefined || chunk.embeddingDimensions === expectedDimensions) &&
+          chunk.chunkerVersion === AI_CHUNKER_VERSION
         );
       }),
     );
 
     if (existing && canReuse) {
       await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
+        await lockAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence);
         await tx.aiRetrievalDocument.update({
           where: { id_tenantId: { id: existing.id, tenantId: source.tenantId } },
           data: {
@@ -558,26 +722,97 @@ export async function upsertAiRetrievalSource(
             data: {
               citationLabel: sourceChunk.citationLabel,
               metadata: sourceChunk.metadata ?? Prisma.JsonNull,
+              ...sourceChunk.filterMetadata,
               sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
             },
           });
         }
+        await completeAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence, {
+          chunkCount: sourceChunks.length,
+          embeddingCacheHitCount: sourceChunks.length,
+        });
       });
-      return { indexed: false, reused: true, chunkCount: sourceChunks.length, telemetry: null };
+      return {
+        indexed: false,
+        reused: true,
+        chunkCount: sourceChunks.length,
+        embeddingCacheHitCount: sourceChunks.length,
+        embeddingModel: configuredEmbeddingModel(),
+        telemetry: null,
+      };
     }
   }
 
   const embedText = options?.embedText ?? createAiRetrievalEmbedding;
-  const embeddedChunks: Array<(typeof sourceChunks)[number] & { embedding: AiEmbeddingResult }> = [];
+  const embeddedChunks: Array<(typeof sourceChunks)[number] & { embedding: AiEmbeddingResult; cacheHit: boolean }> = [];
+  const pendingChunks: Array<{
+    chunk: (typeof sourceChunks)[number];
+    cachedEmbedding: { embedding: number[]; embeddingModel: string; embeddingDimensions: number } | null;
+  }> = [];
+  const expectedDimensions = configuredEmbeddingDimensions();
+  const cachedRows = options?.embedText
+    ? []
+    : await withTenantRlsContext(prisma, source.tenantId, (tx) => tx.aiRetrievalChunk.findMany({
+        where: {
+          tenantId: source.tenantId,
+          embeddingContentHash: { in: Array.from(new Set(sourceChunks.map((chunk) => chunk.embeddingContentHash))) },
+          embeddingModel: configuredEmbeddingModel(),
+          ...(expectedDimensions === undefined ? {} : { embeddingDimensions: expectedDimensions }),
+          chunkerVersion: AI_CHUNKER_VERSION,
+          deletedAtUtc: null,
+          document: { status: "ACTIVE", deletedAtUtc: null },
+        },
+        orderBy: { indexedAtUtc: "desc" },
+        select: {
+          embeddingContentHash: true,
+          embedding: true,
+          embeddingModel: true,
+          embeddingDimensions: true,
+        },
+      }));
+  const cachedByContentHash = new Map<string, (typeof cachedRows)[number]>();
+  for (const cachedRow of cachedRows) {
+    if (
+      cachedRow.embeddingContentHash &&
+      cachedRow.embedding.length === cachedRow.embeddingDimensions &&
+      !cachedByContentHash.has(cachedRow.embeddingContentHash)
+    ) {
+      cachedByContentHash.set(cachedRow.embeddingContentHash, cachedRow);
+    }
+  }
   for (const chunk of sourceChunks) {
-    const embedding = await embedText(chunk.content);
+    const cachedEmbedding = cachedByContentHash.get(chunk.embeddingContentHash) ?? null;
+    pendingChunks.push({
+      chunk,
+      cachedEmbedding,
+    });
+  }
+
+  const misses = pendingChunks.filter((entry) => !entry.cachedEmbedding);
+  const generatedEmbeddings = options?.embedText
+    ? await Promise.all(misses.map((entry) => embedText(entry.chunk.content)))
+    : await createAiRetrievalEmbeddings(misses.map((entry) => entry.chunk.content));
+  let generatedIndex = 0;
+  for (const entry of pendingChunks) {
+    const embedding = entry.cachedEmbedding
+      ? { embedding: entry.cachedEmbedding.embedding, model: entry.cachedEmbedding.embeddingModel }
+      : generatedEmbeddings[generatedIndex++];
+    if (!embedding) throw new Error("AI retrieval chunks require embeddings.");
     if (!embedding.embedding.length) {
       throw new Error("AI retrieval chunks require non-empty embeddings.");
     }
-    embeddedChunks.push({ ...chunk, embedding });
+    embeddedChunks.push({ ...entry.chunk, embedding, cacheHit: Boolean(entry.cachedEmbedding) });
+  }
+
+  const embeddingTelemetry = mergeAiUsageTelemetry(
+    ...embeddedChunks.map((chunk) => chunk.embedding.telemetry),
+  );
+  if (embeddingTelemetry && options?.onEmbeddingTelemetry) {
+    await options.onEmbeddingTelemetry(embeddingTelemetry);
   }
 
   await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
+    await lockAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence);
     const document = await tx.aiRetrievalDocument.upsert({
       where: {
         tenantId_sourceType_sourceId: {
@@ -594,6 +829,7 @@ export async function upsertAiRetrievalSource(
         citationLabel: source.citationLabel.slice(0, 160),
         metadata: source.metadata ?? Prisma.JsonNull,
         policyVersion: AI_DATA_POLICY_VERSION,
+        chunkerVersion: AI_CHUNKER_VERSION,
         indexedAtUtc: now,
         deletedAtUtc: null,
       },
@@ -608,6 +844,7 @@ export async function upsertAiRetrievalSource(
         citationLabel: source.citationLabel.slice(0, 160),
         metadata: source.metadata ?? Prisma.JsonNull,
         policyVersion: AI_DATA_POLICY_VERSION,
+        chunkerVersion: AI_CHUNKER_VERSION,
         indexedAtUtc: now,
       },
       select: { id: true },
@@ -628,13 +865,16 @@ export async function upsertAiRetrievalSource(
           sourceField: chunk.sourceField,
           content: chunk.content,
           contentHash: chunk.contentHash,
+          embeddingContentHash: chunk.embeddingContentHash,
           embedding: chunk.embedding.embedding,
           embeddingModel: chunk.embedding.model.slice(0, 80),
           embeddingDimensions: chunk.embedding.embedding.length,
           classification: chunk.classification,
           citationLabel: chunk.citationLabel,
           metadata: chunk.metadata ?? Prisma.JsonNull,
+          ...chunk.filterMetadata,
           policyVersion: AI_DATA_POLICY_VERSION,
+          chunkerVersion: AI_CHUNKER_VERSION,
           sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
           indexedAtUtc: now,
           deletedAtUtc: null,
@@ -648,13 +888,16 @@ export async function upsertAiRetrievalSource(
           chunkIndex: chunk.chunkIndex,
           content: chunk.content,
           contentHash: chunk.contentHash,
+          embeddingContentHash: chunk.embeddingContentHash,
           embedding: chunk.embedding.embedding,
           embeddingModel: chunk.embedding.model.slice(0, 80),
           embeddingDimensions: chunk.embedding.embedding.length,
           classification: chunk.classification,
           citationLabel: chunk.citationLabel,
           metadata: chunk.metadata ?? Prisma.JsonNull,
+          ...chunk.filterMetadata,
           policyVersion: AI_DATA_POLICY_VERSION,
+          chunkerVersion: AI_CHUNKER_VERSION,
           sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
           indexedAtUtc: now,
         },
@@ -670,13 +913,19 @@ export async function upsertAiRetrievalSource(
       },
       data: { deletedAtUtc: now },
     });
+    await completeAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence, {
+      chunkCount: embeddedChunks.length,
+      embeddingCacheHitCount: embeddedChunks.filter((chunk) => chunk.cacheHit).length,
+    });
   });
 
   return {
     indexed: true,
     reused: false,
     chunkCount: embeddedChunks.length,
-    telemetry: mergeAiUsageTelemetry(...embeddedChunks.map((chunk) => chunk.embedding.telemetry)),
+    embeddingCacheHitCount: embeddedChunks.filter((chunk) => chunk.cacheHit).length,
+    embeddingModel: embeddedChunks[0]?.embedding.model ?? configuredEmbeddingModel(),
+    telemetry: embeddingTelemetry,
   };
 }
 
@@ -726,8 +975,103 @@ type RetrievalCandidateReference = Pick<
   "id" | "sourceType" | "sourceId" | "sourceField" | "contentHash"
 >;
 
+type KeywordRankRow = Readonly<{ id: string; keywordScore: number }>;
+
+function boundedFilterValues(values: readonly string[] | undefined, maxLength: number) {
+  return Array.from(new Set(
+    (values ?? [])
+      .map((value) => value.trim().slice(0, maxLength))
+      .filter(Boolean),
+  )).slice(0, 20);
+}
+
+function retrievalFilterWhere(filters?: AiRetrievalFilters): Prisma.AiRetrievalChunkWhereInput {
+  const sourceTypes = boundedFilterValues(filters?.sourceTypes, 64);
+  const recordStatuses = boundedFilterValues(filters?.recordStatuses, 64);
+  const section = normalizeOptionalString(filters?.section, 128);
+  const customerId = normalizeOptionalString(filters?.customerId);
+  const quoteId = normalizeOptionalString(filters?.quoteId);
+  const assignedTenantUserId = normalizeOptionalString(filters?.assignedTenantUserId);
+  const pageNumber = filters?.pageNumber;
+  return {
+    ...(sourceTypes.length ? { sourceType: { in: sourceTypes } } : {}),
+    ...(filters?.serviceTypes?.length
+      ? { serviceType: { in: Array.from(new Set(filters.serviceTypes)).slice(0, 20) } }
+      : {}),
+    ...(recordStatuses.length ? { recordStatus: { in: recordStatuses } } : {}),
+    ...(filters?.lifecycle ? { lifecycle: filters.lifecycle } : {}),
+    ...(customerId ? { customerId } : {}),
+    ...(quoteId ? { quoteId } : {}),
+    ...(assignedTenantUserId ? { assignedTenantUserId } : {}),
+    ...(section ? { section } : {}),
+    ...(Number.isInteger(pageNumber) && Number(pageNumber) > 0 ? { pageNumber: Number(pageNumber) } : {}),
+    ...(filters?.sourceCreatedAfterUtc || filters?.sourceCreatedBeforeUtc
+      ? {
+          sourceCreatedAtUtc: {
+            ...(filters.sourceCreatedAfterUtc ? { gte: filters.sourceCreatedAfterUtc } : {}),
+            ...(filters.sourceCreatedBeforeUtc ? { lte: filters.sourceCreatedBeforeUtc } : {}),
+          },
+        }
+      : {}),
+    ...(filters?.sourceUpdatedAfterUtc || filters?.sourceUpdatedBeforeUtc
+      ? {
+          sourceUpdatedAtUtc: {
+            ...(filters.sourceUpdatedAfterUtc ? { gte: filters.sourceUpdatedAfterUtc } : {}),
+            ...(filters.sourceUpdatedBeforeUtc ? { lte: filters.sourceUpdatedBeforeUtc } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function retrievalFilterSummary(filters?: AiRetrievalFilters): Prisma.InputJsonObject {
+  return {
+    sourceTypeCount: boundedFilterValues(filters?.sourceTypes, 64).length,
+    serviceTypeCount: Array.from(new Set(filters?.serviceTypes ?? [])).slice(0, 20).length,
+    recordStatusCount: boundedFilterValues(filters?.recordStatuses, 64).length,
+    lifecycleApplied: Boolean(filters?.lifecycle),
+    customerApplied: Boolean(normalizeOptionalString(filters?.customerId)),
+    quoteApplied: Boolean(normalizeOptionalString(filters?.quoteId)),
+    assignmentApplied: Boolean(normalizeOptionalString(filters?.assignedTenantUserId)),
+    sectionApplied: Boolean(normalizeOptionalString(filters?.section, 128)),
+    pageApplied: Number.isInteger(filters?.pageNumber) && Number(filters?.pageNumber) > 0,
+    createdRangeApplied: Boolean(filters?.sourceCreatedAfterUtc || filters?.sourceCreatedBeforeUtc),
+    updatedRangeApplied: Boolean(filters?.sourceUpdatedAfterUtc || filters?.sourceUpdatedBeforeUtc),
+  };
+}
+
+function fieldsAllowedForPurpose(purpose: AiPurpose) {
+  return Object.entries(AI_RETRIEVABLE_FIELD_POLICY)
+    .filter(([, policy]) => policy.vectorEligible && policy.allowedPurposes.includes(purpose))
+    .map(([field]) => field as AiRetrievableField);
+}
+
+async function keywordRankAuthorizedChunks(
+  tx: Prisma.TransactionClient,
+  params: { tenantId: string; query: string; candidateIds: readonly string[] },
+): Promise<KeywordRankRow[]> {
+  const keywordQuery = aiRetrievalLexicalTokens(params.query).slice(0, 16).join(" | ");
+  if (!keywordQuery || params.candidateIds.length === 0) return [];
+  const ids = Array.from(new Set(params.candidateIds)).slice(0, MAX_CANDIDATE_CHUNKS);
+  return tx.$queryRaw<KeywordRankRow[]>(Prisma.sql`
+    SELECT
+      chunk."id",
+      ts_rank_cd(
+        to_tsvector('simple', chunk."content"),
+        to_tsquery('simple', ${keywordQuery})
+      )::double precision AS "keywordScore"
+    FROM "AiRetrievalChunk" chunk
+    WHERE chunk."tenantId" = ${params.tenantId}
+      AND chunk."id" IN (${Prisma.join(ids)})
+      AND chunk."deletedAtUtc" IS NULL
+      AND to_tsvector('simple', chunk."content") @@ to_tsquery('simple', ${keywordQuery})
+    ORDER BY "keywordScore" DESC, chunk."id" ASC
+    LIMIT ${MAX_CANDIDATE_CHUNKS}
+  `);
+}
+
 function fieldContentHashes(field: AiRetrievableField, content: string | null | undefined) {
-  return new Set(splitIntoChunks(content ?? "").map((chunk) => sha256Text(`${field}:${chunk}`)));
+  return new Set(splitAiFieldIntoChunks(field, content ?? "").map((chunk) => sha256Text(`${field}:${chunk}`)));
 }
 
 async function currentRetrievalContentHashes(
@@ -807,20 +1151,42 @@ export async function retrieveAiContextFromIndex(
     model?: string | null;
     embedText?: AiEmbeddingProvider;
     preferredSources?: readonly { sourceType: string; sourceId: string }[];
+    priorUserQueries?: readonly string[];
+    filters?: AiRetrievalFilters;
     now?: Date;
   },
 ): Promise<AiRetrievalResult> {
+  const startedAtMs = Date.now();
   const now = params.now ?? new Date();
+  const resolvedQuery = resolveAiRetrievalQuery({
+    query: params.query,
+    priorUserQueries: params.priorUserQueries,
+  });
+  const query = resolvedQuery.effectiveQuery;
+  if (!resolvedQuery.originalQuery) throw new Error("AI retrieval query is required.");
   const allowedClassifications = allowedClassificationsForAccess(params.access);
-  const queryEmbedding = await (params.embedText ?? createAiRetrievalEmbedding)(params.query);
-  const queryHash = sha256Text(params.query);
+  const embeddingStartedAtMs = Date.now();
+  const queryEmbedding = await (params.embedText ?? createAiRetrievalEmbedding)(query);
+  const embeddingDurationMs = Date.now() - embeddingStartedAtMs;
+  const queryHash = sha256Text(`${params.access.tenantId}:${resolvedQuery.originalQuery}`);
+  const effectiveQueryHash = sha256Text(`${params.access.tenantId}:${query}`);
   const maxAllowedClassification = maxClassification(allowedClassifications);
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_RETRIEVAL_LIMIT, 1), 20);
+  const allowedFields = fieldsAllowedForPurpose(params.purpose);
 
-  const { candidates, currentHashes } = await withTenantRlsContext(
+  const {
+    candidates,
+    currentHashes,
+    candidateCount,
+    authorizedCandidateCount,
+    keywordRows,
+    authorizationDurationMs,
+    keywordDurationMs,
+  } = await withTenantRlsContext(
     prisma,
     params.access.tenantId,
     async (tx) => {
+      const authorizationStartedAtMs = Date.now();
       // First load only non-sensitive source references. Resolve those references
       // through live, tenant- and assignment-scoped records before loading any
       // indexed text or embeddings. This keeps authorization ahead of retrieval.
@@ -832,6 +1198,8 @@ export async function retrieveAiContextFromIndex(
           embeddingDimensions: queryEmbedding.embedding.length,
           embeddingModel: queryEmbedding.model,
           classification: { in: allowedClassifications },
+          sourceField: { in: allowedFields },
+          ...retrievalFilterWhere(params.filters),
           document: {
             tenantId: params.access.tenantId,
             status: "ACTIVE",
@@ -881,28 +1249,71 @@ export async function retrieveAiContextFromIndex(
             },
           });
 
-      return { candidates: authorizedCandidates, currentHashes: authorizedHashes };
+      const authorizationDurationMs = Date.now() - authorizationStartedAtMs;
+      const keywordStartedAtMs = Date.now();
+      const keywordRows = await keywordRankAuthorizedChunks(tx, {
+        tenantId: params.access.tenantId,
+        query,
+        candidateIds: authorizedCandidateIds,
+      });
+      const keywordDurationMs = Date.now() - keywordStartedAtMs;
+
+      return {
+        candidates: authorizedCandidates,
+        currentHashes: authorizedHashes,
+        candidateCount: candidateReferences.length,
+        authorizedCandidateCount: authorizedCandidateIds.length,
+        keywordRows,
+        authorizationDurationMs,
+        keywordDurationMs,
+      };
     },
   );
   const preferredSources = new Set(
     (params.preferredSources ?? []).map((source) => `${source.sourceType}:${source.sourceId}`),
   );
-
-  const ranked = candidates
+  const eligibleCandidates = candidates
     .filter((candidate) => canRetrieveField(candidate.sourceField as AiRetrievableField, params.purpose))
     .filter((candidate) => currentHashes
       .get(`${candidate.sourceType}:${candidate.sourceId}:${candidate.sourceField}`)
-      ?.has(candidate.contentHash) === true)
+      ?.has(candidate.contentHash) === true);
+  const rankingStartedAtMs = Date.now();
+  const semanticRanking = eligibleCandidates
     .map((candidate) => ({
       candidate,
-      score:
-        cosineSimilarity(queryEmbedding.embedding, candidate.embedding) +
-        (preferredSources.has(`${candidate.sourceType}:${candidate.sourceId}`) ? 1 : 0),
+      semanticScore: cosineSimilarity(queryEmbedding.embedding, candidate.embedding),
     }))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+    .sort((left, right) =>
+      right.semanticScore - left.semanticScore || left.candidate.id.localeCompare(right.candidate.id));
+  const semanticRankById = new Map(semanticRanking.map((entry, index) => [entry.candidate.id, index + 1]));
+  const semanticScoreById = new Map(semanticRanking.map((entry) => [entry.candidate.id, entry.semanticScore]));
+  const keywordRankById = new Map(keywordRows.map((entry, index) => [entry.id, index + 1]));
+  const keywordScoreById = new Map(keywordRows.map((entry) => [entry.id, Number(entry.keywordScore)]));
+  const fusedCandidates = eligibleCandidates
+    .map((candidate) => {
+      const semanticRank = semanticRankById.get(candidate.id);
+      const keywordRank = keywordRankById.get(candidate.id);
+      const preferred = preferredSources.has(`${candidate.sourceType}:${candidate.sourceId}`);
+      return {
+        candidate,
+        id: candidate.id,
+        sourceType: candidate.sourceType,
+        sourceId: candidate.sourceId,
+        sourceField: candidate.sourceField,
+        citationLabel: candidate.citationLabel,
+        content: candidate.content,
+        contentHash: candidate.contentHash,
+        semanticRank: semanticRank ?? null,
+        semanticScore: semanticScoreById.get(candidate.id) ?? null,
+        keywordRank: keywordRank ?? null,
+        keywordScore: keywordScoreById.get(candidate.id) ?? null,
+        preferred,
+      };
+    });
+  const ranked = rerankAiRetrievalCandidates({ query, candidates: fusedCandidates, limit });
+  const rankingDurationMs = Date.now() - rankingStartedAtMs;
 
-  const chunks: RetrievedAiChunk[] = ranked.map(({ candidate, score }, index) => ({
+  const chunks: RetrievedAiChunk[] = ranked.map(({ candidate, rerankScore }, index) => ({
     id: candidate.id,
     sourceType: candidate.sourceType,
     sourceId: candidate.sourceId,
@@ -911,15 +1322,39 @@ export async function retrieveAiContextFromIndex(
     citationLabel: candidate.citationLabel,
     classification: candidate.classification,
     content: candidate.content,
-    score: Number(score.toFixed(6)),
+    score: Number(rerankScore.toFixed(6)),
   }));
 
   const sourceRefs = chunks.map((chunk) => ({
     type: chunk.sourceType,
     field: chunk.sourceField,
-    refHash: hashSourceReference(chunk.sourceType, chunk.sourceId),
+    refHash: sha256Text(`${params.access.tenantId}:${chunk.sourceType}:${chunk.sourceId}`),
+    chunkRefHash: sha256Text(`${params.access.tenantId}:${chunk.id}`),
+    contentRefHash: sha256Text(`${params.access.tenantId}:${candidates.find((candidate) => candidate.id === chunk.id)?.contentHash ?? ""}`),
     citationKey: chunk.citationKey,
   }));
+  const totalDurationMs = Date.now() - startedAtMs;
+  const rankingSummary: Prisma.InputJsonObject = {
+    rrfK: AI_RETRIEVAL_RRF_K,
+    semanticWeight: AI_RETRIEVAL_SEMANTIC_WEIGHT,
+    keywordWeight: AI_RETRIEVAL_KEYWORD_WEIGHT,
+    reranker: "lexical_coverage_diversity_v1",
+    rewriteMode: resolvedQuery.mode,
+    rewriteContextTurnCount: resolvedQuery.contextTurnCount,
+    effectiveQueryHash,
+    top: ranked.map((entry) => ({
+      refHash: sha256Text(`${params.access.tenantId}:${entry.candidate.id}`),
+      fusedScore: Number(entry.fusedScore.toFixed(8)),
+      rerankScore: Number(entry.rerankScore.toFixed(8)),
+      lexicalCoverage: Number(entry.lexicalCoverage.toFixed(6)),
+      exactPhrase: entry.exactPhrase,
+      semanticRank: entry.semanticRank,
+      semanticScore: entry.semanticScore === null ? null : Number(entry.semanticScore.toFixed(6)),
+      keywordRank: entry.keywordRank,
+      keywordScore: entry.keywordScore === null ? null : Number(entry.keywordScore.toFixed(6)),
+      preferred: entry.preferred,
+    })),
+  };
 
   const auditEvent = await withTenantRlsContext(prisma, params.access.tenantId, (tx) => tx.aiRetrievalAuditEvent.create({
     data: {
@@ -936,6 +1371,18 @@ export async function retrieveAiContextFromIndex(
       queryHash,
       policyVersion: AI_DATA_POLICY_VERSION,
       status: AiRetrievalAuditStatus.SUCCEEDED,
+      rankingMode: AI_RETRIEVAL_RANKING_MODE,
+      candidateCount,
+      authorizedCandidateCount,
+      semanticCandidateCount: semanticRanking.length,
+      keywordCandidateCount: keywordRows.length,
+      embeddingDurationMs,
+      authorizationDurationMs,
+      keywordDurationMs,
+      rankingDurationMs,
+      totalDurationMs,
+      filterSummary: retrievalFilterSummary(params.filters),
+      rankingSummary,
       retentionExpiresAtUtc: addUtcDays(now, RETRIEVAL_AUDIT_RETENTION_DAYS),
     },
     select: { id: true },
@@ -983,6 +1430,9 @@ export async function refreshQuoteAiRetrievalIndex(
           id: true,
           fullName: true,
           notes: true,
+          followUpStatus: true,
+          assignedTenantUserId: true,
+          createdAt: true,
           updatedAt: true,
         },
       })
@@ -996,6 +1446,13 @@ export async function refreshQuoteAiRetrievalIndex(
       citationLabel: `Customer notes: ${customer.fullName}`,
       sourceUpdatedAtUtc: customer.updatedAt,
       metadata: { customerId: customer.id },
+      filterMetadata: {
+        customerId: customer.id,
+        recordStatus: customer.followUpStatus,
+        lifecycle: "active",
+        assignedTenantUserId: customer.assignedTenantUserId,
+        sourceCreatedAtUtc: customer.createdAt,
+      },
       fields: [{ field: "Customer.notes", content: customer.notes }],
     });
 
@@ -1011,6 +1468,7 @@ export async function refreshQuoteAiRetrievalIndex(
         id: true,
         title: true,
         detail: true,
+        eventType: true,
         createdAt: true,
       },
     });
@@ -1022,6 +1480,14 @@ export async function refreshQuoteAiRetrievalIndex(
         citationLabel: `Customer activity: ${event.title}`.slice(0, 160),
         sourceUpdatedAtUtc: event.createdAt,
         metadata: { customerId: customer.id },
+        filterMetadata: {
+          customerId: customer.id,
+          recordStatus: event.eventType,
+          lifecycle: "active",
+          assignedTenantUserId: customer.assignedTenantUserId,
+          section: "activity",
+          sourceCreatedAtUtc: event.createdAt,
+        },
         fields: [
           { field: "CustomerActivityEvent.title", content: event.title },
           { field: "CustomerActivityEvent.detail", content: event.detail },
@@ -1049,6 +1515,10 @@ export async function refreshQuoteAiRetrievalIndex(
       title: true,
       scopeText: true,
       serviceType: true,
+      customerId: true,
+      status: true,
+      assignedTenantUserId: true,
+      createdAt: true,
       updatedAt: true,
       lineItems: {
         where: tenantActiveScope(tenantId),
@@ -1056,7 +1526,10 @@ export async function refreshQuoteAiRetrievalIndex(
         select: {
           id: true,
           description: true,
+          sectionType: true,
+          sectionLabel: true,
           createdAt: true,
+          updatedAt: true,
         },
       },
     },
@@ -1070,6 +1543,15 @@ export async function refreshQuoteAiRetrievalIndex(
       citationLabel: `Quote: ${quote.title}`.slice(0, 160),
       sourceUpdatedAtUtc: quote.updatedAt,
       metadata: { quoteId: quote.id, serviceType: quote.serviceType },
+      filterMetadata: {
+        customerId: quote.customerId,
+        quoteId: quote.id,
+        serviceType: quote.serviceType,
+        recordStatus: quote.status,
+        lifecycle: "active",
+        assignedTenantUserId: quote.assignedTenantUserId,
+        sourceCreatedAtUtc: quote.createdAt,
+      },
       fields: [
         { field: "Quote.title", content: quote.title },
         { field: "Quote.scopeText", content: quote.scopeText },
@@ -1082,8 +1564,18 @@ export async function refreshQuoteAiRetrievalIndex(
         sourceType: "QuoteLineItem",
         sourceId: lineItem.id,
         citationLabel: `Quote line: ${quote.title}`.slice(0, 160),
-        sourceUpdatedAtUtc: lineItem.createdAt,
+        sourceUpdatedAtUtc: lineItem.updatedAt,
         metadata: { quoteId: quote.id, serviceType: quote.serviceType },
+        filterMetadata: {
+          customerId: quote.customerId,
+          quoteId: quote.id,
+          serviceType: quote.serviceType,
+          recordStatus: quote.status,
+          lifecycle: "active",
+          assignedTenantUserId: quote.assignedTenantUserId,
+          section: lineItem.sectionLabel ?? lineItem.sectionType,
+          sourceCreatedAtUtc: lineItem.createdAt,
+        },
         fields: [{ field: "QuoteLineItem.description", content: lineItem.description }],
       });
     }
@@ -1102,6 +1594,8 @@ export async function refreshQuoteAiRetrievalIndex(
       name: true,
       description: true,
       serviceType: true,
+      category: true,
+      createdAt: true,
       updatedAt: true,
     },
   });
@@ -1113,6 +1607,13 @@ export async function refreshQuoteAiRetrievalIndex(
       citationLabel: `Saved job: ${preset.name}`.slice(0, 160),
       sourceUpdatedAtUtc: preset.updatedAt,
       metadata: serviceTypeMetadata(preset.serviceType),
+      filterMetadata: {
+        serviceType: preset.serviceType,
+        recordStatus: preset.category,
+        lifecycle: "active",
+        section: "product-catalog",
+        sourceCreatedAtUtc: preset.createdAt,
+      },
       fields: [
         { field: "WorkPreset.name", content: preset.name },
         { field: "WorkPreset.description", content: preset.description },
@@ -1145,15 +1646,19 @@ export async function buildGovernedQuoteAiContext(
     quoteId?: string | null;
     model?: string | null;
     embedText?: AiEmbeddingProvider;
+    filters?: AiRetrievalFilters;
+    priorUserQueries?: readonly string[];
   },
 ) {
-  const refresh = await refreshQuoteAiRetrievalIndex(prisma, {
-    access: params.access,
-    serviceType: params.serviceType,
-    customerId: params.customerId,
-    quoteId: params.quoteId,
-    embedText: params.embedText,
-  });
+  const refresh = env.AI_INDEX_INLINE_REFRESH
+    ? await refreshQuoteAiRetrievalIndex(prisma, {
+        access: params.access,
+        serviceType: params.serviceType,
+        customerId: params.customerId,
+        quoteId: params.quoteId,
+        embedText: params.embedText,
+      })
+    : { sourceCount: 0, indexedSourceCount: 0, chunkCount: 0, telemetry: null };
 
   const retrieval = await retrieveAiContextFromIndex(prisma, {
     access: params.access,
@@ -1162,6 +1667,8 @@ export async function buildGovernedQuoteAiContext(
     requestId: params.requestId,
     model: params.model,
     embedText: params.embedText,
+    filters: params.filters,
+    priorUserQueries: params.priorUserQueries,
     preferredSources: [
       ...(params.customerId ? [{ sourceType: "Customer", sourceId: params.customerId }] : []),
       ...(params.quoteId ? [{ sourceType: "Quote", sourceId: params.quoteId }] : []),

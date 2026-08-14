@@ -330,8 +330,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 30,
-      fieldCount: 411,
+      modelCount: 32,
+      fieldCount: 464,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);
@@ -374,6 +374,11 @@ describe("superuser data-governance control plane", () => {
         chunks: number;
         activeChunks: number;
       };
+      indexingQueue: {
+        jobsByStatus: Record<string, number>;
+        successfulJobs: number;
+        embeddingCacheHitRate: number | null;
+      };
       fieldsExcluded: string[];
     };
     expect(ragIndexBody.totals).toMatchObject({
@@ -387,5 +392,8 @@ describe("superuser data-governance control plane", () => {
       "embedding vectors",
       "source row ids",
     ]));
+    expect(ragIndexBody.indexingQueue.jobsByStatus.PENDING).toBeGreaterThan(0);
+    expect(ragIndexBody.indexingQueue.successfulJobs).toBe(0);
+    expect(ragIndexBody.indexingQueue.embeddingCacheHitRate).toBeNull();
   });
 });
