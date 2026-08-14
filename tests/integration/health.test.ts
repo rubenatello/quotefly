@@ -111,6 +111,20 @@ describe("health and readiness routes", () => {
     expect(queryRaw).toHaveBeenCalledOnce();
   });
 
+  test("returns not ready when the workspace assignment migration is missing", async () => {
+    const queryRaw = vi.fn(async () => {
+      throw new Error("The column Customer.assignedTenantUserId does not exist.");
+    });
+    const app = buildHealthServer(queryRaw);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("assignedTenantUserId");
+    expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
   test("returns not ready when AI retrieval RLS is missing or not forced", async () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
