@@ -1,7 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "preDeployCommand": ["npm run prisma:migrate:deploy"],
     "startCommand": "npm start",
     "healthcheckPath": "/v1/ready",
     "healthcheckTimeout": 120,

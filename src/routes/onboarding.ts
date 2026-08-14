@@ -6,6 +6,7 @@ import {
   markWorkPresetAiRetrievalSourceDeleted,
 } from "../lib/ai-retrieval";
 import { getJwtClaims } from "../lib/auth";
+import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import {
   applyOnboardingSetup,
@@ -78,6 +79,10 @@ const PresetQuerySchema = z.object({
 export const onboardingRoutes: FastifyPluginAsync = async (app) => {
   app.get("/onboarding/setup", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can view setup pricing." });
+    }
 
     const tenant = await app.prisma.tenant.findFirst({
       where: { id: claims.tenantId, deletedAtUtc: null },
@@ -129,6 +134,10 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/onboarding/presets/recommended", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can view recommended product costs." });
+    }
     const query = PresetQuerySchema.parse(request.query);
     const serviceType = parseServiceCategory(query.serviceType);
     if (!serviceType) {
@@ -143,6 +152,10 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/onboarding/setup", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can change setup pricing." });
+    }
     const payload = SaveOnboardingSchema.parse(request.body);
 
     const tenant = await app.prisma.tenant.findFirst({
@@ -181,6 +194,10 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/onboarding/presets", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can save products and pricing." });
+    }
     const payload = SavePresetSchema.parse(request.body);
 
     const tenant = await app.prisma.tenant.findFirst({

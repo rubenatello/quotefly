@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { buildAccessContext, hasCapability, type AccessContext } from "../lib/access-policy";
 import {
   markCustomerAiRetrievalSourcesDeleted,
   markQuoteAiRetrievalSourcesDeleted,
@@ -21,6 +22,12 @@ import {
   tenantScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import {
+  WorkspaceAssigneeSelect,
+  assignedRecordScope,
+  defaultAssigneeForCreatedRecord,
+  validateActiveTenantAssignee,
+} from "../lib/workspace-assignment";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -43,6 +50,7 @@ const CreateCustomerSchema = z.object({
   followUpStatus: LeadFollowUpStatusSchema.optional(),
   duplicateAction: z.enum(["merge", "create_new", "use_existing"]).optional(),
   duplicateCustomerId: z.string().min(1).optional(),
+  assignedTenantUserId: z.string().min(1).nullable().optional(),
 });
 
 const DuplicateMatchSummarySchema = z.object({
@@ -75,6 +83,7 @@ const UpdateCustomerSchema = z
     email: z.string().trim().email().nullable().optional(),
     notes: z.string().max(5_000).nullable().optional(),
     followUpStatus: LeadFollowUpStatusSchema.optional(),
+    assignedTenantUserId: z.string().min(1).nullable().optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: "At least one field is required.",
@@ -171,12 +180,20 @@ async function loadPhoneMatchCandidates(
   prisma: PrismaClient | Prisma.TransactionClient,
   tenantId: string,
   normalizedPhoneDigits: string,
-  options?: { excludeCustomerId?: string; limit?: number; activeOnly?: boolean },
+  options?: {
+    excludeCustomerId?: string;
+    limit?: number;
+    activeOnly?: boolean;
+    assignedTenantUserId?: string;
+  },
 ): Promise<DuplicateCustomerCandidate[]> {
   const limit = options?.limit ?? 5;
   return prisma.customer.findMany({
     where: {
       ...tenantScope(tenantId),
+      ...(options?.assignedTenantUserId
+        ? { assignedTenantUserId: options.assignedTenantUserId }
+        : {}),
       phoneDigits: normalizedPhoneDigits,
       ...(options?.excludeCustomerId ? { id: { not: options.excludeCustomerId } } : {}),
       ...(options?.activeOnly
@@ -232,6 +249,7 @@ function customerLifecycleSql(lifecycle: z.infer<typeof CustomerLifecycleSchema>
 
 function customerSearchSql(input: {
   tenantId: string;
+  assignedTenantUserId?: string;
   searchTerm?: string;
   normalizedSearchDigits?: string | null;
 }): Prisma.Sql {
@@ -252,6 +270,9 @@ function customerSearchSql(input: {
         FROM "Quote" search_quote
         WHERE search_quote."tenantId" = ${input.tenantId}
           AND search_quote."customerId" = customer."id"
+          ${input.assignedTenantUserId
+            ? Prisma.sql`AND search_quote."assignedTenantUserId" = ${input.assignedTenantUserId}`
+            : Prisma.empty}
           AND search_quote."archivedAtUtc" IS NULL
           AND search_quote."deletedAtUtc" IS NULL
           AND search_quote."title" ILIKE ${searchPattern} ESCAPE E'\\\\'
@@ -259,8 +280,15 @@ function customerSearchSql(input: {
     )`;
 }
 
+function customerAssignmentSql(assignedTenantUserId?: string): Prisma.Sql {
+  return assignedTenantUserId
+    ? Prisma.sql`AND customer."assignedTenantUserId" = ${assignedTenantUserId}`
+    : Prisma.empty;
+}
+
 function customerStageScopeSql(input: {
   tenantId: string;
+  assignedTenantUserId?: string;
   lifecycle: z.infer<typeof CustomerLifecycleSchema>;
   searchTerm?: string;
   normalizedSearchDigits?: string | null;
@@ -288,12 +316,16 @@ function customerStageScopeSql(input: {
         FROM "Quote" quote
         WHERE quote."tenantId" = ${input.tenantId}
           AND quote."customerId" = customer."id"
+          ${input.assignedTenantUserId
+            ? Prisma.sql`AND quote."assignedTenantUserId" = ${input.assignedTenantUserId}`
+            : Prisma.empty}
           AND quote."archivedAtUtc" IS NULL
           AND quote."deletedAtUtc" IS NULL
         ORDER BY quote."updatedAt" DESC, quote."id" DESC
         LIMIT 1
       ) latest_quote ON TRUE
       WHERE customer."tenantId" = ${input.tenantId}
+        ${customerAssignmentSql(input.assignedTenantUserId)}
         AND ${customerLifecycleSql(input.lifecycle)}
         ${searchSql}
     )`;
@@ -316,6 +348,25 @@ type CustomerLifecycleAggregateRow = {
 };
 
 export const customerRoutes: FastifyPluginAsync = async (app) => {
+  async function resolveRequestedAssignee(
+    access: AccessContext,
+    requested: string | null | undefined,
+  ): Promise<{ allowed: true; assignedTenantUserId: string | null } | { allowed: false }> {
+    if (!hasCapability(access, "manageAssignments")) {
+      if (requested !== undefined && requested !== access.tenantUserId) return { allowed: false };
+      return { allowed: true, assignedTenantUserId: access.tenantUserId };
+    }
+    if (requested === null) return { allowed: true, assignedTenantUserId: null };
+    if (requested === undefined) {
+      return { allowed: true, assignedTenantUserId: defaultAssigneeForCreatedRecord(access) };
+    }
+    const valid = await validateActiveTenantAssignee(app.prisma, {
+      tenantId: access.tenantId,
+      tenantUserId: requested,
+    });
+    return valid ? { allowed: true, assignedTenantUserId: requested } : { allowed: false };
+  }
+
   async function runSerializableCustomerWrite<T>(
     operation: (transaction: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
@@ -339,6 +390,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const assignee = await resolveRequestedAssignee(access, payload.assignedTenantUserId);
+    if (!assignee.allowed) {
+      return reply.code(403).send({ error: "Choose an active member from this workspace." });
+    }
+    const recordScope = assignedRecordScope(access);
 
     const normalizedPhone = normalizeCustomerPhone(payload.phone);
     const normalizedPhoneDigits = normalizePhoneSearchDigits(payload.phone);
@@ -347,6 +404,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.customer.findMany({
         where: {
           ...tenantScope(claims.tenantId),
+          ...recordScope,
           phone: normalizedPhone,
         },
         orderBy: { createdAt: "desc" },
@@ -365,6 +423,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         ? app.prisma.customer.findMany({
             where: {
               ...tenantScope(claims.tenantId),
+              ...recordScope,
               email: normalizedEmail,
             },
             orderBy: { createdAt: "desc" },
@@ -387,6 +446,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         : normalizedPhoneDigits
           ? await loadPhoneMatchCandidates(app.prisma, claims.tenantId, normalizedPhoneDigits, {
               limit: 5,
+              assignedTenantUserId: recordScope.assignedTenantUserId,
             })
           : [];
 
@@ -465,7 +525,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       const mergeOutcome = await runSerializableCustomerWrite(async (tx) => {
         const target = await tx.customer.findFirst({
-          where: { id: targetId, ...tenantScope(claims.tenantId) },
+          where: { id: targetId, ...tenantScope(claims.tenantId), ...recordScope },
         });
         if (!target) return { kind: "not_found" as const };
 
@@ -502,6 +562,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
               : {}),
             archivedAtUtc: null,
             deletedAtUtc: null,
+            assignedTenantUserId: assignee.assignedTenantUserId,
           },
         });
         const activityEvents: Prisma.CustomerActivityEventCreateManyInput[] = [
@@ -574,7 +635,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const existingCustomer = await app.prisma.customer.findFirst({
-        where: { id: targetId, ...tenantScope(claims.tenantId) },
+        where: { id: targetId, ...tenantScope(claims.tenantId), ...recordScope },
       });
 
       if (!existingCustomer) {
@@ -614,6 +675,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             notes: payload.notes,
             followUpStatus: payload.followUpStatus,
             followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+            assignedTenantUserId: assignee.assignedTenantUserId,
           },
         });
         const activityEvents: Prisma.CustomerActivityEventCreateManyInput[] = [
@@ -671,17 +733,21 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/customers", { preHandler: [app.authenticate] }, async (request) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const recordScope = assignedRecordScope(access);
     const query = ListCustomersQuerySchema.parse(request.query);
     const searchTerm = query.search?.trim();
     const normalizedSearchDigits = normalizePhoneSearchDigits(searchTerm);
     const stageScopeSql = customerStageScopeSql({
       tenantId: claims.tenantId,
+      assignedTenantUserId: recordScope.assignedTenantUserId,
       lifecycle: query.lifecycle,
       searchTerm,
       normalizedSearchDigits,
     });
     const lifecycleSearchSql = customerSearchSql({
       tenantId: claims.tenantId,
+      assignedTenantUserId: recordScope.assignedTenantUserId,
       searchTerm,
       normalizedSearchDigits,
     });
@@ -727,6 +793,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           )::bigint AS "deletedCount"
         FROM "Customer" customer
         WHERE customer."tenantId" = ${claims.tenantId}
+          ${customerAssignmentSql(recordScope.assignedTenantUserId)}
           ${lifecycleSearchSql}
       `);
       const lifecycleAggregates = lifecycleAggregateRows[0] ?? {
@@ -740,15 +807,25 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           where: {
             id: { in: pageIds },
             ...tenantScope(claims.tenantId),
+            ...recordScope,
           },
           include: {
+            assignedTenantUser: { select: WorkspaceAssigneeSelect },
             _count: {
               select: {
-                quotes: { where: tenantActiveQuoteScope(claims.tenantId) },
+                quotes: {
+                  where: {
+                    ...tenantActiveQuoteScope(claims.tenantId),
+                    ...recordScope,
+                  },
+                },
               },
             },
             quotes: {
-              where: tenantActiveQuoteScope(claims.tenantId),
+              where: {
+                ...tenantActiveQuoteScope(claims.tenantId),
+                ...recordScope,
+              },
               orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
               take: 1,
               select: {
@@ -829,16 +906,22 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
 
     const customer = await app.prisma.customer.findFirst({
       where: {
         id: customerId,
         ...tenantScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       include: {
+        assignedTenantUser: { select: WorkspaceAssigneeSelect },
         quotes: {
-          where: tenantActiveQuoteScope(claims.tenantId),
+          where: {
+            ...tenantActiveQuoteScope(claims.tenantId),
+            ...assignedRecordScope(access),
+          },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
           select: {
             id: true,
@@ -874,6 +957,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/customers/:customerId/activity", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const query = CustomerActivityQuerySchema.parse(request.query);
 
@@ -881,6 +965,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: customerId,
         ...tenantScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       select: { id: true, fullName: true },
     });
@@ -904,6 +989,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           customerId: customer.id,
           ...tenantActiveScope(claims.tenantId),
+          ...(!hasCapability(access, "viewAllWorkspaceRecords")
+            ? { quote: { assignedTenantUserId: access.tenantUserId } }
+            : {}),
         },
         orderBy: [{ createdAt: "desc" }, { version: "desc" }],
         take,
@@ -933,6 +1021,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           customerId: customer.id,
           ...tenantActiveScope(claims.tenantId),
+          ...(!hasCapability(access, "viewAllWorkspaceRecords")
+            ? { quote: { assignedTenantUserId: access.tenantUserId } }
+            : {}),
         },
         orderBy: { createdAt: "desc" },
         take,
@@ -967,12 +1058,18 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           customerId: customer.id,
           ...tenantActiveScope(claims.tenantId),
+          ...(!hasCapability(access, "viewAllWorkspaceRecords")
+            ? { quote: { assignedTenantUserId: access.tenantUserId } }
+            : {}),
         },
       }),
       app.prisma.quoteOutboundEvent.count({
         where: {
           customerId: customer.id,
           ...tenantActiveScope(claims.tenantId),
+          ...(!hasCapability(access, "viewAllWorkspaceRecords")
+            ? { quote: { assignedTenantUserId: access.tenantUserId } }
+            : {}),
         },
       }),
     ]);
@@ -1041,8 +1138,16 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const payload = UpdateCustomerSchema.parse(request.body);
+    const assignee = payload.assignedTenantUserId !== undefined
+      ? await resolveRequestedAssignee(access, payload.assignedTenantUserId)
+      : null;
+    if (assignee && !assignee.allowed) {
+      return reply.code(403).send({ error: "Choose an active member from this workspace." });
+    }
+    const recordScope = assignedRecordScope(access);
     const actor = await resolveActivityActor(app.prisma, claims);
     const normalizedPhone =
       payload.phone === undefined ? undefined : normalizeCustomerPhone(payload.phone);
@@ -1055,6 +1160,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: customerId,
         ...tenantActiveCustomerScope(claims.tenantId),
+        ...recordScope,
       },
     });
 
@@ -1120,6 +1226,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           notes: payload.notes,
           followUpStatus: payload.followUpStatus,
           followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+          ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
         },
       });
 
@@ -1176,6 +1283,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers/:customerId/restore", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageRecordRetention")) {
+      return reply.code(403).send({ error: "Only a workspace owner or admin can restore customers." });
+    }
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const actor = await resolveActivityActor(app.prisma, claims);
 
@@ -1184,6 +1295,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: customerId,
           ...tenantScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
       });
 
@@ -1222,6 +1334,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers/:customerId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageRecordRetention")) {
+      return reply.code(403).send({ error: "Only a workspace owner or admin can archive customers." });
+    }
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
@@ -1231,6 +1347,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: customerId,
           ...tenantActiveCustomerScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true, fullName: true },
       });
@@ -1301,6 +1418,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageRecordRetention")) {
+      return reply.code(403).send({ error: "Only a workspace owner or admin can delete customers." });
+    }
     const { customerId } = CustomerParamsSchema.parse(request.params);
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
@@ -1310,6 +1431,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: customerId,
           ...tenantActiveCustomerScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true, fullName: true },
       });

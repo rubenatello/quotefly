@@ -17,12 +17,16 @@ ALTER TABLE "AiRetrievalAuditEvent" FORCE ROW LEVEL SECURITY;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'quotefly_runtime') THEN
-        CREATE ROLE quotefly_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+        CREATE ROLE quotefly_runtime NOLOGIN;
     END IF;
 END
 $$;
 
-ALTER ROLE quotefly_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+-- Managed PostgreSQL owners (including Neon `neondb_owner`) are not true
+-- superusers and cannot explicitly toggle SUPERUSER/BYPASSRLS. Newly created
+-- roles already default to NOSUPERUSER and NOBYPASSRLS; production readiness
+-- verifies both flags. The owner can safely enforce the remaining attributes.
+ALTER ROLE quotefly_runtime NOCREATEDB NOCREATEROLE NOINHERIT;
 -- A reused role must not retain membership in a more privileged role. NOINHERIT
 -- blocks implicit privileges, but an existing membership could still permit
 -- SET ROLE after a credential compromise.

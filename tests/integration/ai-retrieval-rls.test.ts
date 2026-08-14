@@ -128,4 +128,14 @@ describe("AI retrieval PostgreSQL RLS", () => {
       canCreatePublic: false,
     }]);
   });
+
+  test("migration SQL avoids superuser-only role alteration on managed PostgreSQL", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const migrationSql = await readFile(
+      new URL("../../prisma/migrations/20260813170000_force_ai_retrieval_tenant_rls/migration.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migrationSql).not.toMatch(/ALTER\s+ROLE\s+quotefly_runtime[^;]*(?:NO)?SUPERUSER/i);
+    expect(migrationSql).not.toMatch(/ALTER\s+ROLE\s+quotefly_runtime[^;]*(?:NO)?BYPASSRLS/i);
+  });
 });

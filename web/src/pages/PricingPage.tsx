@@ -20,6 +20,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Basic",
       price: `$${PUBLIC_BASIC_PLAN.monthlyPriceUsd}`,
       period: "/month",
+      seats: `${PUBLIC_BASIC_PLAN.teamMembers} users included`,
       description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
       features: [
         `Up to ${PUBLIC_BASIC_PLAN.quotesPerMonth} quotes/month`,
@@ -39,6 +40,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Professional",
       price: "$59",
       period: "/month",
+      seats: "15 users included",
       description: "For growing teams that need deeper reporting, quote history, and accounting workflows.",
       features: [
         "Everything in Basic, plus:",
@@ -58,6 +60,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       name: "Enterprise",
       price: "$249",
       period: "/month",
+      seats: "Unlimited users",
       description: "For larger operations that need deeper automation, integration controls, and rollout support.",
       features: [
         "Everything in Professional, plus:",
@@ -75,6 +78,10 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
   ];
 
   const faqs = [
+    {
+      q: "What can each team role see?",
+      a: "Owners and admins see the full workspace, product catalog, internal costs, and margins. Members work only with customers, follow-ups, jobs, and quotes assigned to them; internal costs and margins stay hidden.",
+    },
     {
       q: "Can I cancel anytime?",
       a: "Yes. There are no long-term contracts. Cancel anytime from your account billing settings.",
@@ -152,6 +159,9 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                   <div className="mt-6 flex items-baseline gap-1">
                     <span className="text-4xl font-bold text-slate-900">{plan.price}</span>
                     <span className="text-slate-600">{plan.period}</span>
+                  </div>
+                  <div className="mt-3 inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-800">
+                    {plan.seats}
                   </div>
 
                   <button

@@ -238,10 +238,12 @@ function QuoteActionsMenu({
   quote,
   onOpenPdfActions,
   onRetentionAction,
+  canManageRecordRetention,
 }: {
   quote: Quote;
   onOpenPdfActions: (quote: Quote) => void;
   onRetentionAction: (action: QuoteRetentionAction) => void;
+  canManageRecordRetention: boolean;
 }) {
   const itemClass = "flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50 focus:bg-slate-50";
 
@@ -257,12 +259,12 @@ function QuoteActionsMenu({
           <DropdownMenuPrimitive.Item onSelect={() => onOpenPdfActions(quote)} className={itemClass}>
             <FileText size={14} /> Quote PDF and sharing
           </DropdownMenuPrimitive.Item>
-          <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "archive", quote })} className={itemClass}>
+          {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "archive", quote })} className={itemClass}>
             <Archive size={14} /> Archive quote
-          </DropdownMenuPrimitive.Item>
-          <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-red-700 hover:bg-red-50 focus:bg-red-50`}>
+          </DropdownMenuPrimitive.Item> : null}
+          {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-red-700 hover:bg-red-50 focus:bg-red-50`}>
             <Trash2 size={14} /> Delete quote
-          </DropdownMenuPrimitive.Item>
+          </DropdownMenuPrimitive.Item> : null}
         </DropdownMenuPrimitive.Content>
       </DropdownMenuPrimitive.Portal>
     </DropdownMenuPrimitive.Root>
@@ -274,11 +276,15 @@ function QuoteDesktopRow({
   onOpenQuote,
   onOpenPdfActions,
   onRetentionAction,
+  canViewInternalCosts,
+  canManageRecordRetention,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
   onRetentionAction: (action: QuoteRetentionAction) => void;
+  canViewInternalCosts: boolean;
+  canManageRecordRetention: boolean;
 }) {
   return (
     <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 px-4 py-3 xl:grid xl:items-center`}>
@@ -299,7 +305,7 @@ function QuoteDesktopRow({
         </div>
       </div>
 
-      <div className="text-sm text-slate-700">{money(quote.internalCostSubtotal)}</div>
+      <div className="text-sm text-slate-700">{canViewInternalCosts ? money(quote.internalCostSubtotal ?? 0) : null}</div>
       <div className="text-sm font-semibold text-slate-900">{money(quote.customerPriceSubtotal)}</div>
 
       <div className="min-w-0">
@@ -307,7 +313,7 @@ function QuoteDesktopRow({
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} />
+        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} canManageRecordRetention={canManageRecordRetention} />
         <Button size="sm" onClick={() => onOpenQuote(quote.id)}>
           Open
         </Button>
@@ -321,11 +327,15 @@ function QuoteMobileCard({
   onOpenQuote,
   onOpenPdfActions,
   onRetentionAction,
+  canViewInternalCosts,
+  canManageRecordRetention,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
   onRetentionAction: (action: QuoteRetentionAction) => void;
+  canViewInternalCosts: boolean;
+  canManageRecordRetention: boolean;
 }) {
   return (
     <div className="space-y-3 px-4 py-4 xl:hidden">
@@ -338,11 +348,11 @@ function QuoteMobileCard({
         <QuoteLifecycleMini quote={quote} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm">
-        <div>
+      <div className={`grid gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm ${canViewInternalCosts ? "grid-cols-2" : "grid-cols-1"}`}>
+        {canViewInternalCosts ? <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cost</p>
-          <p className="mt-1 text-slate-700">{money(quote.internalCostSubtotal)}</p>
-        </div>
+          <p className="mt-1 text-slate-700">{money(quote.internalCostSubtotal ?? 0)}</p>
+        </div> : null}
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Price</p>
           <p className="mt-1 font-semibold text-slate-900">{money(quote.customerPriceSubtotal)}</p>
@@ -351,7 +361,7 @@ function QuoteMobileCard({
 
       <div className="grid grid-cols-[1fr_auto] gap-2">
         <Button fullWidth size="sm" onClick={() => onOpenQuote(quote.id)}>Open quote</Button>
-        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} />
+        <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} canManageRecordRetention={canManageRecordRetention} />
       </div>
     </div>
   );
@@ -372,6 +382,8 @@ export function QuotesPage() {
     navigateToBuilder,
     branding,
     canViewCommunicationLog,
+    canViewInternalCosts,
+    canManageRecordRetention,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
@@ -740,7 +752,7 @@ export function QuotesPage() {
               <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid`}>
                 <span>Quote No.</span>
                 <span>Customer</span>
-                <span>Cost</span>
+                <span>{canViewInternalCosts ? "Cost" : ""}</span>
                 <span>Price</span>
                 <span>Status</span>
                 <span className="text-right">Action</span>
@@ -753,12 +765,16 @@ export function QuotesPage() {
                       onOpenQuote={navigateToQuote}
                       onOpenPdfActions={setPdfActionQuote}
                       onRetentionAction={setQuoteRetentionAction}
+                      canViewInternalCosts={canViewInternalCosts}
+                      canManageRecordRetention={canManageRecordRetention}
                     />
                     <QuoteMobileCard
                       quote={quote}
                       onOpenQuote={navigateToQuote}
                       onOpenPdfActions={setPdfActionQuote}
                       onRetentionAction={setQuoteRetentionAction}
+                      canViewInternalCosts={canViewInternalCosts}
+                      canManageRecordRetention={canManageRecordRetention}
                     />
                   </div>
                 ))}
@@ -845,7 +861,7 @@ export function QuotesPage() {
         }
         confirmLabel={quoteRetentionAction?.type === "archive" ? "Archive quote" : "Delete quote"}
         loading={quoteRetentionSaving}
-        confirmVariant={quoteRetentionAction?.type === "archive" ? "primary" : "danger"}
+        confirmVariant={quoteRetentionAction?.type === "archive" ? "warning" : "danger"}
       />
 
       <QuickCustomerModal

@@ -818,7 +818,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
     if (!selectedQuote) return null;
 
     return summarizeQuoteMath({
-      internalCostSubtotal: selectedQuote.internalCostSubtotal,
+      internalCostSubtotal: selectedQuote.internalCostSubtotal ?? 0,
       customerPriceSubtotal: selectedQuote.customerPriceSubtotal,
       taxAmount: quoteEditForm.taxAmount,
     });

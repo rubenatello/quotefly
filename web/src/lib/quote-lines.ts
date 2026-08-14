@@ -133,7 +133,7 @@ export function toEditableQuoteLine(lineItem: QuoteLineItem): EditableQuoteLine 
     sectionType: lineItem.sectionType ?? "INCLUDED",
     sectionLabel: lineItem.sectionLabel ?? "",
     quantity: String(Number(lineItem.quantity)),
-    unitCost: Number(lineItem.unitCost).toFixed(2),
+    unitCost: Number(lineItem.unitCost ?? 0).toFixed(2),
     unitPrice: Number(lineItem.unitPrice).toFixed(2),
     sourcePresetId: null,
     presetPromptHandled: false,
@@ -145,7 +145,7 @@ export function toEditableQuoteLineFromDraft(lineItem: {
   sectionType?: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
   quantity: number;
-  unitCost: number;
+  unitCost?: number;
   unitPrice: number;
 }): EditableQuoteLine {
   const { title, details } = splitQuoteLineDescription(lineItem.description);
@@ -156,7 +156,7 @@ export function toEditableQuoteLineFromDraft(lineItem: {
     sectionType: lineItem.sectionType ?? "INCLUDED",
     sectionLabel: lineItem.sectionLabel ?? "",
     quantity: String(Number(lineItem.quantity)),
-    unitCost: Number(lineItem.unitCost).toFixed(2),
+    unitCost: Number(lineItem.unitCost ?? 0).toFixed(2),
     unitPrice: Number(lineItem.unitPrice).toFixed(2),
   });
 }
@@ -202,7 +202,7 @@ export function applyAiQuoteLinePatch(
           sectionType: change.sectionType,
           sectionLabel: change.sectionLabel ?? "",
           quantity: change.quantity,
-          unitCost: change.unitCost,
+          unitCost: change.unitCost ?? 0,
           unitPrice: change.unitPrice,
         }),
       ];
@@ -232,7 +232,7 @@ export function applyAiQuoteLinePatch(
       sectionType: change.sectionType,
       sectionLabel: change.sectionLabel ?? "",
       quantity: String(Number(change.quantity)),
-      unitCost: Number(change.unitCost).toFixed(2),
+      unitCost: change.unitCost === undefined ? current.unitCost : Number(change.unitCost).toFixed(2),
       unitPrice: Number(change.unitPrice).toFixed(2),
     };
     nextLines = nextLines.map((line, index) => (index === targetIndex ? updatedLine : line));

@@ -58,6 +58,7 @@ export type CreateLineItemInput = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  sourcePresetId?: string;
 };
 export type HistoryMode = "quote" | "customer" | "all";
 export type SendChannel = "email" | "sms" | "copy";
@@ -110,6 +111,7 @@ export interface DashboardSession {
   fullName: string;
   tenantId: string;
   tenantName: string;
+  role: "owner" | "admin" | "member";
   primaryTrade?: ServiceType | null;
   onboardingCompletedAtUtc?: string | null;
   effectivePlanName?: string;
@@ -336,6 +338,10 @@ export interface DashboardContextValue {
   aiQuoteLimit: number | null;
   canViewQuoteHistory: boolean;
   canViewCommunicationLog: boolean;
+  canViewInternalCosts: boolean;
+  canManageCatalog: boolean;
+  canManageAssignments: boolean;
+  canManageRecordRetention: boolean;
   currentPlanLabel: string;
   canAutoUpgradeMessage: boolean;
   // Computed
@@ -1335,7 +1341,7 @@ export function DashboardProvider({
 
   const selectedQuoteMath = useMemo(() => {
     if (!selectedQuote) return null;
-    return summarizeQuoteMath({ internalCostSubtotal: selectedQuote.internalCostSubtotal, customerPriceSubtotal: selectedQuote.customerPriceSubtotal, taxAmount: quoteEditForm.taxAmount });
+    return summarizeQuoteMath({ internalCostSubtotal: selectedQuote.internalCostSubtotal ?? 0, customerPriceSubtotal: selectedQuote.customerPriceSubtotal, taxAmount: quoteEditForm.taxAmount });
   }, [selectedQuote, quoteEditForm.taxAmount]);
 
   const lineItemMath = useMemo(() => {
@@ -1352,7 +1358,12 @@ export function DashboardProvider({
     customerForm, quoteForm, quoteEditForm, lineItemForm,
     chatPrompt, chatParsed, setupTrade, setupSqFtMode, setupSqFtUnitCost, setupSqFtUnitPrice, recommendedPresetCount,
     duplicateModal, sendComposer,
-    canUseChatToQuote, aiQuoteLimit, canViewQuoteHistory, canViewCommunicationLog, currentPlanLabel, canAutoUpgradeMessage,
+    canUseChatToQuote, aiQuoteLimit, canViewQuoteHistory, canViewCommunicationLog,
+    canViewInternalCosts: session?.role !== "member",
+    canManageCatalog: session?.role === "owner" || session?.role === "admin",
+    canManageAssignments: session?.role === "owner" || session?.role === "admin",
+    canManageRecordRetention: session?.role === "owner" || session?.role === "admin",
+    currentPlanLabel, canAutoUpgradeMessage,
     stats, pipeline, createQuoteMath, selectedQuoteMath, lineItemMath,
     setSearch, setStatusFilter, setError, setNotice, setHistoryMode, setHistoryCustomerId,
     setCustomerForm, setQuoteForm, setQuoteEditForm, setLineItemForm,

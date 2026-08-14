@@ -261,6 +261,9 @@ export function resolveEffectivePlanCode(
 export interface TenantEntitlements {
   planCode: PlanCode;
   planName: string;
+  /** Billing plan that controls the number of active workspace seats. */
+  seatPlanCode: PlanCode;
+  seatPlanName: string;
   isTrial: boolean;
   hasWorkspaceAccess: boolean;
   billingRequired: boolean;
@@ -276,6 +279,10 @@ export function buildTenantEntitlements(
 ): TenantEntitlements {
   const access = resolveTenantAccess(snapshot, now, context);
   const definition = PLAN_DEFINITIONS[access.planCode];
+  // Superusers and trials receive broad feature access, but they must not
+  // silently bypass the seat allowance of the tenant's actual sellable plan.
+  const seatPlanCode = parsePlanCode(snapshot.subscriptionPlanCode) ?? "starter";
+  const seatDefinition = PLAN_DEFINITIONS[seatPlanCode];
   const trial = isActiveTrial(snapshot, now) && !isSuperuser(context);
   const limits = trial
     ? {
@@ -284,12 +291,17 @@ export function buildTenantEntitlements(
         // an unpaid workspace cannot create Enterprise-level provider spend.
         aiQuotesPerMonth: BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH,
         aiSpendUsdPerMonth: BASIC_AI_SPEND_LIMIT_USD,
+        teamMembers: seatDefinition.limits.teamMembers,
       }
-    : definition.limits;
+    : access.accessReason === "superuser"
+      ? { ...definition.limits, teamMembers: seatDefinition.limits.teamMembers }
+      : definition.limits;
 
   return {
     planCode: access.planCode,
     planName: definition.name,
+    seatPlanCode,
+    seatPlanName: seatDefinition.name,
     isTrial: trial,
     hasWorkspaceAccess: access.hasWorkspaceAccess,
     billingRequired: access.billingRequired,

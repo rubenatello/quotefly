@@ -24,6 +24,7 @@ export function WorkPresetPickerModal({
   secondaryActionLabel,
   onSecondaryAction,
   onManageProducts,
+  canViewInternalCosts = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -37,6 +38,7 @@ export function WorkPresetPickerModal({
   secondaryActionLabel?: string;
   onSecondaryAction?: () => void;
   onManageProducts?: () => void;
+  canViewInternalCosts?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ALL" | "STANDARD" | "CUSTOM">("ALL");
@@ -132,7 +134,7 @@ export function WorkPresetPickerModal({
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
                     <span>{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</span>
-                    <span>Cost {money(preset.unitCost)}</span>
+                    {canViewInternalCosts ? <span>Cost {money(preset.unitCost ?? 0)}</span> : null}
                   </div>
                 </button>
               );

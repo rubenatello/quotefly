@@ -47,9 +47,9 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
             <Link
               key={link.path}
               to={link.path}
-              aria-current={`/${currentPage}` === link.path ? "page" : undefined}
+              aria-current={`/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/")) ? "page" : undefined}
               className={`text-sm font-medium transition-colors ${
-                `/${currentPage}` === link.path
+                `/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/"))
                   ? "text-quotefly-primary"
                   : "text-slate-600 hover:text-slate-900"
               }`}
@@ -115,10 +115,10 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
               <Link
                 key={link.path}
                 to={link.path}
-                aria-current={`/${currentPage}` === link.path ? "page" : undefined}
+                aria-current={`/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/")) ? "page" : undefined}
                 onClick={() => setMobileMenuOpen(false)}
                 className={`flex min-h-11 items-center rounded-lg px-3 text-left text-sm font-medium transition-colors ${
-                  `/${currentPage}` === link.path
+                  `/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/"))
                     ? "text-quotefly-primary"
                     : "text-slate-600 hover:text-slate-900"
                 }`}

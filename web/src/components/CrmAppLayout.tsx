@@ -34,6 +34,9 @@ function toDashboardSession(s: AppSession): DashboardSession {
     fullName: s.fullName,
     tenantId: s.tenantId,
     tenantName: s.tenantName,
+    role: s.role.trim().toLowerCase() === "owner" || s.role.trim().toLowerCase() === "admin"
+      ? s.role.trim().toLowerCase() as "owner" | "admin"
+      : "member",
     primaryTrade: s.primaryTrade,
     onboardingCompletedAtUtc: s.onboardingCompletedAtUtc,
     effectivePlanName: s.effectivePlanName,
@@ -55,6 +58,7 @@ export function CrmAppLayout({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const canManageCatalog = ["owner", "admin"].includes(session.role.trim().toLowerCase());
   const workspaceLocked =
     session.entitlements?.billingRequired === true &&
     session.entitlements.hasWorkspaceAccess === false &&
@@ -106,10 +110,10 @@ export function CrmAppLayout({
 
   useEffect(() => {
     if (workspaceLocked) return;
-    if (!session.onboardingCompletedAtUtc && !location.pathname.startsWith("/app/setup")) {
+    if (canManageCatalog && !session.onboardingCompletedAtUtc && !location.pathname.startsWith("/app/setup")) {
       navigate("/app/setup", { replace: true });
     }
-  }, [location.pathname, navigate, session.onboardingCompletedAtUtc, workspaceLocked]);
+  }, [canManageCatalog, location.pathname, navigate, session.onboardingCompletedAtUtc, workspaceLocked]);
 
   if (workspaceLocked) {
     return (
@@ -149,6 +153,7 @@ export function CrmAppLayout({
       isTrial={session.isTrial}
       entitlements={session.entitlements}
       usage={session.usage}
+      canManageCatalog={canManageCatalog}
     >
       <DashboardProvider
         session={toDashboardSession(session)}
@@ -169,10 +174,10 @@ export function CrmAppLayout({
                 <Route path="customers" element={<CustomersPage />} />
                 <Route path="follow-up" element={<PipelineView />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
-                <Route path="setup" element={<SetupPage session={session} onSetupSaved={onRefreshSession} />} />
+                <Route path="setup" element={canManageCatalog ? <SetupPage session={session} onSetupSaved={onRefreshSession} /> : <Navigate to="/app/quotes" replace />} />
                 <Route path="build" element={<QuoteBuilderView />} />
                 <Route path="quotes" element={<QuotesPage />} />
-                <Route path="products" element={<ProductsPage />} />
+                <Route path="products" element={canManageCatalog ? <ProductsPage /> : <Navigate to="/app/quotes" replace />} />
                 <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
                 <Route path="history" element={<Navigate to="/app/analytics" replace />} />
                 <Route path="settings" element={<AdminPage session={session} />} />
@@ -208,7 +213,7 @@ export function CrmAppLayout({
         </main>
         <BottomTabBar />
         <Suspense fallback={null}>
-          <KodyAssistant currentPage={currentPage} />
+          <KodyAssistant currentPage={currentPage} canViewInternalCosts={session.role.trim().toLowerCase() !== "member"} />
         </Suspense>
       </DashboardProvider>
     </CrmShell>

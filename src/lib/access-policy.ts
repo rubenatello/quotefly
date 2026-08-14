@@ -19,6 +19,10 @@ export const CAPABILITIES = [
   "manageBilling",
   "manageIntegrations",
   "manageTeam",
+  "manageCatalog",
+  "manageAssignments",
+  "manageRecordRetention",
+  "viewAllWorkspaceRecords",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -40,6 +44,10 @@ const ADMIN_CAPABILITIES = [
   "viewBilling",
   "manageIntegrations",
   "manageTeam",
+  "manageCatalog",
+  "manageAssignments",
+  "manageRecordRetention",
+  "viewAllWorkspaceRecords",
 ] as const satisfies readonly Capability[];
 
 const OWNER_CAPABILITIES = [
@@ -55,6 +63,7 @@ const ROLE_CAPABILITIES: Record<WorkspaceRole, readonly Capability[]> = {
 
 export type AccessContext = Readonly<{
   tenantId: string;
+  tenantUserId: string;
   userId: string;
   role: WorkspaceRole;
   capabilities: ReadonlySet<Capability>;
@@ -92,6 +101,7 @@ export function buildAccessContext(request: FastifyRequest): AccessContext {
   const role = normalizeWorkspaceRole(membership.role);
   return Object.freeze({
     tenantId: claims.tenantId,
+    tenantUserId: membership.id,
     userId: claims.userId,
     role,
     capabilities: capabilitiesForRole(role),

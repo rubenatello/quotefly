@@ -138,8 +138,14 @@ describe("AI business insights", () => {
     const member = await addWorkspaceUser(owner, "member");
     const customer = await createCustomer(owner, "Pipeline Customer");
     const now = new Date("2026-08-12T12:00:00.000Z");
-    await createQuote({ session: owner, customerId: customer.id, title: "Accepted roof", serviceType: "ROOFING", status: "ACCEPTED", price: 2000, cost: 1100, createdAt: now });
-    await createQuote({ session: owner, customerId: customer.id, title: "Open HVAC", serviceType: "HVAC", status: "SENT_TO_CUSTOMER", price: 1200, cost: 500, createdAt: now });
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    await prisma.customer.update({ where: { id: customer.id }, data: { assignedTenantUserId: membership.id } });
+    const accepted = await createQuote({ session: owner, customerId: customer.id, title: "Accepted roof", serviceType: "ROOFING", status: "ACCEPTED", price: 2000, cost: 1100, createdAt: now });
+    const open = await createQuote({ session: owner, customerId: customer.id, title: "Open HVAC", serviceType: "HVAC", status: "SENT_TO_CUSTOMER", price: 1200, cost: 500, createdAt: now });
+    await prisma.quote.updateMany({ where: { id: { in: [accepted.id, open.id] } }, data: { assignedTenantUserId: membership.id } });
 
     const response = await app.inject({
       method: "POST",

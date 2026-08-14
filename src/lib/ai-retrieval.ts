@@ -721,21 +721,29 @@ type RetrievalCandidate = Readonly<{
   embedding: number[];
 }>;
 
+type RetrievalCandidateReference = Pick<
+  RetrievalCandidate,
+  "id" | "sourceType" | "sourceId" | "sourceField" | "contentHash"
+>;
+
 function fieldContentHashes(field: AiRetrievableField, content: string | null | undefined) {
   return new Set(splitIntoChunks(content ?? "").map((chunk) => sha256Text(`${field}:${chunk}`)));
 }
 
 async function currentRetrievalContentHashes(
-  prisma: PrismaClient,
-  tenantId: string,
-  candidates: readonly RetrievalCandidate[],
+  prisma: PrismaClient | Prisma.TransactionClient,
+  access: AccessContext,
+  candidates: readonly RetrievalCandidateReference[],
 ) {
+  const tenantId = access.tenantId;
+  const memberCustomerScope = hasCapability(access, "viewAllWorkspaceRecords") ? {} : { assignedTenantUserId: access.tenantUserId };
+  const memberQuoteScope = hasCapability(access, "viewAllWorkspaceRecords") ? {} : { assignedTenantUserId: access.tenantUserId };
   const sourceIds = (sourceType: string) => Array.from(new Set(
     candidates.filter((candidate) => candidate.sourceType === sourceType).map((candidate) => candidate.sourceId),
   ));
   const [customers, activities, quotes, lineItems, presets] = await Promise.all([
     prisma.customer.findMany({
-      where: { id: { in: sourceIds("Customer") }, ...tenantActiveCustomerScope(tenantId) },
+      where: { id: { in: sourceIds("Customer") }, ...tenantActiveCustomerScope(tenantId), ...memberCustomerScope },
       select: { id: true, notes: true },
     }),
     prisma.customerActivityEvent.findMany({
@@ -743,19 +751,19 @@ async function currentRetrievalContentHashes(
         id: { in: sourceIds("CustomerActivityEvent") },
         tenantId,
         deletedAtUtc: null,
-        customer: tenantActiveCustomerScope(tenantId),
+        customer: { ...tenantActiveCustomerScope(tenantId), ...memberCustomerScope },
       },
       select: { id: true, title: true, detail: true },
     }),
     prisma.quote.findMany({
-      where: { id: { in: sourceIds("Quote") }, ...tenantActiveQuoteScope(tenantId) },
+      where: { id: { in: sourceIds("Quote") }, ...tenantActiveQuoteScope(tenantId), ...memberQuoteScope },
       select: { id: true, title: true, scopeText: true },
     }),
     prisma.quoteLineItem.findMany({
       where: {
         id: { in: sourceIds("QuoteLineItem") },
         ...tenantActiveScope(tenantId),
-        quote: tenantActiveQuoteScope(tenantId),
+        quote: { ...tenantActiveQuoteScope(tenantId), ...memberQuoteScope },
       },
       select: { id: true, description: true },
     }),
@@ -809,36 +817,73 @@ export async function retrieveAiContextFromIndex(
   const maxAllowedClassification = maxClassification(allowedClassifications);
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_RETRIEVAL_LIMIT, 1), 20);
 
-  const candidates = await withTenantRlsContext(prisma, params.access.tenantId, (tx) => tx.aiRetrievalChunk.findMany({
-    where: {
-      tenantId: params.access.tenantId,
-      deletedAtUtc: null,
-      policyVersion: AI_DATA_POLICY_VERSION,
-      embeddingDimensions: queryEmbedding.embedding.length,
-      embeddingModel: queryEmbedding.model,
-      classification: { in: allowedClassifications },
-      document: {
-        tenantId: params.access.tenantId,
-        status: "ACTIVE",
-        deletedAtUtc: null,
-      },
-    },
-    orderBy: [{ indexedAtUtc: "desc" }],
-    take: MAX_CANDIDATE_CHUNKS,
-    select: {
-      id: true,
-      sourceType: true,
-      sourceId: true,
-      sourceField: true,
-      citationLabel: true,
-      classification: true,
-      content: true,
-      contentHash: true,
-      embedding: true,
-    },
-  }));
+  const { candidates, currentHashes } = await withTenantRlsContext(
+    prisma,
+    params.access.tenantId,
+    async (tx) => {
+      // First load only non-sensitive source references. Resolve those references
+      // through live, tenant- and assignment-scoped records before loading any
+      // indexed text or embeddings. This keeps authorization ahead of retrieval.
+      const candidateReferences = await tx.aiRetrievalChunk.findMany({
+        where: {
+          tenantId: params.access.tenantId,
+          deletedAtUtc: null,
+          policyVersion: AI_DATA_POLICY_VERSION,
+          embeddingDimensions: queryEmbedding.embedding.length,
+          embeddingModel: queryEmbedding.model,
+          classification: { in: allowedClassifications },
+          document: {
+            tenantId: params.access.tenantId,
+            status: "ACTIVE",
+            deletedAtUtc: null,
+          },
+        },
+        orderBy: [{ indexedAtUtc: "desc" }],
+        take: MAX_CANDIDATE_CHUNKS,
+        select: {
+          id: true,
+          sourceType: true,
+          sourceId: true,
+          sourceField: true,
+          contentHash: true,
+        },
+      });
+      const authorizedHashes = await currentRetrievalContentHashes(tx, params.access, candidateReferences);
+      const authorizedCandidateIds = candidateReferences
+        .filter((candidate) => authorizedHashes
+          .get(`${candidate.sourceType}:${candidate.sourceId}:${candidate.sourceField}`)
+          ?.has(candidate.contentHash) === true)
+        .map((candidate) => candidate.id);
 
-  const currentHashes = await currentRetrievalContentHashes(prisma, params.access.tenantId, candidates);
+      const authorizedCandidates = authorizedCandidateIds.length === 0
+        ? []
+        : await tx.aiRetrievalChunk.findMany({
+            where: {
+              tenantId: params.access.tenantId,
+              id: { in: authorizedCandidateIds },
+              deletedAtUtc: null,
+              document: {
+                tenantId: params.access.tenantId,
+                status: "ACTIVE",
+                deletedAtUtc: null,
+              },
+            },
+            select: {
+              id: true,
+              sourceType: true,
+              sourceId: true,
+              sourceField: true,
+              citationLabel: true,
+              classification: true,
+              content: true,
+              contentHash: true,
+              embedding: true,
+            },
+          });
+
+      return { candidates: authorizedCandidates, currentHashes: authorizedHashes };
+    },
+  );
   const preferredSources = new Set(
     (params.preferredSources ?? []).map((source) => `${source.sourceType}:${source.sourceId}`),
   );
@@ -918,19 +963,22 @@ function serviceTypeMetadata(serviceType?: ServiceCategory | null): Prisma.Input
 export async function refreshQuoteAiRetrievalIndex(
   prisma: PrismaClient,
   params: {
-    tenantId: string;
+    access: AccessContext;
     serviceType: ServiceCategory;
     customerId?: string | null;
     quoteId?: string | null;
     embedText?: AiEmbeddingProvider;
   },
 ) {
+  const tenantId = params.access.tenantId;
+  const memberCustomerScope = hasCapability(params.access, "viewAllWorkspaceRecords") ? {} : { assignedTenantUserId: params.access.tenantUserId };
+  const memberQuoteScope = hasCapability(params.access, "viewAllWorkspaceRecords") ? {} : { assignedTenantUserId: params.access.tenantUserId };
   const embedText = params.embedText;
   const sources: AiRetrievalSourceInput[] = [];
 
   const customer = params.customerId
     ? await prisma.customer.findFirst({
-        where: { id: params.customerId, ...tenantActiveCustomerScope(params.tenantId) },
+        where: { id: params.customerId, ...tenantActiveCustomerScope(tenantId), ...memberCustomerScope },
         select: {
           id: true,
           fullName: true,
@@ -942,7 +990,7 @@ export async function refreshQuoteAiRetrievalIndex(
 
   if (customer) {
     sources.push({
-      tenantId: params.tenantId,
+      tenantId,
       sourceType: "Customer",
       sourceId: customer.id,
       citationLabel: `Customer notes: ${customer.fullName}`,
@@ -953,7 +1001,7 @@ export async function refreshQuoteAiRetrievalIndex(
 
     const activity = await prisma.customerActivityEvent.findMany({
       where: {
-        tenantId: params.tenantId,
+        tenantId,
         customerId: customer.id,
         deletedAtUtc: null,
       },
@@ -968,7 +1016,7 @@ export async function refreshQuoteAiRetrievalIndex(
     });
     for (const event of activity) {
       sources.push({
-        tenantId: params.tenantId,
+        tenantId,
         sourceType: "CustomerActivityEvent",
         sourceId: event.id,
         citationLabel: `Customer activity: ${event.title}`.slice(0, 160),
@@ -983,9 +1031,10 @@ export async function refreshQuoteAiRetrievalIndex(
   }
 
   const quoteWhere: Prisma.QuoteWhereInput = params.quoteId
-    ? { id: params.quoteId, ...tenantActiveQuoteScope(params.tenantId) }
+    ? { id: params.quoteId, ...tenantActiveQuoteScope(tenantId), ...memberQuoteScope }
     : {
-        tenantId: params.tenantId,
+        tenantId,
+        ...memberQuoteScope,
         serviceType: params.serviceType,
         deletedAtUtc: null,
         archivedAtUtc: null,
@@ -1002,7 +1051,7 @@ export async function refreshQuoteAiRetrievalIndex(
       serviceType: true,
       updatedAt: true,
       lineItems: {
-        where: tenantActiveScope(params.tenantId),
+        where: tenantActiveScope(tenantId),
         orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         select: {
           id: true,
@@ -1015,7 +1064,7 @@ export async function refreshQuoteAiRetrievalIndex(
 
   for (const quote of quotes) {
     sources.push({
-      tenantId: params.tenantId,
+      tenantId,
       sourceType: "Quote",
       sourceId: quote.id,
       citationLabel: `Quote: ${quote.title}`.slice(0, 160),
@@ -1029,7 +1078,7 @@ export async function refreshQuoteAiRetrievalIndex(
 
     for (const lineItem of quote.lineItems) {
       sources.push({
-        tenantId: params.tenantId,
+        tenantId,
         sourceType: "QuoteLineItem",
         sourceId: lineItem.id,
         citationLabel: `Quote line: ${quote.title}`.slice(0, 160),
@@ -1042,7 +1091,7 @@ export async function refreshQuoteAiRetrievalIndex(
 
   const workPresets = await prisma.workPreset.findMany({
     where: {
-      tenantId: params.tenantId,
+      tenantId,
       serviceType: params.serviceType,
       deletedAtUtc: null,
     },
@@ -1058,7 +1107,7 @@ export async function refreshQuoteAiRetrievalIndex(
   });
   for (const preset of workPresets) {
     sources.push({
-      tenantId: params.tenantId,
+      tenantId,
       sourceType: "WorkPreset",
       sourceId: preset.id,
       citationLabel: `Saved job: ${preset.name}`.slice(0, 160),
@@ -1099,7 +1148,7 @@ export async function buildGovernedQuoteAiContext(
   },
 ) {
   const refresh = await refreshQuoteAiRetrievalIndex(prisma, {
-    tenantId: params.access.tenantId,
+    access: params.access,
     serviceType: params.serviceType,
     customerId: params.customerId,
     quoteId: params.quoteId,

@@ -210,6 +210,7 @@ export function AdminPage({ session }: AdminPageProps) {
     session?.entitlements?.limits.teamMembers ?? null,
   );
   const [teamMembersUsed, setTeamMembersUsed] = useState(0);
+  const [seatPlanName, setSeatPlanName] = useState(session?.entitlements?.seatPlanName ?? "Basic");
   const [canManageUsers, setCanManageUsers] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -278,6 +279,7 @@ export function AdminPage({ session }: AdminPageProps) {
       setCanManageUsers(result.policy.canManageUsers);
       setTeamMembersLimit(result.policy.teamMembersLimit);
       setTeamMembersUsed(result.policy.teamMembersUsed);
+      setSeatPlanName(result.policy.seatPlanName);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading organization users.");
     } finally {
@@ -386,8 +388,8 @@ export function AdminPage({ session }: AdminPageProps) {
   }
 
   const seatUsageText = useMemo(() => {
-    if (teamMembersLimit === null) return `${teamMembersUsed} seats in use`;
-    return `${teamMembersUsed}/${teamMembersLimit} seats in use`;
+    if (teamMembersLimit === null) return `${teamMembersUsed} in use · Unlimited`;
+    return `${teamMembersUsed} of ${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
   const aiBudgetLimit = session?.entitlements?.limits.aiSpendUsdPerMonth ?? null;
   const aiBudgetUsed = session?.usage?.monthlyAiSpendUsd ?? 0;
@@ -781,6 +783,33 @@ export function AdminPage({ session }: AdminPageProps) {
             description="Invite field users and office staff into the same workspace and keep role controls obvious."
             actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
           >
+            <Card variant="default" padding="md" className="mb-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{seatPlanName} seat allowance</p>
+                  <p className="mt-1 text-xl font-bold text-slate-950">{seatUsageText}</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {teamMembersLimit === null
+                      ? "This plan has no active-user cap."
+                      : `${Math.max(teamMembersLimit - teamMembersUsed, 0)} seat${Math.max(teamMembersLimit - teamMembersUsed, 0) === 1 ? "" : "s"} remaining.`}
+                  </p>
+                </div>
+                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? "Limit reached" : "Seats available"}</Badge>
+              </div>
+            </Card>
+
+            <div className="mb-5 grid gap-3 md:grid-cols-3">
+              {[
+                { role: "Owner", tone: "border-violet-200 bg-violet-50", text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, users, and billing." },
+                { role: "Admin", tone: "border-sky-200 bg-sky-50", text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, and users. No billing changes." },
+                { role: "Member", tone: "border-slate-200 bg-slate-50", text: "Assigned customers, follow-ups, jobs, and quotes. Can create and edit assigned quotes using approved products; cannot see internal costs or margins, manage the catalog, or archive/delete records." },
+              ].map((guide) => (
+                <div key={guide.role} className={`rounded-2xl border p-4 ${guide.tone}`}>
+                  <p className="text-sm font-bold text-slate-950">{guide.role}</p>
+                  <p className="mt-2 text-xs leading-5 text-slate-700">{guide.text}</p>
+                </div>
+              ))}
+            </div>
             <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Card variant="elevated" padding="lg">
           <CardHeader
@@ -850,15 +879,16 @@ export function AdminPage({ session }: AdminPageProps) {
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {members.length ? (
               <>
-                <div className="hidden grid-cols-[minmax(0,1.2fr)_120px_128px_112px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
                   <span>User</span>
                   <span>Role</span>
+                  <span>Assigned</span>
                   <span>Joined</span>
                   <span>Action</span>
                 </div>
                 <div className="divide-y divide-slate-200">
                   {members.map((member) => (
-                    <div key={member.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.2fr)_120px_128px_112px] lg:items-center">
+                    <div key={member.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] lg:items-center">
                       <div className="min-w-0">
                         <div className="flex items-center gap-3">
                           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
@@ -877,6 +907,10 @@ export function AdminPage({ session }: AdminPageProps) {
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge tone={roleTone(member.role)}>{roleLabel(member.role)}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        <p>{member.assignments?.assignedCustomers ?? 0} customers</p>
+                        <p className="mt-1">{member.assignments?.assignedQuotes ?? 0} quotes</p>
                       </div>
                       <div className="text-xs text-slate-500">Joined {dateText(member.createdAt)}</div>
                       <div className="grid gap-2 sm:grid-cols-[1fr_auto] lg:grid-cols-[1fr]">

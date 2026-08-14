@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Link } from "react-router-dom";
 import {
   AirVent,
   ArrowRight,
@@ -40,6 +41,8 @@ type TradeSolution = {
   response: string;
   quoteItems: string[];
   capabilities: string[];
+  image?: { src: string; alt: string; width: number; height: number; credit: string };
+  detailPath?: string;
 };
 
 const PAIN_POINTS: Array<{
@@ -130,6 +133,13 @@ const TRADES: TradeSolution[] = [
     response: "Spell out tear-off, disposal, flashing, underlayment, and allowances without making the quote hard to read.",
     quoteItems: ["Tear-off and disposal", "Roofing system", "Deck repair allowance"],
     capabilities: ["Detailed lines", "Clear allowances", "Quote tracking"],
+    image: {
+      src: "/images/solutions/roofing-materials.jpg",
+      alt: "Roofing contractor carrying packaged roofing materials across a residential roof",
+      width: 1600,
+      height: 1067,
+      credit: "Photo by Zohair Mirza via Unsplash",
+    },
   },
   {
     id: "landscaping",
@@ -144,6 +154,14 @@ const TRADES: TradeSolution[] = [
     response: "Mix area, hourly, and flat-quantity work in one quote while keeping materials and optional services easy to scan.",
     quoteItems: ["Site preparation", "Labor and materials", "Ongoing service option"],
     capabilities: ["Flexible units", "Reusable work", "Fast follow-up"],
+    image: {
+      src: "/images/solutions/landscaping-field-work.jpg",
+      alt: "Landscaping professional preparing a planted garden bed beside a wheelbarrow",
+      width: 1600,
+      height: 1031,
+      credit: "Photo by Nel Ranoko via Unsplash",
+    },
+    detailPath: "/solutions/landscaping",
   },
   {
     id: "construction",
@@ -388,6 +406,21 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                 >
                   <div aria-hidden="true" className={`h-1.5 w-full bg-gradient-to-r ${trade.accentClass}`} />
 
+                  {trade.image ? (
+                    <figure className="relative h-44 overflow-hidden border-b border-slate-100">
+                      <img
+                        src={trade.image.src}
+                        alt={trade.image.alt}
+                        width={trade.image.width}
+                        height={trade.image.height}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02]"
+                      />
+                      <figcaption className="sr-only">{trade.image.credit}</figcaption>
+                    </figure>
+                  ) : null}
+
                   <div className="flex flex-1 flex-col p-6 sm:p-7">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
@@ -433,6 +466,15 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                           </span>
                         ))}
                       </div>
+                      {trade.detailPath ? (
+                        <Link
+                          to={trade.detailPath}
+                          className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                        >
+                          Explore landscaping quote software
+                          <ArrowRight size={16} aria-hidden="true" />
+                        </Link>
+                      ) : null}
                     </div>
                   </div>
                 </article>

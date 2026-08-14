@@ -82,6 +82,99 @@ test("Kody navigates on mobile while keeping the conversation open", async ({ co
   await expect(kody.getByText("Your Kody conversation will stay open", { exact: false })).toBeVisible();
 });
 
+test("Kody turns a product request into a review-only mobile catalog draft", async ({ context, page, request }) => {
+  test.setTimeout(60_000);
+  const account = await signUpViaApi(request, "kody-product-mobile");
+  const prompt = "Add a new product/service as 'Labor Hours' for quotes. The cost internally is $30 and customer price is $75 per hour.";
+
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    const body = route.request().postDataJSON() as { tool?: string; message?: string };
+    expect(body.tool).toBe("AUTO");
+    expect(body.message).toBe(prompt);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assistant: {
+          tool: "DRAFT_PRODUCT",
+          generatedAtUtc: "2026-08-13T21:00:00.000Z",
+          policyVersion: "2026-08-12",
+          maxClassification: "C3_FINANCIAL_CONFIDENTIAL",
+          answer: "I prepared Labor Hours as a per-hour catalog item. Review the pricing and description before saving.",
+          results: [{ name: "Labor Hours", serviceType: "ROOFING", category: "LABOR", unitType: "HOUR", defaultQuantity: 1, unitCost: 30, unitPrice: 75 }],
+          citations: [{ key: "A1", label: "Product details supplied in this request", sourceType: "WorkPreset", classification: "C3_FINANCIAL_CONFIDENTIAL" }],
+          actions: [{
+            type: "OPEN_PRODUCT_DRAFT",
+            label: "Review product draft",
+            requiresConfirmation: true,
+            payload: {
+              name: "Labor Hours",
+              description: "Hourly labor for Labor Hours. Confirm included work, minimums, and exclusions before using on quotes.",
+              serviceType: "ROOFING",
+              category: "LABOR",
+              unitType: "HOUR",
+              defaultQuantity: 1,
+              unitCost: 30,
+              unitPrice: 75,
+            },
+          }],
+          auditEventId: "audit-kody-product-mobile",
+          fieldsExcluded: ["tenant ids", "deleted rows"],
+          diagnostics: {
+            requestedTool: "AUTO",
+            resolvedTool: "DRAFT_PRODUCT",
+            resultCount: 1,
+            citationCount: 1,
+            emptyReason: null,
+            archivePolicy: "Product drafting does not read archived, deleted, or cross-tenant catalog rows.",
+            filters: { currentPage: "customers", internalCostVisible: true },
+            answerMode: "DETERMINISTIC",
+            model: null,
+          },
+        },
+        usage: {
+          consumedCredits: 0,
+          consumedSpendUsd: 0,
+          monthlyCreditsUsed: 0,
+          monthlyCreditsLimit: 770,
+          monthlyCreditsRemaining: 770,
+          monthlySpendUsedUsd: 0,
+          monthlySpendLimitUsd: 1.25,
+          monthlySpendRemainingUsd: 1.25,
+          monthlySpendUsagePercent: 0,
+          estimatedPromptCostUsd: 0.001615,
+          estimatedPromptsRemaining: 773,
+          renewsAtUtc: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    });
+  });
+
+  await addSessionCookie(context, account);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/customers");
+  await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("kody-launcher").click();
+  const kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill(prompt);
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(kody.getByText("I prepared Labor Hours", { exact: false })).toBeVisible();
+  await kody.getByRole("button", { name: "Review product draft" }).click();
+  const confirm = page.getByRole("dialog", { name: "Review Kody's product draft?" });
+  await expect(confirm).toContainText("Nothing is added until you review");
+  await confirm.getByRole("button", { name: "Open product review" }).click();
+
+  await expect(page).toHaveURL(/\/app\/products$/);
+  const productDialog = page.getByRole("dialog", { name: "Add product" });
+  await expect(productDialog).toBeVisible();
+  await expect(productDialog.getByLabel("Product or service name")).toHaveValue("Labor Hours");
+  await expect(productDialog.getByLabel("Pricing unit")).toHaveValue("HOUR");
+  await expect(productDialog.getByLabel("Internal unit cost")).toHaveValue("30");
+  await expect(productDialog.getByLabel("Customer unit price")).toHaveValue("75");
+  await expect(kody).toBeVisible();
+  await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
+});
+
 test("Kody mobile assistant shows data guardrails and hands off review-first actions", async ({
   context,
   page,
@@ -280,6 +373,8 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await kodyDialog.getByRole("button", { name: `Open ${customer.fullName}` }).click();
   await expect(page.getByRole("heading", { name: `${customer.fullName} activity` })).toBeVisible();
   await expect(kodyDialog).toBeVisible();
+  await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Customer details and activity" }).getByRole("button", { name: "Ask Kody" })).toHaveClass(/bg-\[var\(--qf-brand-orange\)\]/);
   await page.getByRole("dialog", { name: "Customer details and activity" }).getByRole("button", { name: "Close modal" }).click();
   await kodyDialog.getByTestId("kody-prompt").focus();
   await page.keyboard.press("Escape");

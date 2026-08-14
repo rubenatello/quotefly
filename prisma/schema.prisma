@@ -279,8 +279,11 @@ model TenantUser {
   deletedAtUtc DateTime? @db.Timestamptz(3)
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedCustomers Customer[] @relation("CustomerAssignee")
+  assignedQuotes    Quote[]    @relation("QuoteAssignee")
 
   @@unique([tenantId, userId])
+  @@unique([id, tenantId])
   @@index([userId])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, userId, deletedAtUtc])
@@ -309,11 +312,13 @@ model Customer {
   notes                  String?
   followUpStatus         LeadFollowUpStatus      @default(NEEDS_FOLLOW_UP)
   followUpUpdatedAtUtc   DateTime?               @db.Timestamptz(3)
+  assignedTenantUserId   String?
   createdAt              DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime                @updatedAt @db.Timestamptz(3)
   archivedAtUtc          DateTime?               @db.Timestamptz(3)
   deletedAtUtc           DateTime?               @db.Timestamptz(3)
   tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTenantUser     TenantUser?             @relation("CustomerAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   quotes                 Quote[]
   activityEvents         CustomerActivityEvent[]
   revisions              QuoteRevision[]
@@ -329,6 +334,7 @@ model Customer {
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, phoneDigits, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
+  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, updatedAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
 }
@@ -369,6 +375,7 @@ model Quote {
   id                              String                  @id @default(cuid())
   tenantId                        String
   customerId                      String
+  assignedTenantUserId            String?
   serviceType                     ServiceCategory
   status                          QuoteStatus             @default(DRAFT)
   jobStatus                       QuoteJobStatus          @default(NOT_STARTED)
@@ -393,6 +400,7 @@ model Quote {
   deletedAtUtc                    DateTime?               @db.Timestamptz(3)
   tenant                          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer                        Customer                @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  assignedTenantUser              TenantUser?             @relation("QuoteAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   lineItems                       QuoteLineItem[]
   decisionSessions                QuoteDecisionSession[]
   revisions                       QuoteRevision[]
@@ -402,6 +410,7 @@ model Quote {
 
   @@unique([id, tenantId])
   @@index([tenantId, customerId])
+  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, status])
   @@index([tenantId, jobStatus])
   @@index([tenantId, afterSaleFollowUpStatus])

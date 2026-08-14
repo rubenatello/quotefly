@@ -20,6 +20,7 @@ const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
 const ServicesPage = lazy(() => import("./pages/ServicesPage").then((module) => ({ default: module.ServicesPage })));
 const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
+const LandscapingSolutionsPage = lazy(() => import("./pages/LandscapingSolutionsPage").then((module) => ({ default: module.LandscapingSolutionsPage })));
 const AboutPage = lazy(() => import("./pages/AboutPage").then((module) => ({ default: module.AboutPage })));
 const SupportPage = lazy(() => import("./pages/SupportPage").then((module) => ({ default: module.SupportPage })));
 const PrivacyPage = lazy(() => import("./pages/PrivacyPage").then((module) => ({ default: module.PrivacyPage })));
@@ -119,6 +120,7 @@ function MarketingLayout({
             <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/landscaping" element={<LandscapingSolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
             <Route
               path="support"

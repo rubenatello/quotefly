@@ -120,6 +120,7 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO") {
     if (tool === "FOLLOW_UP_QUEUE") return "Checking your follow-ups...";
     if (tool === "CUSTOMERS_WITHOUT_QUOTES") return "Checking who still needs a quote...";
     if (tool === "PIPELINE_SCENARIO") return "Crunching the numbers...";
+    if (tool === "DRAFT_PRODUCT") return "Preparing your product details...";
     if (tool === "DRAFT_QUOTE") return "Gathering quote details...";
     if (tool === "SUMMARIZE_PIPELINE") return "Gathering pipeline info...";
     if (tool === "RANK_PROFITABLE_JOBS") return "Comparing job performance...";
@@ -243,6 +244,14 @@ function formatVisibleAnswer(answer: string) {
 }
 
 function actionConfirmationCopy(action: AiAssistantAction) {
+  if (action.type === "OPEN_PRODUCT_DRAFT") {
+    return {
+      title: "Review Kody's product draft?",
+      description:
+        "Kody will open the Products form with the details it understood. Nothing is added until you review the unit, internal cost, customer price, and click Add product.",
+      confirmLabel: "Open product review",
+    };
+  }
   if (action.type === "OPEN_QUOTE_DRAFT") {
     return {
       title: "Review Kody's quote draft?",
@@ -311,6 +320,14 @@ function KodyResponse({
   return (
     <div className="space-y-3">
       <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        {response.conversation.mode === "SHIFTED" && response.conversation.acknowledgement ? (
+          <p
+            className="mb-3 rounded-2xl border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-2 text-sm leading-5 text-slate-700"
+            data-testid="kody-context-shift"
+          >
+            {response.conversation.acknowledgement}
+          </p>
+        ) : null}
         <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
           {visibleAnswer || "Kody returned a response, but there was no answer text to show."}
         </p>
@@ -371,7 +388,13 @@ function KodyResponse({
   );
 }
 
-export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) {
+export function KodyAssistant({
+  currentPage,
+  canViewInternalCosts = false,
+}: {
+  currentPage?: WorkspacePage;
+  canViewInternalCosts?: boolean;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const track = useTrack();
@@ -394,6 +417,9 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   const currentContextPage = assistantContextFromPage(workspacePage);
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
   const showQuickPrompts = messages.length === 0;
+  const visibleQuickPrompts = canViewInternalCosts
+    ? QUICK_PROMPTS
+    : QUICK_PROMPTS.filter((quickPrompt) => quickPrompt.tool !== "RANK_PROFITABLE_JOBS");
 
   const starterText = useMemo(() => {
     if (messages.length) return "Ask a follow-up or choose another Kody action.";
@@ -413,7 +439,10 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
       setOpen(true);
       setError(null);
       setPrompt(detail.prompt);
-      setSelectedTool(detail.tool ?? "AUTO");
+      // Context buttons suggest useful starting text, but the user can replace
+      // it with a completely different request. AUTO keeps that edited prompt
+      // from being trapped in a stale customer/quote tool selection.
+      setSelectedTool("AUTO");
       setContextOverride(detail.context ?? null);
       window.setTimeout(() => inputRef.current?.focus(), 0);
       track("kody_context_received", {
@@ -587,6 +616,11 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
   }
 
   function executeAction(action: AiAssistantAction, source: "direct" | "confirmed") {
+    if (action.requiresConfirmation && source !== "confirmed") {
+      setPendingAction(action);
+      track("kody_action_confirmation_enforced", { type: action.type });
+      return;
+    }
     track("kody_action", { type: action.type, source, requiresConfirmation: action.requiresConfirmation });
     if (action.type === "OPEN_CUSTOMER") {
       const customerId = getString(action.payload.customerId);
@@ -597,6 +631,11 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
 
     if (action.type === "OPEN_QUOTE_DRAFT") {
       navigate("/app/build", { state: { kodyQuoteDraft: action.payload } });
+      return;
+    }
+
+    if (action.type === "OPEN_PRODUCT_DRAFT") {
+      navigate("/app/products", { state: { kodyProductDraft: action.payload } });
       return;
     }
 
@@ -699,7 +738,7 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
           <div className="flex min-h-0 flex-1 flex-col gap-3 bg-slate-50 p-3 sm:p-4">
           {showQuickPrompts ? (
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-              {QUICK_PROMPTS.map((quickPrompt) => (
+              {visibleQuickPrompts.map((quickPrompt) => (
                 <button
                   key={quickPrompt.label}
                   type="button"
@@ -734,7 +773,10 @@ export function KodyAssistant({ currentPage }: { currentPage?: WorkspacePage }) 
                   Backend-only AI. Tenant-scoped data.
                 </div>
                 <div className="mt-4 grid w-full max-w-xl gap-2 text-left sm:grid-cols-3">
-                  {["Find customers due for follow-up", "Draft a quote from job notes", "Rank profitable jobs"].map((example) => (
+                  {(canViewInternalCosts
+                    ? ["Find customers due for follow-up", "Draft a quote from job notes", "Rank profitable jobs"]
+                    : ["Find customers due for follow-up", "Draft a quote from job notes", "Show my assigned open quotes"]
+                  ).map((example) => (
                     <button
                       key={example}
                       type="button"

@@ -66,6 +66,7 @@ async function createCustomer(params: {
   name: string;
   phoneDigits: string;
   notes?: string;
+  assignedTenantUserId?: string | null;
 }) {
   return prisma.customer.create({
     data: {
@@ -74,6 +75,7 @@ async function createCustomer(params: {
       phone: params.phoneDigits,
       phoneDigits: params.phoneDigits,
       notes: params.notes ?? "Assistant integration customer.",
+      assignedTenantUserId: params.assignedTenantUserId ?? null,
     },
   });
 }
@@ -88,6 +90,7 @@ async function createQuote(params: {
   cost: number;
   createdAt: Date;
   lineDescription?: string;
+  assignedTenantUserId?: string | null;
 }) {
   const quote = await prisma.quote.create({
     data: {
@@ -104,6 +107,7 @@ async function createQuote(params: {
       closedAtUtc: params.status === "ACCEPTED" ? params.createdAt : null,
       createdAt: params.createdAt,
       updatedAt: params.createdAt,
+      assignedTenantUserId: params.assignedTenantUserId ?? null,
     },
   });
   await prisma.quoteLineItem.create({
@@ -215,6 +219,77 @@ describe("AI assistant", () => {
     expect(audit.promptHash).toMatch(/^[0-9a-f]{64}$/);
     expect(audit.retrievalAuditEvent?.tenantId).toBe(alpha.tenant.id);
     expect(JSON.stringify(audit)).not.toContain("Ruben Beta Secret");
+  });
+
+  test("member assistant tools only retrieve records assigned to that membership", async () => {
+    const owner = await signUp("assistant-assignment");
+    const member = await addWorkspaceUser(owner, "member");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const assigned = await createCustomer({
+      session: owner,
+      name: "Assigned Field Customer",
+      phoneDigits: "5553030101",
+      assignedTenantUserId: membership.id,
+    });
+    const privateCustomer = await createCustomer({
+      session: owner,
+      name: "Owner Office Customer",
+      phoneDigits: "5553030102",
+    });
+    await createQuote({
+      session: owner,
+      customerId: assigned.id,
+      title: "Assigned follow-up quote",
+      serviceType: "ROOFING",
+      status: "SENT_TO_CUSTOMER",
+      price: 3000,
+      cost: 1200,
+      createdAt: new Date("2026-08-12T12:00:00.000Z"),
+      assignedTenantUserId: membership.id,
+    });
+    await createQuote({
+      session: owner,
+      customerId: privateCustomer.id,
+      title: "Private owner quote",
+      serviceType: "ROOFING",
+      status: "SENT_TO_CUSTOMER",
+      price: 9000,
+      cost: 4000,
+      createdAt: new Date("2026-08-12T12:00:00.000Z"),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Find recent customers", tool: "SEARCH_CUSTOMERS" },
+    });
+    expect(response.statusCode).toBe(200);
+    const results = (response.json() as { assistant: { results: Array<Record<string, unknown>> } }).assistant.results;
+    expect(results.map((row) => row.fullName)).toContain("Assigned Field Customer");
+    expect(results.map((row) => row.fullName)).not.toContain("Owner Office Customer");
+  });
+
+  test("members cannot ask Kody to draft catalog changes", async () => {
+    const owner = await signUp("assistant-member-catalog");
+    const member = await addWorkspaceUser(owner, "member");
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Add Labor Hours at $30 internal cost and $75 customer price",
+        tool: "DRAFT_PRODUCT",
+        context: { currentPage: "products", serviceType: "CONSTRUCTION" },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const assistant = (response.json() as { assistant: { results: unknown[]; actions: Array<{ type: string }> } }).assistant;
+    expect(assistant.results).toEqual([]);
+    expect(assistant.actions[0]?.type).toBe("REQUEST_ADMIN_ACCESS");
   });
 
   test("LLM composition receives minimized authorized context and records model telemetry", async () => {
@@ -523,10 +598,15 @@ describe("AI assistant", () => {
   test("member assistant requests cannot opt into archived business insight rows", async () => {
     const owner = await signUp("assistant-archive-owner");
     const member = await addWorkspaceUser(owner, "member");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
     const customer = await createCustomer({
       session: owner,
       name: "Archived Insight Customer",
       phoneDigits: "5559090909",
+      assignedTenantUserId: membership.id,
     });
     const now = new Date("2026-08-12T12:00:00.000Z");
     await createQuote({
@@ -538,6 +618,7 @@ describe("AI assistant", () => {
       price: 1200,
       cost: 500,
       createdAt: now,
+      assignedTenantUserId: membership.id,
     });
     const archivedQuote = await createQuote({
       session: owner,
@@ -548,6 +629,7 @@ describe("AI assistant", () => {
       price: 9000,
       cost: 2000,
       createdAt: now,
+      assignedTenantUserId: membership.id,
     });
     await prisma.quote.update({
       where: { id: archivedQuote.id },
@@ -1015,6 +1097,63 @@ describe("AI assistant", () => {
     expect(audit.promptTokens).toBe(0);
     expect(audit.completionTokens).toBe(0);
     expect(audit.totalTokens).toBe(0);
+
+    const productDraftResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Add a new product/service as 'Labor Hours' for quotes. The cost internally is $30 and customer price is $75 per hour.",
+        tool: "SEARCH_CUSTOMERS",
+        context: { currentPage: "customers", customerId: "stale-customer-context" },
+      },
+    });
+    expect(productDraftResponse.statusCode).toBe(200);
+    const productDraftBody = productDraftResponse.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(productDraftBody.assistant.tool).toBe("DRAFT_PRODUCT");
+    expect(productDraftBody.assistant.results[0]).toMatchObject({
+      name: "Labor Hours",
+      category: "LABOR",
+      unitType: "HOUR",
+      unitCost: 30,
+      unitPrice: 75,
+    });
+    expect(productDraftBody.assistant.actions).toEqual([expect.objectContaining({
+      type: "OPEN_PRODUCT_DRAFT",
+      requiresConfirmation: true,
+      payload: expect.objectContaining({ name: "Labor Hours", unitType: "HOUR", unitCost: 30, unitPrice: 75 }),
+    })]);
+    expect(productDraftBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+
+    const shiftedResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Actually, add a product called Cleanup Labor for $85 per hour.",
+        tool: "AUTO",
+        conversation: [{ message: "Find customer Ruben", resolvedTool: "SEARCH_CUSTOMERS" }],
+      },
+    });
+    expect(shiftedResponse.statusCode).toBe(200);
+    expect(shiftedResponse.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_PRODUCT",
+        conversation: {
+          mode: "SHIFTED",
+          previousTool: "SEARCH_CUSTOMERS",
+          currentTool: "DRAFT_PRODUCT",
+        },
+        actions: [expect.objectContaining({ requiresConfirmation: true })],
+      },
+    });
 
     const paidAiResponse = await app.inject({
       method: "POST",

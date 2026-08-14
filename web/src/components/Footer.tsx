@@ -5,6 +5,7 @@ const PRODUCT_LINKS = [
   { label: "Services", to: "/services" },
   { label: "Pricing", to: "/pricing" },
   { label: "Solutions", to: "/solutions" },
+  { label: "Landscaping software", to: "/solutions/landscaping" },
   { label: "About", to: "/about" },
   { label: "Support", to: "/support" },
 ];

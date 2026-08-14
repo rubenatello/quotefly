@@ -176,6 +176,9 @@ function shouldIncludeArchivedRecords(params: AiBusinessInsightInput) {
 function quoteWhere(params: AiBusinessInsightInput, range: { from: Date; to: Date }): Prisma.QuoteWhereInput {
   return {
     tenantId: params.access.tenantId,
+    ...(!hasCapability(params.access, "viewAllWorkspaceRecords")
+      ? { assignedTenantUserId: params.access.tenantUserId }
+      : {}),
     deletedAtUtc: null,
     ...(shouldIncludeArchivedRecords(params) ? {} : { archivedAtUtc: null }),
     ...(params.serviceType ? { serviceType: params.serviceType } : {}),

@@ -505,6 +505,8 @@ export function QuoteBuilderView() {
     setError,
     setNotice,
     canUseChatToQuote,
+    canViewInternalCosts,
+    canManageCatalog,
     chatPrompt,
     setChatPrompt,
     setChatParsed,
@@ -914,7 +916,7 @@ export function QuoteBuilderView() {
         serviceType: suggestion.serviceType,
         title: suggestion.title,
         scopeText: suggestion.scopeText,
-        internalCostSubtotal: String(suggestion.internalCostSubtotal),
+        internalCostSubtotal: String(suggestion.internalCostSubtotal ?? 0),
         customerPriceSubtotal: String(suggestion.customerPriceSubtotal),
         taxAmount: String(suggestion.taxAmount),
       }));
@@ -1167,7 +1169,7 @@ export function QuoteBuilderView() {
       setError(validateQuoteLine(linesToCreate[invalidLineIndex], `Line ${invalidLineIndex + 1}`));
       return;
     }
-    const promptCandidate =
+    const promptCandidate = canManageCatalog ?
       [...linesToCreate]
         .reverse()
         .find(
@@ -1178,7 +1180,7 @@ export function QuoteBuilderView() {
             !savedPresetKeys.has(
               `${quoteForm.serviceType}:${line.title.trim().toLowerCase()}:${line.details.trim().toLowerCase()}`,
             ),
-        ) ?? null;
+        ) ?? null : null;
 
     track("builder_quote_create");
     const createdQuote = await createQuoteDraftFromForm({
@@ -1195,6 +1197,7 @@ export function QuoteBuilderView() {
         quantity: Number(line.quantity) || 1,
         unitCost: Number(line.unitCost) || 0,
         unitPrice: Number(line.unitPrice) || 0,
+        sourcePresetId: line.sourcePresetId ?? undefined,
       })),
       successNotice: "Quote ready. Review it, then share it from the quote desk.",
     });
@@ -1252,6 +1255,7 @@ export function QuoteBuilderView() {
       {kodyDraftHandoff ? (
         <KodyDraftHandoffBanner
           handoff={kodyDraftHandoff}
+          canViewInternalCosts={canViewInternalCosts}
           activeCustomerName={activeCustomer?.fullName ?? null}
           onOpenAiDraft={() => setAiModalOpen(true)}
           onDismiss={() => setKodyDraftHandoff(null)}
@@ -1423,12 +1427,12 @@ export function QuoteBuilderView() {
             />
           </div>
           <div className="space-y-3 text-sm">
-            <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
+            {canViewInternalCosts ? <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} /> : null}
             <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
             <SummaryRow label="Tax" value={money(taxAmount)} />
             <SummaryRow label="Total" value={money(totalAmount)} strong />
-            <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-            <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+            {canViewInternalCosts ? <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
+            {canViewInternalCosts ? <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
           </div>
           <div className="mt-4 space-y-2 text-sm text-slate-700">
             <ChecklistItem compact complete={Boolean(activeCustomer)} label="Customer selected" />
@@ -1626,7 +1630,7 @@ export function QuoteBuilderView() {
                 <span>Line</span>
                 <span>Description</span>
                 <span>Qty</span>
-                <span>Cost</span>
+                <span>{canViewInternalCosts ? "Cost" : ""}</span>
                 <span>Price</span>
                 <span>Total</span>
                 <span className="text-right">Actions</span>
@@ -1638,6 +1642,7 @@ export function QuoteBuilderView() {
                     line={line}
                     index={index}
                     startExpanded={!line.title.trim() && !line.details.trim()}
+                    canViewInternalCosts={canViewInternalCosts}
                     onChange={updateDraftLine}
                     onInsertBelow={addBlankLine}
                     onRemove={removeDraftLine}
@@ -1732,7 +1737,7 @@ export function QuoteBuilderView() {
       />
 
       <SaveLinePresetModal
-        open={Boolean(presetPromptLine)}
+        open={canManageCatalog && Boolean(presetPromptLine)}
         line={presetPromptLine}
         saving={presetPromptSaving}
         onClose={dismissPresetPrompt}
@@ -1754,10 +1759,11 @@ export function QuoteBuilderView() {
           applyPresetToDraft(selectedPreset);
           setPresetPickerOpen(false);
         }}
-        onManageProducts={() => {
+        onManageProducts={canManageCatalog ? () => {
           setPresetPickerOpen(false);
           requestNavigation(() => navigate("/app/products"));
-        }}
+        } : undefined}
+        canViewInternalCosts={canViewInternalCosts}
       />
 
       <QuoteAiPromptModal
@@ -1879,11 +1885,13 @@ function KodyDraftHandoffBanner({
   activeCustomerName,
   onOpenAiDraft,
   onDismiss,
+  canViewInternalCosts,
 }: {
   handoff: KodyQuoteDraftHandoff;
   activeCustomerName: string | null;
   onOpenAiDraft: () => void;
   onDismiss: () => void;
+  canViewInternalCosts: boolean;
 }) {
   const customerLabel = activeCustomerName ?? handoff.customerName ?? "Customer not selected";
   const visibleLines = handoff.lineItems.slice(0, 3);
@@ -1914,7 +1922,7 @@ function KodyDraftHandoffBanner({
               ? "Kody found relevant saved jobs, quote details, or customer context. Generate the grounded draft, then review every scope and price before creating it. Nothing is saved or sent automatically."
               : "Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote."}
           </p>
-          {handoff.pricingNeedsReview ? (
+          {handoff.pricingNeedsReview && canViewInternalCosts ? (
             <p className="mt-2 text-sm font-semibold text-amber-700">
               Pricing still needs review. Kody does not finalize costs, margins, taxes, or customer price without your confirmation.
             </p>
@@ -2023,6 +2031,7 @@ function DraftLineEditorRow({
   onChange,
   onInsertBelow,
   onRemove,
+  canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
   index: number;
@@ -2030,6 +2039,7 @@ function DraftLineEditorRow({
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onInsertBelow: (lineId?: string) => void;
   onRemove: (lineId: string) => void;
+  canViewInternalCosts: boolean;
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
   const [advancedOpen, setAdvancedOpen] = useState(
@@ -2136,7 +2146,7 @@ function DraftLineEditorRow({
                     value={line.details}
                     onChange={(event) => onChange(line.id, "details", event.target.value)}
                   />
-                  <Input
+                  {canViewInternalCosts ? <Input
                     label="Internal cost"
                     aria-label={`Line ${index + 1} cost`}
                     type="number"
@@ -2144,7 +2154,7 @@ function DraftLineEditorRow({
                     step="0.01"
                     value={line.unitCost}
                     onChange={(event) => onChange(line.id, "unitCost", event.target.value)}
-                  />
+                  /> : null}
                   <QuoteLineSectionField
                     sectionType={line.sectionType}
                     sectionLabel={line.sectionLabel}
@@ -2193,7 +2203,9 @@ function DraftLineEditorRow({
           onChange={(event) => onChange(line.id, "details", event.target.value)}
         />
         <Input aria-label={`Line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-        <Input aria-label={`Line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+        {canViewInternalCosts ? (
+          <Input aria-label={`Line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+        ) : <span aria-hidden="true" />}
         <Input aria-label={`Line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}

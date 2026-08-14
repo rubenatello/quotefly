@@ -39,6 +39,7 @@ interface CrmShellProps {
   isTrial?: boolean;
   entitlements?: TenantEntitlements;
   usage?: TenantUsageSnapshot;
+  canManageCatalog?: boolean;
 }
 
 function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
@@ -75,6 +76,7 @@ export function CrmShell({
   isTrial,
   entitlements,
   usage,
+  canManageCatalog = false,
 }: CrmShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -153,6 +155,9 @@ export function CrmShell({
   };
 
   const pageMeta = WORKSPACE_PAGE_META[currentPage];
+  const operationsLinks = canManageCatalog
+    ? OPERATIONS_LINKS
+    : OPERATIONS_LINKS.filter((link) => link.path !== "products");
 
   useEffect(() => {
     document.title = `${pageMeta.label} | QuoteFly`;
@@ -193,7 +198,7 @@ export function CrmShell({
           onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
           onCloseMobile={() => setMobileOpen(false)}
           onNavigate={handleNavigate}
-          operationsLinks={OPERATIONS_LINKS}
+          operationsLinks={operationsLinks}
           settingsLinks={SETTINGS_LINKS}
           onLogout={onLogout}
           onRequestFeature={handleRequestFeature}

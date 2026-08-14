@@ -19,6 +19,9 @@ test("paid Basic workspaces receive the approved monthly AI spend ceiling", () =
   assert.equal(entitlements.planCode, "starter");
   assert.equal(entitlements.limits.aiQuotesPerMonth, BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH);
   assert.equal(entitlements.limits.aiSpendUsdPerMonth, 1.25);
+  assert.equal(entitlements.seatPlanCode, "starter");
+  assert.equal(entitlements.seatPlanName, "Basic");
+  assert.equal(entitlements.limits.teamMembers, 7);
 });
 
 test("full-feature trials cannot consume the Enterprise AI spend ceiling", () => {
@@ -35,4 +38,22 @@ test("full-feature trials cannot consume the Enterprise AI spend ceiling", () =>
   assert.equal(entitlements.features.advancedAnalytics, true);
   assert.equal(entitlements.limits.aiQuotesPerMonth, BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH);
   assert.equal(entitlements.limits.aiSpendUsdPerMonth, BASIC_AI_SPEND_LIMIT_USD);
+  assert.equal(entitlements.seatPlanCode, "starter");
+  assert.equal(entitlements.seatPlanName, "Basic");
+  assert.equal(entitlements.limits.teamMembers, 7);
+});
+
+test("Professional workspaces receive the 15-seat allowance", () => {
+  const entitlements = buildTenantEntitlements({
+    subscriptionStatus: "active",
+    subscriptionPlanCode: "professional",
+    trialStartsAtUtc: null,
+    trialEndsAtUtc: null,
+    subscriptionCurrentPeriodEndUtc: new Date("2026-09-13T00:00:00.000Z"),
+  }, new Date("2026-08-13T00:00:00.000Z"));
+
+  assert.equal(entitlements.planCode, "professional");
+  assert.equal(entitlements.seatPlanCode, "professional");
+  assert.equal(entitlements.seatPlanName, "Professional");
+  assert.equal(entitlements.limits.teamMembers, 15);
 });

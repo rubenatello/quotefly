@@ -50,7 +50,7 @@ import {
   Select,
   Textarea,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
@@ -320,6 +320,8 @@ export function QuoteDeskView() {
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
+  const [workspaceMembers, setWorkspaceMembers] = useState<OrganizationUser[]>([]);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
   const canSharePdfFromDevice = useMemo(() => canNativePdfShareOnDevice(), []);
   const {
     session,
@@ -351,6 +353,10 @@ export function QuoteDeskView() {
     setSendComposer,
     canViewQuoteHistory,
     canViewCommunicationLog,
+    canViewInternalCosts,
+    canManageCatalog,
+    canManageAssignments,
+    canManageRecordRetention,
     currentPlanLabel,
     canAutoUpgradeMessage,
     quoteHistory,
@@ -375,6 +381,30 @@ export function QuoteDeskView() {
     () => session && quoteId ? quoteDeskDraftStorageKey(session.tenantId, session.userId, quoteId) : null,
     [quoteId, session],
   );
+
+  useEffect(() => {
+    if (!canManageAssignments) return;
+    let mounted = true;
+    api.org.users.list()
+      .then((result) => { if (mounted) setWorkspaceMembers(result.members); })
+      .catch(() => { if (mounted) setWorkspaceMembers([]); });
+    return () => { mounted = false; };
+  }, [canManageAssignments]);
+
+  const updateQuoteAssignment = useCallback(async (assignedTenantUserId: string) => {
+    if (!selectedQuote || !canManageAssignments || assignmentSaving) return;
+    setAssignmentSaving(true);
+    setError(null);
+    try {
+      await api.quotes.update(selectedQuote.id, { assignedTenantUserId: assignedTenantUserId || null });
+      await refreshSelectedQuote();
+      setNotice(assignedTenantUserId ? "Quote assignment updated." : "Quote is now unassigned.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed updating quote assignment.");
+    } finally {
+      setAssignmentSaving(false);
+    }
+  }, [assignmentSaving, canManageAssignments, refreshSelectedQuote, selectedQuote, setError, setNotice]);
 
   useEffect(() => {
     if (!quoteId) return;
@@ -870,6 +900,7 @@ export function QuoteDeskView() {
         quantity: Number(lineToMaybeSave.quantity) || 1,
         unitCost: Number(lineToMaybeSave.unitCost) || 0,
         unitPrice: Number(lineToMaybeSave.unitPrice) || 0,
+        sourcePresetId: lineToMaybeSave.sourcePresetId ?? undefined,
       },
       {
         notice: `${lineToMaybeSave.title} added to the quote.`,
@@ -878,6 +909,7 @@ export function QuoteDeskView() {
     if (!added) return false;
     setNewLine(makeEditableQuoteLine());
     if (
+      canManageCatalog &&
       options?.offerPreset !== false &&
       lineToMaybeSave.title.trim() &&
       !lineToMaybeSave.sourcePresetId &&
@@ -919,6 +951,7 @@ export function QuoteDeskView() {
       quantity: Number(line.quantity) || 1,
       unitCost: Number(line.unitCost) || 0,
       unitPrice: Number(line.unitPrice) || 0,
+      sourcePresetId: line.sourcePresetId ?? undefined,
     });
     const lineToMaybeSave = newLine.title.trim() ? newLine : null;
     track("quote_sheet_save");
@@ -1217,6 +1250,7 @@ export function QuoteDeskView() {
         quantity: presetQuantity,
         unitCost: Number(preset.unitCost),
         unitPrice: Number(preset.unitPrice),
+        sourcePresetId: preset.id,
       },
       { notice: `${preset.name} added to the quote.` },
     );
@@ -1397,6 +1431,26 @@ export function QuoteDeskView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {canManageAssignments || selectedQuote.assignedTenantUser ? (
+        <Card variant="blue" padding="md" className="xl:hidden">
+          {canManageAssignments ? (
+            <Select
+              label="Assigned to"
+              value={selectedQuote.assignedTenantUserId ?? ""}
+              onChange={(event) => void updateQuoteAssignment(event.target.value)}
+              disabled={assignmentSaving}
+              options={[
+                { value: "", label: "Unassigned" },
+                ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${member.role}` })),
+              ]}
+            />
+          ) : selectedQuote.assignedTenantUser ? (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-800">
+              Assigned to {selectedQuote.assignedTenantUser.user.fullName}
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
       {deskDraftRecoveryMessage ? (
         <Alert tone="warning" onDismiss={() => setDeskDraftRecoveryMessage(null)}>{deskDraftRecoveryMessage}</Alert>
       ) : null}
@@ -1692,7 +1746,7 @@ export function QuoteDeskView() {
                   <span>Line</span>
                   <span>Description</span>
                   <span>Qty</span>
-                  <span>Cost</span>
+                  <span>{canViewInternalCosts ? "Cost" : ""}</span>
                   <span>Price</span>
                   <span>Total</span>
                   <span className="text-right">Actions</span>
@@ -1711,6 +1765,7 @@ export function QuoteDeskView() {
                     dirty={dirtyLineIds.includes(line.id)}
                     startExpanded={dirtyLineIds.includes(line.id)}
                     readOnly={isQuoteLocked}
+                    canViewInternalCosts={canViewInternalCosts}
                     onChange={updateEditableLine}
                     onSave={saveLine}
                     onDelete={() => setLineItemPendingDeleteId(line.id)}
@@ -1728,7 +1783,7 @@ export function QuoteDeskView() {
                           </p>
                         </div>
                       </div>
-                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} readOnly={isQuoteLocked} />
+                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} readOnly={isQuoteLocked} canViewInternalCosts={canViewInternalCosts} />
                     </div>
                   </div>
                 </div>
@@ -1769,6 +1824,22 @@ export function QuoteDeskView() {
                 subtitle="Use the same control rail whether you are opening, reviewing, or editing a quote."
               />
               <div className="mb-4 space-y-3">
+                {canManageAssignments ? (
+                  <Select
+                    label="Assigned to"
+                    value={selectedQuote.assignedTenantUserId ?? ""}
+                    onChange={(event) => void updateQuoteAssignment(event.target.value)}
+                    disabled={assignmentSaving}
+                    options={[
+                      { value: "", label: "Unassigned" },
+                      ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${member.role}` })),
+                    ]}
+                  />
+                ) : selectedQuote.assignedTenantUser ? (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-800">
+                    Assigned to {selectedQuote.assignedTenantUser.user.fullName}
+                  </div>
+                ) : null}
                 <Select
                   label="Trade"
                   value={quoteEditForm.serviceType}
@@ -1816,9 +1887,9 @@ export function QuoteDeskView() {
                   />
                 </div>
                 <SummaryRow label="Total" value={money(totalAmount)} strong />
-                <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} />
-                <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} />
-                <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} />
+                {canViewInternalCosts ? <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} /> : null}
+                {canViewInternalCosts ? <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
+                {canViewInternalCosts ? <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
               </div>
               <div className="mt-4 space-y-2 text-sm text-slate-700">
                 <ChecklistItem compact complete={Boolean(selectedQuote.customerId)} label="Customer attached" />
@@ -1844,7 +1915,7 @@ export function QuoteDeskView() {
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     Start Another Quote
                   </Button>
-                  <details className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  {canManageRecordRetention ? <details className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                     <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700">
                       More actions
                     </summary>
@@ -1877,7 +1948,7 @@ export function QuoteDeskView() {
                         </Button>
                       </div>
                     </div>
-                  </details>
+                  </details> : null}
                 </div>
                 <div className="hidden gap-2 lg:grid">
                   <Button fullWidth variant="outline" icon={<RotateCcw size={14} />} onClick={revertQuoteSheetToLastSaved} disabled={!hasUnsavedQuoteSheetChanges}>
@@ -1889,7 +1960,7 @@ export function QuoteDeskView() {
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     Start Another Quote
                   </Button>
-                  <div className="grid grid-cols-2 gap-2">
+                  {canManageRecordRetention ? <div className="grid grid-cols-2 gap-2">
                     <Button
                       fullWidth
                       variant="warning"
@@ -1906,7 +1977,7 @@ export function QuoteDeskView() {
                     >
                       Delete
                     </Button>
-                  </div>
+                  </div> : null}
                 </div>
                 <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
               </div>
@@ -2149,7 +2220,7 @@ export function QuoteDeskView() {
                               <span className="text-sm font-semibold text-slate-900">{revision.title}</span>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
-                              {selectedQuote && revision.quote.id === selectedQuote.id ? (
+                              {canManageRecordRetention && selectedQuote && revision.quote.id === selectedQuote.id ? (
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -2372,7 +2443,7 @@ export function QuoteDeskView() {
       </ConfirmModal>
 
       <SaveLinePresetModal
-        open={Boolean(presetPromptLine)}
+        open={canManageCatalog && Boolean(presetPromptLine)}
         line={presetPromptLine}
         saving={presetPromptSaving}
         onClose={dismissPresetPrompt}
@@ -2400,10 +2471,11 @@ export function QuoteDeskView() {
           loadPresetToNewLine(selectedPreset);
           setPresetPickerOpen(false);
         }}
-        onManageProducts={() => {
+        onManageProducts={canManageCatalog ? () => {
           setPresetPickerOpen(false);
           requestNavigation(() => navigate("/app/products"));
-        }}
+        } : undefined}
+        canViewInternalCosts={canViewInternalCosts}
       />
 
       <QuoteAiPromptModal
@@ -2607,6 +2679,7 @@ function ExistingLineEditorRow({
   onChange,
   onSave,
   onDelete,
+  canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
   index: number;
@@ -2616,6 +2689,7 @@ function ExistingLineEditorRow({
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onSave: (lineId: string) => Promise<boolean>;
   onDelete: () => void;
+  canViewInternalCosts: boolean;
 }) {
   const [expanded, setExpanded] = useState(startExpanded ?? false);
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
@@ -2672,9 +2746,9 @@ function ExistingLineEditorRow({
             <div className="space-y-3">
               <Input label="Line" aria-label={`Existing line ${index + 1} title`} value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
               <Textarea label="Description" aria-label={`Existing line ${index + 1} description`} rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
-              <div className="grid grid-cols-3 gap-2">
+              <div className={`grid gap-2 ${canViewInternalCosts ? "grid-cols-3" : "grid-cols-2"}`}>
                 <Input label="Qty" aria-label={`Existing line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-                <Input label="Cost" aria-label={`Existing line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+                {canViewInternalCosts ? <Input label="Cost" aria-label={`Existing line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : null}
                 <Input label="Price" aria-label={`Existing line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
               </div>
               <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
@@ -2702,7 +2776,7 @@ function ExistingLineEditorRow({
         </div>
         <Textarea aria-label={`Existing line ${index + 1} description`} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
         <Input aria-label={`Existing line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-        <Input aria-label={`Existing line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} />
+        {canViewInternalCosts ? <Input aria-label={`Existing line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label={`Existing line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
           {money(lineTotal)}
@@ -2740,12 +2814,14 @@ function NewLineEditorRow({
   onAdd,
   saving,
   readOnly,
+  canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
   onChange: (line: EditableQuoteLine) => void;
   onAdd: () => Promise<unknown>;
   saving: boolean;
   readOnly?: boolean;
+  canViewInternalCosts: boolean;
 }) {
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
 
@@ -2777,7 +2853,7 @@ function NewLineEditorRow({
           disabled={readOnly}
         />
         <Input aria-label="New line quantity" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
-        <Input aria-label="New line cost" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} />
+        {canViewInternalCosts ? <Input aria-label="New line cost" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label="New line price" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
         <div className="space-y-1">
           <label className="block text-xs font-medium text-slate-600">Total</label>

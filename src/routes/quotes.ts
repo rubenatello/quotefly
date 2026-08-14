@@ -3,6 +3,7 @@ import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
+import type { AccessContext } from "../lib/access-policy";
 import {
   accumulateAiUsageTelemetry,
   assertAiUsageAvailable,
@@ -23,6 +24,12 @@ import {
   tenantActiveScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import {
+  WorkspaceAssigneeSelect,
+  assignedRecordScope,
+  defaultAssigneeForCreatedRecord,
+  validateActiveTenantAssignee,
+} from "../lib/workspace-assignment";
 import {
   buildTenantEntitlements,
   loadTenantEntitlements,
@@ -87,6 +94,7 @@ const CreateQuoteSchema = z.object({
   customerPriceSubtotal: z.number().nonnegative(),
   taxAmount: z.number().nonnegative().default(0),
   aiUsageEventId: z.string().min(1).optional(),
+  assignedTenantUserId: z.string().min(1).nullable().optional(),
   lineItems: z
     .array(
       z.object({
@@ -96,6 +104,7 @@ const CreateQuoteSchema = z.object({
         quantity: z.number().positive(),
         unitCost: z.number().nonnegative(),
         unitPrice: z.number().nonnegative(),
+        sourcePresetId: z.string().min(1).optional(),
       }),
     )
     .max(300)
@@ -114,6 +123,7 @@ const UpdateQuoteSchema = z
     internalCostSubtotal: z.number().nonnegative().optional(),
     customerPriceSubtotal: z.number().nonnegative().optional(),
     taxAmount: z.number().nonnegative().optional(),
+    assignedTenantUserId: z.string().min(1).nullable().optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: "At least one field is required.",
@@ -150,6 +160,7 @@ const CreateLineItemSchema = z.object({
   quantity: z.number().positive(),
   unitCost: z.number().nonnegative(),
   unitPrice: z.number().nonnegative(),
+  sourcePresetId: z.string().min(1).optional(),
 });
 
 const UpdateLineItemSchema = z
@@ -172,6 +183,7 @@ const QuoteSheetLineSchema = z.object({
   quantity: z.number().positive(),
   unitCost: z.number().nonnegative(),
   unitPrice: z.number().nonnegative(),
+  sourcePresetId: z.string().min(1).optional(),
 });
 
 const SaveQuoteSheetSchema = z
@@ -391,11 +403,13 @@ async function getActiveQuoteForTenant(
   tx: Prisma.TransactionClient,
   quoteId: string,
   tenantId: string,
+  assignedTenantUserId?: string,
 ) {
   return tx.quote.findFirst({
     where: {
       id: quoteId,
       ...tenantActiveQuoteScope(tenantId),
+      ...(assignedTenantUserId ? { assignedTenantUserId } : {}),
     },
   });
 }
@@ -2660,7 +2674,7 @@ function scoreSimilarQuote(
 
 async function loadSimilarQuoteContext(
   prisma: Prisma.TransactionClient | PrismaClient,
-  tenantId: string,
+  access: AccessContext,
   params: {
     serviceType: z.infer<typeof ServiceTypeSchema>;
     prompt: string;
@@ -2672,7 +2686,8 @@ async function loadSimilarQuoteContext(
 ): Promise<SimilarQuoteContext[]> {
   const recentQuotes = await prisma.quote.findMany({
     where: {
-      tenantId,
+      tenantId: access.tenantId,
+      ...assignedRecordScope(access),
       serviceType: params.serviceType,
       deletedAtUtc: null,
       status: {
@@ -3168,10 +3183,79 @@ function stripRestrictedAiPromptFields(payload: unknown, seen = new WeakSet<obje
   return payload;
 }
 
+const MEMBER_RESTRICTED_FINANCIAL_FIELDS = new Set([
+  "internalCostSubtotal",
+  "unitCost",
+  "grossCost",
+  "grossProfit",
+  "grossMarginPercent",
+  "estimatedProfit",
+  "estimatedMarginPercent",
+]);
+
+function stripInternalFinancialFields(payload: unknown, seen = new WeakSet<object>()): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  if (payload instanceof Date || Buffer.isBuffer(payload)) return payload;
+  if (seen.has(payload)) return payload;
+  seen.add(payload);
+  if (Array.isArray(payload)) {
+    for (const value of payload) stripInternalFinancialFields(value, seen);
+    return payload;
+  }
+  const prototype = Object.getPrototypeOf(payload);
+  if (prototype !== Object.prototype && prototype !== null) return payload;
+  const record = payload as Record<string, unknown>;
+  for (const field of MEMBER_RESTRICTED_FINANCIAL_FIELDS) delete record[field];
+  for (const value of Object.values(record)) stripInternalFinancialFields(value, seen);
+  return payload;
+}
+
+async function resolveRequestedQuoteAssignee(
+  prisma: PrismaClient,
+  access: AccessContext,
+  requested: string | null | undefined,
+  inherited: string | null | undefined,
+): Promise<{ allowed: true; assignedTenantUserId: string | null } | { allowed: false }> {
+  if (!hasCapability(access, "manageAssignments")) {
+    if (requested !== undefined && requested !== access.tenantUserId) return { allowed: false };
+    return { allowed: true, assignedTenantUserId: access.tenantUserId };
+  }
+  if (requested === null) return { allowed: true, assignedTenantUserId: null };
+  const candidate = requested ?? inherited ?? defaultAssigneeForCreatedRecord(access);
+  if (!candidate) return { allowed: true, assignedTenantUserId: null };
+  const valid = await validateActiveTenantAssignee(prisma, {
+    tenantId: access.tenantId,
+    tenantUserId: candidate,
+  });
+  return valid ? { allowed: true, assignedTenantUserId: candidate } : { allowed: false };
+}
+
+async function resolveMemberLineUnitCost(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  input: { access: AccessContext; sourcePresetId?: string; requestedUnitCost: number },
+): Promise<number> {
+  if (hasCapability(input.access, "viewInternalCosts")) return input.requestedUnitCost;
+  if (!input.sourcePresetId) return 0;
+  const preset = await prisma.workPreset.findFirst({
+    where: {
+      id: input.sourcePresetId,
+      tenantId: input.access.tenantId,
+      deletedAtUtc: null,
+    },
+    select: { unitCost: true },
+  });
+  return preset ? Number(preset.unitCost) : 0;
+}
+
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook("preSerialization", async (_request, _reply, payload) =>
-    stripRestrictedAiPromptFields(payload),
-  );
+  app.addHook("preSerialization", async (request, _reply, payload) => {
+    stripRestrictedAiPromptFields(payload);
+    const membership = request.liveAuthMembership;
+    if (membership && !hasCapability(buildAccessContext(request), "viewInternalCosts")) {
+      stripInternalFinancialFields(payload);
+    }
+    return payload;
+  });
 
   app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = SuggestQuoteWithAiSchema.parse(request.body);
@@ -3228,6 +3312,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             where: {
               id: payload.quoteId,
               ...tenantActiveQuoteScope(claims.tenantId),
+              ...assignedRecordScope(access),
             },
             include: {
               customer: {
@@ -3278,6 +3363,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             where: {
               id: payload.customerId,
               ...tenantActiveCustomerScope(claims.tenantId),
+              ...assignedRecordScope(access),
             },
           })
         : existingQuote?.customer ?? null;
@@ -3340,7 +3426,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           )
       : [];
 
-    const similarQuotes = await loadSimilarQuoteContext(app.prisma, claims.tenantId, {
+    const similarQuotes = await loadSimilarQuoteContext(app.prisma, access, {
       serviceType: preliminaryServiceType,
       prompt: payload.prompt,
       title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
@@ -3920,6 +4006,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   app.post("/quotes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateQuoteSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const recordScope = assignedRecordScope(access);
     const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -3947,8 +4035,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: payload.customerId,
           ...tenantActiveCustomerScope(claims.tenantId),
+          ...recordScope,
         },
-        select: { id: true },
+        select: { id: true, assignedTenantUserId: true },
       }),
       resolveActivityActor(app.prisma, claims),
     ]);
@@ -3975,15 +4064,42 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
+    const assignee = await resolveRequestedQuoteAssignee(
+      app.prisma,
+      access,
+      payload.assignedTenantUserId,
+      customer.assignedTenantUserId,
+    );
+    if (!assignee.allowed) {
+      return reply.code(403).send({ error: "Choose an active member from this workspace." });
+    }
+    const resolvedLineItems = payload.lineItems
+      ? await Promise.all(payload.lineItems.map(async (lineItem) => ({
+          ...lineItem,
+          unitCost: await resolveMemberLineUnitCost(app.prisma, {
+            access,
+            sourcePresetId: lineItem.sourcePresetId,
+            requestedUnitCost: lineItem.unitCost,
+          }),
+        })))
+      : [];
+    const internalCostSubtotal = resolvedLineItems.length
+      ? roundCurrency(resolvedLineItems.reduce((sum, lineItem) =>
+          sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitCost : 0), 0))
+      : hasCapability(access, "viewInternalCosts")
+        ? payload.internalCostSubtotal
+        : 0;
+
     const quote = await app.prisma.$transaction(async (tx) => {
       const createdQuote = await tx.quote.create({
         data: {
           tenantId: claims.tenantId,
           customerId: payload.customerId,
+          assignedTenantUserId: assignee.assignedTenantUserId,
           serviceType: payload.serviceType,
           title: payload.title,
           scopeText: payload.scopeText,
-          internalCostSubtotal: payload.internalCostSubtotal,
+          internalCostSubtotal,
           customerPriceSubtotal: payload.customerPriceSubtotal,
           taxAmount: payload.taxAmount,
           totalAmount,
@@ -4005,9 +4121,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      if (payload.lineItems?.length) {
+      if (resolvedLineItems.length) {
         await tx.quoteLineItem.createMany({
-          data: payload.lineItems.map((lineItem, position) => ({
+          data: resolvedLineItems.map((lineItem, position) => ({
             tenantId: claims.tenantId,
             quoteId: createdQuote.id,
             description: lineItem.description,
@@ -4056,10 +4172,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/quotes", { preHandler: [app.authenticate] }, async (request) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const query = ListQuotesQuerySchema.parse(request.query);
 
     const where: Prisma.QuoteWhereInput = {
       ...tenantActiveQuoteScope(claims.tenantId),
+      ...assignedRecordScope(access),
       ...(query.status ? { status: query.status } : {}),
       ...(query.customerId ? { customerId: query.customerId } : {}),
       ...(query.search
@@ -4080,6 +4198,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         take: query.limit,
         skip: query.offset,
         include: {
+          assignedTenantUser: { select: WorkspaceAssigneeSelect },
           customer: {
             select: {
               id: true,
@@ -4129,6 +4248,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/quotes/invoices/export-csv", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const payload = ExportQuickBooksInvoicesCsvSchema.parse(request.body);
     const quoteIds = Array.from(new Set(payload.quoteIds));
 
@@ -4136,6 +4256,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: { in: quoteIds },
         ...tenantActiveQuoteScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       include: {
         customer: {
@@ -4217,6 +4338,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/quotes/history", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const query = QuoteHistoryQuerySchema.parse(request.query);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
@@ -4246,6 +4368,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: query.customerId,
           ...tenantActiveCustomerScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true },
       });
@@ -4260,6 +4383,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: query.quoteId,
           ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true },
       });
@@ -4273,6 +4397,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       ...tenantActiveScope(claims.tenantId),
       ...(query.customerId ? { customerId: query.customerId } : {}),
       ...(query.quoteId ? { quoteId: query.quoteId } : {}),
+      ...(!hasCapability(access, "viewAllWorkspaceRecords")
+        ? { quote: { assignedTenantUserId: access.tenantUserId } }
+        : {}),
       ...(historyWindowStart ? { createdAt: { gte: historyWindowStart } } : {}),
     };
 
@@ -4302,6 +4429,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/quotes/:quoteId/history", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const query = QuoteHistoryByQuoteQuerySchema.parse(request.query);
     const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
@@ -4378,6 +4506,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: quoteId,
         ...tenantActiveQuoteScope(access.tenantId),
+        ...assignedRecordScope(access),
       },
       select: { id: true },
     });
@@ -4458,6 +4587,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
+      if (!hasCapability(access, "manageRecordRetention")) {
+        return reply.code(403).send({ error: "Only a workspace owner or admin can restore quote revisions." });
+      }
       const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId, revisionId } = QuoteRevisionParamsSchema.parse(request.params);
       const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
@@ -4476,6 +4609,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           requiredPlan: requiredPlanForFeature("quoteVersionHistory"),
           error: "Restoring a quote revision is available on Professional and Enterprise plans.",
         });
+      }
+
+      const authorizedQuote = await app.prisma.quote.findFirst({
+        where: {
+          id: quoteId,
+          ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
+        },
+        select: { id: true },
+      });
+      if (!authorizedQuote) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
       }
 
       const result = await app.prisma.$transaction((tx) =>
@@ -4509,6 +4654,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: quoteId,
           ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         include: {
           customer: true,
@@ -4532,14 +4678,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
 
     const quote = await app.prisma.quote.findFirst({
       where: {
         id: quoteId,
         ...tenantActiveQuoteScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       include: {
+        assignedTenantUser: { select: WorkspaceAssigneeSelect },
         customer: true,
         lineItems: {
           where: tenantActiveScope(claims.tenantId),
@@ -4570,6 +4719,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/quotes/:quoteId/pdf", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const query = QuotePdfQuerySchema.parse(request.query);
 
@@ -4577,6 +4727,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: quoteId,
         ...tenantActiveQuoteScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       include: {
         customer: true,
@@ -4725,13 +4876,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/quotes/:quoteId/sheet", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = SaveQuoteSheetSchema.parse(request.body);
 
     try {
       const quote = await app.prisma.$transaction(async (tx) => {
-        const existingQuote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+        const existingQuote = await getActiveQuoteForTenant(
+          tx,
+          quoteId,
+          claims.tenantId,
+          assignedRecordScope(access).assignedTenantUserId,
+        );
         if (!existingQuote) return null;
 
         const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload.quote);
@@ -4754,11 +4911,34 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           },
         });
 
+        const existingLineCosts = hasCapability(access, "viewInternalCosts")
+          ? new Map<string, number>()
+          : new Map((await tx.quoteLineItem.findMany({
+              where: {
+                quoteId: existingQuote.id,
+                ...tenantActiveScope(claims.tenantId),
+              },
+              select: { id: true, unitCost: true },
+            })).map((line) => [line.id, Number(line.unitCost)]));
+        const lineItems = await Promise.all(payload.lineItems.map(async (line) => ({
+          ...line,
+          unitCost: hasCapability(access, "viewInternalCosts")
+            ? line.unitCost
+            : existingLineCosts.get(line.id) ?? 0,
+        })));
+        const newLineItems = await Promise.all(payload.newLineItems.map(async (line) => ({
+          ...line,
+          unitCost: await resolveMemberLineUnitCost(tx, {
+            access,
+            sourcePresetId: line.sourcePresetId,
+            requestedUnitCost: line.unitCost,
+          }),
+        })));
         await applyQuoteSheetLineMutations(tx, {
           tenantId: claims.tenantId,
           quoteId: updatedQuote.id,
-          updates: payload.lineItems,
-          creates: payload.newLineItems,
+          updates: lineItems,
+          creates: newLineItems,
         });
 
         const recalculatedQuote = await recalculateQuoteFromLineItems(tx, updatedQuote.id, claims.tenantId);
@@ -4843,6 +5023,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = UpdateQuoteSchema.parse(request.body);
     const actor = await resolveActivityActor(app.prisma, claims);
@@ -4851,6 +5032,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: quoteId,
         ...tenantActiveQuoteScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
     });
 
@@ -4863,6 +5045,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: payload.customerId,
           ...tenantActiveCustomerScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true },
       });
@@ -4870,6 +5053,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       if (!customer) {
         return reply.code(404).send({ error: "Customer not found for tenant." });
       }
+    }
+
+    const assignee = payload.assignedTenantUserId !== undefined
+      ? await resolveRequestedQuoteAssignee(
+          app.prisma,
+          access,
+          payload.assignedTenantUserId,
+          existingQuote.assignedTenantUserId,
+        )
+      : null;
+    if (assignee && !assignee.allowed) {
+      return reply.code(403).send({ error: "Choose an active member from this workspace." });
     }
 
     const nextCustomerPriceSubtotal =
@@ -4899,7 +5094,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         status: payload.status,
         title: payload.title,
         scopeText: payload.scopeText,
-        internalCostSubtotal: payload.internalCostSubtotal,
+        internalCostSubtotal: hasCapability(access, "viewInternalCosts")
+          ? payload.internalCostSubtotal
+          : undefined,
         customerPriceSubtotal: payload.customerPriceSubtotal,
         taxAmount: payload.taxAmount,
         ...(shouldRecalculateTotal
@@ -4916,6 +5113,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             }
           : {}),
         ...lifecycleUpdate.data,
+        ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
       };
 
       const updatedQuote = await tx.quote.update({
@@ -4957,12 +5155,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageRecordRetention")) {
+      return reply.code(403).send({ error: "Only a workspace owner or admin can delete quotes." });
+    }
     const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const now = new Date();
 
     const deleted = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
       if (!quote) return false;
 
       await createCustomerActivityEvent(tx, {
@@ -5020,12 +5222,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/quotes/:quoteId/archive", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageRecordRetention")) {
+      return reply.code(403).send({ error: "Only a workspace owner or admin can archive quotes." });
+    }
     const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const now = new Date();
 
     const archived = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
       if (!quote) return false;
 
       await createCustomerActivityEvent(tx, {
@@ -5069,6 +5275,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const { decision } = QuoteDecisionSchema.parse(request.body);
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const actor = await resolveActivityActor(app.prisma, claims);
 
     const status = decision === "send" ? "SENT_TO_CUSTOMER" : "READY_FOR_REVIEW";
@@ -5076,7 +5283,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const decisionStatus = decision === "send" ? "APPROVED" : "REVISION_REQUESTED";
 
     const quote = await app.prisma.$transaction(async (tx) => {
-      const existingQuote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+      const existingQuote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
       if (!existingQuote) return null;
 
       const updatedQuote = await tx.quote.update({
@@ -5140,6 +5347,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const query = QuoteOutboundEventQuerySchema.parse(request.query);
       const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
@@ -5164,6 +5372,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: quoteId,
           ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: { id: true },
       });
@@ -5203,6 +5412,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
       const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const payload = ConfirmQuoteSendSchema.parse(request.body);
@@ -5229,7 +5439,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               return { conflict: true as const };
             }
 
-            const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+            const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
             return quote
               ? { quote, event: existingEvent, duplicate: true as const }
               : null;
@@ -5239,6 +5449,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             where: {
               id: quoteId,
               ...tenantActiveQuoteScope(claims.tenantId),
+              ...assignedRecordScope(access),
             },
             include: {
               customer: {
@@ -5338,6 +5549,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               where: {
                 id: quoteId,
                 ...tenantActiveQuoteScope(claims.tenantId),
+                ...assignedRecordScope(access),
               },
             });
             if (quote) return reply.send({ quote, event: existingEvent, duplicate: true });
@@ -5354,6 +5566,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
       const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId } = QuoteParamsSchema.parse(request.params);
       const payload = CreateQuoteOutboundEventSchema.parse(request.body);
@@ -5379,6 +5592,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         where: {
           id: quoteId,
           ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
         },
         select: {
           id: true,
@@ -5425,12 +5639,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/quotes/:quoteId/line-items", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const actor = await resolveActivityActor(app.prisma, claims);
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = CreateLineItemSchema.parse(request.body);
 
     const result = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+      const quote = await getActiveQuoteForTenant(
+        tx,
+        quoteId,
+        claims.tenantId,
+        assignedRecordScope(access).assignedTenantUserId,
+      );
       if (!quote) return null;
 
       const lastLineItem = await tx.quoteLineItem.findFirst({
@@ -5451,7 +5671,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           sectionLabel: payload.sectionLabel?.trim() || null,
           position: (lastLineItem?.position ?? -1) + 1,
           quantity: payload.quantity,
-          unitCost: payload.unitCost,
+          unitCost: await resolveMemberLineUnitCost(tx, {
+            access,
+            sourcePresetId: payload.sourcePresetId,
+            requestedUnitCost: payload.unitCost,
+          }),
           unitPrice: payload.unitPrice,
         },
       });
@@ -5495,12 +5719,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
       const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const payload = UpdateLineItemSchema.parse(request.body);
 
       const result = await app.prisma.$transaction(async (tx) => {
-        const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+        const quote = await getActiveQuoteForTenant(
+          tx,
+          quoteId,
+          claims.tenantId,
+          assignedRecordScope(access).assignedTenantUserId,
+        );
         if (!quote) return null;
 
         const lineItem = await tx.quoteLineItem.findFirst({
@@ -5522,7 +5752,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             sectionType: payload.sectionType ? normalizeQuoteLineSectionType(payload.sectionType) : undefined,
             sectionLabel: payload.sectionLabel !== undefined ? payload.sectionLabel?.trim() || null : undefined,
             quantity: payload.quantity,
-            unitCost: payload.unitCost,
+            unitCost: hasCapability(access, "viewInternalCosts") ? payload.unitCost : undefined,
             unitPrice: payload.unitPrice,
           },
         });
@@ -5567,12 +5797,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+      const access = buildAccessContext(request);
       const actor = await resolveActivityActor(app.prisma, claims);
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const now = new Date();
 
       const deleted = await app.prisma.$transaction(async (tx) => {
-        const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId);
+        const quote = await getActiveQuoteForTenant(
+          tx,
+          quoteId,
+          claims.tenantId,
+          assignedRecordScope(access).assignedTenantUserId,
+        );
         if (!quote) return false;
 
         const lineItem = await tx.quoteLineItem.findFirst({

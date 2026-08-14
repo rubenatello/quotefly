@@ -421,6 +421,7 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  modal?: boolean;
   size?: ModalSize;
   closeOnBackdrop?: boolean;
   panelClassName?: string;
@@ -438,6 +439,7 @@ export function Modal({
   open,
   onClose,
   children,
+  modal = true,
   size = "md",
   closeOnBackdrop = true,
   panelClassName = "",
@@ -446,12 +448,13 @@ export function Modal({
   return (
     <DialogPrimitive.Root
       open={open}
+      modal={modal}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) onClose();
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-slate-950/65 backdrop-blur-sm" />
+        {modal ? <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-slate-950/65 backdrop-blur-sm" /> : null}
         <DialogPrimitive.Content
           onPointerDownOutside={(event) => {
             if (!closeOnBackdrop) event.preventDefault();

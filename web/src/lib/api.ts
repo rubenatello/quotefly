@@ -244,6 +244,8 @@ export type TenantAccessReason =
 export type TenantEntitlements = {
   planCode: PlanCode;
   planName: string;
+  seatPlanCode: PlanCode;
+  seatPlanName: string;
   isTrial: boolean;
   hasWorkspaceAccess: boolean;
   billingRequired: boolean;
@@ -568,6 +570,7 @@ export type AiAssistantRequestedTool =
   | "SEARCH_CUSTOMERS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
+  | "DRAFT_PRODUCT"
   | "DRAFT_QUOTE";
 
 export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
@@ -575,6 +578,13 @@ export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
 export type AiAssistantConversationTurn = {
   message: string;
   resolvedTool: AiAssistantTool;
+};
+
+export type AiAssistantConversationState = {
+  mode: "NEW" | "CONTINUING" | "SHIFTED";
+  acknowledgement: string | null;
+  previousTool: AiAssistantTool | null;
+  currentTool: AiAssistantTool;
 };
 
 export type AiAssistantContext = {
@@ -590,7 +600,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;
@@ -615,6 +625,7 @@ export type AiAssistantResponse = {
     actions: AiAssistantAction[];
     auditEventId: string;
     fieldsExcluded: string[];
+    conversation: AiAssistantConversationState;
     diagnostics: {
       requestedTool: AiAssistantRequestedTool;
       resolvedTool: AiAssistantTool;
@@ -769,6 +780,8 @@ export type Customer = {
   deletedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
+  assignedTenantUserId?: string | null;
+  assignedTenantUser?: WorkspaceAssignee | null;
   summary?: {
     quoteCount: number;
     latestQuote: CustomerQuoteSummary | null;
@@ -795,7 +808,7 @@ export type QuoteLineItem = {
   sectionType: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
   quantity: DecimalLike;
-  unitCost: DecimalLike;
+  unitCost?: DecimalLike;
   unitPrice: DecimalLike;
   createdAt: string;
 };
@@ -807,6 +820,7 @@ export type QuoteSheetLineInput = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  sourcePresetId?: string;
 };
 
 export type SaveQuoteSheetInput = {
@@ -833,7 +847,7 @@ export type Quote = {
   afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
-  internalCostSubtotal: DecimalLike;
+  internalCostSubtotal?: DecimalLike;
   customerPriceSubtotal: DecimalLike;
   taxAmount: DecimalLike;
   totalAmount: DecimalLike;
@@ -848,6 +862,8 @@ export type Quote = {
   deletedAtUtc?: string | null;
   createdAt: string;
   updatedAt: string;
+  assignedTenantUserId?: string | null;
+  assignedTenantUser?: WorkspaceAssignee | null;
   customer?: Customer;
   lineItems?: QuoteLineItem[];
   quickBooksInvoiceSyncs?: Array<{
@@ -949,7 +965,7 @@ export type AiQuoteSuggestion = {
   serviceType: ServiceType;
   title: string;
   scopeText: string;
-  internalCostSubtotal: number;
+  internalCostSubtotal?: number;
   customerPriceSubtotal: number;
   taxAmount: number;
   totalAmount: number;
@@ -959,7 +975,7 @@ export type AiQuoteSuggestion = {
     sectionType: "INCLUDED" | "ALTERNATE";
     sectionLabel?: string | null;
     quantity: number;
-    unitCost: number;
+    unitCost?: number;
     unitPrice: number;
   }>;
 };
@@ -972,7 +988,7 @@ export type AiQuoteLinePatch = {
   sectionType: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
   quantity: number;
-  unitCost: number;
+  unitCost?: number;
   unitPrice: number;
   reason: string;
 };
@@ -1102,7 +1118,7 @@ export type WorkPreset = {
   name: string;
   description?: string | null;
   defaultQuantity: number | string;
-  unitCost: number | string;
+  unitCost?: number | string;
   unitPrice: number | string;
   isDefault: boolean;
   createdAt: string;
@@ -1128,11 +1144,26 @@ export type OrganizationUser = {
   tenantId: string;
   role: OrgUserRole;
   createdAt: string;
+  capabilities?: string[];
+  assignments?: {
+    assignedCustomers: number;
+    assignedQuotes: number;
+  };
   user: {
     id: string;
     email: string;
     fullName: string;
     createdAt: string;
+  };
+};
+
+export type WorkspaceAssignee = {
+  id: string;
+  role: OrgUserRole;
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
   };
 };
 
@@ -1591,6 +1622,7 @@ export const api = {
         primaryTrade?: ServiceType | null;
         supportedTrades: ServiceType[];
         products: WorkPreset[];
+        policy: { canManageCatalog: boolean; canViewInternalCosts: boolean };
       }>(`/v1/products${toQueryString({ serviceType })}`),
 
     create: (body: ProductInput) =>
@@ -1620,6 +1652,9 @@ export const api = {
             canManageUsers: boolean;
             teamMembersLimit: number | null;
             teamMembersUsed: number;
+            teamMembersRemaining: number | null;
+            seatPlanCode: PlanCode;
+            seatPlanName: string;
           };
         }>(`/v1/org/users`),
 
@@ -1681,6 +1716,7 @@ export const api = {
       phone: string;
       email?: string | null;
       notes?: string | null;
+      assignedTenantUserId?: string | null;
       followUpStatus?: LeadFollowUpStatus;
       duplicateAction?: "merge" | "create_new" | "use_existing";
       duplicateCustomerId?: string;
@@ -1704,6 +1740,7 @@ export const api = {
         email?: string | null;
         notes?: string | null;
         followUpStatus?: LeadFollowUpStatus;
+        assignedTenantUserId?: string | null;
       },
     ) => request<{ customer: Customer }>(`/v1/customers/${customerId}`, {
       method: "PATCH",
@@ -1800,6 +1837,7 @@ export const api = {
       customerPriceSubtotal: number;
       taxAmount: number;
       aiUsageEventId?: string;
+      assignedTenantUserId?: string | null;
       lineItems?: Array<{
         description: string;
         sectionType?: "INCLUDED" | "ALTERNATE";
@@ -1807,6 +1845,7 @@ export const api = {
         quantity: number;
         unitCost: number;
         unitPrice: number;
+        sourcePresetId?: string;
       }>;
     }) =>
       request<{ quote: Quote }>(`/v1/quotes`, {
@@ -1925,6 +1964,7 @@ export const api = {
         title?: string;
         scopeText?: string;
         internalCostSubtotal?: number;
+        assignedTenantUserId?: string | null;
         customerPriceSubtotal?: number;
         taxAmount?: number;
       },
@@ -1974,7 +2014,7 @@ export const api = {
     lineItems: {
       create: (
         quoteId: string,
-        body: { description: string; sectionType?: "INCLUDED" | "ALTERNATE"; sectionLabel?: string | null; quantity: number; unitCost: number; unitPrice: number },
+        body: { description: string; sectionType?: "INCLUDED" | "ALTERNATE"; sectionLabel?: string | null; quantity: number; unitCost: number; unitPrice: number; sourcePresetId?: string },
       ) =>
         request<{ lineItem: QuoteLineItem; quote: Quote }>(`/v1/quotes/${quoteId}/line-items`, {
           method: "POST",

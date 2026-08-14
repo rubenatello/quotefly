@@ -118,6 +118,9 @@ test("social and visible marketing images are valid JPEG assets with expected di
     ["carpentry-measurement.jpg", { width: 1400, height: 1400 }],
     ["contractor-tools.jpg", { width: 1600, height: 1067 }],
     ["construction-silhouette.jpg", { width: 1600, height: 1067 }],
+    ["gardening-watering.jpg", { width: 1000, height: 1500 }],
+    ["landscaping-field-work.jpg", { width: 1600, height: 1031 }],
+    ["roofing-materials.jpg", { width: 1600, height: 1067 }],
   ] as const;
   for (const [asset, dimensions] of solutionsAssets) {
     const assetPath = join(distDir, "images", "solutions", asset);

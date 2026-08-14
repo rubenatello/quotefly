@@ -13,6 +13,14 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("If we close 30% of open quotes, what is the revenue boost?"), "PIPELINE_SCENARIO");
   assert.equal(resolveAssistantTool("If we sold 30 percent of open quotes, what would that realize?"), "PIPELINE_SCENARIO");
   assert.equal(resolveAssistantTool("Take me to products"), "NAVIGATE_WORKSPACE");
+  assert.equal(
+    resolveAssistantTool(
+      "I need to add a new product/service as 'Labor Hours' for quotes, the cost internally is $30.00 and customer price is $75.00",
+      "SEARCH_CUSTOMERS",
+      { currentPage: "customers", customerId: "stale-customer" },
+    ),
+    "DRAFT_PRODUCT",
+  );
   assert.equal(resolveAssistantTool("Show me the most profitable products"), "RANK_PROFITABLE_JOBS");
   assert.equal(resolveAssistantTool("Show me customer named Ruben"), "SEARCH_CUSTOMERS");
   assert.equal(resolveAssistantTool("Open customer Ruben"), "SEARCH_CUSTOMERS");
@@ -28,6 +36,7 @@ test("deterministic operational tools do not consume the external AI budget", as
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
+    "DRAFT_PRODUCT",
   ] as const) {
     assert.equal(assistantToolConsumesAiBudget(tool), false);
   }
@@ -36,7 +45,7 @@ test("deterministic operational tools do not consume the external AI budget", as
 });
 
 test("bounded conversation hints route genuine follow-ups but never override explicit intent", async () => {
-  const { resolveAssistantTool } = await import("../../src/lib/ai-assistant");
+  const { resolveAssistantConversationState, resolveAssistantTool } = await import("../../src/lib/ai-assistant");
   const conversation = [{
     message: "Summarize my sales pipeline for the last 90 days.",
     resolvedTool: "SUMMARIZE_PIPELINE" as const,
@@ -50,6 +59,18 @@ test("bounded conversation hints route genuine follow-ups but never override exp
     resolveAssistantTool("Find customer Smith", "AUTO", { currentPage: "analytics" }, conversation),
     "SEARCH_CUSTOMERS",
   );
+  assert.deepEqual(resolveAssistantConversationState(conversation, "SUMMARIZE_PIPELINE"), {
+    mode: "CONTINUING",
+    acknowledgement: null,
+    previousTool: "SUMMARIZE_PIPELINE",
+    currentTool: "SUMMARIZE_PIPELINE",
+  });
+  assert.deepEqual(resolveAssistantConversationState(conversation, "DRAFT_PRODUCT"), {
+    mode: "SHIFTED",
+    acknowledgement: "Got it — we're switching from business insights to setting up a product or service. I'll use your latest request.",
+    previousTool: "SUMMARIZE_PIPELINE",
+    currentTool: "DRAFT_PRODUCT",
+  });
 });
 
 test("relative business-insight dates are deterministic and bounded", async () => {

@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import {
   AI_ASSISTANT_TOOLS,
+  type AiAssistantConversationState,
   type AiAssistantConversationTurn,
   type AiAssistantRequestedTool,
   type AiAssistantTool,
@@ -57,6 +58,7 @@ export type AiAssistantContext = Readonly<{
 export type AiAssistantAction = Readonly<{
   type:
     | "OPEN_CUSTOMER"
+    | "OPEN_PRODUCT_DRAFT"
     | "OPEN_QUOTE_DRAFT"
     | "OPEN_ANALYTICS"
     | "OPEN_WORKSPACE_PAGE"
@@ -85,6 +87,7 @@ export type AiAssistantResult = Readonly<{
   auditEventId: string;
   fieldsExcluded: string[];
   diagnostics: AiAssistantDiagnostics;
+  conversation?: AiAssistantConversationState;
 }>;
 
 export type AiAssistantRunResult = Readonly<{
@@ -134,6 +137,18 @@ const CLASSIFICATION_RANK: Record<DataClassification, number> = {
   C4_RESTRICTED: 4,
 };
 
+function assignedCustomerScope(access: AccessContext): Prisma.CustomerWhereInput {
+  return hasCapability(access, "viewAllWorkspaceRecords")
+    ? {}
+    : { assignedTenantUserId: access.tenantUserId };
+}
+
+function assignedQuoteScope(access: AccessContext): Prisma.QuoteWhereInput {
+  return hasCapability(access, "viewAllWorkspaceRecords")
+    ? {}
+    : { assignedTenantUserId: access.tenantUserId };
+}
+
 function highestClassification(...values: readonly DataClassification[]) {
   return values.reduce<DataClassification>(
     (current, value) => CLASSIFICATION_RANK[value] > CLASSIFICATION_RANK[current] ? value : current,
@@ -151,9 +166,52 @@ const CUSTOMERS_WITHOUT_QUOTES_PATTERN =
   /\b(?:customers?|clients?)\b.{0,64}\b(?:do\s+not\s+have|does\s+not\s+have|don't\s+have|doesn't\s+have|have\s+no|has\s+no|without|missing)\b.{0,40}\b(?:quotes?|estimates?|proposals?)\b/i;
 const PIPELINE_SCENARIO_PATTERN =
   /(?:\b(?:close|closed|convert|converted|win|won|sell|sold|attain|attained|land|landed|realize|realized)\b.{0,64}\b(?:\d{1,3}(?:\.\d+)?\s*(?:%|percent)|open\s+(?:quotes?|pipeline))\b)|(?:\b\d{1,3}(?:\.\d+)?\s*(?:%|percent)\b.{0,64}\b(?:open\s+quotes?|pipeline|revenue)\b)/i;
+const PRODUCT_DRAFT_INTENT_PATTERN =
+  /(?:\b(?:add|create|make|save|set\s+up)\b.{0,72}\b(?:product|service|catalog\s+item|line[-\s]*item)\b)|(?:\b(?:product|service|catalog\s+item|line[-\s]*item)\b.{0,72}\b(?:add|create|make|save|set\s+up)\b)/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me)\b/i;
 const CONVERSATION_FOLLOW_UP_PATTERN =
   /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|them|those)\b)/i;
+
+type AssistantTopic = "CRM" | "QUOTING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION";
+
+function assistantTopic(tool: AiAssistantTool): AssistantTopic {
+  if (["SEARCH_CUSTOMERS", "FOLLOW_UP_QUEUE", "CUSTOMERS_WITHOUT_QUOTES"].includes(tool)) return "CRM";
+  if (tool === "DRAFT_QUOTE") return "QUOTING";
+  if (tool === "DRAFT_PRODUCT") return "PRODUCTS";
+  if (tool === "NAVIGATE_WORKSPACE") return "NAVIGATION";
+  return "INSIGHTS";
+}
+
+function assistantTopicLabel(topic: AssistantTopic) {
+  if (topic === "CRM") return "customer follow-up";
+  if (topic === "QUOTING") return "building a quote";
+  if (topic === "PRODUCTS") return "setting up a product or service";
+  if (topic === "INSIGHTS") return "business insights";
+  return "workspace navigation";
+}
+
+export function resolveAssistantConversationState(
+  conversation: readonly AiAssistantConversationTurn[] | undefined,
+  currentTool: AiAssistantTool,
+): AiAssistantConversationState {
+  const previousTool = conversation?.at(-1)?.resolvedTool ?? null;
+  if (!previousTool) {
+    return { mode: "NEW", acknowledgement: null, previousTool: null, currentTool };
+  }
+
+  const previousTopic = assistantTopic(previousTool);
+  const currentTopic = assistantTopic(currentTool);
+  if (previousTopic === currentTopic || previousTopic === "NAVIGATION" || currentTopic === "NAVIGATION") {
+    return { mode: "CONTINUING", acknowledgement: null, previousTool, currentTool };
+  }
+
+  return {
+    mode: "SHIFTED",
+    acknowledgement: `Got it — we're switching from ${assistantTopicLabel(previousTopic)} to ${assistantTopicLabel(currentTopic)}. I'll use your latest request.`,
+    previousTool,
+    currentTool,
+  };
+}
 const SEARCH_STOP_WORDS = new Set([
   "a",
   "an",
@@ -195,7 +253,10 @@ function clampLimit(value: number | undefined, max: number, fallback: number) {
 function cleanSearchQuery(message: string, contextSearch?: string) {
   let raw = contextSearch?.trim() || message.trim().replace(STOP_CUSTOMER_SEARCH_PREFIX, "").trim();
   raw = raw.split(/\b(?:and\s+)?(?:ignore|bypass|override|expose|retrieve\s+all|show\s+all)\b/i)[0] ?? raw;
-  return raw.replace(/\s+/g, " ").slice(0, 120);
+  const cleaned = raw.replace(/\s+/g, " ").slice(0, 120);
+  return /^(?:please\s+)?(?:find|search|show(?:\s+me)?|look\s+up)?\s*(?:(?:my|assigned|active|recent)\s+)*(?:customers?|clients?|contacts?)$/i.test(cleaned)
+    ? ""
+    : cleaned;
 }
 
 function searchableTokens(search: string) {
@@ -235,6 +296,10 @@ export function resolveAssistantTool(
   context?: AiAssistantContext,
   conversation?: readonly AiAssistantConversationTurn[],
 ): AiAssistantTool {
+  // A review-only product draft is a stronger intent than a stale UI tool
+  // selection. This also protects older clients that opened Kody from a
+  // customer-specific button and then replaced the suggested prompt.
+  if (PRODUCT_DRAFT_INTENT_PATTERN.test(message)) return "DRAFT_PRODUCT";
   if (requestedTool && requestedTool !== "AUTO") return requestedTool;
   const lower = message.toLowerCase();
 
@@ -279,6 +344,7 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
+    "DRAFT_PRODUCT",
   ].includes(tool);
 }
 
@@ -483,6 +549,7 @@ async function runCustomerSearch(
   const customers = await prisma.customer.findMany({
     where: {
       ...tenantActiveCustomerScope(params.access.tenantId),
+      ...assignedCustomerScope(params.access),
       ...(scopedCustomerId ? { id: scopedCustomerId } : filters.length ? { OR: filters } : {}),
     },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -497,12 +564,12 @@ async function runCustomerSearch(
       _count: {
         select: {
           quotes: {
-            where: tenantActiveQuoteScope(params.access.tenantId),
+            where: { ...tenantActiveQuoteScope(params.access.tenantId), ...assignedQuoteScope(params.access) },
           },
         },
       },
       quotes: {
-        where: tenantActiveQuoteScope(params.access.tenantId),
+        where: { ...tenantActiveQuoteScope(params.access.tenantId), ...assignedQuoteScope(params.access) },
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
         take: 1,
         select: {
@@ -621,6 +688,210 @@ function workspacePageLabel(page: AiWorkspaceTarget) {
   return `${page.charAt(0).toUpperCase()}${page.slice(1)}`;
 }
 
+type ProductDraft = Readonly<{
+  name: string;
+  description: string;
+  category: "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
+  unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
+  defaultQuantity: number;
+  unitCost: number | null;
+  unitPrice: number | null;
+}>;
+
+function parsedMoney(message: string, patterns: readonly RegExp[]) {
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (!match?.[1]) continue;
+    const value = Number(match[1].replaceAll(",", ""));
+    if (Number.isFinite(value) && value >= 0 && value <= 1_000_000) return value;
+  }
+  return null;
+}
+
+function parseProductDraft(message: string): ProductDraft {
+  const quotedName = message.match(/\b(?:as|called|named)\s+["']([^"']{2,120})["']/i)?.[1];
+  const productName = message.match(
+    /\b(?:add|create|make|save|set\s+up)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:product(?:\s*\/\s*service)?|service|catalog\s+item|line[-\s]*item)\s+(?:as\s+|called\s+|named\s+)?([a-z0-9][a-z0-9 /&+_-]{1,80}?)(?=\s+(?:for|with|where|that|cost|priced|at|to\s+the\s+catalog)\b|[,.;]|$)/i,
+  )?.[1];
+  const name = (quotedName ?? productName ?? "New product or service").trim().replace(/\s+/g, " ").slice(0, 120);
+  const normalized = `${name} ${message}`.toLowerCase();
+  const category: ProductDraft["category"] = /\blabor\b/.test(normalized)
+    ? "LABOR"
+    : /\bmaterial/.test(normalized)
+      ? "MATERIAL"
+      : /\bfee\b|\bpermit\b|\bdisposal\b/.test(normalized)
+        ? "FEE"
+        : "SERVICE";
+  const unitType: ProductDraft["unitType"] = /\bper\s+(?:labor\s+)?hour\b|\bhourly\b|\blabor\s+hours?\b/.test(normalized)
+    ? "HOUR"
+    : /\bper\s+(?:square|sq)\s*(?:foot|feet|ft)\b|\bsq\s*ft\b|\bsqft\b/.test(normalized)
+      ? "SQ_FT"
+      : /\bper\s+(?:item|unit|each)\b|\beach\b/.test(normalized)
+        ? "EACH"
+        : "FLAT";
+  const unitCost = parsedMoney(message, [
+    /\b(?:the\s+)?cost\s+internally\s+(?:is|at|of)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+    /\binternal(?:\s+unit)?\s+cost\s+(?:is|at|of)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+    /\bmy\s+(?:unit\s+)?cost\s+(?:is|at|of)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+  ]);
+  const unitPrice = parsedMoney(message, [
+    /\bcustomer(?:\s+unit)?\s+price\s+(?:is|at|of)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+    /\b(?:charge|sell)(?:d|ing)?(?:\s+(?:the\s+)?customer)?\s+(?:is|at|of|for)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+    /\bprice(?:d)?\s+(?:to\s+the\s+customer\s+)?(?:is|at|of)?\s*\$?([\d,]+(?:\.\d{1,2})?)/i,
+  ]);
+  const description = unitType === "HOUR"
+    ? `Hourly ${category === "LABOR" ? "labor" : "service"} for ${name}. Confirm included work, minimums, and exclusions before using on quotes.`
+    : unitType === "SQ_FT"
+      ? `Per-square-foot ${category.toLowerCase()} pricing for ${name}. Confirm materials, preparation, and exclusions before using on quotes.`
+      : unitType === "EACH"
+        ? `Per-item pricing for ${name}. Confirm the included labor, materials, and exclusions before using on quotes.`
+        : `Flat-rate pricing for ${name}. Confirm the included scope, materials, and exclusions before using on quotes.`;
+
+  return {
+    name,
+    description,
+    category,
+    unitType,
+    defaultQuantity: 1,
+    unitCost,
+    unitPrice,
+  };
+}
+
+async function runProductDraftPreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "manageCatalog")) {
+    const answer = "Only a workspace owner or admin can add or change products. I can still help you build an assigned quote with products they have approved.";
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: "C1_BUSINESS_INTERNAL",
+      sourceTypes: ["WorkPreset"],
+      sourceLabels: ["Catalog management denied"],
+      creditsConsumed: 0,
+      telemetry: ZERO_AI_TELEMETRY,
+      riskNote: "Denied before creating a product draft because members cannot manage the tenant catalog.",
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "DRAFT_PRODUCT",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: "C1_BUSINESS_INTERNAL",
+        answer,
+        results: [],
+        citations: [],
+        actions: [{ type: "REQUEST_ADMIN_ACCESS", label: "Ask an admin to add this product", requiresConfirmation: true, payload: { capability: "manageCatalog" } }],
+        auditEventId: event.id,
+        fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "DRAFT_PRODUCT",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "Catalog drafting denied for member role.",
+          archivePolicy: "No catalog rows were read or written.",
+          filters: { currentPage: params.context?.currentPage },
+        }),
+      },
+    };
+  }
+  const draft = parseProductDraft(params.message);
+  const canViewInternalCosts = hasCapability(params.access, "viewInternalCosts");
+  const visibleUnitCost = canViewInternalCosts ? draft.unitCost : null;
+  const serviceType = params.context?.serviceType ?? null;
+  const missing = [
+    draft.name === "New product or service" ? "name" : null,
+    draft.unitPrice === null ? "customer price" : null,
+  ].filter((value): value is string => Boolean(value));
+  const answer = missing.length
+    ? `I prepared a product draft. Add the ${missing.join(" and ")} in the review form before saving it to your catalog.`
+    : `I prepared ${draft.name} as a ${draft.unitType === "HOUR" ? "per-hour" : draft.unitType === "SQ_FT" ? "per-square-foot" : draft.unitType === "EACH" ? "per-item" : "flat-rate"} catalog item. Review the pricing and description before saving.`;
+  const maxClassification: DataClassification = draft.unitCost !== null
+    ? "C3_FINANCIAL_CONFIDENTIAL"
+    : "C2_CUSTOMER_CONFIDENTIAL";
+  const result = {
+    name: draft.name,
+    serviceType,
+    category: draft.category,
+    unitType: draft.unitType,
+    defaultQuantity: draft.defaultQuantity,
+    unitCost: visibleUnitCost,
+    unitPrice: draft.unitPrice,
+  };
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: maxClassification,
+    sourceTypes: ["WorkPreset"],
+    sourceLabels: ["User-supplied product draft"],
+    serviceType,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: missing.length ? "medium" : "high",
+    confidenceLabel: "Deterministic product draft parser",
+    riskNote: "No catalog row was created. The user must review and explicitly save the tenant-scoped product form.",
+  });
+  const fieldsExcluded = [
+    ...defaultExcludedFields(canViewInternalCosts),
+    ...(!canViewInternalCosts && draft.unitCost !== null ? ["user-supplied internal cost"] : []),
+  ];
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "DRAFT_PRODUCT",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification,
+      answer,
+      results: [result],
+      citations: [{
+        key: "A1",
+        label: "Product details supplied in this request",
+        sourceType: "WorkPreset",
+        classification: maxClassification,
+      }],
+      actions: [{
+        type: "OPEN_PRODUCT_DRAFT",
+        label: "Review product draft",
+        requiresConfirmation: true,
+        payload: {
+          ...draft,
+          unitCost: visibleUnitCost,
+          serviceType,
+        },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded,
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "DRAFT_PRODUCT",
+        resultCount: 1,
+        citationCount: 1,
+        emptyReason: null,
+        archivePolicy: "Product drafting does not read archived, deleted, or cross-tenant catalog rows.",
+        filters: {
+          currentPage: params.context?.currentPage,
+          serviceType,
+          internalCostVisible: canViewInternalCosts,
+          missingFields: missing.join(",") || null,
+        },
+      }),
+    },
+  };
+}
+
 async function runWorkspaceNavigation(
   prisma: PrismaClient,
   params: AiAssistantInput,
@@ -634,13 +905,17 @@ async function runWorkspaceNavigation(
       ? params.context.currentPage
       : "customers"
   );
-  const label = workspacePageLabel(target);
-  const answer = `I can take you to ${label}. Your Kody conversation will stay open while you move.`;
+  const catalogRestricted = target === "products" && !hasCapability(params.access, "manageCatalog");
+  const authorizedTarget = catalogRestricted ? "quotes" : target;
+  const label = workspacePageLabel(authorizedTarget);
+  const answer = catalogRestricted
+    ? "The product catalog is managed by workspace owners and admins. I can take you to your assigned quotes, where you can use products they have approved."
+    : `I can take you to ${label}. Your Kody conversation will stay open while you move.`;
   const action: AiAssistantAction = {
     type: "OPEN_WORKSPACE_PAGE",
     label: `Open ${label}`,
     requiresConfirmation: false,
-    payload: { page: target },
+    payload: { page: authorizedTarget },
   };
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
@@ -649,12 +924,14 @@ async function runWorkspaceNavigation(
     answer,
     classification: "C1_BUSINESS_INTERNAL",
     sourceTypes: [],
-    sourceLabels: ["Approved workspace navigation"],
+    sourceLabels: [catalogRestricted ? "Catalog navigation restricted by role" : "Approved workspace navigation"],
     creditsConsumed: 0,
     telemetry: ZERO_AI_TELEMETRY,
     confidenceLevel: "high",
     confidenceLabel: "Deterministic navigation",
-    riskNote: "No workspace records or external AI provider were used for navigation.",
+    riskNote: catalogRestricted
+      ? "Catalog management navigation was replaced with assigned quote navigation for a member role."
+      : "No workspace records or external AI provider were used for navigation.",
   });
   const baseDiagnostics = diagnostics({
     input: params,
@@ -662,7 +939,7 @@ async function runWorkspaceNavigation(
     resultCount: 0,
     citationCount: 0,
     archivePolicy: "Navigation does not retrieve customer or quote rows.",
-    filters: { targetPage: target },
+    filters: { targetPage: authorizedTarget, requestedPage: target, catalogRestricted },
   });
 
   return {
@@ -748,7 +1025,8 @@ async function runCustomersWithoutQuotes(
   const limit = clampLimit(params.context?.limit, MAX_CUSTOMER_LIMIT, DEFAULT_CUSTOMER_LIMIT);
   const where: Prisma.CustomerWhereInput = {
     ...tenantActiveCustomerScope(params.access.tenantId),
-    quotes: { none: tenantActiveQuoteScope(params.access.tenantId) },
+    ...assignedCustomerScope(params.access),
+    quotes: { none: { ...tenantActiveQuoteScope(params.access.tenantId), ...assignedQuoteScope(params.access) } },
   };
   const [total, customers] = await Promise.all([
     prisma.customer.count({ where }),
@@ -850,13 +1128,16 @@ async function runFollowUpQueue(
   const tenantId = params.access.tenantId;
   const activeCustomer = tenantActiveCustomerScope(tenantId);
   const activeQuote = tenantActiveQuoteScope(tenantId);
+  const memberCustomer = assignedCustomerScope(params.access);
+  const memberQuote = assignedQuoteScope(params.access);
 
   const [sentQuotes, afterSaleQuotes] = await Promise.all([
     prisma.quote.findMany({
       where: {
         ...activeQuote,
+        ...memberQuote,
         status: "SENT_TO_CUSTOMER",
-        customer: { is: { ...activeCustomer, followUpStatus: "NEEDS_FOLLOW_UP" } },
+        customer: { is: { ...activeCustomer, ...memberCustomer, followUpStatus: "NEEDS_FOLLOW_UP" } },
       },
       orderBy: [{ sentAt: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
       take: limit,
@@ -874,10 +1155,11 @@ async function runFollowUpQueue(
       : prisma.quote.findMany({
           where: {
             ...activeQuote,
+            ...memberQuote,
             status: "ACCEPTED",
             afterSaleFollowUpStatus: "DUE",
             afterSaleFollowUpDueAtUtc: { lte: generatedAtUtc },
-            customer: { is: activeCustomer },
+            customer: { is: { ...activeCustomer, ...memberCustomer } },
           },
           orderBy: [{ afterSaleFollowUpDueAtUtc: "asc" }, { id: "asc" }],
           take: limit,
@@ -896,9 +1178,10 @@ async function runFollowUpQueue(
     : await prisma.customer.findMany({
         where: {
           ...activeCustomer,
+          ...memberCustomer,
           followUpStatus: "NEEDS_FOLLOW_UP",
           quotes: {
-            none: { ...activeQuote, status: { in: ["SENT_TO_CUSTOMER", "ACCEPTED"] } },
+            none: { ...activeQuote, ...memberQuote, status: { in: ["SENT_TO_CUSTOMER", "ACCEPTED"] } },
           },
         },
         orderBy: [{ followUpUpdatedAtUtc: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
@@ -909,7 +1192,7 @@ async function runFollowUpQueue(
           followUpStatus: true,
           updatedAt: true,
           quotes: {
-            where: activeQuote,
+            where: { ...activeQuote, ...memberQuote },
             orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
             take: 1,
             select: { id: true, title: true, status: true, totalAmount: true },
@@ -1047,6 +1330,7 @@ async function runPipelineScenario(
     prisma.quote.aggregate({
       where: {
         ...tenantActiveQuoteScope(tenantId),
+        ...assignedQuoteScope(params.access),
         status: { in: [...OPEN_PIPELINE_STATUSES] },
         ...serviceFilter,
       },
@@ -1056,6 +1340,7 @@ async function runPipelineScenario(
     prisma.quote.aggregate({
       where: {
         ...tenantActiveQuoteScope(tenantId),
+        ...assignedQuoteScope(params.access),
         status: "ACCEPTED",
         closedAtUtc: { gte: referenceFromUtc, lte: generatedAtUtc },
         ...serviceFilter,
@@ -1367,6 +1652,7 @@ async function runDraftQuotePreview(
         where: {
           id: params.context.quoteId,
           ...tenantActiveQuoteScope(params.access.tenantId),
+          ...assignedQuoteScope(params.access),
         },
         select: {
           id: true,
@@ -1386,6 +1672,7 @@ async function runDraftQuotePreview(
         where: {
           id: selectedCustomerId,
           ...tenantActiveCustomerScope(params.access.tenantId),
+          ...assignedCustomerScope(params.access),
         },
         select: { id: true, fullName: true, email: true, phone: true },
       })
@@ -1585,27 +1872,33 @@ export async function runAiAssistant(
 ): Promise<AiAssistantRunResult> {
   const generatedAtUtc = params.now ?? new Date();
   const tool = resolveAssistantTool(params.message, params.tool, params.context, params.conversation);
+  let result: AiAssistantRunResult;
 
   if (tool === "NAVIGATE_WORKSPACE") {
-    return runWorkspaceNavigation(prisma, params, generatedAtUtc);
+    result = await runWorkspaceNavigation(prisma, params, generatedAtUtc);
+  } else if (tool === "DRAFT_PRODUCT") {
+    result = await runProductDraftPreview(prisma, params, generatedAtUtc);
+  } else if (tool === "FOLLOW_UP_QUEUE") {
+    result = await runFollowUpQueue(prisma, params, generatedAtUtc);
+  } else if (tool === "CUSTOMERS_WITHOUT_QUOTES") {
+    result = await runCustomersWithoutQuotes(prisma, params, generatedAtUtc);
+  } else if (tool === "PIPELINE_SCENARIO") {
+    result = await runPipelineScenario(prisma, params, generatedAtUtc);
+  } else if (tool === "SEARCH_CUSTOMERS") {
+    result = await runCustomerSearch(prisma, params, generatedAtUtc);
+  } else if (tool === "SUMMARIZE_PIPELINE") {
+    result = await runBusinessInsightTool(prisma, params, generatedAtUtc, "SUMMARIZE_PIPELINE");
+  } else if (tool === "RANK_PROFITABLE_JOBS") {
+    result = await runBusinessInsightTool(prisma, params, generatedAtUtc, "RANK_PROFITABLE_JOBS");
+  } else {
+    result = await runDraftQuotePreview(prisma, params, generatedAtUtc);
   }
-  if (tool === "FOLLOW_UP_QUEUE") {
-    return runFollowUpQueue(prisma, params, generatedAtUtc);
-  }
-  if (tool === "CUSTOMERS_WITHOUT_QUOTES") {
-    return runCustomersWithoutQuotes(prisma, params, generatedAtUtc);
-  }
-  if (tool === "PIPELINE_SCENARIO") {
-    return runPipelineScenario(prisma, params, generatedAtUtc);
-  }
-  if (tool === "SEARCH_CUSTOMERS") {
-    return runCustomerSearch(prisma, params, generatedAtUtc);
-  }
-  if (tool === "SUMMARIZE_PIPELINE") {
-    return runBusinessInsightTool(prisma, params, generatedAtUtc, "SUMMARIZE_PIPELINE");
-  }
-  if (tool === "RANK_PROFITABLE_JOBS") {
-    return runBusinessInsightTool(prisma, params, generatedAtUtc, "RANK_PROFITABLE_JOBS");
-  }
-  return runDraftQuotePreview(prisma, params, generatedAtUtc);
+
+  return {
+    ...result,
+    assistant: {
+      ...result.assistant,
+      conversation: resolveAssistantConversationState(params.conversation, tool),
+    },
+  };
 }

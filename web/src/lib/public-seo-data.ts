@@ -10,6 +10,7 @@ export const PUBLIC_ROUTE_PATHS = [
   "/pricing",
   "/services",
   "/solutions",
+  "/solutions/landscaping",
   "/about",
   "/support",
   "/privacy",
@@ -69,6 +70,16 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
     summary:
       "Turn fresh job details into clear customer quotes with one mobile workflow for customer records, pricing, branded PDFs, and follow-up.",
     schemaType: "CollectionPage",
+  },
+  "/solutions/landscaping": {
+    path: "/solutions/landscaping",
+    title: "Landscaping and Gardening Quote Software | QuoteFly",
+    description:
+      "Create landscaping and gardening estimates with hourly, per-visit, square-foot, material, and recurring-service pricing in QuoteFly.",
+    heading: "Landscaping and gardening quotes built around the way you work",
+    summary:
+      "Build clear landscaping estimates from reusable labor, material, area, and recurring-service items, then share a branded quote and track follow-up.",
+    schemaType: "WebPage",
   },
   "/about": {
     path: "/about",

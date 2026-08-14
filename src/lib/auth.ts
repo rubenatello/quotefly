@@ -3,6 +3,9 @@ import { FastifyRequest } from "fastify";
 import { z } from "zod";
 
 export const LiveAuthMembershipSelect = Prisma.validator<Prisma.TenantUserSelect>()({
+  id: true,
+  tenantId: true,
+  userId: true,
   role: true,
   user: {
     select: {

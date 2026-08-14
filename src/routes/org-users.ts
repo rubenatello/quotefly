@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { Prisma } from "@prisma/client";
 import { getJwtClaims } from "../lib/auth";
 import { loadTenantEntitlements } from "../lib/subscription";
 
@@ -34,6 +35,17 @@ function canManageUsers(role: string): boolean {
   return normalized === "owner" || normalized === "admin";
 }
 
+function roleCapabilities(role: string) {
+  const normalized = normalizeRole(role);
+  if (normalized === "owner") {
+    return ["All customers and assigned work", "Products, costs, margins, and retention", "Users, assignments, and billing"];
+  }
+  if (normalized === "admin") {
+    return ["All customers and assigned work", "Products, costs, margins, and retention", "Users and assignments"];
+  }
+  return ["Assigned customers and follow-ups", "Create and edit assigned quotes", "No catalog changes, internal costs, margins, or record deletion"];
+}
+
 export const orgUserRoutes: FastifyPluginAsync = async (app) => {
   app.get("/org/users", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
@@ -52,7 +64,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "No active tenant membership for this user." });
     }
 
-    const [members, entitlements] = await Promise.all([
+    const [members, entitlements, assignmentCounts] = await Promise.all([
       app.prisma.tenantUser.findMany({
         where: {
           tenantId: claims.tenantId,
@@ -72,7 +84,20 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ role: "asc" }, { createdAt: "asc" }],
       }),
       loadTenantEntitlements(app.prisma, claims.tenantId, { userEmail: claims.email }),
+      app.prisma.tenantUser.findMany({
+        where: { tenantId: claims.tenantId, deletedAtUtc: null },
+        select: {
+          id: true,
+          _count: {
+            select: {
+              assignedCustomers: { where: { archivedAtUtc: null, deletedAtUtc: null } },
+              assignedQuotes: { where: { archivedAtUtc: null, deletedAtUtc: null } },
+            },
+          },
+        },
+      }),
     ]);
+    const assignmentsByMembership = new Map(assignmentCounts.map((member) => [member.id, member._count]));
 
     return {
       members: members.map((member) => ({
@@ -80,6 +105,8 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         tenantId: member.tenantId,
         role: normalizeRole(member.role),
         createdAt: member.createdAt,
+        capabilities: roleCapabilities(member.role),
+        assignments: assignmentsByMembership.get(member.id) ?? { assignedCustomers: 0, assignedQuotes: 0 },
         user: {
           id: member.user.id,
           email: member.user.email,
@@ -91,6 +118,11 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         canManageUsers: canManageUsers(membership.role),
         teamMembersLimit: entitlements?.limits.teamMembers ?? null,
         teamMembersUsed: members.length,
+        teamMembersRemaining: entitlements?.limits.teamMembers === null || entitlements?.limits.teamMembers === undefined
+          ? null
+          : Math.max(entitlements.limits.teamMembers - members.length, 0),
+        seatPlanCode: entitlements?.seatPlanCode ?? "starter",
+        seatPlanName: entitlements?.seatPlanName ?? "Basic",
       },
     };
   });
@@ -123,30 +155,6 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const activeMemberCount = await app.prisma.tenantUser.count({
-      where: {
-        tenantId: claims.tenantId,
-        deletedAtUtc: null,
-        user: { deletedAtUtc: null },
-      },
-    });
-
-    if (
-      entitlements.limits.teamMembers !== null &&
-      activeMemberCount >= entitlements.limits.teamMembers
-    ) {
-      const requiredPlan = entitlements.planCode === "starter" ? "professional" : "enterprise";
-      return reply.code(403).send({
-        code: "PLAN_LIMIT_EXCEEDED",
-        feature: "teamMembers",
-        error: `${entitlements.planName} allows up to ${entitlements.limits.teamMembers} active team members.`,
-        currentPlan: entitlements.planCode,
-        requiredPlan,
-        limit: entitlements.limits.teamMembers,
-        used: activeMemberCount,
-      });
-    }
-
     const existingUser = await app.prisma.user.findUnique({
       where: { email: normalizedEmail },
       include: {
@@ -167,6 +175,24 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       await app.prisma.$transaction(async (tx) => {
+        // Serialize seat additions per tenant so simultaneous invitations can
+        // never overrun the plan allowance.
+        await tx.$queryRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtextextended(${claims.tenantId}, 0))::text
+        `);
+        const activeMemberCount = await tx.tenantUser.count({
+          where: {
+            tenantId: claims.tenantId,
+            deletedAtUtc: null,
+            user: { deletedAtUtc: null },
+          },
+        });
+        if (
+          entitlements.limits.teamMembers !== null &&
+          activeMemberCount >= entitlements.limits.teamMembers
+        ) {
+          throw new Error(`SEAT_LIMIT:${activeMemberCount}`);
+        }
         if (!existingUser) {
           const passwordHash = await bcrypt.hash(payload.password, BCRYPT_ROUNDS);
           const createdUser = await tx.user.create({
@@ -226,6 +252,24 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       if (error instanceof Error && error.message === "ACTIVE_MEMBERSHIP_EXISTS") {
         return reply.code(409).send({ error: "User is already an active member in this organization." });
+      }
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return reply.code(409).send({
+          error: "That user or workspace membership was created by another request. Refresh the team list before retrying.",
+        });
+      }
+      if (error instanceof Error && error.message.startsWith("SEAT_LIMIT:")) {
+        const activeMemberCount = Number(error.message.split(":")[1] ?? entitlements.limits.teamMembers ?? 0);
+        const requiredPlan = entitlements.planCode === "starter" ? "professional" : "enterprise";
+        return reply.code(403).send({
+          code: "PLAN_LIMIT_EXCEEDED",
+          feature: "teamMembers",
+          error: `${entitlements.seatPlanName} allows up to ${entitlements.limits.teamMembers} active team members.`,
+          currentPlan: entitlements.seatPlanCode,
+          requiredPlan,
+          limit: entitlements.limits.teamMembers,
+          used: activeMemberCount,
+        });
       }
       throw error;
     }
@@ -383,6 +427,22 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
 
     if (normalizeRole(targetMembership.role) === "owner") {
       return reply.code(400).send({ error: "Transfer ownership before removing another owner." });
+    }
+
+    const activeAssignments = await app.prisma.$transaction(async (tx) => ({
+      customers: await tx.customer.count({
+        where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
+      }),
+      quotes: await tx.quote.count({
+        where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
+      }),
+    }));
+    if (activeAssignments.customers > 0 || activeAssignments.quotes > 0) {
+      return reply.code(409).send({
+        code: "MEMBER_HAS_ACTIVE_ASSIGNMENTS",
+        error: `Reassign ${activeAssignments.customers} customer(s) and ${activeAssignments.quotes} quote(s) before removing this member.`,
+        assignments: activeAssignments,
+      });
     }
 
     await app.prisma.tenantUser.update({

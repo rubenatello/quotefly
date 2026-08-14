@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
   Boxes,
@@ -81,6 +81,41 @@ type ProductForm = {
   unitPrice: string;
 };
 
+type KodyProductDraft = Partial<ProductForm>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function kodyProductDraftFromState(value: unknown): KodyProductDraft | null {
+  if (!isRecord(value)) return null;
+  const state = value.kodyProductDraft;
+  if (!isRecord(state)) return null;
+  const serviceType = typeof state.serviceType === "string" && state.serviceType in TRADE_LABELS
+    ? state.serviceType as ServiceType
+    : undefined;
+  const category = typeof state.category === "string" && state.category in CATEGORY_LABELS
+    ? state.category as WorkPresetCategory
+    : undefined;
+  const unitType = typeof state.unitType === "string" && state.unitType in UNIT_LABELS
+    ? state.unitType as WorkPresetUnitType
+    : undefined;
+  const boundedNumber = (candidate: unknown) =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 && candidate <= 1_000_000
+      ? String(candidate)
+      : undefined;
+  return {
+    ...(serviceType ? { serviceType } : {}),
+    ...(typeof state.name === "string" ? { name: state.name.trim().slice(0, 120) } : {}),
+    ...(typeof state.description === "string" ? { description: state.description.trim().slice(0, 500) } : {}),
+    ...(category ? { category } : {}),
+    ...(unitType ? { unitType } : {}),
+    ...(boundedNumber(state.defaultQuantity) ? { defaultQuantity: boundedNumber(state.defaultQuantity) } : {}),
+    ...(boundedNumber(state.unitCost) ? { unitCost: boundedNumber(state.unitCost) } : {}),
+    ...(boundedNumber(state.unitPrice) ? { unitPrice: boundedNumber(state.unitPrice) } : {}),
+  };
+}
+
 function emptyProductForm(serviceType: ServiceType): ProductForm {
   return {
     serviceType,
@@ -128,6 +163,7 @@ function marginTone(margin: number | null): "emerald" | "amber" | "red" | "slate
 function ProductEditorModal({
   open,
   product,
+  draft,
   defaultTrade,
   supportedTrades,
   saving,
@@ -138,6 +174,7 @@ function ProductEditorModal({
 }: {
   open: boolean;
   product: WorkPreset | null;
+  draft: KodyProductDraft | null;
   defaultTrade: ServiceType;
   supportedTrades: ServiceType[];
   saving: boolean;
@@ -147,8 +184,8 @@ function ProductEditorModal({
   onSave: (form: ProductForm) => Promise<void> | void;
 }) {
   const initialForm = useMemo(
-    () => (product ? productToForm(product) : emptyProductForm(defaultTrade)),
-    [defaultTrade, product],
+    () => product ? productToForm(product) : { ...emptyProductForm(defaultTrade), ...(draft ?? {}) },
+    [defaultTrade, draft, product],
   );
   const [form, setForm] = useState<ProductForm>(initialForm);
   const [error, setError] = useState<string | null>(null);
@@ -205,7 +242,15 @@ function ProductEditorModal({
   }
 
   return (
-    <Modal open={open} onClose={requestClose} size="lg" ariaLabel={product ? "Edit product" : "Add product"}>
+    <Modal
+      open={open}
+      onClose={requestClose}
+      size="lg"
+      modal={false}
+      closeOnBackdrop={false}
+      panelClassName="z-[60]"
+      ariaLabel={product ? "Edit product" : "Add product"}
+    >
       <ModalHeader
         title={product ? "Edit product" : "Add product or service"}
         description={
@@ -220,6 +265,9 @@ function ProductEditorModal({
         {saveError ? <Alert tone="error" onDismiss={onDismissSaveError}>{saveError}</Alert> : null}
         {isStandard ? (
           <Alert tone="info">Standard catalog names, trades, categories, and units are locked to keep quote matching reliable.</Alert>
+        ) : null}
+        {draft ? (
+          <Alert tone="info">Kody prepared this draft from your request. Review every field—especially the pricing unit, internal cost, and customer price—before adding it.</Alert>
         ) : null}
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -321,7 +369,7 @@ function ProductMobileCard({ product, onEdit, onArchive }: {
   onEdit: () => void;
   onArchive: () => void;
 }) {
-  const margin = marginPercent(product.unitCost, product.unitPrice);
+  const margin = marginPercent(product.unitCost ?? 0, product.unitPrice);
   return (
     <Card padding="md" className="space-y-4 md:hidden">
       <div className="flex items-start justify-between gap-3">
@@ -345,7 +393,7 @@ function ProductMobileCard({ product, onEdit, onArchive }: {
         </div>
         <div>
           <p className="text-xs text-slate-500">Internal cost</p>
-          <p className="mt-1 font-semibold text-slate-900">{money(product.unitCost)}</p>
+          <p className="mt-1 font-semibold text-slate-900">{money(product.unitCost ?? 0)}</p>
         </div>
         <div>
           <p className="text-xs text-slate-500">Unit</p>
@@ -369,6 +417,7 @@ function ProductMobileCard({ product, onEdit, onArchive }: {
 }
 
 export function ProductsPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const [products, setProducts] = useState<WorkPreset[]>([]);
   const [supportedTrades, setSupportedTrades] = useState<ServiceType[]>([]);
@@ -383,6 +432,7 @@ export function ProductsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<WorkPreset | null>(null);
+  const [kodyProductDraft, setKodyProductDraft] = useState<KodyProductDraft | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<WorkPreset | null>(null);
 
   useEffect(() => {
@@ -391,6 +441,18 @@ export function ProductsPage() {
       description: "Manage reusable products, services, costs, and customer pricing for QuoteFly quotes.",
     });
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const draft = kodyProductDraftFromState(location.state);
+    if (!draft) return;
+    setEditorError(null);
+    setEditingProduct(null);
+    setKodyProductDraft(draft);
+    if (draft.serviceType) setSelectedTrade(draft.serviceType);
+    setEditorOpen(true);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [loading, location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     let mounted = true;
@@ -436,7 +498,7 @@ export function ProductsPage() {
 
   const averageMargin = useMemo(() => {
     const values = tradeProducts
-      .map((product) => marginPercent(product.unitCost, product.unitPrice))
+      .map((product) => marginPercent(product.unitCost ?? 0, product.unitPrice))
       .filter((value): value is number => value !== null);
     if (!values.length) return null;
     return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -448,12 +510,14 @@ export function ProductsPage() {
   function openCreateProduct() {
     setEditorError(null);
     setEditingProduct(null);
+    setKodyProductDraft(null);
     setEditorOpen(true);
   }
 
   function openEditProduct(product: WorkPreset) {
     setEditorError(null);
     setEditingProduct(product);
+    setKodyProductDraft(null);
     setEditorOpen(true);
   }
 
@@ -495,6 +559,7 @@ export function ProductsPage() {
       setNotice(editingProduct ? `${result.product.name} updated.` : `${result.product.name} added to your catalog.`);
       setEditorOpen(false);
       setEditingProduct(null);
+      setKodyProductDraft(null);
     } catch (err) {
       setEditorError(err instanceof ApiError ? err.message : "Product could not be saved.");
     } finally {
@@ -635,7 +700,7 @@ export function ProductsPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {visibleProducts.map((product) => {
-                    const margin = marginPercent(product.unitCost, product.unitPrice);
+                    const margin = marginPercent(product.unitCost ?? 0, product.unitPrice);
                     return (
                       <tr key={product.id} className="align-top hover:bg-slate-50/70">
                         <td className="max-w-[340px] px-3 py-4">
@@ -647,7 +712,7 @@ export function ProductsPage() {
                         </td>
                         <td className="px-3 py-4"><Badge tone="slate">{CATEGORY_LABELS[product.category]}</Badge><p className="mt-2 text-xs text-slate-500">{UNIT_LABELS[product.unitType]}</p></td>
                         <td className="px-3 py-4 font-medium text-slate-700">{Number(product.defaultQuantity)}</td>
-                        <td className="px-3 py-4 font-medium text-slate-700">{money(product.unitCost)}</td>
+                        <td className="px-3 py-4 font-medium text-slate-700">{money(product.unitCost ?? 0)}</td>
                         <td className="px-3 py-4 font-semibold text-slate-900">{money(product.unitPrice)}</td>
                         <td className="px-3 py-4"><Badge tone={marginTone(margin)}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</Badge></td>
                         <td className="px-3 py-4">
@@ -672,14 +737,16 @@ export function ProductsPage() {
 
       {editorOpen ? (
         <ProductEditorModal
+          key={editingProduct?.id ?? (kodyProductDraft ? "kody-product-draft" : "new-product")}
           open
           product={editingProduct}
+          draft={kodyProductDraft}
           defaultTrade={selectedTrade}
           supportedTrades={supportedTrades.length ? supportedTrades : Object.keys(TRADE_LABELS) as ServiceType[]}
           saving={saving}
           saveError={editorError}
           onDismissSaveError={() => setEditorError(null)}
-          onClose={() => { if (!saving) { setEditorOpen(false); setEditingProduct(null); setEditorError(null); } }}
+          onClose={() => { if (!saving) { setEditorOpen(false); setEditingProduct(null); setKodyProductDraft(null); setEditorError(null); } }}
           onSave={saveProduct}
         />
       ) : null}
@@ -692,6 +759,7 @@ export function ProductsPage() {
         description={archiveTarget ? `${archiveTarget.name} will stop appearing in new quote product lists. Existing quotes stay unchanged.` : undefined}
         confirmLabel="Archive product"
         loading={archiving}
+        confirmVariant="warning"
       />
     </div>
   );

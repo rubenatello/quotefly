@@ -27,6 +27,7 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "SEARCH_CUSTOMERS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
+  "DRAFT_PRODUCT",
   "DRAFT_QUOTE",
 ];
 
@@ -67,6 +68,7 @@ function isRequestedTool(value: unknown): value is AiAssistantRequestedTool {
 function isAssistantActionType(value: unknown): value is AiAssistantAction["type"] {
   return (
     value === "OPEN_CUSTOMER" ||
+    value === "OPEN_PRODUCT_DRAFT" ||
     value === "OPEN_QUOTE_DRAFT" ||
     value === "OPEN_ANALYTICS" ||
     value === "OPEN_WORKSPACE_PAGE" ||
@@ -76,6 +78,7 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
 
 function actionLabelForType(type: AiAssistantAction["type"]) {
   if (type === "OPEN_CUSTOMER") return "Open customer";
+  if (type === "OPEN_PRODUCT_DRAFT") return "Review product draft";
   if (type === "OPEN_QUOTE_DRAFT") return "Review quote draft";
   if (type === "OPEN_ANALYTICS") return "Open analytics";
   if (type === "OPEN_WORKSPACE_PAGE") return "Open page";
@@ -181,6 +184,12 @@ export function normalizeKodyAssistantResponse(response: unknown): AssistantPayl
       ? rawDiagnostics.resolvedTool
       : "DRAFT_QUOTE";
   const resolvedTool = isAssistantTool(rawDiagnostics.resolvedTool) ? rawDiagnostics.resolvedTool : tool;
+  const rawConversation = isRecord(raw.conversation) ? raw.conversation : {};
+  const previousTool = isAssistantTool(rawConversation.previousTool) ? rawConversation.previousTool : null;
+  const currentTool = isAssistantTool(rawConversation.currentTool) ? rawConversation.currentTool : resolvedTool;
+  const conversationMode = rawConversation.mode === "SHIFTED" || rawConversation.mode === "CONTINUING"
+    ? rawConversation.mode
+    : "NEW";
 
   return {
     tool,
@@ -195,6 +204,12 @@ export function normalizeKodyAssistantResponse(response: unknown): AssistantPayl
     actions,
     auditEventId: getString(raw.auditEventId) ?? "audit-unavailable",
     fieldsExcluded,
+    conversation: {
+      mode: conversationMode,
+      acknowledgement: conversationMode === "SHIFTED" ? getString(rawConversation.acknowledgement) : null,
+      previousTool,
+      currentTool,
+    },
     diagnostics: {
       requestedTool: isRequestedTool(rawDiagnostics.requestedTool) ? rawDiagnostics.requestedTool : "AUTO",
       resolvedTool,

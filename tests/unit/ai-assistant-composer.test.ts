@@ -136,6 +136,47 @@ test("assistant composition includes only bounded redacted conversation hints", 
   ]);
 });
 
+test("assistant composer encodes Kody's collaborative tone and review boundaries", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  let capturedPrompt = "";
+  setAssistantCompositionProviderForTest(async (request) => {
+    capturedPrompt = request.systemPrompt;
+    return {
+      outputText: JSON.stringify({ answer: "I prepared the draft for your review.", sourceKeys: ["A1"], safetyNotes: [] }),
+      model: "test-kody-tone",
+      telemetry: null,
+    };
+  });
+  try {
+    await composeAssistantAnswer({
+      userMessage: "Actually, let's create a product instead.",
+      tool: "DRAFT_PRODUCT",
+      deterministicAnswer: "I prepared a product draft for review.",
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      results: [],
+      citations: [{ key: "A1", label: "Current request", sourceType: "UserRequest", classification: "C1_BUSINESS_INTERNAL" }],
+      actions: [{ type: "OPEN_PRODUCT_DRAFT", label: "Review product draft", requiresConfirmation: true }],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "AUTO",
+        resolvedTool: "DRAFT_PRODUCT",
+        resultCount: 0,
+        citationCount: 1,
+        emptyReason: null,
+        archivePolicy: "No rows read.",
+        filters: {},
+      },
+    });
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+  }
+
+  assert.match(capturedPrompt, /calm, collaborative, and natural/i);
+  assert.match(capturedPrompt, /never scold, argue with, blame, or talk down/i);
+  assert.match(capturedPrompt, /latest request as authoritative/i);
+  assert.match(capturedPrompt, /requiresConfirmation are proposals only/i);
+});
+
 test("assistant composition bounds and redacts governed retrieval excerpts", async () => {
   const { buildAssistantCompositionPayload } = await loadComposer();
   const payload = buildAssistantCompositionPayload({

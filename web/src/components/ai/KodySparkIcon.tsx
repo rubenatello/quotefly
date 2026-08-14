@@ -61,18 +61,11 @@ export function KodySparkIcon({
     >
       {thinking ? <style>{THINKING_STYLES}</style> : null}
       {title ? <title id={titleId}>{title}</title> : null}
-      <path
-        d="M6.25 5.9h7.8c2.45 0 4.45 1.88 4.45 4.2v2.1c0 2.32-2 4.2-4.45 4.2h-3.9L6.25 18.7v-2.3c-2.45 0-4.45-1.88-4.45-4.2v-2.1c0-2.32 2-4.2 4.45-4.2Z"
-        opacity="0.72"
-      />
-      <path d="M7.35 8.65v6.65" />
-      <path className="qf-kody-spark-icon__wing" d="M7.55 12.1 13.4 7.8l4.1-1.95-1.95 4.1-8 5.4" />
-      <path className="qf-kody-spark-icon__wing" d="m13.4 7.8 2.15 2.15" />
+      <path d="M6.8 6.8h8.4a3.8 3.8 0 0 1 3.8 3.8v1.8a3.8 3.8 0 0 1-3.8 3.8h-4.1l-3.6 2v-2.05a3.8 3.8 0 0 1-4.5-3.75v-1.8a3.8 3.8 0 0 1 3.8-3.8Z" opacity="0.82" />
+      <path className="qf-kody-spark-icon__wing" d="m10.9 8.9.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9Z" />
       <g className="qf-kody-spark-icon__spark">
-        <path d="M19.3 2.85v2.45" />
-        <path d="M18.08 4.08h2.45" />
-        <path d="M21.05 6.75v1.35" opacity="0.7" />
-        <path d="M20.38 7.42h1.35" opacity="0.7" />
+        <path d="M18.5 2.8v2.7" />
+        <path d="M17.15 4.15h2.7" />
       </g>
     </svg>
   );

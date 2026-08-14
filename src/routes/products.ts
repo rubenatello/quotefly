@@ -3,6 +3,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { markWorkPresetAiRetrievalSourceDeleted } from "../lib/ai-retrieval";
 import { getJwtClaims } from "../lib/auth";
+import { buildAccessContext, hasCapability } from "../lib/access-policy";
 
 const ServiceTypeEnum = z.enum([
   "HVAC",
@@ -84,6 +85,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/products", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
     const query = ProductQuerySchema.parse(request.query);
 
     const tenant = await app.prisma.tenant.findFirst({
@@ -108,12 +110,25 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     return {
       primaryTrade: tenant.primaryTrade,
       supportedTrades: ServiceTypeEnum.options,
-      products,
+      products: products.map((product) => {
+        const { unitCost, ...visibleProduct } = product;
+        return hasCapability(access, "viewInternalCosts")
+          ? { ...visibleProduct, unitCost }
+          : visibleProduct;
+      }),
+      policy: {
+        canManageCatalog: hasCapability(access, "manageCatalog"),
+        canViewInternalCosts: hasCapability(access, "viewInternalCosts"),
+      },
     };
   });
 
   app.post("/products", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can manage products and pricing." });
+    }
     const payload = CreateProductSchema.parse(request.body);
 
     const tenant = await app.prisma.tenant.findFirst({
@@ -217,6 +232,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/products/:productId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can manage products and pricing." });
+    }
     const params = ProductParamsSchema.parse(request.params);
     const payload = UpdateProductSchema.parse(request.body);
 
@@ -307,6 +326,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/products/:productId", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can manage products and pricing." });
+    }
     const params = ProductParamsSchema.parse(request.params);
 
     const existingProduct = await app.prisma.workPreset.findFirst({

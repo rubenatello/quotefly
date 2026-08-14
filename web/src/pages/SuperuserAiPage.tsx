@@ -23,6 +23,7 @@ const ASSISTANT_TOOLS: Array<{ value: AiAssistantRequestedTool; label: string }>
   { value: "DRAFT_QUOTE", label: "Draft quote" },
   { value: "SUMMARIZE_PIPELINE", label: "Summarize pipeline" },
   { value: "RANK_PROFITABLE_JOBS", label: "Rank profitable jobs" },
+  { value: "DRAFT_PRODUCT", label: "Draft product" },
 ];
 
 const CONTEXT_PAGES: Array<{ value: NonNullable<AiAssistantContext["currentPage"]>; label: string }> = [

@@ -125,6 +125,12 @@ describe("AI data governance", () => {
     const beta = await signUp("ai-governance-beta");
     const { customer, quote } = await createCustomerAndQuote(owner);
     const betaRecords = await createCustomerAndQuote(beta);
+    const memberMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    await prisma.customer.update({ where: { id: customer.id }, data: { assignedTenantUserId: memberMembership.id } });
+    await prisma.quote.update({ where: { id: quote.id }, data: { assignedTenantUserId: memberMembership.id } });
 
     await expect(
       createAiUsageEvent(prisma, {
@@ -318,13 +324,13 @@ describe("AI data governance", () => {
       },
       data: { role: "member" },
     });
+    await prisma.quote.update({ where: { id: quote.id }, data: { assignedTenantUserId: memberMembership.id } });
     const demotedAdmin = await app.inject({
       method: "GET",
       url: `/v1/quotes/${quote.id}/ai-runs`,
       headers: { cookie: admin.cookie },
     });
-    expect(demotedAdmin.statusCode).toBe(200);
-    expect((demotedAdmin.json() as { pagination: { total: number } }).pagination.total).toBe(0);
+    expect(demotedAdmin.statusCode).toBe(404);
 
     const crossTenant = await app.inject({
       method: "GET",

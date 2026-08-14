@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Textarea } from "../components/ui";
+import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Select, Textarea } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
 import { usePageView } from "../lib/analytics";
-import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary } from "../lib/api";
+import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser } from "../lib/api";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 
@@ -20,6 +20,12 @@ type CustomerRow = {
 type CustomerRetentionAction =
   | { type: "archive" | "delete" | "restore"; row: CustomerRow }
   | null;
+
+function roleLabelForAssignment(role: OrganizationUser["role"]): string {
+  if (role === "owner") return "Owner";
+  if (role === "admin") return "Admin";
+  return "Member";
+}
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
 const ACTIVITY_PAGE_SIZE = 5;
@@ -433,6 +439,8 @@ export function CustomersPage() {
     loadQuotes,
     navigateToQuote,
     navigateToBuilder,
+    canManageAssignments,
+    canManageRecordRetention,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
@@ -452,7 +460,8 @@ export function CustomersPage() {
   const [activityTotal, setActivityTotal] = useState(0);
   const [customerNotesDraft, setCustomerNotesDraft] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
-  const [customerDetailsDraft, setCustomerDetailsDraft] = useState({ fullName: "", phone: "", email: "" });
+  const [customerDetailsDraft, setCustomerDetailsDraft] = useState({ fullName: "", phone: "", email: "", assignedTenantUserId: "" });
+  const [workspaceMembers, setWorkspaceMembers] = useState<OrganizationUser[]>([]);
   const [detailsSaving, setDetailsSaving] = useState(false);
   const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
@@ -463,6 +472,19 @@ export function CustomersPage() {
   const customerRequestIdRef = useRef(0);
   const activityRequestIdRef = useRef(0);
   const detailRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!canManageAssignments) return;
+    let mounted = true;
+    api.org.users.list()
+      .then((result) => {
+        if (mounted) setWorkspaceMembers(result.members);
+      })
+      .catch(() => {
+        if (mounted) setWorkspaceMembers([]);
+      });
+    return () => { mounted = false; };
+  }, [canManageAssignments]);
 
   useEffect(() => {
     if (searchParams.get("compose") === "customer") {
@@ -626,7 +648,8 @@ export function CustomersPage() {
   const detailsChanged = Boolean(selectedActivityRow) && (
     selectedActivityRow?.customer.fullName !== customerDetailsDraft.fullName.trim() ||
     selectedActivityRow?.customer.phone !== customerDetailsDraft.phone.trim() ||
-    (selectedActivityRow?.customer.email ?? "") !== customerDetailsDraft.email.trim()
+    (selectedActivityRow?.customer.email ?? "") !== customerDetailsDraft.email.trim() ||
+    (selectedActivityRow?.customer.assignedTenantUserId ?? "") !== customerDetailsDraft.assignedTenantUserId
   );
 
   useEffect(() => {
@@ -638,8 +661,9 @@ export function CustomersPage() {
       fullName: selectedActivityRow?.customer.fullName ?? "",
       phone: selectedActivityRow?.customer.phone ?? "",
       email: selectedActivityRow?.customer.email ?? "",
+      assignedTenantUserId: selectedActivityRow?.customer.assignedTenantUserId ?? "",
     });
-  }, [selectedActivityRow?.customer.email, selectedActivityRow?.customer.fullName, selectedActivityRow?.customer.id, selectedActivityRow?.customer.phone]);
+  }, [selectedActivityRow?.customer.assignedTenantUserId, selectedActivityRow?.customer.email, selectedActivityRow?.customer.fullName, selectedActivityRow?.customer.id, selectedActivityRow?.customer.phone]);
 
   useEffect(() => {
     setDetailsFeedback(null);
@@ -666,6 +690,7 @@ export function CustomersPage() {
         fullName,
         phone,
         email: customerDetailsDraft.email.trim() || null,
+        ...(canManageAssignments ? { assignedTenantUserId: customerDetailsDraft.assignedTenantUserId || null } : {}),
       });
       await Promise.all([loadCustomerPage(), loadCustomers(), loadCustomerDetail(selectedActivityRow.customer.id)]);
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
@@ -898,7 +923,15 @@ export function CustomersPage() {
         }}
       />
 
-      <Modal open={Boolean(selectedActivityRow)} onClose={closeActivityModal} size="lg" ariaLabel="Customer details and activity">
+      <Modal
+        open={Boolean(selectedActivityRow)}
+        onClose={closeActivityModal}
+        size="lg"
+        modal={false}
+        closeOnBackdrop={false}
+        panelClassName="z-[60]"
+        ariaLabel="Customer details and activity"
+      >
         <ModalHeader
           title={selectedActivityRow ? `${selectedActivityRow.customer.fullName} activity` : "Customer activity"}
           description={selectedActivityRow ? "Timeline of customer entry, contact, quotes, and work progress." : undefined}
@@ -952,6 +985,25 @@ export function CustomersPage() {
                       disabled={detailsSaving || selectedCustomerInactive}
                     />
                   </label>
+                  {canManageAssignments ? (
+                    <div className="sm:col-span-2">
+                      <Select
+                        label="Assigned to"
+                        value={customerDetailsDraft.assignedTenantUserId}
+                        onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, assignedTenantUserId: event.target.value }))}
+                        disabled={detailsSaving || selectedCustomerInactive}
+                        options={[
+                          { value: "", label: "Unassigned" },
+                          ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${roleLabelForAssignment(member.role)}` })),
+                        ]}
+                      />
+                      <p className="mt-1.5 text-xs text-slate-500">Members see only customers and work assigned to them. Owners and admins see the full workspace.</p>
+                    </div>
+                  ) : selectedActivityRow.customer.assignedTenantUser ? (
+                    <div className="sm:col-span-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-800">
+                      Assigned to {selectedActivityRow.customer.assignedTenantUser.user.fullName}
+                    </div>
+                  ) : null}
                   <label className="space-y-1.5">
                     <span className="text-xs font-medium text-slate-700">Phone</span>
                     <Input
@@ -1159,7 +1211,7 @@ export function CustomersPage() {
         </ModalBody>
         {selectedActivityRow ? (
           <ModalFooter className="justify-between">
-            <div className="flex flex-wrap gap-2">
+            {canManageRecordRetention ? <div className="flex flex-wrap gap-2">
               {selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? (
                 <Button
                   variant="outline"
@@ -1178,7 +1230,7 @@ export function CustomersPage() {
                   </Button>
                 </>
               )}
-            </div>
+            </div> : <div />}
             <div className="flex flex-wrap gap-2">
               <KodyButton
                 label="Ask Kody"
@@ -1190,6 +1242,8 @@ export function CustomersPage() {
                   search: selectedActivityRow.customer.fullName,
                   limit: 1,
                 }}
+                variant="secondary"
+                className="shadow-[0_8px_20px_rgba(244,139,37,0.22)]"
               />
               <Button variant="outline" onClick={closeActivityModal}>
                 Close
@@ -1231,7 +1285,7 @@ export function CustomersPage() {
         }
         confirmLabel={customerRetentionAction?.type === "archive" ? "Archive customer" : customerRetentionAction?.type === "delete" ? "Delete customer" : "Restore customer"}
         loading={customerRetentionSaving}
-        confirmVariant={customerRetentionAction?.type === "delete" ? "danger" : "primary"}
+        confirmVariant={customerRetentionAction?.type === "delete" ? "danger" : customerRetentionAction?.type === "archive" ? "warning" : "primary"}
       />
     </div>
   );
