@@ -64,28 +64,22 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 }
 
 export const productRoutes: FastifyPluginAsync = async (app) => {
-  async function runSerializableProductWrite<T>(
+  async function runTenantSerializedProductWrite<T>(
+    tenantId: string,
     operation: (transaction: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    let lastSerializationError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        return await app.prisma.$transaction(operation, {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        });
-      } catch (error) {
-        const serializationConflict = error instanceof Prisma.PrismaClientKnownRequestError && (
-          error.code === "P2034"
-          || (error.code === "P2010" && error.meta?.code === "40001")
-        );
-        if (serializationConflict) {
-          lastSerializationError = error;
-          continue;
-        }
-        throw error;
-      }
-    }
-    throw lastSerializationError;
+    return app.prisma.$transaction(async (transaction) => {
+      // Product names, restores, and the 200-item catalog limit are tenant-wide
+      // invariants. Lock the tenant row before reading catalog state so concurrent
+      // API replicas make those decisions in order without exhausting optimistic
+      // serializable retries and leaking a transient P2034 as a 500 response.
+      await transaction.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`,
+      );
+      return operation(transaction);
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+    });
   }
 
   app.get("/products", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -145,7 +139,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const outcome = await runSerializableProductWrite(async (transaction) => {
+    const outcome = await runTenantSerializedProductWrite(claims.tenantId, async (transaction) => {
       const existingProduct = await transaction.workPreset.findFirst({
         where: {
           tenantId: claims.tenantId,
@@ -251,7 +245,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const params = ProductParamsSchema.parse(request.params);
     const payload = UpdateProductSchema.parse(request.body);
 
-    const outcome = await runSerializableProductWrite(async (transaction) => {
+    const outcome = await runTenantSerializedProductWrite(claims.tenantId, async (transaction) => {
       const existingProduct = await transaction.workPreset.findFirst({
         where: {
           id: params.productId,
