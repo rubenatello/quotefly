@@ -61,16 +61,16 @@ export function BrandQuickSetup({
   return (
     <section
       aria-labelledby="quick-brand-setup-title"
-      className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm"
+      className="overflow-hidden rounded-[28px] border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]"
     >
-      <div className="border-b border-slate-100 bg-gradient-to-r from-quotefly-primary/[0.08] via-white to-white px-5 py-5 sm:px-6">
+      <div className="border-b border-[var(--qf-border)] bg-[var(--qf-panel-subtle)] px-5 py-5 sm:px-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-quotefly-blue">Start here</p>
-            <h2 id="quick-brand-setup-title" className="mt-2 font-display text-2xl font-semibold text-slate-950">
+            <h2 id="quick-brand-setup-title" className="mt-2 font-display text-2xl font-semibold text-[var(--qf-text)]">
               Build your quote look in three steps
             </h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--qf-text-soft)]">
               Pick a layout, add your logo, and choose one brand color. QuoteFly handles the rest automatically.
             </p>
           </div>
@@ -99,22 +99,22 @@ export function BrandQuickSetup({
                   onClick={() => onTemplateChange(template.id)}
                   className={`min-h-[170px] rounded-[22px] border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue focus-visible:ring-offset-2 ${
                     active
-                      ? "border-quotefly-blue bg-quotefly-blue/[0.06] shadow-[0_12px_28px_rgba(42,127,216,0.12)]"
-                      : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                      ? "border-quotefly-blue bg-[var(--qf-selected)] shadow-[var(--qf-shadow-md)]"
+                      : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                   }`}
                   aria-pressed={active}
                   aria-label={`Use ${template.name} quote preset`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-base font-semibold text-slate-950">{template.name}</p>
-                      <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">{template.bestFor}</p>
+                      <p className="text-base font-semibold text-[var(--qf-text)]">{template.name}</p>
+                      <p className="mt-1 text-xs font-medium uppercase tracking-wide text-[var(--qf-text-muted)]">{template.bestFor}</p>
                     </div>
                     <span
                       className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
                         active
                           ? "border-quotefly-blue bg-quotefly-blue text-white"
-                          : "border-slate-300 bg-white text-transparent"
+                          : "border-[var(--qf-border-strong)] bg-[var(--qf-panel)] text-transparent"
                       }`}
                       aria-hidden="true"
                     >
@@ -122,14 +122,14 @@ export function BrandQuickSetup({
                     </span>
                   </div>
                   <PresetPreview headerStyle={template.headerStyle} brandColor={brandColor} previewClass={template.preview} />
-                  <p className="mt-3 text-sm leading-5 text-slate-600">{template.description}</p>
+                  <p className="mt-3 text-sm leading-5 text-[var(--qf-text-soft)]">{template.description}</p>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="grid gap-5 border-t border-slate-100 pt-6 lg:grid-cols-2">
+        <div className="grid gap-5 border-t border-[var(--qf-border)] pt-6 lg:grid-cols-2">
           <div>
             <StepHeading number="2" title="Add your logo" description="PNG or JPG. We resize it for every quote." />
             <input
@@ -142,14 +142,14 @@ export function BrandQuickSetup({
               tabIndex={-1}
               aria-label="Choose a PNG or JPG business logo"
             />
-            <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-4">
-              <div className="flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-4">
+            <div className="rounded-[22px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4">
+              <div className="flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel)] p-4">
                 {logo ? (
                   <img src={logo} alt="Your business logo" className="max-h-16 max-w-full object-contain" />
                 ) : (
                   <div className="text-center">
-                    <ImageIcon size={24} className="mx-auto text-slate-400" />
-                    <p className="mt-2 text-sm font-medium text-slate-600">No logo yet</p>
+                    <ImageIcon size={24} className="mx-auto text-[var(--qf-text-muted)]" />
+                    <p className="mt-2 text-sm font-medium text-[var(--qf-text-soft)]">No logo yet</p>
                   </div>
                 )}
               </div>
@@ -164,7 +164,7 @@ export function BrandQuickSetup({
                 ) : null}
               </div>
               <div className="mt-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Position</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">Position</p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {LOGO_PLACEMENTS.map((option) => {
                     const Icon = option.icon;
@@ -177,8 +177,8 @@ export function BrandQuickSetup({
                         onClick={() => onLogoPositionChange(option.value)}
                         className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-2 text-xs font-semibold transition ${
                           active
-                            ? "border-quotefly-blue bg-white text-quotefly-blue"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                            ? "border-quotefly-blue bg-[var(--qf-selected)] text-quotefly-blue"
+                            : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                         }`}
                         aria-pressed={active}
                         aria-label={`Place logo ${option.value}`}
@@ -199,11 +199,11 @@ export function BrandQuickSetup({
               title="Choose your brand color"
               description="One color automatically styles headers, sections, and totals."
             />
-            <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3">
+            <div className="rounded-[22px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4">
+              <div className="flex items-center gap-4 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
                 <label
                   htmlFor="branding-quick-color"
-                  className="relative h-16 w-20 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-slate-200 shadow-sm"
+                  className="relative h-16 w-20 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--qf-border)] shadow-[var(--qf-shadow-sm)]"
                   style={{ backgroundColor: brandColor }}
                 >
                   <span className="sr-only">Choose a custom brand color</span>
@@ -216,9 +216,9 @@ export function BrandQuickSetup({
                   />
                 </label>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-950">Primary color</p>
-                  <p className="mt-1 font-mono text-sm uppercase text-slate-600">{brandColor}</p>
-                  <p className="mt-1 text-xs text-slate-500">Tap the color block for a custom color.</p>
+                  <p className="text-sm font-semibold text-[var(--qf-text)]">Primary color</p>
+                  <p className="mt-1 font-mono text-sm uppercase text-[var(--qf-text-soft)]">{brandColor}</p>
+                  <p className="mt-1 text-xs text-[var(--qf-text-muted)]">Tap the color block for a custom color.</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-6 gap-2">
@@ -231,7 +231,7 @@ export function BrandQuickSetup({
                       type="button"
                       onClick={() => onBrandColorChange(color.value)}
                       className={`h-11 rounded-xl border-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue focus-visible:ring-offset-2 ${
-                        active ? "border-slate-950 ring-2 ring-white ring-inset" : "border-white shadow-sm"
+                        active ? "border-[var(--qf-text)] ring-2 ring-[var(--qf-panel)] ring-inset" : "border-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]"
                       }`}
                       style={{ backgroundColor: color.value }}
                       aria-label={`Use ${color.label} (${color.value})`}
@@ -241,11 +241,11 @@ export function BrandQuickSetup({
                   );
                 })}
               </div>
-              <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3">
+              <div className="mt-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">Automatic color assignment</p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="text-sm font-semibold text-[var(--qf-text)]">Automatic color assignment</p>
+                    <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
                       {componentColorOverrideCount > 0
                         ? `${componentColorOverrideCount} advanced color ${componentColorOverrideCount === 1 ? "override is" : "overrides are"} active.`
                         : "Your primary color is applied throughout the quote."}
@@ -262,12 +262,12 @@ export function BrandQuickSetup({
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-slate-950">
+            <p className="text-sm font-semibold text-[var(--qf-text)]">
               {isDirty ? "Your brand preview is updated and ready to save." : "Your saved brand is active on quotes."}
             </p>
-            <p className="mt-1 text-xs text-slate-500">Business details and advanced color controls are available below when you need them.</p>
+            <p className="mt-1 text-xs text-[var(--qf-text-muted)]">Business details and advanced color controls are available below when you need them.</p>
           </div>
           <Button type="button" variant="outline" onClick={onViewPreview} icon={<Eye size={15} />}>
             View Full Preview
@@ -281,12 +281,12 @@ export function BrandQuickSetup({
 function StepHeading({ number, title, description }: { number: string; title: string; description: string }) {
   return (
     <div className="mb-3 flex items-center gap-3">
-      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-950 text-sm font-semibold text-white">
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--qf-text)] text-sm font-semibold text-[var(--qf-panel)]">
         {number}
       </span>
       <div>
-        <h3 className="text-base font-semibold text-slate-950">{title}</h3>
-        <p className="text-sm text-slate-500">{description}</p>
+        <h3 className="text-base font-semibold text-[var(--qf-text)]">{title}</h3>
+        <p className="text-sm text-[var(--qf-text-muted)]">{description}</p>
       </div>
     </div>
   );

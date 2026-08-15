@@ -75,6 +75,10 @@ test.describe("mobile launch smoke", () => {
 
     await page.getByRole("button", { name: "Add customer" }).first().click();
     const quickCustomerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    const saveCustomerButton = quickCustomerDialog.getByRole("button", { name: "Save Customer" });
+    const buildQuoteButton = quickCustomerDialog.getByRole("button", { name: "Save + Build Quote" });
+    await expect(saveCustomerButton).toHaveCSS("width", await buildQuoteButton.evaluate((button) => getComputedStyle(button).width));
+    expect((await saveCustomerButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await quickCustomerDialog.getByLabel("Full name").fill("Unsaved mobile customer");
     await quickCustomerDialog.getByRole("button", { name: "Cancel", exact: true }).click();
     const discardConfirmation = page.getByRole("dialog", { name: "Discard unsaved customer?" });
@@ -177,6 +181,16 @@ test.describe("mobile launch smoke", () => {
     await page.goto(`/app/quotes/${quote.id}`);
     await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole("heading", { name: "Mobile Roof Leak Smoke" })).toBeVisible();
+    const firstLineEditor = page.getByTestId("existing-quote-line-row-1");
+    const firstLineToggle = firstLineEditor.getByRole("button").first();
+    await expect(firstLineToggle).toHaveAttribute("aria-expanded", "false");
+    expect((await firstLineToggle.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    await firstLineToggle.click();
+    await expect(firstLineToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(firstLineEditor.getByLabel("Existing line 1 title").filter({ visible: true })).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
     await expect(page.getByRole("button", { name: "Preview" }).first()).toBeVisible();
     await page.getByRole("button", { name: "Preview" }).first().click();
     await expect(page.getByText("Internal subtotal", { exact: true }).filter({ visible: true })).toHaveCount(0);
@@ -211,7 +225,11 @@ test.describe("mobile launch smoke", () => {
       .poll(() => queueTabs.evaluate((element) => element.scrollWidth - element.clientWidth))
       .toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: /Quoted/ }).click();
-    const followUpSelect = page.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true });
+    const quotedLeadRow = page.getByTestId("follow-up-queue-row").filter({ hasText: "Mobile Beta Customer" });
+    const followUpSelect = quotedLeadRow.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true });
+    const openFollowUpQuote = quotedLeadRow.getByRole("button", { name: "Open quote", exact: true }).filter({ visible: true });
+    await expect(openFollowUpQuote).toBeVisible();
+    await expect(followUpSelect).toHaveCSS("width", await openFollowUpQuote.evaluate((button) => getComputedStyle(button).width));
     await followUpSelect.selectOption("FOLLOWED_UP");
     await expect(page.getByText("Follow-up status updated to Followed Up.", { exact: true })).toBeVisible();
     await page.reload();

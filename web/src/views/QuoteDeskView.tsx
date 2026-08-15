@@ -50,6 +50,7 @@ import {
   PageHeader,
   Select,
   Textarea,
+  WorkflowActionDock,
 } from "../components/ui";
 import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
@@ -1333,9 +1334,9 @@ export function QuoteDeskView() {
         <PageHeader title="Loading quote" subtitle="Getting the latest quote details and customer information." />
         <Card variant="default" padding="lg">
           <div role="status" aria-live="polite" className="space-y-3">
-            <div className="h-4 w-32 animate-pulse rounded-full bg-slate-200" aria-hidden="true" />
-            <div className="h-8 w-3/4 animate-pulse rounded-lg bg-slate-200" aria-hidden="true" />
-            <p className="text-sm text-slate-600">Loading this quote...</p>
+            <div className="h-4 w-32 animate-pulse rounded-full bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+            <div className="h-8 w-3/4 animate-pulse rounded-lg bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+            <p className="text-sm text-[var(--qf-text-soft)]">Loading this quote...</p>
           </div>
         </Card>
       </div>
@@ -1351,7 +1352,7 @@ export function QuoteDeskView() {
         />
         <Card variant="default" padding="lg">
           <div role="alert" className="space-y-4">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-[var(--qf-text-soft)]">
               {quoteDetailError.kind === "not-found"
                 ? "Open the quote board to choose another quote, or retry if this link should still be active."
                 : "Your current page has not changed. Retry when your connection is ready."}
@@ -1462,9 +1463,9 @@ export function QuoteDeskView() {
         <Alert tone="warning" onDismiss={() => setDeskDraftRecoveryMessage(null)}>{deskDraftRecoveryMessage}</Alert>
       ) : null}
       {conflictingDeskDraft ? (
-        <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-slate-900">
+        <div role="alert" className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]">
           <p className="text-sm font-semibold">This quote changed after the browser draft was saved</p>
-          <p className="mt-1 text-sm text-slate-700">
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
             Use the latest saved quote, or restore the browser draft and review it carefully before saving.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -1474,11 +1475,11 @@ export function QuoteDeskView() {
         </div>
       ) : null}
       {hasUnsavedQuoteSheetChanges && hydratedDeskDraftKey === deskDraftStorageKey ? (
-        <div role="status" aria-live="polite" className="rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3">
-          <p className="text-sm font-semibold text-slate-900">
+        <div role="status" aria-live="polite" className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3">
+          <p className="text-sm font-semibold text-[var(--qf-text)]">
             {deskDraftPersistenceFailed ? "Unsaved edits are open in this tab" : deskDraftRestored ? "Browser draft restored" : "Edits saved for recovery"}
           </p>
-          <p className="mt-1 text-xs text-slate-600">
+          <p className="mt-1 text-xs text-[var(--qf-text-soft)]">
             {deskDraftPersistenceFailed
               ? "Keep this tab open until the quote is saved."
               : `Stored in this browser for up to 12 hours${deskDraftSavedAtUtc ? ` · updated ${new Date(deskDraftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}.`}
@@ -1486,16 +1487,16 @@ export function QuoteDeskView() {
         </div>
       ) : null}
       {aiInsight ? (
-        <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
+        <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3 text-sm text-[var(--qf-text-soft)]">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
-              <p className="mt-1 font-medium text-slate-900">{aiInsight.summary}</p>
+              <p className="mt-1 font-medium text-[var(--qf-text)]">{aiInsight.summary}</p>
             </div>
             <button
               type="button"
               onClick={() => setAiInsight(null)}
-              className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-slate-500 hover:text-slate-700 sm:min-h-[36px]"
+              className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-[var(--qf-text-muted)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] sm:min-h-[36px]"
             >
               Dismiss
             </button>
@@ -1511,10 +1512,10 @@ export function QuoteDeskView() {
             <Badge tone={aiInsight.confidence.level === "high" ? "emerald" : aiInsight.confidence.level === "medium" ? "amber" : "red"}>
               {aiInsight.confidence.label}
             </Badge>
-            {aiInsight.riskNote ? <span className="text-xs text-slate-600">{aiInsight.riskNote}</span> : null}
+            {aiInsight.riskNote ? <span className="text-xs text-[var(--qf-text-soft)]">{aiInsight.riskNote}</span> : null}
           </div>
           {aiInsight.sources.length ? (
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
               Context used: {aiInsight.sources.map((source) => source.label).join(" | ")}
             </p>
           ) : null}
@@ -1534,8 +1535,8 @@ export function QuoteDeskView() {
               aria-pressed={mobilePane === pane.id}
               className={`flex-1 rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
                 mobilePane === pane.id
-                  ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                  : "border-slate-200 bg-white text-slate-700"
+                  ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
+                  : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)]"
               }`}
             >
               {pane.label}
@@ -1553,8 +1554,8 @@ export function QuoteDeskView() {
             aria-pressed={activeTab === tab.id}
             className={`rounded-full border px-4 py-2 text-sm font-medium transition min-h-[44px] ${
               activeTab === tab.id
-                ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
+                : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
             }`}
           >
             {tab.label}
@@ -1645,11 +1646,11 @@ export function QuoteDeskView() {
                 </Alert>
               ) : null}
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Products &amp; services</p>
-                    <p className="mt-1 text-sm text-slate-600">Load catalog items into the new row or insert them directly into the quote.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Products &amp; services</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Load catalog items into the new row or insert them directly into the quote.</p>
                   </div>
                   <div>
                     <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
@@ -1682,11 +1683,11 @@ export function QuoteDeskView() {
                 {presetLoadError ? <p className="mt-3 text-xs text-red-600">{presetLoadError}</p> : null}
 
                 {selectedPreset ? (
-                  <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:hidden">
+                  <div className="mt-3 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 xl:hidden">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">
+                        <p className="text-sm font-semibold text-[var(--qf-text)]">{selectedPreset.name}</p>
+                        <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
                           {money(selectedPreset.unitPrice)} / {formatPresetUnitLabel(selectedPreset.unitType)}
                         </p>
                       </div>
@@ -1720,7 +1721,7 @@ export function QuoteDeskView() {
                       title="Loading common work"
                       description="Fetching saved tenant work presets for this trade."
                       variant="compact"
-                      className="min-w-[260px] bg-white"
+                      className="min-w-[260px] bg-[var(--qf-panel)]"
                     />
                   ) : availablePresets.length ? (
                     availablePresets.slice(0, 10).map((preset) => (
@@ -1730,25 +1731,25 @@ export function QuoteDeskView() {
                         onClick={() => setSelectedPresetId(preset.id)}
                         className={`min-w-fit rounded-xl border px-3 py-2 text-left transition ${
                           preset.id === selectedPresetId
-                            ? "border-quotefly-blue/20 bg-white text-quotefly-blue"
-                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                            ? "border-quotefly-blue/30 bg-[var(--qf-panel)] text-quotefly-blue shadow-[0_0_0_2px_var(--qf-focus-ring)]"
+                            : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                         }`}
                       >
                         <p className="text-sm font-semibold">{preset.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</p>
+                        <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</p>
                       </button>
                     ))
                   ) : (
-                    <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
+                    <div className="rounded-xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-3 text-sm text-[var(--qf-text-muted)]">
                       No products for this trade yet.
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+              <div className="overflow-x-auto rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
                 <div
-                  className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
+                  className={`hidden gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
                 >
                   <span>Line</span>
                   <span>Description</span>
@@ -1763,7 +1764,7 @@ export function QuoteDeskView() {
                     <EmptyState title="No saved lines yet" description="Add the first line below or load one from Products & services." />
                   </div>
                 ) : null}
-                <div className="divide-y divide-slate-200">
+                <div className="divide-y divide-[var(--qf-border)]">
                   {editableLines.map((line, index) => (
                   <ExistingLineEditorRow
                     key={line.id}
@@ -1779,11 +1780,11 @@ export function QuoteDeskView() {
                     />
                   ))}
                   <div className="px-4 py-4">
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
+                    <div className="rounded-2xl border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Add line</p>
-                          <p className="mt-1 text-sm text-slate-600">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Add line</p>
+                          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
                             {isQuoteLocked
                               ? "Unlock the quote to add new rows."
                               : "Keep adding rows directly in the quote sheet."}
@@ -1898,7 +1899,7 @@ export function QuoteDeskView() {
                 {canViewInternalCosts ? <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
                 {canViewInternalCosts ? <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
               </div>
-              <div className="mt-4 space-y-2 text-sm text-slate-700">
+              <div className="mt-4 space-y-2 text-sm text-[var(--qf-text-soft)]">
                 <ChecklistItem compact complete={Boolean(selectedQuote.customerId)} label="Customer attached" />
                 <ChecklistItem compact complete={Boolean(quoteEditForm.title.trim())} label="Quote title present" />
                 <ChecklistItem compact complete={lineItemCount > 0} label={`${lineItemCount} line${lineItemCount === 1 ? "" : "s"} in quote`} />
@@ -1922,8 +1923,8 @@ export function QuoteDeskView() {
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     Start Another Quote
                   </Button>
-                  {canManageRecordRetention ? <details className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700">
+                  {canManageRecordRetention ? <details className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2">
+                    <summary className="min-h-11 cursor-pointer list-none py-3 text-sm font-semibold text-[var(--qf-text-soft)]">
                       More actions
                     </summary>
                     <div className="mt-3 grid gap-2">
@@ -2027,8 +2028,8 @@ export function QuoteDeskView() {
       {activeTab === "quote" ? (
         <div className="xl:hidden">
           <div className="h-24" />
-          <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
-            <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+          <WorkflowActionDock>
+            <div className="mb-2 flex items-center justify-between text-xs text-[var(--qf-text-muted)]">
               <span>{lineItemCount} line{lineItemCount === 1 ? "" : "s"}</span>
               <span>Total {money(totalAmount)}</span>
             </div>
@@ -2050,7 +2051,7 @@ export function QuoteDeskView() {
                 </Button>
               )}
             </div>
-          </div>
+          </WorkflowActionDock>
         </div>
       ) : null}
 
@@ -2076,7 +2077,7 @@ export function QuoteDeskView() {
 
           <Card variant="blue" padding="md">
             <CardHeader title="Send notes" subtitle="QuoteFly opens the user's native apps so V1 does not need a paid send service." />
-            <div className="space-y-2 text-sm text-slate-700">
+            <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
               <p>Text App opens Messages at the customer's phone number with the quote message filled in.</p>
               <p>Email can use the native share sheet with the PDF attached on supported phones; otherwise attach the downloaded PDF manually.</p>
               <p>Sent date updates once the quote is marked sent.</p>
@@ -2105,7 +2106,7 @@ export function QuoteDeskView() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">AI runs</p>
-                  <p className="mt-1 text-sm text-slate-600">Review privacy-safe AI activity and context quality for this quote.</p>
+                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Review privacy-safe AI activity and context quality for this quote.</p>
                 </div>
               </div>
 
@@ -2121,7 +2122,7 @@ export function QuoteDeskView() {
               ) : (
                 <div className="space-y-2">
                   {aiRuns.map((run) => (
-                    <div key={run.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                    <div key={run.id} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge tone={run.eventType === "REVISE" ? "orange" : "blue"}>{run.eventType === "REVISE" ? "AI Revise" : "AI Draft"}</Badge>
@@ -2131,20 +2132,20 @@ export function QuoteDeskView() {
                             </Badge>
                           ) : null}
                           {typeof run.patchAdded === "number" || typeof run.patchUpdated === "number" || typeof run.patchRemoved === "number" ? (
-                            <span className="text-xs text-slate-500">
+                            <span className="text-xs text-[var(--qf-text-muted)]">
                               {run.patchUpdated ?? 0} updated | {run.patchAdded ?? 0} added | {run.patchRemoved ?? 0} removed
                             </span>
                           ) : null}
                         </div>
-                        <span className="text-xs text-slate-500">{formatDateTime(run.createdAt)}</span>
+                        <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(run.createdAt)}</span>
                       </div>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{run.insightSummary || "AI prepared a quote update."}</p>
+                      <p className="mt-2 text-sm font-semibold text-[var(--qf-text)]">{run.insightSummary || "AI prepared a quote update."}</p>
                       {run.promptRedacted ? (
-                        <p className="mt-1 text-sm text-slate-600">{run.promptRedacted}</p>
+                        <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{run.promptRedacted}</p>
                       ) : (
-                        <p className="mt-1 text-sm text-slate-500">Prompt details are unavailable for this historical run.</p>
+                        <p className="mt-1 text-sm text-[var(--qf-text-muted)]">Prompt details are unavailable for this historical run.</p>
                       )}
-                      {run.riskNote ? <p className="mt-2 text-xs text-slate-600">{run.riskNote}</p> : null}
+                      {run.riskNote ? <p className="mt-2 text-xs text-[var(--qf-text-soft)]">{run.riskNote}</p> : null}
                       {run.insightReasons.length ? (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {run.insightReasons.map((reason) => (
@@ -2153,11 +2154,11 @@ export function QuoteDeskView() {
                         </div>
                       ) : null}
                       {run.insightSourceLabels.length ? (
-                        <p className="mt-2 text-xs text-slate-500">
+                        <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
                           Context used: {run.insightSourceLabels.join(" | ")}
                         </p>
                       ) : null}
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--qf-text-muted)]">
                         <span>By {run.actorName || run.actorEmail || "Unknown"}</span>
                         <span>
                           {run.totalTokens ? `${run.totalTokens.toLocaleString()} tokens` : "Tokens not captured"}
@@ -2169,11 +2170,11 @@ export function QuoteDeskView() {
               )}
             </section>
 
-            <section className="space-y-3 border-t border-slate-200 pt-4">
+            <section className="space-y-3 border-t border-[var(--qf-border)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Revision history</p>
-                  <p className="mt-1 text-sm text-slate-600">Track title, status, and pricing changes for this quote.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Revision history</p>
+                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Track title, status, and pricing changes for this quote.</p>
                 </div>
               </div>
 
@@ -2188,7 +2189,7 @@ export function QuoteDeskView() {
                         className={`min-h-[44px] rounded-full border px-3 py-2 text-xs font-semibold transition sm:min-h-[36px] sm:py-1 ${
                           historyMode === mode
                             ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08] text-quotefly-blue"
-                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            : "border-[var(--qf-border-strong)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)]"
                         }`}
                       >
                         {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
@@ -2198,7 +2199,7 @@ export function QuoteDeskView() {
                       <select
                         value={historyCustomerId}
                         onChange={(event) => setHistoryCustomerId(event.target.value)}
-                        className="min-h-[44px] rounded-full border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 sm:min-h-[36px] sm:py-1"
+                        className="min-h-[44px] rounded-full border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[36px] sm:py-1"
                       >
                         <option value="ALL">Select customer...</option>
                         {customers.map((customer) => (
@@ -2219,12 +2220,12 @@ export function QuoteDeskView() {
                   ) : (
                     <div className="space-y-2">
                       {quoteHistory.map((revision) => (
-                        <div key={revision.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                        <div key={revision.id} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex flex-wrap items-center gap-2">
                               <HistoryEventPill eventType={revision.eventType} />
                               <QuoteStatusPill status={revision.status} compact />
-                              <span className="text-sm font-semibold text-slate-900">{revision.title}</span>
+                              <span className="text-sm font-semibold text-[var(--qf-text)]">{revision.title}</span>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
                               {canManageRecordRetention && selectedQuote && revision.quote.id === selectedQuote.id ? (
@@ -2237,10 +2238,10 @@ export function QuoteDeskView() {
                                   Restore
                                 </Button>
                               ) : null}
-                              <span className="text-xs text-slate-500">{formatDateTime(revision.createdAt)}</span>
+                              <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(revision.createdAt)}</span>
                             </div>
                           </div>
-                          <p className="mt-2 text-xs text-slate-600">
+                          <p className="mt-2 text-xs text-[var(--qf-text-soft)]">
                             v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
                           </p>
                         </div>
@@ -2282,18 +2283,18 @@ export function QuoteDeskView() {
             ) : (
               <div className="space-y-2">
                 {outboundEvents.map((event) => (
-                  <div key={event.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div key={event.id} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <OutboundChannelPill channel={event.channel} />
-                      <span className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</span>
+                      <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(event.createdAt)}</span>
                     </div>
-                    <p className="mt-2 text-xs text-slate-600">
+                    <p className="mt-2 text-xs text-[var(--qf-text-soft)]">
                       {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
                     </p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
                       By {event.actorName || event.actorEmail || "Unknown"}
                     </p>
-                    {event.subject ? <p className="mt-1 text-xs text-slate-500">Subject: {event.subject}</p> : null}
+                    {event.subject ? <p className="mt-1 text-xs text-[var(--qf-text-muted)]">Subject: {event.subject}</p> : null}
                   </div>
                 ))}
               </div>
@@ -2398,7 +2399,7 @@ export function QuoteDeskView() {
         confirmLabel="Unlock quote"
         confirmVariant="warning"
       >
-        <div className="space-y-2 text-sm text-slate-600">
+        <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
           <p>Use this when you need to revise a sent quote, correct pricing, or update scope after the customer has already seen it.</p>
           <p>Revert only resets unsaved edits in the current session. Saved changes remain in the audit trail.</p>
         </div>
@@ -2418,7 +2419,7 @@ export function QuoteDeskView() {
         confirmVariant={quoteRetentionAction === "archive" ? "warning" : "danger"}
         loading={quoteRetentionSaving}
       >
-        <div className="space-y-2 text-sm text-slate-600">
+        <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
           <p>
             {quoteRetentionAction === "archive"
               ? "Archived quotes stay retained for audit purposes and can be referenced later."
@@ -2439,7 +2440,7 @@ export function QuoteDeskView() {
         loading={restoreRevisionSaving}
       >
         {restoreRevisionTarget ? (
-          <div className="space-y-2 text-sm text-slate-600">
+          <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
             <p>
               Restoring revision <strong>v{restoreRevisionTarget.version}</strong> will bring back the saved title,
               totals, status, and line items from {formatDateTime(restoreRevisionTarget.createdAt)}.
@@ -2523,7 +2524,7 @@ export function QuoteDeskView() {
           description="This in-app preview includes current unsaved edits. Use Preview Generated PDF to review the saved PDF output."
           onClose={() => setPreviewOpen(false)}
         />
-        <ModalBody className="bg-slate-50">
+        <ModalBody className="bg-[var(--qf-panel-muted)]">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             quoteReferenceLabel={`Quote #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
@@ -2593,7 +2594,7 @@ export function QuoteDeskView() {
                 setSendComposer((prev) => (prev ? { ...prev, body: event.target.value } : prev))
               }
             />
-            <div className="rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.05] px-3 py-3 text-sm text-slate-700">
+            <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-3 text-sm text-[var(--qf-text-soft)]">
               {sendComposer.handoffComplete
                 ? "Did the message leave your phone? QuoteFly has not changed the quote status yet."
                 : canSharePdfFromDevice && sendComposer.channel === "email"
@@ -2645,11 +2646,11 @@ function SummaryRow({
   tone?: "good" | "bad";
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5">
-      <span className="text-sm text-slate-600">{label}</span>
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5">
+      <span className="text-sm text-[var(--qf-text-soft)]">{label}</span>
       <span
         className={`text-sm font-semibold ${
-          strong ? "text-slate-950" : tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-red-700" : "text-slate-900"
+          strong ? "text-[var(--qf-text)]" : tone === "good" ? "text-[var(--qf-success-strong)]" : tone === "bad" ? "text-[var(--qf-danger-strong)]" : "text-[var(--qf-text)]"
         }`}
       >
         {value}
@@ -2668,11 +2669,11 @@ function ChecklistItem({
   compact?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-[var(--qf-border)] bg-white"}`}>
-      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)]" : "border-[var(--qf-border)] bg-[var(--qf-panel)]"}`}>
+      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-[var(--qf-success-strong)] text-white" : "bg-[var(--qf-interactive-active)] text-[var(--qf-text-muted)]"}`}>
         {complete ? "OK" : "-"}
       </span>
-      <span className="text-sm text-slate-700">{label}</span>
+      <span className="text-sm text-[var(--qf-text-soft)]">{label}</span>
     </div>
   );
 }
@@ -2707,7 +2708,7 @@ function ExistingLineEditorRow({
   const sectionPillClassName =
     line.sectionType === "ALTERNATE"
       ? "border-orange-200 bg-orange-50 text-orange-700"
-      : "border-slate-200 bg-slate-100 text-slate-600";
+      : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]";
 
   useEffect(() => {
     setExpanded(startExpanded ?? false);
@@ -2720,28 +2721,30 @@ function ExistingLineEditorRow({
           <button
             type="button"
             onClick={() => setExpanded((current) => !current)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
+            className="flex min-h-14 w-full items-center justify-between gap-3 px-3 py-3 text-left"
+            aria-expanded={expanded}
+            aria-controls={`existing-quote-line-${line.id}`}
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Line {index + 1}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Line {index + 1}</p>
                 {dirty ? <Badge tone="amber">Unsaved</Badge> : null}
                 <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
                   {sectionPillLabel}
                 </span>
               </div>
-              <p className="truncate text-sm font-semibold text-slate-900">{line.title.trim() || "Untitled line"}</p>
-              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || "Untitled line"}</p>
+              <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--qf-text-muted)]">
                 <span>Qty {line.quantity}</span>
                 <span>Price {money(line.unitPrice)}</span>
                 <span>Total {money(lineTotal)}</span>
               </div>
             </div>
-            <span className="rounded-lg border border-[var(--qf-border)] bg-white p-2 text-slate-500">
+            <span className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-2 text-[var(--qf-text-muted)]">
               {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </span>
           </button>
-          <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
+          <div id={`existing-quote-line-${line.id}`} className={expanded ? "border-t border-[var(--qf-border)] px-3 py-3" : "hidden"}>
             <div className="mb-2 flex items-center justify-end gap-2">
               <Button size="sm" variant="outline" icon={<Save size={14} />} onClick={() => void onSave(line.id)} disabled={!dirty || readOnly}>
                 Save
@@ -2758,7 +2761,7 @@ function ExistingLineEditorRow({
                 {canViewInternalCosts ? <Input label="Cost" aria-label={`Existing line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : null}
                 <Input label="Price" aria-label={`Existing line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
               </div>
-              <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
+              <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)]">
                 Line total {money(lineTotal)}
               </div>
             </div>
@@ -2769,7 +2772,7 @@ function ExistingLineEditorRow({
       <div
         className={`hidden xl:grid xl:items-start xl:gap-2.5 ${QUOTE_DESK_EXISTING_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
-        <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
+        <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-[var(--qf-text-muted)]">
           {index + 1}
         </div>
         <div className="space-y-1.5">
@@ -2785,7 +2788,7 @@ function ExistingLineEditorRow({
         <Input aria-label={`Existing line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
         {canViewInternalCosts ? <Input aria-label={`Existing line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label={`Existing line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
-        <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
+        <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
           {money(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">
@@ -2803,7 +2806,7 @@ function ExistingLineEditorRow({
             size="sm"
             variant="ghost"
             icon={<X size={14} />}
-            className="w-9 px-0 text-slate-500 hover:text-red-600"
+            className="w-9 px-0 text-[var(--qf-text-muted)] hover:text-[var(--qf-danger-strong)]"
             onClick={onDelete}
             disabled={readOnly}
             aria-label="Remove line"
@@ -2837,7 +2840,7 @@ function NewLineEditorRow({
       <div
         className={`grid gap-3 ${QUOTE_DESK_NEW_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
-        <div className="hidden xl:flex h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
+        <div className="hidden h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-[var(--qf-text-muted)] xl:flex">
           New
         </div>
         <Input
@@ -2863,8 +2866,8 @@ function NewLineEditorRow({
         {canViewInternalCosts ? <Input aria-label="New line cost" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label="New line price" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
         <div className="space-y-1">
-          <label className="block text-xs font-medium text-slate-600">Total</label>
-          <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5 text-sm font-semibold text-slate-900 tabular-nums">
+          <label className="block text-xs font-medium text-[var(--qf-text-soft)]">Total</label>
+          <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
             {money(lineTotal)}
           </div>
         </div>

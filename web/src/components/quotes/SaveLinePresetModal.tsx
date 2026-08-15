@@ -26,20 +26,20 @@ export function SaveLinePresetModal({
       />
       <ModalBody>
         <div className="space-y-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4">
             <div className="flex items-center gap-2">
               <Badge tone="blue" icon={<ListPlus size={12} />}>
                 Reusable job
               </Badge>
-              <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">Preview</span>
+              <span className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Preview</span>
             </div>
-            <p className="mt-3 text-base font-semibold text-slate-900">{line?.title || "Untitled line"}</p>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">
+            <p className="mt-3 text-base font-semibold text-[var(--qf-text)]">{line?.title || "Untitled line"}</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--qf-text-soft)]">
               {line?.details?.trim() ? line.details : "No description on this line yet."}
             </p>
           </div>
 
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-600">
+          <div className="rounded-2xl border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 text-sm text-[var(--qf-text-soft)]">
             QuoteFly will save the current line under this trade using the line's current quantity, cost, and price defaults.
           </div>
         </div>

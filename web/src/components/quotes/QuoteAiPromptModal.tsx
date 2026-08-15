@@ -207,16 +207,16 @@ export function QuoteAiPromptModal({
     <Modal open={open} onClose={loading ? () => {} : onClose} size="lg" ariaLabel={title}>
       <ModalHeader title={title} description={description} onClose={loading ? undefined : onClose} />
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
-        <ModalBody className="space-y-5 bg-[linear-gradient(180deg,rgba(47,111,214,0.035),rgba(255,255,255,0)_180px)] pb-4">
-          <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-white px-4 py-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
+        <ModalBody className="space-y-5 bg-[var(--qf-panel-muted)] pb-4">
+          <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-4 py-3 shadow-[var(--qf-shadow-sm)]">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
                 <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--qf-brand-orange-soft)] text-[var(--qf-brand-orange-text)]">
                   <Sparkles size={18} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">AI drafting workspace</p>
-                  <p className="mt-1 text-sm text-slate-700">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">AI drafting workspace</p>
+                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
                     Use tenant context, saved jobs, customer activity, and similar quotes to prepare a faster first pass.
                   </p>
                 </div>
@@ -229,7 +229,7 @@ export function QuoteAiPromptModal({
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_200px]">
-            <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-[linear-gradient(135deg,rgba(47,111,214,0.08),rgba(255,255,255,0.98))] px-4 py-3.5 shadow-[0_10px_24px_rgba(47,111,214,0.05)]">
+            <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel-subtle)] px-4 py-3.5 shadow-[var(--qf-shadow-sm)]">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-quotefly-blue">Customer context</p>
                 {customerContextBadge ? <Badge tone="blue">{customerContextBadge}</Badge> : null}
@@ -239,10 +239,10 @@ export function QuoteAiPromptModal({
                   <UserRound size={18} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-950">
+                  <p className="text-sm font-semibold text-[var(--qf-text)]">
                     {hasAssignedCustomer ? customerContextName : "No customer assigned yet"}
                   </p>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                  <p className="mt-1 text-sm leading-6 text-[var(--qf-text-soft)]">
                     {hasAssignedCustomer ? customerContextDetails ?? customerContextText : customerContextText}
                   </p>
                 </div>
@@ -267,14 +267,14 @@ export function QuoteAiPromptModal({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
+          <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 shadow-[var(--qf-shadow-sm)]">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Prompt</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Prompt</p>
                   <Badge tone="slate">Review before saving</Badge>
                 </div>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
                   AI uses the selected customer, customer notes, recent activity, current quote sheet, saved jobs, and similar past quotes for the chosen trade when available.
                 </p>
               </div>
@@ -297,7 +297,7 @@ export function QuoteAiPromptModal({
 
             <Textarea
               data-testid="quote-ai-prompt"
-              className="mt-4 min-h-[260px] border-[color:rgba(47,111,214,0.16)] bg-[linear-gradient(180deg,rgba(47,111,214,0.03),rgba(255,255,255,0.96))] text-[15px] leading-7 text-quotefly-blue placeholder:text-quotefly-blue/45 caret-quotefly-blue shadow-inner selection:bg-quotefly-blue/15"
+              className="mt-4 min-h-[220px] border-[var(--qf-info-border)] bg-[var(--qf-panel)] text-[15px] leading-7 text-[var(--qf-text)] shadow-inner selection:bg-[var(--qf-selected)]"
               rows={9}
               placeholder={promptPlaceholder}
               value={prompt}
@@ -315,8 +315,8 @@ export function QuoteAiPromptModal({
                     <Badge tone="orange">Tracked suggestion</Badge>
                   </div>
                   <div>
-                    <p className="text-base font-semibold text-slate-900">{activeProgress.label}</p>
-                    <p className="mt-1 text-sm text-slate-600">{activeProgress.detail}</p>
+                    <p className="text-base font-semibold text-[var(--qf-text)]">{activeProgress.label}</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeProgress.detail}</p>
                   </div>
                   <ProgressBar value={activeProgress.value} label="AI progress" hint={`${activeProgress.value}%`} />
                   {activeProgress.sourceHints.length ? (
@@ -335,13 +335,13 @@ export function QuoteAiPromptModal({
                       <Badge tone="slate">{activeProgress.patchCounts.removed} removed</Badge>
                     </div>
                   ) : null}
-                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">
                     AI is building line-level changes for the quote sheet, not sending anything to the customer.
                   </p>
                 </div>
 
-                <div className="rounded-2xl border border-white/70 bg-white/70 px-3 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)] backdrop-blur">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">AI run log</p>
+                <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 shadow-[var(--qf-shadow-sm)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">AI run log</p>
                   <div className="mt-3 space-y-0">
                     {AI_PROGRESS_STAGES.map((stage, index) => {
                       const isComplete = index < activeProgress.index;
@@ -357,7 +357,7 @@ export function QuoteAiPromptModal({
                                   ? "flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white"
                                   : isCurrent
                                     ? "flex h-6 w-6 items-center justify-center rounded-full bg-[var(--qf-brand-orange)] text-[var(--qf-brand-orange-contrast)] shadow-[0_6px_18px_rgba(249,105,40,0.24)]"
-                                    : "flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400"
+                                    : "flex h-6 w-6 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)]"
                               }
                             >
                               {isComplete ? (
@@ -373,16 +373,16 @@ export function QuoteAiPromptModal({
                                 className={
                                   isComplete
                                     ? "mt-1 h-full w-px bg-emerald-300"
-                                    : "mt-1 h-full w-px bg-slate-200"
+                                    : "mt-1 h-full w-px bg-[var(--qf-border)]"
                                 }
                               />
                             ) : null}
                           </div>
                           <div className="min-w-0 pt-0.5">
-                            <p className={isCurrent ? "text-sm font-semibold text-slate-900" : "text-sm font-medium text-slate-700"}>
+                            <p className={isCurrent ? "text-sm font-semibold text-[var(--qf-text)]" : "text-sm font-medium text-[var(--qf-text-soft)]"}>
                               {stage.label}
                             </p>
-                            <p className="mt-0.5 text-xs leading-5 text-slate-500">{stage.detail}</p>
+                            <p className="mt-0.5 text-xs leading-5 text-[var(--qf-text-muted)]">{stage.detail}</p>
                           </div>
                         </div>
                       );
@@ -394,21 +394,21 @@ export function QuoteAiPromptModal({
           ) : null}
 
           {errorMessage ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="rounded-xl border border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] px-3 py-2 text-sm text-[var(--qf-danger-text)]">
               {errorMessage}
             </div>
           ) : null}
         </ModalBody>
 
-        <ModalFooter className="justify-between gap-3 border-t border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,1),rgba(47,111,214,0.03))]">
+        <ModalFooter className="justify-between gap-3 bg-[var(--qf-panel)]">
           <div className="max-w-[34rem] space-y-1">
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-[var(--qf-text-muted)]">
               AI builds the first draft only. You still review every line title, description, cost, and price before saving.
             </p>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-[var(--qf-text-muted)]">
               AI usage is metered by token usage. Prompt usage varies based on context size and response length.
             </p>
-            <p className="text-xs font-medium text-amber-700">
+            <p className="text-xs font-medium text-[var(--qf-warning-text)]">
               AI can make mistakes. Please revise the quote before sending.
             </p>
           </div>

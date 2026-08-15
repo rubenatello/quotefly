@@ -160,6 +160,7 @@ function QueueTabs({
                 ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
                 : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
             }`}
+            aria-pressed={active}
           >
             <span className="truncate">{tab.label}</span>
             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold sm:px-2 sm:text-[11px] ${active ? "bg-[var(--qf-panel)] text-[var(--qf-link)]" : "bg-[var(--qf-panel-muted)] text-[var(--qf-text-muted)]"}`}>
@@ -197,7 +198,7 @@ function QueueActions({
   const selectClassName = mobile ? "min-w-0 w-full" : "w-full min-w-[150px] sm:w-auto";
 
   return (
-    <div className={mobile ? "grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
+    <div className={mobile ? "grid grid-cols-1 gap-2 min-[420px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
       <Button
         size="sm"
         variant={lead.quoteId ? "outline" : "primary"}

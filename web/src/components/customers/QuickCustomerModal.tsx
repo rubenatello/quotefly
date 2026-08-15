@@ -236,12 +236,12 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
         />
 
         {matches.length > 0 ? (
-          <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="space-y-3 rounded-2xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] p-4">
             <div>
-              <p className="text-sm font-semibold text-amber-900">
+              <p className="text-sm font-semibold text-[var(--qf-warning-text)]">
                 {phoneConflictExists ? "Exact phone match found" : "Possible email duplicate found"}
               </p>
-              <p className="mt-1 text-xs text-amber-800">
+              <p className="mt-1 text-xs text-[var(--qf-warning-text)]">
                 {phoneConflictExists
                   ? "Use Existing is the fastest path and is the default recommendation. Add as New is disabled for exact phone matches."
                   : "Email-only matches are a softer warning. You can use existing, merge updates, or add as new."}
@@ -253,8 +253,8 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
                   key={match.id}
                   className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition ${
                     selectedMatchId === match.id
-                      ? "border-amber-300 bg-white"
-                      : "border-amber-200/80 bg-white/70"
+                      ? "border-[var(--qf-warning-border)] bg-[var(--qf-panel)] ring-2 ring-[var(--qf-focus-ring)]"
+                      : "border-[var(--qf-warning-border)] bg-[var(--qf-panel)]"
                   }`}
                 >
                   <input
@@ -266,9 +266,9 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
                     disabled={saving}
                   />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900">{match.fullName}</p>
-                    <p className="mt-1 text-xs text-slate-600">{formatUsPhoneDisplay(match.phone)}</p>
-                    <p className="mt-1 truncate text-xs text-slate-500">{match.email ?? "No email"}</p>
+                    <p className="text-sm font-semibold text-[var(--qf-text)]">{match.fullName}</p>
+                    <p className="mt-1 text-xs text-[var(--qf-text-soft)]">{formatUsPhoneDisplay(match.phone)}</p>
+                    <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{match.email ?? "No email"}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {match.matchReasons.map((reason) => (
                         <Badge key={`${match.id}-${reason}`} tone={reason === "phone" ? "red" : "amber"}>
@@ -283,7 +283,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
               ))}
             </div>
             {selectedMatchInactive ? (
-              <p className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700">
+              <p className="rounded-lg border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-soft)]">
                 Selected record is inactive. Choose <span className="font-semibold">Merge Selected</span> to restore the customer. Retained quotes stay archived or deleted and are not restored automatically.
               </p>
             ) : null}

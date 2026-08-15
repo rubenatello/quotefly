@@ -198,13 +198,16 @@ function StageCountCard({
       type="button"
       onClick={onClick}
       className={`min-w-fit rounded-full border px-3 py-2 text-left transition ${
-        active ? "border-quotefly-blue/20 bg-quotefly-blue/[0.08]" : "border-slate-200 bg-white hover:border-slate-300"
+        active
+          ? "border-quotefly-blue/30 bg-[var(--qf-selected)] shadow-[0_0_0_2px_var(--qf-focus-ring)]"
+          : "border-[var(--qf-border)] bg-[var(--qf-panel)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
       } min-h-[44px]`}
+      aria-pressed={active}
     >
       <div className="flex items-center gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{label}</p>
         {stage === "ALL" ? (
-          <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1 text-[10px] font-bold text-slate-500">
+          <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-1 text-[10px] font-bold text-[var(--qf-text-muted)]">
             All
           </span>
         ) : (
@@ -214,7 +217,7 @@ function StageCountCard({
             {lifecycleInitial(stage)}
           </span>
         )}
-        <span className="text-sm font-semibold text-slate-900">{count}</span>
+        <span className="text-sm font-semibold text-[var(--qf-text)]">{count}</span>
       </div>
     </button>
   );
@@ -228,7 +231,7 @@ function QuoteLifecycleMini({ quote }: { quote: Quote }) {
       <Badge tone={stage === "SENT" ? "orange" : stage === "DRAFT" ? "slate" : stage === "DECLINED" ? "red" : "emerald"} icon={lifecycleIcon(stage, quote.status)}>
         {lifecycleLabel(stage)}
       </Badge>
-      <span className="truncate text-xs text-slate-500">{rawStatusHint(quote)}</span>
+      <span className="truncate text-xs text-[var(--qf-text-muted)]">{rawStatusHint(quote)}</span>
     </div>
   );
 }
@@ -244,7 +247,7 @@ function QuoteActionsMenu({
   onRetentionAction: (action: QuoteRetentionAction) => void;
   canManageRecordRetention: boolean;
 }) {
-  const itemClass = "flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-slate-700 outline-none transition hover:bg-slate-50 focus:bg-slate-50";
+  const itemClass = "flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] focus:bg-[var(--qf-interactive-hover)]";
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -261,7 +264,7 @@ function QuoteActionsMenu({
           {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "archive", quote })} className={itemClass}>
             <Archive size={14} /> Archive quote
           </DropdownMenuPrimitive.Item> : null}
-          {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-red-700 hover:bg-red-50 focus:bg-red-50`}>
+          {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-[var(--qf-danger-text)] hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)]`}>
             <Trash2 size={14} /> Delete quote
           </DropdownMenuPrimitive.Item> : null}
         </DropdownMenuPrimitive.Content>
@@ -288,24 +291,24 @@ function QuoteDesktopRow({
   return (
     <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 px-4 py-3 xl:grid xl:items-center`}>
       <div className="space-y-1">
-        <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
-        <p className="text-xs text-slate-500">Updated {formatDateTime(quote.updatedAt)}</p>
+        <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
+        <p className="text-xs text-[var(--qf-text-muted)]">Updated {formatDateTime(quote.updatedAt)}</p>
       </div>
 
       <div className="min-w-0">
         <div className="flex items-center gap-3">
-          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
             {customerInitials(quote.customer?.fullName ?? "QM")}
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900">{quote.customer?.fullName ?? "Customer missing"}</p>
-            <p className="mt-1 truncate text-xs text-slate-500">{quote.title}</p>
+            <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{quote.customer?.fullName ?? "Customer missing"}</p>
+            <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{quote.title}</p>
           </div>
         </div>
       </div>
 
-      <div className="text-sm text-slate-700">{canViewInternalCosts ? money(quote.internalCostSubtotal ?? 0) : null}</div>
-      <div className="text-sm font-semibold text-slate-900">{money(quote.customerPriceSubtotal)}</div>
+      <div className="text-sm text-[var(--qf-text-soft)]">{canViewInternalCosts ? money(quote.internalCostSubtotal ?? 0) : null}</div>
+      <div className="text-sm font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal)}</div>
 
       <div className="min-w-0">
         <QuoteLifecycleMini quote={quote} />
@@ -340,21 +343,21 @@ function QuoteMobileCard({
     <div className="space-y-3 px-4 py-4 xl:hidden">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</p>
-          <p className="mt-1 truncate text-sm text-slate-700">{quote.customer?.fullName ?? "Customer missing"}</p>
-          <p className="mt-1 truncate text-xs text-slate-500">{quote.title}</p>
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
+          <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{quote.customer?.fullName ?? "Customer missing"}</p>
+          <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{quote.title}</p>
         </div>
         <QuoteLifecycleMini quote={quote} />
       </div>
 
-      <div className={`grid gap-3 rounded-xl bg-slate-50 px-3 py-3 text-sm ${canViewInternalCosts ? "grid-cols-2" : "grid-cols-1"}`}>
+      <div className={`grid gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3 text-sm ${canViewInternalCosts ? "grid-cols-2" : "grid-cols-1"}`}>
         {canViewInternalCosts ? <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cost</p>
-          <p className="mt-1 text-slate-700">{money(quote.internalCostSubtotal ?? 0)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">Cost</p>
+          <p className="mt-1 text-[var(--qf-text-soft)]">{money(quote.internalCostSubtotal ?? 0)}</p>
         </div> : null}
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Price</p>
-          <p className="mt-1 font-semibold text-slate-900">{money(quote.customerPriceSubtotal)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">Price</p>
+          <p className="mt-1 font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal)}</p>
         </div>
       </div>
 
@@ -709,10 +712,10 @@ export function QuotesPage() {
       </div>
 
       <Card variant="default" padding="md">
-        <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-3 border-b border-[var(--qf-border)] pb-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quote board</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">Most recent quotes first</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quote board</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-[var(--qf-text)]">Most recent quotes first</h2>
           </div>
           <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
             <div className="w-full lg:w-[300px]">
@@ -730,7 +733,7 @@ export function QuotesPage() {
           </div>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="mt-4 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
           {loading ? (
             <div className="p-4">
               <LoadingState
@@ -750,7 +753,7 @@ export function QuotesPage() {
             </div>
           ) : (
             <>
-              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid`}>
+              <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid`}>
                 <span>Quote No.</span>
                 <span>Customer</span>
                 <span>{canViewInternalCosts ? "Cost" : ""}</span>
@@ -758,9 +761,9 @@ export function QuotesPage() {
                 <span>Status</span>
                 <span className="text-right">Action</span>
               </div>
-              <div className="divide-y divide-slate-200">
+              <div className="divide-y divide-[var(--qf-border)]">
                 {filteredQuotes.map((quote) => (
-                  <div key={quote.id} className="transition-colors hover:bg-slate-50/80">
+                  <div key={quote.id} className="transition-colors hover:bg-[var(--qf-interactive-hover)]">
                     <QuoteDesktopRow
                       quote={quote}
                       onOpenQuote={navigateToQuote}
@@ -793,14 +796,14 @@ export function QuotesPage() {
             onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }}
           />
           <ModalBody className="space-y-5">
-            <div className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="flex items-start gap-4 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-4">
               <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">
                 <FileText size={22} strokeWidth={2} />
               </span>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-900">{pdfActionQuote.title}</p>
-                <p className="mt-1 text-sm text-slate-600">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="text-sm font-semibold text-[var(--qf-text)]">{pdfActionQuote.title}</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
+                <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
                   Preview first to verify the layout. Email quote can share the PDF on supported phones; Text quote opens Messages with the customer's number and message filled in.
                 </p>
               </div>
@@ -826,9 +829,9 @@ export function QuotesPage() {
               ) : null}
             </div>
             {preparedSend?.quoteId === pdfActionQuote.id ? (
-              <div className="rounded-2xl border border-quotefly-blue/20 bg-quotefly-blue/[0.06] px-4 py-4">
-                <p className="text-sm font-semibold text-slate-900">Did you send it?</p>
-                <p className="mt-1 text-sm text-slate-600">QuoteFly has not changed the status yet. Confirm only after the message leaves your phone.</p>
+              <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-4">
+                <p className="text-sm font-semibold text-[var(--qf-text)]">Did you send it?</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">QuoteFly has not changed the status yet. Confirm only after the message leaves your phone.</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                   <Button variant="outline" onClick={() => setPreparedSend(null)} disabled={pdfActionLoading !== null}>
                     Share Again

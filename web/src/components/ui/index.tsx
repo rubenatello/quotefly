@@ -1,7 +1,7 @@
 import { forwardRef, useId } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, HTMLAttributes } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { AlertTriangle, CheckCircle2, HelpCircle, Info, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HelpCircle, Info, ShieldAlert, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
@@ -41,8 +41,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
-        "inline-flex items-center justify-center rounded-lg border font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:border-[var(--qf-border)] disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] disabled:shadow-none disabled:opacity-70",
+        "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:translate-y-px disabled:cursor-not-allowed disabled:border-[var(--qf-border)] disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] disabled:shadow-none disabled:opacity-70 disabled:active:translate-y-0",
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         fullWidth && "w-full",
@@ -50,12 +51,39 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       )}
       {...rest}
     >
-      {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon}
+      {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon ? <span className="inline-flex shrink-0" aria-hidden="true">{icon}</span> : null}
       {children}
     </button>
   ),
 );
 Button.displayName = "Button";
+
+interface IconButtonProps extends Omit<ButtonProps, "children" | "fullWidth"> {
+  label: string;
+}
+
+const ICON_BUTTON_SIZES: Record<ButtonSize, string> = {
+  sm: "h-11 w-11 px-0 py-0 sm:h-9 sm:min-h-9 sm:w-9",
+  md: "h-11 w-11 px-0 py-0",
+  lg: "h-12 w-12 px-0 py-0",
+};
+
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
+  ({ label, icon, size = "md", className = "", title, ...rest }, ref) => (
+    <Button
+      ref={ref}
+      size={size}
+      icon={icon}
+      aria-label={label}
+      title={title ?? label}
+      className={cn("shrink-0", ICON_BUTTON_SIZES[size], className)}
+      {...rest}
+    >
+      <span className="sr-only">{label}</span>
+    </Button>
+  ),
+);
+IconButton.displayName = "IconButton";
 
 /* ─────────────────────────── INPUT ─────────────────────────── */
 
@@ -500,14 +528,15 @@ export function ModalHeader({
         ) : null}
       </div>
       {onClose ? (
-        <button
+        <IconButton
           type="button"
           onClick={onClose}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] transition hover:bg-[var(--qf-panel-muted)] hover:text-[var(--qf-text)] sm:h-9 sm:w-9"
-          aria-label="Close modal"
-        >
-          <span className="text-xl leading-none">&times;</span>
-        </button>
+          variant="outline"
+          size="sm"
+          icon={<X size={18} />}
+          label="Close modal"
+          className="rounded-full"
+        />
       ) : null}
     </div>
   );
@@ -519,7 +548,26 @@ export function ModalBody({ children, className = "" }: { children: ReactNode; c
 
 export function ModalFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-wrap justify-end gap-2 border-t border-[var(--qf-border)] px-5 py-4 sm:px-6", className)}>
+    <div
+      className={cn(
+        "grid shrink-0 grid-cols-1 gap-2 border-t border-[var(--qf-border)] bg-[var(--qf-panel)] px-5 py-4 sm:flex sm:flex-wrap sm:justify-end sm:px-6 [&>button]:w-full sm:[&>button]:w-auto [&>div]:grid [&>div]:w-full [&>div]:gap-2 [&>div>*]:w-full sm:[&>div]:flex sm:[&>div]:w-auto sm:[&>div>*]:w-auto",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function WorkflowActionDock({ children, className = "", ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn(
+        "qf-mobile-action-dock qf-theme-scope fixed z-40 rounded-2xl border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] p-3 text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] backdrop-blur-xl",
+        className,
+      )}
+      {...rest}
+    >
       {children}
     </div>
   );
@@ -621,6 +669,8 @@ export function Spinner({ size = 16 }: { size?: number }) {
       viewBox="0 0 24 24"
       fill="none"
       className="animate-spin"
+      aria-hidden="true"
+      focusable="false"
     >
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
       <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />

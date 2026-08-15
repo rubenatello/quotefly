@@ -56,6 +56,7 @@
   --qf-panel: #ffffff;
   --qf-panel-muted: #f5f7fb;
   --qf-panel-subtle: #edf3ff;
+  --qf-kody-avatar-surface: #edf5ff;
   --qf-border: #d7e2ef;
   --qf-border-strong: #c4d4e8;
   --qf-text-muted: #60708a;
@@ -127,6 +128,7 @@ html.dark {
   --qf-panel: rgb(var(--qf-panel-rgb));
   --qf-panel-muted: rgb(var(--qf-panel-muted-rgb));
   --qf-panel-subtle: rgb(var(--qf-panel-subtle-rgb));
+  --qf-kody-avatar-surface: #dceaff;
   --qf-border: rgb(var(--qf-border-rgb));
   --qf-border-strong: #40516b;
   --qf-text-muted: rgb(var(--qf-text-muted-rgb));

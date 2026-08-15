@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Mail, Phone, Search, UserRoundPlus } from "lucide-react";
 import { api, ApiError, type Customer } from "../../lib/api";
 import { formatUsPhoneDisplay } from "../../lib/phone";
+import { Button } from "../ui";
 
 interface InlineCustomerLookupProps {
   selectedCustomer: Customer | null;
@@ -63,9 +64,11 @@ export function InlineCustomerLookup({
       <div className="relative">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--qf-text-muted)]" />
             <input
               aria-label="Find customer by name, phone, or email"
+              aria-expanded={query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase()}
+              aria-controls="inline-customer-results"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={
@@ -73,29 +76,30 @@ export function InlineCustomerLookup({
                   ? "Find another customer by name, phone, or email"
                   : "Find customer by name, phone, or email"
               }
-              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-4 focus:ring-quotefly-blue/10 sm:min-h-[40px]"
+              className="min-h-[44px] w-full rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] pl-10 pr-3 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:outline-none focus:ring-4 focus:ring-[var(--qf-focus-ring)] sm:min-h-[40px]"
             />
           </div>
-          <button
+          <Button
             type="button"
+            variant="outline"
             onClick={onAddCustomer}
             aria-label="Add Customer"
-            className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-quotefly-blue sm:min-h-[40px]"
+            icon={<UserRoundPlus size={15} />}
+            className="shrink-0 sm:min-h-10"
           >
-            <UserRoundPlus size={15} />
             <span className="sm:hidden">Add</span>
             <span className="hidden sm:inline">Add customer</span>
-          </button>
+          </Button>
         </div>
 
         {query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase() ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_40px_rgba(15,23,42,0.12)]">
+          <div id="inline-customer-results" className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
             {loading ? (
-              <p className="px-3 py-3 text-sm text-slate-500">Searching customers...</p>
+              <p role="status" className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">Searching customers...</p>
             ) : error ? (
-              <p className="px-3 py-3 text-sm text-red-600">{error}</p>
+              <p role="alert" className="px-3 py-3 text-sm text-[var(--qf-danger-text)]">{error}</p>
             ) : results.length ? (
-              <div className="max-h-[280px] divide-y divide-slate-200 overflow-y-auto">
+              <div className="max-h-[280px] divide-y divide-[var(--qf-border)] overflow-y-auto">
                 {results.map((customer) => (
                   <button
                     key={customer.id}
@@ -105,11 +109,11 @@ export function InlineCustomerLookup({
                       setQuery(customer.fullName);
                       setResults([]);
                     }}
-                    className="flex min-h-[44px] w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-50 sm:min-h-[40px]"
+                    className="flex min-h-[44px] w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">{customer.fullName}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                      <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{customer.fullName}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--qf-text-muted)]">
                         <span className="inline-flex items-center gap-1">
                           <Phone size={12} />
                           {formatUsPhoneDisplay(customer.phone)}
@@ -122,14 +126,14 @@ export function InlineCustomerLookup({
                         ) : null}
                       </div>
                     </div>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                    <span className="rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-2 py-1 text-[11px] font-semibold text-[var(--qf-text-soft)]">
                       Use
                     </span>
                   </button>
                 ))}
               </div>
             ) : (
-              <p className="px-3 py-3 text-sm text-slate-500">No customers matched that search.</p>
+              <p className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">No customers matched that search.</p>
             )}
           </div>
         ) : null}

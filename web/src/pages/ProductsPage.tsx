@@ -352,8 +352,8 @@ function ProductEditorModal({
 
         <div className={`rounded-xl border px-4 py-3 ${
           margin !== null && margin < 0
-            ? "border-red-200 bg-red-50 text-red-700"
-            : "border-slate-200 bg-slate-50 text-slate-700"
+            ? "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)]"
+            : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]"
         }`}>
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium">{marginLabel}</span>

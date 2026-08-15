@@ -27,6 +27,7 @@ import {
   PageHeader,
   Select,
   Textarea,
+  WorkflowActionDock,
 } from "../components/ui";
 import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
@@ -1265,10 +1266,10 @@ export function QuoteBuilderView() {
         <div
           role="alert"
           data-testid="quote-builder-draft-conflict"
-          className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-slate-900"
+          className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
         >
           <p className="text-sm font-semibold">Saved quote draft found</p>
-          <p className="mt-1 text-sm text-slate-700">
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
             This tab has a saved draft for a different customer. Choose which quote you want to continue.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -1286,7 +1287,7 @@ export function QuoteBuilderView() {
           role="status"
           aria-live="polite"
           data-testid="quote-builder-draft-status"
-          className="rounded-xl border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-3 py-2.5 sm:px-4 sm:py-3"
+          className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-2.5 sm:px-4 sm:py-3"
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -1294,14 +1295,14 @@ export function QuoteBuilderView() {
                 <Check size={15} strokeWidth={2.5} aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">
+                <p className="truncate text-sm font-semibold text-[var(--qf-text)]">
                   {draftPersistenceFailed
                     ? "Draft open in this tab"
                     : draftRestored
                       ? "Draft restored"
                       : "Draft autosaved"}
                 </p>
-                <p className="truncate text-xs text-slate-600">
+                <p className="truncate text-xs text-[var(--qf-text-soft)]">
                   {draftPersistenceFailed
                     ? "Keep this tab open until the quote is created."
                     : `Saved in this browser${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}
@@ -1311,7 +1312,7 @@ export function QuoteBuilderView() {
             {!discardDraftConfirmOpen ? (
               <button
                 type="button"
-                className="min-h-[44px] shrink-0 rounded-lg px-2 text-xs font-semibold text-slate-600 transition hover:bg-white hover:text-red-600 sm:min-h-[36px]"
+                className="min-h-[44px] shrink-0 rounded-lg px-2 text-xs font-semibold text-[var(--qf-text-soft)] transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-danger-text)] sm:min-h-[36px]"
                 onClick={() => setDiscardDraftConfirmOpen(true)}
                 aria-label="Discard saved quote draft and start over"
               >
@@ -1321,7 +1322,7 @@ export function QuoteBuilderView() {
           </div>
           {discardDraftConfirmOpen ? (
             <div role="group" aria-label="Confirm discard saved quote draft" className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-quotefly-blue/10 pt-2">
-              <span className="mr-auto text-xs font-semibold text-slate-700">Discard this draft?</span>
+              <span className="mr-auto text-xs font-semibold text-[var(--qf-text-soft)]">Discard this draft?</span>
               <Button ref={keepDraftButtonRef} variant="outline" size="sm" onClick={() => setDiscardDraftConfirmOpen(false)}>
                 Keep Draft
               </Button>
@@ -1333,16 +1334,16 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
       {aiInsight ? (
-        <div className="rounded-lg border border-quotefly-blue/20 bg-quotefly-blue/[0.05] px-4 py-3 text-sm text-slate-700">
+        <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3 text-sm text-[var(--qf-text-soft)]">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
-              <p className="mt-1 font-medium text-slate-900">{aiInsight.summary}</p>
+              <p className="mt-1 font-medium text-[var(--qf-text)]">{aiInsight.summary}</p>
             </div>
             <button
               type="button"
               onClick={() => setAiInsight(null)}
-              className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-slate-500 hover:text-slate-700 sm:min-h-[36px]"
+              className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-[var(--qf-text-muted)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] sm:min-h-[36px]"
             >
               Dismiss
             </button>
@@ -1358,15 +1359,15 @@ export function QuoteBuilderView() {
             <Badge tone={aiInsight.confidence.level === "high" ? "emerald" : aiInsight.confidence.level === "medium" ? "amber" : "red"}>
               {aiInsight.confidence.label}
             </Badge>
-            {aiInsight.riskNote ? <span className="text-xs text-slate-600">{aiInsight.riskNote}</span> : null}
+            {aiInsight.riskNote ? <span className="text-xs text-[var(--qf-text-soft)]">{aiInsight.riskNote}</span> : null}
           </div>
           {aiInsight.sources.length ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <span className="font-semibold text-slate-700">Context used:</span>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--qf-text-soft)]">
+              <span className="font-semibold text-[var(--qf-text)]">Context used:</span>
               {aiInsight.sources.map((source, index) => (
                 <span
                   key={`${source.type}-${source.label}-${index}`}
-                  className="rounded-full border border-[var(--qf-border)] bg-white px-2.5 py-1"
+                  className="rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel)] px-2.5 py-1"
                 >
                   {source.label}
                 </span>
@@ -1376,7 +1377,7 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
 
-      <ol className="grid grid-cols-3 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 xl:hidden" aria-label="Quote progress">
+      <ol className="grid grid-cols-3 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1.5 xl:hidden" aria-label="Quote progress">
         {["Customer", "Work", "Review"].map((label, index) => {
           const step = index + 1;
           const active = step === mobileBuilderStep;
@@ -1386,11 +1387,11 @@ export function QuoteBuilderView() {
               key={label}
               aria-current={active ? "step" : undefined}
               className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-2 text-xs font-semibold transition ${
-                active ? "bg-quotefly-blue/[0.08] text-quotefly-blue" : complete ? "text-slate-700" : "text-slate-400"
+                active ? "bg-[var(--qf-selected)] text-[var(--qf-link)]" : complete ? "text-[var(--qf-text-soft)]" : "text-[var(--qf-text-muted)]"
               }`}
             >
               <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
-                active ? "bg-quotefly-blue text-white" : complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                active ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]" : complete ? "bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]" : "bg-[var(--qf-panel-muted)] text-[var(--qf-text-muted)]"
               }`}>
                 {complete ? <Check size={13} strokeWidth={2.5} aria-hidden="true" /> : step}
               </span>
@@ -1688,15 +1689,15 @@ export function QuoteBuilderView() {
 
       {activeCustomer || mobilePane === "preview" ? <div className="xl:hidden">
         <div className="h-20" />
-        <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 px-3 py-2.5 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+        <WorkflowActionDock className="px-3 py-2.5">
           {error ? <p role="alert" className="mb-2 line-clamp-2 text-xs font-medium text-red-700">{error}</p> : null}
           {mobilePane === "editor" ? (
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 pl-1">
-                <p className="text-[11px] font-medium text-slate-500">
+                <p className="text-[11px] font-medium text-[var(--qf-text-muted)]">
                   {filteredDraftLines.length} work item{filteredDraftLines.length === 1 ? "" : "s"}
                 </p>
-                <p className="text-sm font-bold text-slate-950">Total {money(totalAmount)}</p>
+                <p className="text-sm font-bold text-[var(--qf-text)]">Total {money(totalAmount)}</p>
               </div>
               <Button className="min-w-[148px]" icon={<Eye size={15} />} onClick={() => setMobilePane("preview")}>
                 Review quote
@@ -1712,7 +1713,7 @@ export function QuoteBuilderView() {
               </Button>
             </div>
           )}
-        </div>
+        </WorkflowActionDock>
       </div> : null}
 
       <QuickCustomerModal
@@ -1810,7 +1811,7 @@ export function QuoteBuilderView() {
           description="This is an in-app preview of the unsaved quote. Create the quote to generate its PDF."
           onClose={() => setPreviewOpen(false)}
         />
-        <ModalBody className="bg-slate-50">
+        <ModalBody className="bg-[var(--qf-panel-muted)]">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
@@ -1861,11 +1862,11 @@ function SummaryRow({
   tone?: "good" | "bad";
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5">
-      <span className="text-sm text-slate-600">{label}</span>
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5">
+      <span className="text-sm text-[var(--qf-text-soft)]">{label}</span>
       <span
         className={`text-sm font-semibold ${
-          strong ? "text-slate-950" : tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-red-700" : "text-slate-900"
+          strong ? "text-[var(--qf-text)]" : tone === "good" ? "text-[var(--qf-success-text)]" : tone === "bad" ? "text-[var(--qf-danger-text)]" : "text-[var(--qf-text)]"
         }`}
       >
         {value}
@@ -1900,7 +1901,7 @@ function KodyDraftHandoffBanner({
   return (
     <div
       data-testid="kody-draft-handoff"
-      className="rounded-2xl border border-quotefly-blue/20 bg-[linear-gradient(135deg,rgba(47,111,214,0.08),rgba(255,255,255,0.96))] px-4 py-4 shadow-[0_12px_30px_rgba(47,111,214,0.06)]"
+      className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-4 shadow-[var(--qf-shadow-sm)]"
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
@@ -1917,7 +1918,7 @@ function KodyDraftHandoffBanner({
           <h2 className="mt-3 text-base font-semibold text-slate-950">
             Review this AI handoff before creating the quote.
           </h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--qf-text-soft)]">
             {handoff.useWorkspaceContext
               ? "Kody found relevant saved jobs, quote details, or customer context. Generate the grounded draft, then review every scope and price before creating it. Nothing is saved or sent automatically."
               : "Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote."}
@@ -1939,10 +1940,10 @@ function KodyDraftHandoffBanner({
       </div>
 
       {handoff.retrievedSourceLabels.length ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <span className="font-semibold text-slate-700">Workspace context:</span>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--qf-text-soft)]">
+          <span className="font-semibold text-[var(--qf-text)]">Workspace context:</span>
           {handoff.retrievedSourceLabels.slice(0, 4).map((label) => (
-            <span key={label} className="rounded-full border border-quotefly-blue/15 bg-white/80 px-2.5 py-1">
+            <span key={label} className="rounded-full border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-2.5 py-1">
               {label}
             </span>
           ))}
@@ -1953,48 +1954,48 @@ function KodyDraftHandoffBanner({
       ) : null}
 
       <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Customer</p>
-          <p className="mt-1 truncate font-semibold text-slate-900">{customerLabel}</p>
+        <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Customer</p>
+          <p className="mt-1 truncate font-semibold text-[var(--qf-text)]">{customerLabel}</p>
         </div>
-        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Trade</p>
-          <p className="mt-1 font-semibold text-slate-900">{serviceTypeLabel(handoff.serviceType)}</p>
+        <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Trade</p>
+          <p className="mt-1 font-semibold text-[var(--qf-text)]">{serviceTypeLabel(handoff.serviceType)}</p>
         </div>
-        <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-2 sm:col-span-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Title</p>
-          <p className="mt-1 truncate font-semibold text-slate-900">{handoff.title ?? "Kody will generate a title from the prompt"}</p>
+        <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2 sm:col-span-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Title</p>
+          <p className="mt-1 truncate font-semibold text-[var(--qf-text)]">{handoff.title ?? "Kody will generate a title from the prompt"}</p>
         </div>
       </div>
 
       {handoff.scopeText || visibleLines.length || handoff.estimatedTotalAmount !== null ? (
         <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
-          <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scope preview</p>
-            <p className="mt-1 line-clamp-3 text-sm leading-6 text-slate-700">
+          <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Scope preview</p>
+            <p className="mt-1 line-clamp-3 text-sm leading-6 text-[var(--qf-text-soft)]">
               {handoff.scopeText ?? "Kody will generate scope details from the prompt."}
             </p>
           </div>
-          <div className="rounded-xl border border-white/70 bg-white/75 px-3 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested work</p>
+          <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Suggested work</p>
             {visibleLines.length ? (
-              <ul className="mt-1 space-y-1 text-sm text-slate-700">
+              <ul className="mt-1 space-y-1 text-sm text-[var(--qf-text-soft)]">
                 {visibleLines.map((lineItem, index) => (
                   <li key={`${lineItem.description}-${index}`} className="flex gap-2">
-                    <span className="text-slate-400">{index + 1}.</span>
+                    <span className="text-[var(--qf-text-muted)]">{index + 1}.</span>
                     <span className="min-w-0">
                       {lineItem.description}
-                      {lineItem.quantity ? <span className="text-slate-500"> · Qty {lineItem.quantity}</span> : null}
+                      {lineItem.quantity ? <span className="text-[var(--qf-text-muted)]"> · Qty {lineItem.quantity}</span> : null}
                     </span>
                   </li>
                 ))}
-                {extraLineCount ? <li className="text-xs font-semibold text-slate-500">+{extraLineCount} more in prompt</li> : null}
+                {extraLineCount ? <li className="text-xs font-semibold text-[var(--qf-text-muted)]">+{extraLineCount} more in prompt</li> : null}
               </ul>
             ) : (
-              <p className="mt-1 text-sm text-slate-600">No line preview supplied yet.</p>
+              <p className="mt-1 text-sm text-[var(--qf-text-soft)]">No line preview supplied yet.</p>
             )}
             {handoff.estimatedTotalAmount !== null ? (
-              <p className="mt-2 text-xs font-semibold text-slate-600">
+              <p className="mt-2 text-xs font-semibold text-[var(--qf-text-soft)]">
                 Kody estimate: {money(handoff.estimatedTotalAmount)}
               </p>
             ) : null}
@@ -2015,11 +2016,11 @@ function ChecklistItem({
   compact?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-emerald-200 bg-emerald-50" : "border-[var(--qf-border)] bg-white"}`}>
-      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+    <div className={`flex items-center gap-2 rounded-lg border px-3 ${compact ? "py-2" : "py-2"} ${complete ? "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)]" : "border-[var(--qf-border)] bg-[var(--qf-panel)]"}`}>
+      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${complete ? "bg-[var(--qf-success-strong)] text-white" : "bg-[var(--qf-interactive-active)] text-[var(--qf-text-muted)]"}`}>
         {complete ? "OK" : "-"}
       </span>
-      <span className="text-sm text-slate-700">{label}</span>
+      <span className="text-sm text-[var(--qf-text-soft)]">{label}</span>
     </div>
   );
 }
@@ -2053,7 +2054,7 @@ function DraftLineEditorRow({
   const sectionPillClassName =
     line.sectionType === "ALTERNATE"
       ? "border-orange-200 bg-orange-50 text-orange-700"
-      : "border-slate-200 bg-slate-100 text-slate-600";
+      : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]";
 
   useEffect(() => {
     if (startExpanded) setExpanded(true);
@@ -2084,21 +2085,21 @@ function DraftLineEditorRow({
             >
               <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Item {index + 1}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Item {index + 1}</p>
                 {line.sectionType === "ALTERNATE" ? (
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
                     {sectionPillLabel}
                   </span>
                 ) : null}
               </div>
-              <p className="truncate text-sm font-semibold text-slate-900">{line.title.trim() || "Untitled line"}</p>
-              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || "Untitled line"}</p>
+              <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--qf-text-muted)]">
                 <span>Qty {line.quantity}</span>
                 <span>Price {money(line.unitPrice)}</span>
                 <span>Total {money(lineTotal)}</span>
               </div>
               </div>
-              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)]">
                 {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
             </button>
@@ -2106,7 +2107,7 @@ function DraftLineEditorRow({
               <button
                 type="button"
                 onClick={() => onRemove(line.id)}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-white text-slate-500 transition hover:border-red-200 hover:text-red-600"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] transition hover:border-[var(--qf-danger-border)] hover:bg-[var(--qf-danger-surface)] hover:text-[var(--qf-danger-text)]"
                 aria-label={`Remove item ${index + 1}`}
               >
                 <Trash2 size={15} />
@@ -2114,7 +2115,7 @@ function DraftLineEditorRow({
             </div>
           </div>
 
-          <div className={expanded ? "border-t border-slate-200 px-3 py-3" : "hidden"}>
+          <div className={expanded ? "border-t border-[var(--qf-border)] px-3 py-3" : "hidden"}>
             <div className="space-y-3">
               <Input
                 label="Work item"
@@ -2130,14 +2131,14 @@ function DraftLineEditorRow({
               <button
                 type="button"
                 onClick={() => setAdvancedOpen((current) => !current)}
-                className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-[var(--qf-border)] bg-white px-3 text-sm font-medium text-slate-700"
+                className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 text-sm font-medium text-[var(--qf-text-soft)] transition hover:bg-[var(--qf-interactive-hover)]"
                 aria-expanded={advancedOpen}
               >
                 More details
                 {advancedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
               </button>
               {advancedOpen ? (
-                <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-white p-3">
+                <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
                   <Textarea
                     label="Description"
                     aria-label={`Line ${index + 1} description`}
@@ -2163,7 +2164,7 @@ function DraftLineEditorRow({
                   />
                 </div>
               ) : null}
-              <div className="rounded-lg border border-[var(--qf-border)] bg-white px-3 py-2.5 text-sm font-semibold text-slate-900">
+              <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)]">
                 Line total {money(lineTotal)}
               </div>
             </div>
@@ -2174,7 +2175,7 @@ function DraftLineEditorRow({
       <div
         className={`hidden xl:grid xl:items-start xl:gap-2.5 ${QUOTE_BUILDER_LINE_GRID_COLUMNS} ${QUOTE_BUILDER_LINE_GRID_MIN_WIDTH}`}
       >
-        <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-slate-500">
+        <div className="flex h-[38px] items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-[var(--qf-text-muted)]">
           {index + 1}
         </div>
         <div className="space-y-1.5">
@@ -2207,7 +2208,7 @@ function DraftLineEditorRow({
           <Input aria-label={`Line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
         ) : <span aria-hidden="true" />}
         <Input aria-label={`Line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
-        <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-slate-900 tabular-nums">
+        <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
           {money(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">
@@ -2224,7 +2225,7 @@ function DraftLineEditorRow({
             size="sm"
             variant="ghost"
             icon={<X size={14} />}
-            className="w-9 px-0 text-slate-500 hover:text-red-600"
+            className="w-9 px-0 text-[var(--qf-text-muted)] hover:text-[var(--qf-danger-text)]"
             onClick={() => onRemove(line.id)}
             aria-label="Remove line"
             title="Remove line"

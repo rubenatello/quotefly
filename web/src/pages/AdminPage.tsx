@@ -127,6 +127,24 @@ const ROLE_OPTIONS: Array<{ value: OrgUserRole; label: string }> = [
   { value: "owner", label: "Owner" },
 ];
 
+const ROLE_GUIDES = [
+  {
+    role: "Owner",
+    tone: "border-violet-200 bg-violet-50",
+    text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, users, and billing.",
+  },
+  {
+    role: "Admin",
+    tone: "border-sky-200 bg-sky-50",
+    text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, and users. No billing changes.",
+  },
+  {
+    role: "Member",
+    tone: "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]",
+    text: "Assigned customers, follow-ups, jobs, and quotes. Can create and edit assigned quotes using approved products; cannot see internal costs or margins, manage the catalog, or archive/delete records.",
+  },
+] as const;
+
 function normalizeRole(role: string): OrgUserRole {
   const value = role.trim().toLowerCase();
   if (value === "owner" || value === "admin") return value;
@@ -486,33 +504,41 @@ export function AdminPage({ session }: AdminPageProps) {
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
           <WorkspaceRailCard
-            eyebrow="Admin"
-            title="Workspace Control"
-            description="Billing, accounting, and team settings should be obvious and fast to scan on mobile or desktop."
+            eyebrow={settingsMode === "users" ? "Team" : "Admin"}
+            title={settingsMode === "users" ? "Access & seats" : "Workspace Control"}
+            description={settingsMode === "users"
+              ? "See the current seat allowance and jump directly to team access."
+              : "Billing, accounting, and team settings should be obvious and fast to scan on mobile or desktop."}
           >
             <div className="flex flex-wrap gap-2">
               <Badge tone={planTone(effectivePlanCode)}>{displayPlanName} access</Badge>
-              {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
-              <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
-                {sentenceCaseStatus(session?.subscriptionStatus)}
-              </Badge>
-              <Badge tone={starterLaunchMode ? "blue" : "amber"}>
-                {starterLaunchMode ? "Basic launch" : "Advanced tiers later"}
-              </Badge>
+              {settingsMode === "users" ? (
+                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? "Seat limit reached" : "Seats available"}</Badge>
+              ) : (
+                <>
+                  {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
+                  <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
+                    {sentenceCaseStatus(session?.subscriptionStatus)}
+                  </Badge>
+                  <Badge tone={starterLaunchMode ? "blue" : "amber"}>
+                    {starterLaunchMode ? "Basic launch" : "Advanced tiers later"}
+                  </Badge>
+                </>
+              )}
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <AdminMetricCard
-                icon={<PriceIcon size={16} />}
-                label="Current access"
-                value={displayPlanName}
-                hint={session?.isTrial ? "Trial access" : "Live plan access"}
-              />
-              <AdminMetricCard
-                icon={<ClockIcon size={16} />}
-                label="Billing state"
-                value={sentenceCaseStatus(session?.subscriptionStatus)}
-                hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
-              />
+            <div className={`mt-4 grid gap-3 ${settingsMode === "users" ? "grid-cols-1" : "sm:grid-cols-3 xl:grid-cols-1"}`}>
+              {settingsMode === "org" ? <AdminMetricCard
+                  icon={<PriceIcon size={16} />}
+                  label="Current access"
+                  value={displayPlanName}
+                  hint={session?.isTrial ? "Trial access" : "Live plan access"}
+                /> : null}
+              {settingsMode === "org" ? <AdminMetricCard
+                  icon={<ClockIcon size={16} />}
+                  label="Billing state"
+                  value={sentenceCaseStatus(session?.subscriptionStatus)}
+                  hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+                /> : null}
               <AdminMetricCard
                 icon={<CustomerIcon size={16} />}
                 label="Team seats"
@@ -520,7 +546,7 @@ export function AdminPage({ session }: AdminPageProps) {
                 hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
               />
             </div>
-            {aiBudgetLimit !== null ? (
+            {settingsMode === "org" && aiBudgetLimit !== null ? (
               <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Usage</p>
@@ -561,10 +587,10 @@ export function AdminPage({ session }: AdminPageProps) {
             <WorkspaceJumpBar links={visibleAdminLinks} className="mt-4" />
           </WorkspaceRailCard>
 
-          <WorkspaceRailCard
-            eyebrow={settingsMode === "users" ? "Access" : "Owner actions"}
-            title={settingsMode === "users" ? "User management" : ownerView ? "You can manage billing" : "Read-only access"}
-            description={settingsMode === "users" ? "Owners can edit roles and remove members. Admins can add members." : ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
+          {settingsMode === "org" ? <WorkspaceRailCard
+            eyebrow="Owner actions"
+            title={ownerView ? "You can manage billing" : "Read-only access"}
+            description={ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
           >
             <div className="grid gap-2">
               {settingsMode === "org" && ownerView && hasPortalAccess ? (
@@ -595,7 +621,7 @@ export function AdminPage({ session }: AdminPageProps) {
                 </div>
               ) : null}
             </div>
-          </WorkspaceRailCard>
+          </WorkspaceRailCard> : null}
         </aside>
 
         <div className="space-y-6">
@@ -817,20 +843,24 @@ export function AdminPage({ session }: AdminPageProps) {
                 </div>
                 <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? "Limit reached" : "Seats available"}</Badge>
               </div>
+              {teamMembersLimit !== null ? (
+                <ProgressBar
+                  value={Math.min(100, (teamMembersUsed / Math.max(teamMembersLimit, 1)) * 100)}
+                  label="Active team seats"
+                  hint={`${teamMembersUsed} of ${teamMembersLimit} seats in use`}
+                  className="mt-4"
+                />
+              ) : null}
             </Card>
 
-            <div className="mb-5 grid gap-3 md:grid-cols-3">
-              {[
-                { role: "Owner", tone: "border-violet-200 bg-violet-50", text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, users, and billing." },
-                { role: "Admin", tone: "border-sky-200 bg-sky-50", text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, and users. No billing changes." },
-                { role: "Member", tone: "border-slate-200 bg-slate-50", text: "Assigned customers, follow-ups, jobs, and quotes. Can create and edit assigned quotes using approved products; cannot see internal costs or margins, manage the catalog, or archive/delete records." },
-              ].map((guide) => (
-                <div key={guide.role} className={`rounded-2xl border p-4 ${guide.tone}`}>
-                  <p className="text-sm font-bold text-slate-950">{guide.role}</p>
-                  <p className="mt-2 text-xs leading-5 text-slate-700">{guide.text}</p>
-                </div>
-              ))}
-            </div>
+            <details className="mb-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 md:hidden">
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-semibold text-[var(--qf-text)]">
+                Compare role permissions
+                <span className="text-xs font-medium text-[var(--qf-text-muted)]">Owner · Admin · Member</span>
+              </summary>
+              <RoleGuideCards className="border-t border-[var(--qf-border)] py-4" />
+            </details>
+            <RoleGuideCards className="mb-5 hidden md:grid md:grid-cols-3" />
             <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Card variant="elevated" padding="lg">
           <CardHeader
@@ -897,22 +927,22 @@ export function AdminPage({ session }: AdminPageProps) {
             subtitle="Owners can edit roles and remove members. Admins can add members. Members are read-only."
             actions={<Badge tone="slate">{members.length} users</Badge>}
           />
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
             {members.length ? (
               <>
-                <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:grid">
                   <span>User</span>
                   <span>Role</span>
                   <span>Assigned</span>
                   <span>Joined</span>
                   <span>Action</span>
                 </div>
-                <div className="divide-y divide-slate-200">
+                <div className="divide-y divide-[var(--qf-border)]">
                   {members.map((member) => (
-                    <div key={member.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] lg:items-center">
+                    <div key={member.id} className="grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] lg:items-center lg:py-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-3">
-                          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+                          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
                             {member.user.fullName
                               .split(" ")
                               .map((part) => part[0] ?? "")
@@ -921,20 +951,27 @@ export function AdminPage({ session }: AdminPageProps) {
                               .toUpperCase()}
                           </span>
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{member.user.fullName}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{member.user.email}</p>
+                            <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{member.user.fullName}</p>
+                            <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{member.user.email}</p>
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-2 lg:justify-start">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">Role</span>
                         <Badge tone={roleTone(member.role)}>{roleLabel(member.role)}</Badge>
                       </div>
-                      <div className="text-xs text-slate-600">
-                        <p>{member.assignments?.assignedCustomers ?? 0} customers</p>
-                        <p className="mt-1">{member.assignments?.assignedQuotes ?? 0} quotes</p>
+                      <div className="flex items-center justify-between gap-3 text-xs text-[var(--qf-text-soft)] lg:block">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">Assigned</span>
+                        <span className="text-right lg:text-left">
+                          <span>{member.assignments?.assignedCustomers ?? 0} customers</span>
+                          <span className="ml-2 lg:ml-0 lg:mt-1 lg:block">{member.assignments?.assignedQuotes ?? 0} quotes</span>
+                        </span>
                       </div>
-                      <div className="text-xs text-slate-500">Joined {dateText(member.createdAt)}</div>
-                      <div className="grid gap-2 sm:grid-cols-[1fr_auto] lg:grid-cols-[1fr]">
+                      <div className="flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)] lg:block">
+                        <span className="font-semibold uppercase tracking-wide lg:hidden">Joined</span>
+                        <span>{dateText(member.createdAt)}</span>
+                      </div>
+                      <div className="grid gap-2 border-t border-[var(--qf-border)] pt-3 sm:grid-cols-[1fr_auto] lg:grid-cols-[1fr] lg:border-0 lg:pt-0">
                         {ownerView ? (
                       <Select
                         aria-label={`Role for ${member.user.fullName}`}
@@ -989,6 +1026,19 @@ export function AdminPage({ session }: AdminPageProps) {
   );
 }
 
+function RoleGuideCards({ className = "" }: { className?: string }) {
+  return (
+    <div className={`grid gap-3 ${className}`}>
+      {ROLE_GUIDES.map((guide) => (
+        <div key={guide.role} className={`rounded-2xl border p-4 ${guide.tone}`}>
+          <p className="text-sm font-bold text-[var(--qf-text)]">{guide.role}</p>
+          <p className="mt-2 text-xs leading-5 text-[var(--qf-text-soft)]">{guide.text}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AdminMetricCard({
   icon,
   label,
@@ -1001,15 +1051,15 @@ function AdminMetricCard({
   hint: string;
 }) {
   return (
-    <div className="h-full rounded-xl border border-slate-200 bg-white px-4 py-3">
+    <div className="h-full rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{label}</p>
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]">
           {icon}
         </span>
       </div>
-      <p className="mt-2 text-base font-semibold leading-6 text-slate-900 sm:text-lg">{value}</p>
-      <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p>
+      <p className="mt-2 text-base font-semibold leading-6 text-[var(--qf-text)] sm:text-lg">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{hint}</p>
     </div>
   );
 }

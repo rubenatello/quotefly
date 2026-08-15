@@ -68,7 +68,7 @@ export function WorkPresetPickerModal({
         description="Choose a standard or custom catalog item, set quantity, then add it to the quote."
         onClose={closePicker}
       />
-      <ModalBody className="space-y-4 bg-slate-50">
+      <ModalBody className="space-y-4 bg-[var(--qf-panel-muted)]">
         <Input
           label="Search products"
           icon={<Search size={14} />}
@@ -78,7 +78,7 @@ export function WorkPresetPickerModal({
         />
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1" aria-label="Product source filter">
+          <div className="inline-flex rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1" aria-label="Product source filter">
             {([
               { value: "ALL", label: "All" },
               { value: "STANDARD", label: "Standard" },
@@ -91,8 +91,8 @@ export function WorkPresetPickerModal({
                 onClick={() => setSourceFilter(option.value)}
                 className={`min-h-[40px] rounded-lg px-3 text-xs font-semibold transition sm:min-h-[32px] ${
                   sourceFilter === option.value
-                    ? "bg-quotefly-blue text-white shadow-sm"
-                    : "text-slate-600 hover:bg-slate-50"
+                    ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[var(--qf-shadow-sm)]"
+                    : "text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)]"
                 }`}
               >
                 {option.label}
@@ -117,22 +117,22 @@ export function WorkPresetPickerModal({
                   onClick={() => onSelectPreset(preset.id)}
                   className={`min-h-[44px] rounded-2xl border px-4 py-3 text-left transition sm:min-h-[40px] ${
                     active
-                      ? "border-quotefly-blue/20 bg-white shadow-[0_8px_18px_rgba(15,23,42,0.06)]"
-                      : "border-slate-200 bg-white hover:border-slate-300"
+                      ? "border-[var(--qf-info-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)] ring-2 ring-[var(--qf-focus-ring)]"
+                      : "border-[var(--qf-border)] bg-[var(--qf-panel)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className={`text-sm font-semibold ${active ? "text-quotefly-blue" : "text-slate-900"}`}>
+                      <p className={`text-sm font-semibold ${active ? "text-[var(--qf-link)]" : "text-[var(--qf-text)]"}`}>
                         {preset.name}
                       </p>
                       {preset.description ? (
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{preset.description}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--qf-text-muted)]">{preset.description}</p>
                       ) : null}
                     </div>
                     {preset.catalogKey ? <Badge tone="blue">Standard</Badge> : <Badge tone="slate">Saved</Badge>}
                   </div>
-                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)]">
                     <span>{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</span>
                     {canViewInternalCosts ? <span>Cost {money(preset.unitCost ?? 0)}</span> : null}
                   </div>
@@ -140,18 +140,18 @@ export function WorkPresetPickerModal({
               );
             })
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500 sm:col-span-2">
+            <div className="rounded-2xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-4 py-6 text-sm text-[var(--qf-text-muted)] sm:col-span-2">
               No products match this search and filter.
             </div>
           )}
         </div>
 
         {selectedPreset ? (
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected product</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">{selectedPreset.name}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Selected product</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{selectedPreset.name}</p>
               </div>
               <div className="w-24">
                 <Input

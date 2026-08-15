@@ -76,6 +76,7 @@ async function expectQuoteFlyOrangePalette(page: Page) {
 }
 
 test("workspace controls remain readable in light and dark themes", async ({ context, page, request }) => {
+  test.setTimeout(90_000);
   const account = await signUpViaApi(request, "theme-mobile");
   await createCustomerViaApi(request, account, {
     fullName: "Theme Check Customer",
@@ -112,12 +113,16 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   const kodyPanel = page.getByTestId("kody-chat-panel");
   await expect(kodyPanel).toBeVisible();
   await expect(kodyLauncher).toHaveCount(0);
-  await kodyPanel.getByTestId("kody-quick-prompts").locator("summary").click();
+  const quickPrompts = kodyPanel.getByTestId("kody-quick-prompts");
+  await quickPrompts.locator("summary").click();
   const draftQuoteQuickAction = kodyPanel.getByTestId("kody-quick-draft_quote");
   await expect(draftQuoteQuickAction).toHaveCount(1);
   await expect(kodyPanel.getByText("Draft a quote from job notes", { exact: true })).toHaveCount(0);
   await expectReadableControl(draftQuoteQuickAction);
+  await draftQuoteQuickAction.click();
+  await expect.poll(() => quickPrompts.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
   await expectReadableControl(kodyPanel.getByTestId("kody-prompt"));
+  await expectReadableControl(kodyPanel.getByRole("button", { name: "Send", exact: true }));
   await captureThemeScreenshot(page, "dark-mobile-kody", false);
   await kodyPanel.getByRole("button", { name: "Close Kody" }).click();
   await expect(kodyLauncher).toBeVisible();
@@ -130,6 +135,36 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await captureThemeScreenshot(page, "dark-mobile-settings");
   await page.getByTestId("theme-option-dark").scrollIntoViewIfNeeded();
   await captureThemeScreenshot(page, "dark-mobile-settings-appearance", false);
+
+  await page.goto("/app/settings/users");
+  await expect(page.getByText(/seat allowance/i).first()).toBeVisible();
+  await expect(page.getByText(/of \d+ seats in use/i).first()).toBeVisible();
+  const roleGuide = page.locator("details").filter({ hasText: "Compare role permissions" });
+  await expect(roleGuide).toBeVisible();
+  await expect.poll(() => roleGuide.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  await roleGuide.locator("summary").click();
+  await expect.poll(() => roleGuide.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(true);
+  await expect(roleGuide.getByText("Member", { exact: true })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await captureThemeScreenshot(page, "dark-mobile-team");
+
+  await page.goto("/app/branding");
+  await expect(page.getByRole("heading", { name: "Build your quote look in three steps" })).toBeVisible();
+  const quotePresetButtons = page.getByRole("button", { name: /Use .* quote preset/ });
+  await expect(quotePresetButtons).toHaveCount(3);
+  for (const presetButton of await quotePresetButtons.all()) {
+    expect((await presetButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  await quotePresetButtons.nth(1).click();
+  await expect(quotePresetButtons.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Save Brand", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Brand Saved", exact: true })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await captureThemeScreenshot(page, "dark-mobile-branding");
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/app/customers");

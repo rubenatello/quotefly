@@ -970,22 +970,22 @@ export function CustomersPage() {
           {selectedActivityRow ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer since</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(selectedActivityRow.customer.createdAt)}</p>
+                <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer since</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{formatDateTime(selectedActivityRow.customer.createdAt)}</p>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current status</p>
+                <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Current status</p>
                   <div className="mt-1 flex items-center gap-2">
                     <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(selectedActivityRow.stage)}`}>
                       {stageInitial(selectedActivityRow.stage)}
                     </span>
-                    <span className="text-sm font-semibold text-slate-900">{stageLabel(selectedActivityRow.stage)}</span>
+                    <span className="text-sm font-semibold text-[var(--qf-text)]">{stageLabel(selectedActivityRow.stage)}</span>
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quotes on record</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{selectedActivityQuotes.length}</p>
+                <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quotes on record</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{selectedActivityQuotes.length}</p>
                 </div>
               </div>
 
@@ -995,11 +995,11 @@ export function CustomersPage() {
                 </Alert>
               ) : null}
 
-              <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer details</p>
-                    <p className="mt-1 text-sm text-slate-600">Keep contact information current for calls, texts, and quote delivery.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer details</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Keep contact information current for calls, texts, and quote delivery.</p>
                   </div>
                   <Button size="sm" onClick={() => void saveCustomerDetails()} disabled={!detailsChanged || detailsSaving || selectedCustomerInactive} loading={detailsSaving}>
                     Save details
@@ -1007,7 +1007,7 @@ export function CustomersPage() {
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <label className="space-y-1.5 sm:col-span-2">
-                    <span className="text-xs font-medium text-slate-700">Name</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Name</span>
                     <Input
                       value={customerDetailsDraft.fullName}
                       onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, fullName: event.target.value }))}
@@ -1026,7 +1026,7 @@ export function CustomersPage() {
                           ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${roleLabelForAssignment(member.role)}` })),
                         ]}
                       />
-                      <p className="mt-1.5 text-xs text-slate-500">Members see only customers and work assigned to them. Owners and admins see the full workspace.</p>
+                      <p className="mt-1.5 text-xs text-[var(--qf-text-muted)]">Members see only customers and work assigned to them. Owners and admins see the full workspace.</p>
                     </div>
                   ) : selectedActivityRow.customer.assignedTenantUser ? (
                     <div className="sm:col-span-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-800">
@@ -1034,7 +1034,7 @@ export function CustomersPage() {
                     </div>
                   ) : null}
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-700">Phone</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Phone</span>
                     <Input
                       type="tel"
                       value={customerDetailsDraft.phone}
@@ -1043,7 +1043,7 @@ export function CustomersPage() {
                     />
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-700">Email</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Email</span>
                     <Input
                       type="email"
                       value={customerDetailsDraft.email}
@@ -1059,11 +1059,11 @@ export function CustomersPage() {
                 ) : null}
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer notes</p>
-                    <p className="mt-1 text-sm text-slate-600">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer notes</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
                       Keep property details, objections, promises, and follow-up context here for your team and future AI follow-up drafts.
                     </p>
                   </div>
@@ -1087,11 +1087,11 @@ export function CustomersPage() {
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+              <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
+                <div className="flex items-start justify-between gap-3 border-b border-[var(--qf-border)] px-4 py-4">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quotes</p>
-                    <p className="mt-1 text-sm text-slate-600">Open any active quote for this customer or start another.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quotes</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Open any active quote for this customer or start another.</p>
                   </div>
                   <Button
                     size="sm"
@@ -1108,23 +1108,23 @@ export function CustomersPage() {
                       key={quote.id}
                       type="button"
                       onClick={() => closeActivityModal(() => navigateToQuote(quote.id))}
-                      className={`flex min-h-[64px] w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue ${index > 0 ? "border-t border-slate-200" : ""}`}
+                      className={`flex min-h-[64px] w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--qf-focus)] ${index > 0 ? "border-t border-[var(--qf-border)]" : ""}`}
                     >
                       <span className="min-w-0">
-                        <span className="block truncate text-sm font-semibold text-slate-900">{quote.title}</span>
-                        <span className="mt-1 block text-xs text-slate-500">{quoteNumber(quote.id)} · {formatQuoteStatus(quote.status)} · Updated {formatDateTime(quote.updatedAt)}</span>
+                        <span className="block truncate text-sm font-semibold text-[var(--qf-text)]">{quote.title}</span>
+                        <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{quoteNumber(quote.id)} · {formatQuoteStatus(quote.status)} · Updated {formatDateTime(quote.updatedAt)}</span>
                       </span>
-                      <span className="shrink-0 text-sm font-semibold text-slate-900">{formatQuoteTotal(quote.totalAmount)}</span>
+                      <span className="shrink-0 text-sm font-semibold text-[var(--qf-text)]">{formatQuoteTotal(quote.totalAmount)}</span>
                     </button>
                   ))
                 ) : (
-                  <div className="px-4 py-5 text-sm text-slate-600">
+                  <div className="px-4 py-5 text-sm text-[var(--qf-text-soft)]">
                     No active quotes. Archived or deleted quotes remain retained but are not reopened automatically when a customer is restored.
                   </div>
                 )}
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
                 {activityLoading ? (
                   <div className="p-4">
                     <LoadingState
@@ -1140,7 +1140,7 @@ export function CustomersPage() {
                     return (
                     <div
                       key={item.id}
-                      className={`flex gap-3 px-4 py-4 ${index > 0 ? "border-t border-slate-200" : ""}`}
+                      className={`flex gap-3 px-4 py-4 ${index > 0 ? "border-t border-[var(--qf-border)]" : ""}`}
                     >
                       <span
                         className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
@@ -1150,7 +1150,7 @@ export function CustomersPage() {
                               ? "bg-[var(--qf-warning-strong)] text-white"
                               : tone === "emerald"
                                 ? "bg-[var(--qf-success-strong)] text-white"
-                                : "bg-slate-700 text-white"
+                                : "bg-[var(--qf-text-soft)] text-[var(--qf-panel)]"
                         }`}
                       >
                         {activityIcon(item)}
@@ -1160,17 +1160,17 @@ export function CustomersPage() {
                           {item.quoteId ? (
                             <button
                               type="button"
-                              className="rounded text-left text-sm font-semibold text-slate-900 hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
+                              className="rounded text-left text-sm font-semibold text-[var(--qf-text)] hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
                               onClick={() => closeActivityModal(() => navigateToQuote(item.quoteId!))}
                             >
                               {item.title}
                             </button>
                           ) : (
-                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                            <p className="text-sm font-semibold text-[var(--qf-text)]">{item.title}</p>
                           )}
-                          <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
+                          <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(item.occurredAt)}</span>
                         </div>
-                        <p className="mt-1 text-sm text-slate-600">{item.detail || "No additional detail captured."}</p>
+                        <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{item.detail || "No additional detail captured."}</p>
                         <div className="mt-2 flex items-center justify-between gap-3">
                           {item.quoteId ? (
                             <button
@@ -1181,7 +1181,7 @@ export function CustomersPage() {
                               Open quote
                             </button>
                           ) : <span />}
-                          <span className="text-[11px] font-medium text-slate-500">By {activityActorLabel(item)}</span>
+                          <span className="text-[11px] font-medium text-[var(--qf-text-muted)]">By {activityActorLabel(item)}</span>
                         </div>
                       </div>
                     </div>
@@ -1195,8 +1195,8 @@ export function CustomersPage() {
               </div>
 
               {activityTotal > ACTIVITY_PAGE_SIZE ? (
-                <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs text-slate-500">
+                <div className="flex flex-col gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-[var(--qf-text-muted)]">
                     Showing {Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal)}-
                     {Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal)} of {activityTotal} events
                   </p>
@@ -1209,7 +1209,7 @@ export function CustomersPage() {
                     >
                       Previous
                     </Button>
-                    <span className="text-xs font-medium text-slate-600">
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">
                       Page {activityPage} of {totalActivityPages}
                     </span>
                     <Button
@@ -1228,7 +1228,7 @@ export function CustomersPage() {
         </ModalBody>
         {selectedActivityRow ? (
           <ModalFooter className="justify-between">
-            {canManageRecordRetention ? <div className="flex flex-wrap gap-2">
+            {canManageRecordRetention ? <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               {selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? (
                 <Button
                   variant="outline"
@@ -1248,7 +1248,7 @@ export function CustomersPage() {
                 </>
               )}
             </div> : <div />}
-            <div className="flex flex-wrap gap-2">
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
               <KodyButton
                 label="Ask Kody"
                 prompt={`Summarize customer ${selectedActivityRow.customer.fullName}. Show quote status, next follow-up, and anything that helps me move this customer toward a sent or accepted quote.`}
@@ -1260,12 +1260,13 @@ export function CustomersPage() {
                   limit: 1,
                 }}
                 variant="secondary"
-                className="shadow-[0_8px_20px_rgba(244,139,37,0.22)]"
+                className="w-full shadow-[0_8px_20px_rgba(255,113,22,0.2)] sm:w-auto"
               />
-              <Button variant="outline" onClick={() => closeActivityModal()}>
+              <Button className="w-full sm:w-auto" variant="outline" onClick={() => closeActivityModal()}>
                 Close
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                 disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
                 title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? "Restore this customer before starting a quote" : undefined}

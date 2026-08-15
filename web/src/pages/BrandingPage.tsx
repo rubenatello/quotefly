@@ -8,8 +8,6 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   ImageIcon,
   Palette,
@@ -29,7 +27,7 @@ import {
 } from "../lib/api";
 import { isSupportedBrandLogoDataUrl, resizeBrandLogoFile } from "../lib/brand-logo";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
-import { Badge, Button, ConfirmModal, Input, LoadingState, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
+import { Badge, Button, ConfirmModal, Input, LoadingState, PageHeader, ProgressBar, Select, Textarea, WorkflowActionDock } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard } from "../components/ui/workspace";
 import { BrandingSectionCard, BrandingSummaryTile } from "../components/branding/BrandingSectionCard";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -283,10 +281,10 @@ function TemplateMiniPreview({
     <button
       type="button"
       onClick={onSelect}
-      className={`min-w-[220px] rounded-[24px] border p-3 text-left shadow-sm transition ${
+      className={`min-w-0 rounded-[24px] border p-3 text-left shadow-sm transition ${
         active
-          ? "border-quotefly-primary bg-quotefly-primary/[0.05] shadow-[0_12px_28px_rgba(42,127,216,0.10)]"
-          : "border-slate-200 bg-white hover:border-quotefly-primary/30 hover:shadow-[0_14px_28px_rgba(15,23,42,0.08)]"
+          ? "border-quotefly-primary bg-[var(--qf-selected)] shadow-[var(--qf-shadow-md)]"
+          : "border-[var(--qf-border)] bg-[var(--qf-panel)] hover:border-quotefly-primary/40 hover:bg-[var(--qf-interactive-hover)] hover:shadow-[var(--qf-shadow-md)]"
       }`}
       aria-pressed={active}
     >
@@ -326,15 +324,15 @@ function TemplateMiniPreview({
 
       <div className="mt-3">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-slate-900">{template.name}</p>
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{template.name}</p>
           {active ? (
             <span className="rounded-full bg-quotefly-blue/[0.08] px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-quotefly-blue">
               Selected
             </span>
           ) : null}
         </div>
-        <p className="mt-1 text-xs text-slate-500">{template.bestFor}</p>
-        <p className="mt-2 text-xs text-slate-600">{template.description}</p>
+        <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{template.bestFor}</p>
+        <p className="mt-2 text-xs text-[var(--qf-text-soft)]">{template.description}</p>
       </div>
     </button>
   );
@@ -527,11 +525,6 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     historyPrompt: "You have unsaved branding changes. Leave this page and discard them?",
   });
 
-  const moveTemplate = (offset: -1 | 1) => {
-    const nextIndex = (selectedTemplateIndex + offset + QUOTE_TEMPLATE_OPTIONS.length) % QUOTE_TEMPLATE_OPTIONS.length;
-    setSelectedTemplate(QUOTE_TEMPLATE_OPTIONS[nextIndex].id);
-  };
-
   const toggleSection = (sectionId: BrandingSectionId) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   };
@@ -717,23 +710,6 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
       ratio: getContrastRatio(previewComponentColors.footerTextColor ?? "#666666", "#ffffff"),
     },
   ].filter((warning) => warning.ratio < 4.5);
-  const activeTemplateSummaryCard = (
-    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
-          <p className="mt-1 text-sm text-slate-600">{activeTemplate.description}</p>
-          <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            Best for: {activeTemplate.bestFor}
-          </p>
-        </div>
-        <div className="hidden sm:block">
-          <TemplateMiniPreview template={activeTemplate} active onSelect={() => undefined} />
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div className="space-y-5 pb-24 xl:pb-0">
         <PageHeader
@@ -1253,60 +1229,14 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             <BrandingSectionCard
               id="branding-templates"
               title="Templates"
-              description="Use arrows to browse layouts. The preview updates instantly."
+              description="Choose one of three customer-ready layouts. The preview updates instantly."
               icon={SwatchBook}
               isOpen={openSections.templates}
               completionLabel={sectionCompletionLabel.templates}
               onToggle={() => toggleSection("templates")}
             >
-              <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="sm:hidden">
-                  {activeTemplateSummaryCard}
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => moveTemplate(-1)}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-                      aria-label="Previous template"
-                    >
-                      <ChevronLeft size={16} />
-                      Previous
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveTemplate(1)}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-                      aria-label="Next template"
-                    >
-                      Next
-                      <ChevronRight size={16} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="hidden items-center gap-3 sm:flex">
-                  <button
-                    type="button"
-                    onClick={() => moveTemplate(-1)}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
-                    aria-label="Previous template"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-
-                  <div className="min-w-0 flex-1">{activeTemplateSummaryCard}</div>
-
-                  <button
-                    type="button"
-                    onClick={() => moveTemplate(1)}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
-                    aria-label="Next template"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                </div>
-
-                <div className="-mx-1 mt-4 flex gap-3 overflow-x-auto px-1 pb-1">
+              <div className="rounded-[28px] border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)]">
+                <div className="grid gap-3 md:grid-cols-3">
                   {QUOTE_TEMPLATE_OPTIONS.map((template) => (
                     <TemplateMiniPreview
                       key={template.id}
@@ -1379,16 +1309,16 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             </div>
 
             <div className="h-24 xl:hidden" aria-hidden="true" />
-            <div className="qf-mobile-action-dock fixed z-40 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur xl:hidden">
+            <WorkflowActionDock className="xl:hidden">
               <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1" aria-live="polite">
-                  <p className="text-sm font-semibold text-slate-900">
+                  <p className="text-sm font-semibold text-[var(--qf-text)]">
                     {isDirty ? "Unsaved branding changes" : "Branding is up to date"}
                   </p>
                   {saveStatus === "error" ? (
                     <p className="truncate text-xs text-red-600">{saveErrorMessage ?? "Save failed"}</p>
                   ) : (
-                    <p className="truncate text-xs text-slate-500">Logo, colors, template, and business details</p>
+                    <p className="truncate text-xs text-[var(--qf-text-muted)]">Logo, colors, template, and business details</p>
                   )}
                 </div>
                 <Button
@@ -1400,7 +1330,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   {isSaving ? "Saving..." : "Save"}
                 </Button>
               </div>
-            </div>
+            </WorkflowActionDock>
           </>
         )}
         <ConfirmModal
