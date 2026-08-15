@@ -443,6 +443,8 @@ export function ProductsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | WorkPresetCategory>("ALL");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -475,7 +477,7 @@ export function ProductsPage() {
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     api.products
       .list()
       .then((result) => {
@@ -484,10 +486,11 @@ export function ProductsPage() {
         setProducts(result.products);
         setSupportedTrades(result.supportedTrades);
         setSelectedTrade(nextTrade);
+        setLoadError(null);
       })
       .catch((err) => {
         if (!mounted) return;
-        setError(err instanceof ApiError ? err.message : "Products could not be loaded.");
+        setLoadError(err instanceof ApiError ? err.message : "Products could not be loaded.");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -496,7 +499,7 @@ export function ProductsPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const tradeProducts = useMemo(
     () => products.filter((product) => product.serviceType === selectedTrade),
@@ -630,7 +633,7 @@ export function ProductsPage() {
                 limit: 8,
               }}
             />
-            <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>Add product</Button>
+            <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct} disabled={Boolean(loadError)}>Add product</Button>
           </>
         }
       />
@@ -689,6 +692,15 @@ export function ProductsPage() {
           variant="table"
           rows={3}
         />
+      ) : loadError ? (
+        <Card>
+          <EmptyState
+            icon={<Boxes size={24} />}
+            title="Products are temporarily unavailable"
+            description={`${loadError} Your catalog was not changed.`}
+            action={<Button variant="outline" onClick={() => setReloadKey((value) => value + 1)}>Try again</Button>}
+          />
+        </Card>
       ) : visibleProducts.length === 0 ? (
         <Card>
           <EmptyState

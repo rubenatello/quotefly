@@ -89,6 +89,7 @@ export function QuickLookupCard({
 
       <div className="space-y-3">
         <Input
+          aria-label="Search customers and quotes"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search customer name, phone, email, or quote title"

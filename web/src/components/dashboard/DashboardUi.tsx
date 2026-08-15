@@ -441,6 +441,7 @@ export function PipelineColumn({
                 </div>
                 {lead.quoteId ? (
                   <select
+                    aria-label={`Update follow-up for ${lead.customerName}`}
                     value={lead.followUpStatus}
                     disabled={saving}
                     onClick={(event) => event.stopPropagation()}

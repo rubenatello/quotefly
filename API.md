@@ -151,19 +151,6 @@ Returns `200` only when the API can query PostgreSQL. Dependency failures return
 
 Returns the authenticated user's current tenant.
 
-### `POST /v1/tenants`
-
-Creates another tenant and links the current user as owner. This is currently a lower-priority V1 route; signup is the preferred tenant bootstrap.
-
-Body:
-
-```json
-{
-  "name": "Company Name",
-  "slug": "company-name"
-}
-```
-
 ### `GET /v1/tenants/:tenantId/branding`
 
 Returns tenant timezone and branding settings. The `tenantId` must match the authenticated tenant.

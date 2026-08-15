@@ -47,7 +47,7 @@ export function BrandingSectionCard({
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-4 px-5 py-5 text-left sm:px-6"
+        className="flex w-full items-center justify-between gap-4 px-5 py-5 text-left focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-[var(--qf-focus)] sm:px-6"
         aria-expanded={isOpen}
       >
         <div className="flex min-w-0 items-start gap-3">

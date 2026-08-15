@@ -297,6 +297,7 @@ export function QuoteAiPromptModal({
 
             <Textarea
               data-testid="quote-ai-prompt"
+              aria-label="Describe the quote for Kody"
               className="mt-4 min-h-[220px] border-[var(--qf-info-border)] bg-[var(--qf-panel)] text-[15px] leading-7 text-[var(--qf-text)] shadow-inner selection:bg-[var(--qf-selected)]"
               rows={9}
               placeholder={promptPlaceholder}

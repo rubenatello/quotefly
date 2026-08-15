@@ -89,7 +89,7 @@ export function WorkPresetPickerModal({
                 type="button"
                 aria-pressed={sourceFilter === option.value}
                 onClick={() => setSourceFilter(option.value)}
-                className={`min-h-[40px] rounded-lg px-3 text-xs font-semibold transition sm:min-h-[32px] ${
+                className={`min-h-[44px] rounded-lg px-3 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[36px] ${
                   sourceFilter === option.value
                     ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[var(--qf-shadow-sm)]"
                     : "text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)]"

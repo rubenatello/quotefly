@@ -4481,6 +4481,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: quoteId,
         ...tenantActiveQuoteScope(claims.tenantId),
+        ...assignedRecordScope(access),
       },
       select: { id: true },
     });
@@ -4492,6 +4493,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const where: Prisma.QuoteRevisionWhereInput = {
       quoteId: quote.id,
       ...tenantActiveScope(claims.tenantId),
+      ...(!hasCapability(access, "viewAllWorkspaceRecords")
+        ? {
+            quote: {
+              ...tenantActiveQuoteScope(claims.tenantId),
+              assignedTenantUserId: access.tenantUserId,
+            },
+          }
+        : {}),
       ...(historyWindowStart ? { createdAt: { gte: historyWindowStart } } : {}),
     };
 

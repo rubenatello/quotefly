@@ -906,6 +906,7 @@ export function KodyAssistant({
           data-testid="kody-chat-panel"
           className={cn(
             "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[24px] border border-[var(--qf-border-strong)] bg-gradient-to-b from-[var(--qf-panel)] to-[var(--qf-panel-muted)] shadow-[var(--qf-shell-shadow)]",
+            hasMobileActionDock && "qf-kody-chat-panel--with-dock",
           )}
         >
           <header className="flex items-start justify-between gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 backdrop-blur sm:px-5">

@@ -260,7 +260,7 @@ export function CrmShell({
                 <button
                   type="button"
                   onClick={() => setCommandOpen(true)}
-                      className="inline-flex min-w-[176px] items-center gap-3 rounded-xl border border-qf-border bg-qf-surface-muted px-3.5 py-2 text-sm font-medium text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-qf-surface hover:text-qf-text xl:min-w-[196px] 2xl:min-w-[216px]"
+                      className="inline-flex min-w-[176px] items-center gap-3 rounded-xl border border-qf-border bg-qf-surface-muted px-3.5 py-2 text-sm font-medium text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-qf-surface hover:text-qf-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] xl:min-w-[196px] 2xl:min-w-[216px]"
                 >
                   <span className="inline-flex items-center gap-2">
                     <Search size={15} />

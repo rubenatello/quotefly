@@ -45,6 +45,7 @@ export function QuoteHistoryView() {
             ))}
             {historyMode === "customer" && (
               <select
+                aria-label="Filter quote history by customer"
                 value={historyCustomerId}
                 onChange={(e) => setHistoryCustomerId(e.target.value)}
                 className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"

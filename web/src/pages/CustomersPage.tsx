@@ -451,6 +451,7 @@ export function CustomersPage() {
   const [customerItems, setCustomerItems] = useState<Customer[]>([]);
   const [customerTotal, setCustomerTotal] = useState(0);
   const [customerLoading, setCustomerLoading] = useState(true);
+  const [customerLoadError, setCustomerLoadError] = useState<string | null>(null);
   const [lifecycleCounts, setLifecycleCounts] = useState({ active: 0, archived: 0, deleted: 0 });
   const [serverStageCounts, setServerStageCounts] = useState<Record<CustomerStage, number>>({ NEW: 0, CONTACTED: 0, READY: 0, SENT: 0, WON: 0, LOST: 0 });
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
@@ -510,6 +511,7 @@ export function CustomersPage() {
   const loadCustomerPage = useCallback(async () => {
     const requestId = ++customerRequestIdRef.current;
     setCustomerLoading(true);
+    setCustomerLoadError(null);
     try {
       const result = await api.customers.list({
         limit: CUSTOMER_PAGE_SIZE,
@@ -523,13 +525,14 @@ export function CustomersPage() {
       setCustomerTotal(result.pagination.total);
       setLifecycleCounts(result.summary.lifecycleCounts);
       setServerStageCounts(result.summary.stageCounts);
+      setCustomerLoadError(null);
     } catch (err) {
       if (requestId !== customerRequestIdRef.current) return;
-      setError(err instanceof Error ? err.message : "Failed loading customers.");
+      setCustomerLoadError(err instanceof Error ? err.message : "Failed loading customers.");
     } finally {
       if (requestId === customerRequestIdRef.current) setCustomerLoading(false);
     }
-  }, [customerPage, debouncedSearchTerm, lifecycleFilter, setError, stageFilter]);
+  }, [customerPage, debouncedSearchTerm, lifecycleFilter, stageFilter]);
 
   useEffect(() => {
     void loadCustomerPage();
@@ -792,7 +795,7 @@ export function CustomersPage() {
         subtitle="Track customers through a simple sales pipeline, then jump into quoting when they are ready."
         mode="actions-only"
         actions={
-          <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>
+          <Button onClick={() => setQuickCustomerOpen(true)} disabled={Boolean(customerLoadError)}>Add customer</Button>
         }
       />
 
@@ -858,6 +861,14 @@ export function CustomersPage() {
                 description="Getting the latest tenant-scoped customer list, quote stage, and contact summary."
                 variant="table"
                 rows={5}
+              />
+            </div>
+          ) : customerLoadError ? (
+            <div className="p-5">
+              <EmptyState
+                title="Customers are temporarily unavailable"
+                description={`${customerLoadError} No customer records were changed.`}
+                action={<Button variant="outline" onClick={() => void loadCustomerPage()}>Try again</Button>}
               />
             </div>
           ) : customerRows.length === 0 ? (

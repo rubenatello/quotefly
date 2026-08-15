@@ -192,6 +192,96 @@ describe("workspace team permissions", () => {
     expect(memberQuoteDetail.body).not.toContain("unitCost");
     expect(memberQuoteDetail.body).not.toContain("internalCostSubtotal");
 
+    await prisma.tenant.update({
+      where: { id: owner.tenant.id },
+      data: {
+        stripeCustomerId: `cus_private_${Date.now()}`,
+        stripeSubscriptionId: `sub_private_${Date.now()}`,
+        stripeCheckoutSessionId: `cs_private_${Date.now()}`,
+      },
+    });
+    const memberTenant = await app.inject({
+      method: "GET",
+      url: "/v1/tenants",
+      headers: { cookie: member.cookie },
+    });
+    expect(memberTenant.statusCode).toBe(200);
+    expect(memberTenant.body).not.toContain("stripeCustomerId");
+    expect(memberTenant.body).not.toContain("stripeSubscriptionId");
+    expect(memberTenant.body).not.toContain("stripeCheckoutSessionId");
+    expect((memberTenant.json() as { tenants: Array<Record<string, unknown>> }).tenants[0]).toEqual({
+      id: owner.tenant.id,
+      name: expect.any(String),
+      slug: expect.any(String),
+      timezone: expect.any(String),
+      primaryTrade: "CONSTRUCTION",
+      onboardingCompletedAtUtc: expect.any(String),
+      createdAt: expect.any(String),
+      updatedAt: expect.any(String),
+    });
+    const forbiddenTenantCreation = await app.inject({
+      method: "POST",
+      url: "/v1/tenants",
+      headers: { cookie: member.cookie },
+      payload: { name: "Unapproved Workspace", slug: `unapproved-${Date.now()}` },
+    });
+    expect(forbiddenTenantCreation.statusCode).toBe(404);
+
+    await prisma.quoteRevision.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quoteId: stored.id,
+        customerId: customer.id,
+        version: 1,
+        title: stored.title,
+        status: stored.status,
+        customerPriceSubtotal: stored.customerPriceSubtotal,
+        totalAmount: stored.totalAmount,
+        snapshot: {},
+      },
+    });
+    const privateQuote = await prisma.quote.create({
+      data: {
+        tenantId: owner.tenant.id,
+        customerId: privateCustomer.id,
+        serviceType: "CONSTRUCTION",
+        title: "Office-only quote history",
+        scopeText: "Private office scope",
+        internalCostSubtotal: 25,
+        customerPriceSubtotal: 50,
+        taxAmount: 0,
+        totalAmount: 50,
+      },
+    });
+    await prisma.quoteRevision.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quoteId: privateQuote.id,
+        customerId: privateCustomer.id,
+        version: 1,
+        title: privateQuote.title,
+        status: privateQuote.status,
+        customerPriceSubtotal: privateQuote.customerPriceSubtotal,
+        totalAmount: privateQuote.totalAmount,
+        snapshot: {},
+      },
+    });
+    const assignedHistory = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${stored.id}/history`,
+      headers: { cookie: member.cookie },
+    });
+    expect(assignedHistory.statusCode).toBe(200);
+    const assignedRevisions = (assignedHistory.json() as { revisions: Array<{ quoteId: string }> }).revisions;
+    expect(assignedRevisions.length).toBeGreaterThan(0);
+    expect(assignedRevisions.every((revision) => revision.quoteId === stored.id)).toBe(true);
+    const privateHistory = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${privateQuote.id}/history`,
+      headers: { cookie: member.cookie },
+    });
+    expect(privateHistory.statusCode).toBe(404);
+
     const memberOverview = await app.inject({
       method: "GET",
       url: "/v1/workspace/overview",
@@ -221,8 +311,8 @@ describe("workspace team permissions", () => {
     expect(ownerOverview.json()).toMatchObject({
       metrics: {
         activeCustomers: 2,
-        unquotedLeads: 1,
-        activeQuotes: 1,
+        unquotedLeads: 0,
+        activeQuotes: 2,
       },
     });
     expect((ownerOverview.json() as { recentCustomers: Array<{ id: string }> }).recentCustomers.map((entry) => entry.id))
