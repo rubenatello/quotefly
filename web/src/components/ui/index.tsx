@@ -1,6 +1,7 @@
 import { forwardRef, useId } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, HTMLAttributes } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { AlertTriangle, CheckCircle2, HelpCircle, Info, ShieldAlert } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
@@ -459,6 +460,9 @@ export function Modal({
           onPointerDownOutside={(event) => {
             if (!closeOnBackdrop) event.preventDefault();
           }}
+          onInteractOutside={(event) => {
+            if (!closeOnBackdrop) event.preventDefault();
+          }}
           className={cn(
             "qf-theme-scope fixed left-1/2 top-1/2 z-[110] flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]",
             MODAL_SIZES[size],
@@ -488,7 +492,11 @@ export function ModalHeader({
     <div className={`flex items-start justify-between gap-4 border-b border-[var(--qf-border)] px-5 py-4 sm:px-6 ${className}`}>
       <div className="min-w-0">
         <h2 className="text-lg font-semibold text-[var(--qf-text)] sm:text-xl">{title}</h2>
-        {description ? <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{description}</p> : null}
+        {description ? (
+          <DialogPrimitive.Description className="mt-1 text-sm text-[var(--qf-text-soft)]">
+            {description}
+          </DialogPrimitive.Description>
+        ) : null}
       </div>
       {onClose ? (
         <button
@@ -509,7 +517,11 @@ export function ModalBody({ children, className = "" }: { children: ReactNode; c
 }
 
 export function ModalFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`flex flex-wrap justify-end gap-2 border-t border-[var(--qf-border)] px-5 py-4 sm:px-6 ${className}`}>{children}</div>;
+  return (
+    <div className={cn("flex flex-wrap justify-end gap-2 border-t border-[var(--qf-border)] px-5 py-4 sm:px-6", className)}>
+      {children}
+    </div>
+  );
 }
 
 interface ConfirmModalProps {
@@ -539,15 +551,58 @@ export function ConfirmModal({
   children,
   size = "sm",
 }: ConfirmModalProps) {
+  const closeIfIdle = () => {
+    if (!loading) onClose();
+  };
+  const tone =
+    confirmVariant === "danger"
+      ? {
+          icon: <ShieldAlert size={22} aria-hidden="true" />,
+          iconClass: "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)]",
+        }
+      : confirmVariant === "warning"
+        ? {
+            icon: <AlertTriangle size={22} aria-hidden="true" />,
+            iconClass: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",
+          }
+        : confirmVariant === "success"
+          ? {
+              icon: <CheckCircle2 size={22} aria-hidden="true" />,
+              iconClass: "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]",
+            }
+          : confirmVariant === "primary" || confirmVariant === "secondary"
+            ? {
+                icon: <HelpCircle size={22} aria-hidden="true" />,
+                iconClass: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
+              }
+            : {
+                icon: <Info size={22} aria-hidden="true" />,
+                iconClass: "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]",
+              };
+
   return (
-    <Modal open={open} onClose={onClose} size={size} ariaLabel={title}>
-      <ModalHeader title={title} description={description} onClose={onClose} />
-      {children ? <ModalBody>{children}</ModalBody> : null}
-      <ModalFooter>
-        <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+    <Modal open={open} onClose={closeIfIdle} closeOnBackdrop={!loading} size={size} ariaLabel={title}>
+      <ModalHeader title={title} onClose={loading ? undefined : onClose} />
+      <ModalBody className="py-4 sm:py-5">
+        <div className="flex items-start gap-3">
+          <span className={cn("inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border", tone.iconClass)}>
+            {tone.icon}
+          </span>
+          <div className="min-w-0 flex-1 space-y-3">
+            {description ? (
+              <DialogPrimitive.Description className="text-sm leading-6 text-[var(--qf-text-soft)]">
+                {description}
+              </DialogPrimitive.Description>
+            ) : null}
+            {children}
+          </div>
+        </div>
+      </ModalBody>
+      <ModalFooter className="grid grid-cols-1 gap-3 sm:flex sm:flex-row sm:gap-2">
+        <Button type="button" variant="outline" onClick={onClose} disabled={loading} fullWidth className="order-2 sm:order-1 sm:w-auto">
           {cancelLabel}
         </Button>
-        <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading}>
+        <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading} fullWidth className="order-1 sm:order-2 sm:w-auto">
           {confirmLabel}
         </Button>
       </ModalFooter>

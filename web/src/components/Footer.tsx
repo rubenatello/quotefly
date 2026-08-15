@@ -5,9 +5,17 @@ const PRODUCT_LINKS = [
   { label: "Services", to: "/services" },
   { label: "Pricing", to: "/pricing" },
   { label: "Solutions", to: "/solutions" },
-  { label: "Landscaping software", to: "/solutions/landscaping" },
   { label: "About", to: "/about" },
   { label: "Support", to: "/support" },
+];
+
+const INDUSTRY_LINKS = [
+  { label: "HVAC", to: "/solutions/hvac" },
+  { label: "Plumbing", to: "/solutions/plumbing" },
+  { label: "Flooring", to: "/solutions/flooring" },
+  { label: "Roofing", to: "/solutions/roofing" },
+  { label: "Landscaping", to: "/solutions/landscaping" },
+  { label: "Construction", to: "/solutions/construction" },
 ];
 
 const LEGAL_LINKS = [
@@ -23,7 +31,7 @@ export function Footer() {
   return (
     <footer className="border-t border-slate-200 bg-white px-4 py-12 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <div className="grid gap-8 md:grid-cols-[1.4fr_1fr_1fr]">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-[1.45fr_0.8fr_1.1fr_1fr]">
           <div className="max-w-md">
             <img src="/logo.png" alt="QuoteFly" className="h-9 w-auto" />
             <p className="mt-3 text-sm text-slate-600">
@@ -50,6 +58,19 @@ export function Footer() {
             <h2 className="font-semibold text-slate-900">Product</h2>
             <ul className="mt-4 space-y-2 text-sm text-slate-600">
               {PRODUCT_LINKS.map((link) => (
+                <li key={link.to}>
+                  <Link to={link.to} className="transition-colors hover:text-slate-900">
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <h2 className="font-semibold text-slate-900">Industries</h2>
+            <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-slate-600 lg:grid-cols-1">
+              {INDUSTRY_LINKS.map((link) => (
                 <li key={link.to}>
                   <Link to={link.to} className="transition-colors hover:text-slate-900">
                     {link.label}

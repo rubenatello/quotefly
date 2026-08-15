@@ -28,6 +28,7 @@ import {
 } from "../../lib/quote-pdf-actions";
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
 import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
+import { notify } from "../../lib/notifications";
 
 /* ─────────────── Types ─────────────── */
 
@@ -1202,8 +1203,12 @@ export function DashboardProvider({
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice("Line item deleted.");
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed deleting line item."); } finally { setSaving(false); }
+      notify.success("Line item deleted", { description: "Quote totals were recalculated." });
+    } catch (err) {
+      notify.error("Line item could not be deleted", {
+        description: err instanceof ApiError ? err.message : "Please try again. The quote was not changed.",
+      });
+    } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
   const updateLeadFollowUpStatus = useCallback(async (customerId: string, followUpStatus: LeadFollowUpStatus) => {

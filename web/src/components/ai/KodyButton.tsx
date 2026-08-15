@@ -11,7 +11,7 @@ export function KodyButton({
   tool = "AUTO",
   context,
   label = "Ask Kody",
-  icon = <KodySparkIcon size={14} />,
+  icon = <KodySparkIcon size={16} />,
   variant = "outline",
   size = "sm",
   className,
@@ -34,7 +34,7 @@ export function KodyButton({
       variant={variant}
       size={size}
       className={cn("qf-kody-context-action", className)}
-      icon={icon ?? <KodySparkIcon size={14} />}
+      icon={icon ?? <KodySparkIcon size={16} />}
       disabled={disabled}
       onClick={() => {
         track("kody_context_open", { tool, currentPage: context?.currentPage ?? "unknown" });

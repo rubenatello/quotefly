@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && tsx scripts/prerender-public.ts && npm run test:seo",
+    "generate:sitemap": "tsx scripts/generate-sitemap.ts",
+    "check:sitemap": "tsx scripts/generate-sitemap.ts --check",
+    "check:sitemap:live": "tsx scripts/check-live-sitemap.ts",
+    "build": "npm run generate:sitemap && tsc -b && vite build && tsx scripts/prerender-public.ts && npm run test:seo",
     "test:seo": "tsx --test scripts/public-seo.test.ts",
     "lint": "eslint .",
     "preview": "vite preview"

@@ -32,6 +32,7 @@ import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { SaveLinePresetModal } from "../components/quotes/SaveLinePresetModal";
 import { WorkPresetPickerModal } from "../components/quotes/WorkPresetPickerModal";
 import { buildQuoteFooterText, shouldShowQuoteFlyAttribution } from "../components/quotes/quote-footer";
+import { notify } from "../lib/notifications";
 import {
   Alert,
   Badge,
@@ -1303,10 +1304,14 @@ export function QuoteDeskView() {
     try {
       if (quoteRetentionAction === "archive") {
         await api.quotes.archive(selectedQuote.id);
-        setNotice(`Archived ${selectedQuote.title}. The quote and its history were retained.`);
+        notify.success("Quote archived", {
+          description: `${selectedQuote.title} left active views, while its history remains retained.`,
+        });
       } else {
         await api.quotes.delete(selectedQuote.id);
-        setNotice(`Deleted ${selectedQuote.title}. The quote and its history were retained.`);
+        notify.success("Quote removed from the workspace", {
+          description: `${selectedQuote.title} remains retained with its audit history.`,
+        });
       }
 
       setQuoteRetentionAction(null);
@@ -1314,7 +1319,9 @@ export function QuoteDeskView() {
       await loadQuotes();
       navigate("/app/quotes");
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction} the quote.`);
+      notify.error(`Could not ${quoteRetentionAction} quote`, {
+        description: err instanceof Error ? err.message : "Please try again. The quote was not changed.",
+      });
     } finally {
       setQuoteRetentionSaving(false);
     }

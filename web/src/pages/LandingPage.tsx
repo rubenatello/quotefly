@@ -3,6 +3,7 @@ import { ArrowRight, Check, Sparkles } from "lucide-react";
 import { setPublicSEOMetadata } from "../lib/seo";
 import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { LandingPitchDeck } from "../components/marketing/LandingPitchDeck";
 import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 
@@ -161,6 +162,8 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <LandingProductDemo />
         </div>
       </section>
+
+      <LandingPitchDeck onOpenAuth={onOpenAuth} />
 
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
         <div className="mx-auto max-w-6xl">

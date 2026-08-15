@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
+import { Alert, Badge, Button, ConfirmModal, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
 import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits } from "../../lib/phone";
 
@@ -71,6 +71,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
   const [intent, setIntent] = useState<QuickCustomerIntent>("save");
   const [matches, setMatches] = useState<CustomerDuplicateMatch[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
   const phoneConflictExists = useMemo(
     () => matches.some((match) => hasPhoneDuplicateReason(match)),
@@ -106,6 +107,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
     setIntent("save");
     setMatches([]);
     setSelectedMatchId(null);
+    setDiscardConfirmOpen(false);
   }
 
   function completeAndCloseModal() {
@@ -114,7 +116,10 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
   }
 
   function closeModal() {
-    if (dirty && !window.confirm("Discard this unsaved customer?")) return;
+    if (dirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
     completeAndCloseModal();
   }
 
@@ -182,7 +187,8 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
   }
 
   return (
-    <Modal open={open} onClose={closeModal} size="lg" ariaLabel="Add customer fast">
+    <>
+    <Modal open={open} onClose={closeModal} closeOnBackdrop={!discardConfirmOpen} size="lg" ariaLabel="Add customer fast">
       <ModalHeader
         title="Add customer fast"
         description="Create a customer without leaving the board. Save only, or save and jump straight into a quote."
@@ -324,5 +330,15 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
         )}
       </ModalFooter>
     </Modal>
+    <ConfirmModal
+      open={discardConfirmOpen}
+      onClose={() => setDiscardConfirmOpen(false)}
+      onConfirm={completeAndCloseModal}
+      title="Discard unsaved customer?"
+      description="The customer details entered in this window will be lost."
+      confirmLabel="Discard changes"
+      confirmVariant="warning"
+    />
+    </>
   );
 }

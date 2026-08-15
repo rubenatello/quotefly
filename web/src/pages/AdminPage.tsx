@@ -17,6 +17,7 @@ import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../comp
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import { ThemeSelector } from "../components/settings/ThemeSelector";
+import { notify } from "../lib/notifications";
 
 interface AdminPageProps {
   session?: {
@@ -346,10 +347,14 @@ export function AdminPage({ session }: AdminPageProps) {
     try {
       await api.org.users.remove(pendingRemovalMember.id);
       await loadMembers();
-      setNotice("Member removed.");
+      notify.success("Team member removed", {
+        description: `${pendingRemovalMember.user.fullName} can no longer access this workspace.`,
+      });
       setPendingRemovalMember(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed removing member.");
+      notify.error("Team member could not be removed", {
+        description: err instanceof ApiError ? err.message : "Please try again. Their access was not changed.",
+      });
     } finally {
       setSaving(false);
     }

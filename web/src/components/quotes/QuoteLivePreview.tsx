@@ -65,6 +65,8 @@ export function QuoteLivePreview({
 }) {
   const logo = isSupportedBrandLogoDataUrl(logoUrl) ? <BrandLogo logoUrl={logoUrl} /> : null;
   const template = getQuoteTemplateOption(templateId);
+  const headerBgColor = componentColors?.headerBgColor ?? accentColor;
+  const headerTextColor = componentColors?.headerTextColor ?? getContrastingTextColor(headerBgColor);
   const sectionLabelColor = componentColors?.sectionTitleColor ?? "#64748b";
   const tableHeaderBgColor = componentColors?.tableHeaderBgColor ?? accentColor;
   const tableHeaderTextColor = componentColors?.tableHeaderTextColor ?? getContrastingTextColor(tableHeaderBgColor);
@@ -92,11 +94,13 @@ export function QuoteLivePreview({
     >
       <div className="rounded-[24px] border border-[var(--qf-border)] bg-white p-4 shadow-[var(--qf-shadow-md)] sm:p-6">
         <PreviewHeaderCard
-          accentColor={accentColor}
+          headerBgColor={headerBgColor}
+          headerTextColor={headerTextColor}
           logo={logo}
           logoPosition={logoPosition}
           quoteTitle={quoteTitle}
           preparedDateLabel={preparedDateLabel}
+          sentDateLabel={sentDateLabel}
           quoteReferenceLabel={quoteReferenceLabel}
           subtitle={subtitle}
           templateId={template.id}
@@ -115,11 +119,6 @@ export function QuoteLivePreview({
             hint={[customerPhone, customerEmail].filter(Boolean).join(" / ") || "Customer details will show here."}
             labelColor={sectionLabelColor}
           />
-        </div>
-
-        <div className="mt-5 grid gap-4 border-y border-[var(--qf-border)] py-4 sm:grid-cols-2">
-          <PreviewMeta label="Prepared" value={preparedDateLabel} labelColor={sectionLabelColor} />
-          <PreviewMeta label="Sent" value={sentDateLabel || "N/A"} labelColor={sectionLabelColor} />
         </div>
 
         {scopeText.trim() ? (
@@ -249,20 +248,24 @@ export function QuoteLivePreview({
 }
 
 function PreviewHeaderCard({
-  accentColor,
+  headerBgColor,
+  headerTextColor,
   logo,
   logoPosition,
   quoteTitle,
   preparedDateLabel,
+  sentDateLabel,
   quoteReferenceLabel,
   subtitle,
   templateId,
 }: {
-  accentColor: string;
+  headerBgColor: string;
+  headerTextColor: string;
   logo: ReactNode;
   logoPosition: BrandingLogoPosition;
   quoteTitle: string;
   preparedDateLabel: string;
+  sentDateLabel: string;
   quoteReferenceLabel: string;
   subtitle: string;
   templateId: "modern" | "professional" | "minimal";
@@ -273,32 +276,57 @@ function PreviewHeaderCard({
       : logoPosition === "right"
         ? "items-end text-right"
         : "items-start text-left";
+  const isProfessional = templateId === "professional";
+  const shellClass =
+    templateId === "minimal"
+      ? "border-b border-[var(--qf-border)] bg-white"
+      : "overflow-hidden rounded-[24px] border border-[var(--qf-border)] shadow-[var(--qf-shadow-sm)]";
+  const rowClass =
+    logoPosition === "center"
+      ? "items-center text-center"
+      : logoPosition === "right"
+        ? "items-end text-right sm:flex-row-reverse sm:items-center"
+        : "items-start text-left sm:flex-row sm:items-center";
+  const metaClass = isProfessional
+    ? "border-white/25"
+    : "border-[var(--qf-border)]";
 
   return (
-    <section className="overflow-hidden rounded-[24px] border border-[var(--qf-border)] bg-white shadow-[var(--qf-shadow-sm)]">
+    <section
+      className={`${shellClass} ${isProfessional ? "bg-transparent" : "bg-white"}`}
+      style={isProfessional ? { backgroundColor: headerBgColor, color: headerTextColor } : undefined}
+    >
       {templateId === "modern" ? (
-        <div className="h-1.5" style={{ backgroundColor: accentColor }} />
+        <div className="h-1.5" style={{ backgroundColor: headerBgColor }} />
       ) : null}
 
-      <div className={`px-5 py-5 sm:px-6 sm:py-6 ${templateId === "professional" ? "relative sm:pl-9" : ""}`}>
-        {templateId === "professional" ? (
-          <div
-            className="absolute bottom-6 left-5 top-6 hidden w-1 rounded-full sm:block"
-            style={{ backgroundColor: accentColor }}
-          />
-        ) : null}
-
-        <div className={`flex min-w-0 flex-col ${alignmentClass}`}>
-          {logo ? <div className="mb-3 flex max-w-full">{logo}</div> : null}
-          <h3 className="max-w-full break-words text-[1.3rem] font-semibold tracking-tight text-slate-950 sm:text-[1.45rem]">
-            {quoteTitle.trim() || "Untitled quote"}
-          </h3>
-          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+      <div className="px-5 py-5 sm:px-6 sm:py-6">
+        <div className={`flex min-w-0 flex-col gap-4 ${rowClass}`}>
+          {logo ? (
+            <div className={`flex max-w-full shrink-0 ${isProfessional ? "rounded-xl bg-white p-2" : ""}`}>
+              {logo}
+            </div>
+          ) : null}
+          <div className={`min-w-0 flex-1 ${alignmentClass}`}>
+            <h3
+              className={`max-w-full break-words text-[1.3rem] font-semibold tracking-tight sm:text-[1.45rem] ${
+                isProfessional ? "" : "text-slate-950"
+              }`}
+              style={isProfessional ? { color: headerTextColor } : undefined}
+            >
+              {quoteTitle.trim() || "Untitled quote"}
+            </h3>
+            <p className={`mt-1 text-sm ${isProfessional ? "opacity-80" : "text-slate-500"}`}>{subtitle}</p>
+          </div>
         </div>
 
-        <div className="mt-4 flex flex-col items-start gap-1 border-t border-[var(--qf-border)] pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-          <span>Prepared {preparedDateLabel}</span>
-          <span className="font-medium text-slate-500">{quoteReferenceLabel}</span>
+        <div
+          className={`mt-4 flex flex-col items-start gap-1 border-t pt-4 text-xs sm:flex-row sm:items-center sm:justify-between sm:gap-4 ${
+            isProfessional ? "opacity-80" : "text-slate-500"
+          } ${metaClass}`}
+        >
+          <span>Prepared {preparedDateLabel} &nbsp;|&nbsp; Sent {sentDateLabel || "N/A"}</span>
+          <span className={`font-medium ${isProfessional ? "" : "text-slate-500"}`}>{quoteReferenceLabel}</span>
         </div>
       </div>
     </section>
@@ -307,7 +335,7 @@ function PreviewHeaderCard({
 
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
-    <div className="flex h-14 max-w-[160px] items-center sm:max-w-[220px]">
+    <div className="flex h-12 max-w-[132px] items-center sm:max-w-[160px]">
       <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
@@ -331,17 +359,6 @@ function PreviewInfoCard({
       </p>
       <p className="mt-3 break-words text-[15px] font-semibold text-slate-900">{value}</p>
       {hint ? <p className="mt-2 whitespace-pre-line break-words text-sm leading-6 text-slate-500">{hint}</p> : null}
-    </div>
-  );
-}
-
-function PreviewMeta({ label, value, labelColor }: { label: string; value: string; labelColor?: string }) {
-  return (
-    <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: labelColor ?? "#64748b" }}>
-        {label}
-      </p>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
 }

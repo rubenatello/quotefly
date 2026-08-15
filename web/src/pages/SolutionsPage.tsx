@@ -91,6 +91,14 @@ const TRADES: TradeSolution[] = [
     response: "Build the base system scope, separate startup work, and give upgrades or ductwork their own clear option.",
     quoteItems: ["Equipment and installation", "Startup and testing", "Ductwork alternate"],
     capabilities: ["Saved work", "Alternate lines", "Branded PDF"],
+    image: {
+      src: "/images/solutions/hvac-service.jpg",
+      alt: "HVAC technician servicing a residential outdoor air-conditioning condenser",
+      width: 1536,
+      height: 1024,
+      credit: "QuoteFly trade visual",
+    },
+    detailPath: "/solutions/hvac",
   },
   {
     id: "plumbing",
@@ -105,6 +113,14 @@ const TRADES: TradeSolution[] = [
     response: "Keep the service call, likely repair, and possible add-on separate so the customer can understand the path forward.",
     quoteItems: ["Diagnostic visit", "Primary repair", "Replacement option"],
     capabilities: ["Clear scope", "Cost vs. price", "Customer notes"],
+    image: {
+      src: "/images/solutions/plumbing-service.jpg",
+      alt: "Residential plumber repairing copper supply lines and valves beneath a kitchen sink",
+      width: 1536,
+      height: 1024,
+      credit: "QuoteFly trade visual",
+    },
+    detailPath: "/solutions/plumbing",
   },
   {
     id: "flooring",
@@ -119,6 +135,14 @@ const TRADES: TradeSolution[] = [
     response: "Price the square footage, then keep demolition, leveling, waste, transitions, and finish work visible.",
     quoteItems: ["Floor preparation", "Material by square foot", "Transitions and finish"],
     capabilities: ["Flexible quantities", "Pricing defaults", "Optional upgrades"],
+    image: {
+      src: "/images/solutions/flooring-installation.jpg",
+      alt: "Flooring installer aligning natural-oak planks in a bright residential room",
+      width: 1536,
+      height: 1024,
+      credit: "QuoteFly trade visual",
+    },
+    detailPath: "/solutions/flooring",
   },
   {
     id: "roofing",
@@ -140,6 +164,7 @@ const TRADES: TradeSolution[] = [
       height: 1067,
       credit: "Photo by Zohair Mirza via Unsplash",
     },
+    detailPath: "/solutions/roofing",
   },
   {
     id: "landscaping",
@@ -176,6 +201,14 @@ const TRADES: TradeSolution[] = [
     response: "Organize multi-step labor, material, cleanup, and upgrade alternates into a quote the customer can actually follow.",
     quoteItems: ["Demolition and prep", "Labor and materials", "Upgrade alternate"],
     capabilities: ["Multi-step scope", "Internal costs", "Customer options"],
+    image: {
+      src: "/images/solutions/construction-framing.jpg",
+      alt: "Construction professional framing the wall of a new residential structure",
+      width: 1600,
+      height: 1067,
+      credit: "Construction field visual",
+    },
+    detailPath: "/solutions/construction",
   },
 ];
 
@@ -469,9 +502,9 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                       {trade.detailPath ? (
                         <Link
                           to={trade.detailPath}
-                          className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                          className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-quotefly-blue focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
                         >
-                          Explore landscaping quote software
+                          Explore {trade.name} quote software
                           <ArrowRight size={16} aria-hidden="true" />
                         </Link>
                       ) : null}

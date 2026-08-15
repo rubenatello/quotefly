@@ -241,7 +241,7 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Settings</p> : null}
+          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
             {settingsLinks.map((link) => {
               const active = isWorkspaceNavigationActive(link.path, currentPage);
@@ -265,9 +265,11 @@ export function CrmSidebar({
                   <span className={cn("inline-flex items-center", collapsed ? "justify-center" : "gap-3")}>
                     <span
                       className={cn(
-                        "inline-flex items-center justify-center",
-                        collapsed ? "h-8 w-8" : "h-5 w-5",
-                        active ? "text-[var(--qf-link)]" : "text-[var(--qf-text-muted)] group-hover:text-[var(--qf-link)]",
+                        "inline-flex items-center justify-center rounded-lg transition",
+                        collapsed ? "h-9 w-9" : "h-8 w-8",
+                        active
+                          ? "bg-[var(--qf-info-surface)] text-[var(--qf-link)]"
+                          : "bg-[var(--qf-panel-muted)] text-[var(--qf-text-muted)] group-hover:bg-[var(--qf-info-surface)] group-hover:text-[var(--qf-link)]",
                       )}
                     >
                       {link.icon}

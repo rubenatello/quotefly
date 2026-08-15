@@ -28,6 +28,7 @@ import {
   openPdfPreviewBlob,
   sharePdfBlobNatively,
 } from "../lib/quote-pdf-actions";
+import { notify } from "../lib/notifications";
 
 type QuoteLifecycleStage = "DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
@@ -630,20 +631,28 @@ export function QuotesPage() {
   async function confirmQuoteRetentionAction() {
     if (!quoteRetentionAction || quoteRetentionSaving) return;
 
+    const action = quoteRetentionAction;
     setQuoteRetentionSaving(true);
+    setError(null);
     try {
-      if (quoteRetentionAction.type === "archive") {
-        await api.quotes.archive(quoteRetentionAction.quote.id);
-        setNotice("Quote archived.");
+      if (action.type === "archive") {
+        await api.quotes.archive(action.quote.id);
+        notify.success("Quote archived", {
+          description: `${action.quote.title} left active views, while its history remains retained.`,
+        });
       } else {
-        await api.quotes.delete(quoteRetentionAction.quote.id);
-        setNotice("Quote deleted from the active workspace.");
+        await api.quotes.delete(action.quote.id);
+        notify.success("Quote removed from the workspace", {
+          description: `${action.quote.title} remains retained with its audit history.`,
+        });
       }
-      setPdfActionQuote((current) => (current?.id === quoteRetentionAction.quote.id ? null : current));
+      setPdfActionQuote((current) => (current?.id === action.quote.id ? null : current));
       await loadQuotes();
       setQuoteRetentionAction(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${quoteRetentionAction.type} quote.`);
+      notify.error(`Could not ${action.type} quote`, {
+        description: err instanceof Error ? err.message : "Please try again. The quote was not changed.",
+      });
     } finally {
       setQuoteRetentionSaving(false);
     }
@@ -861,8 +870,7 @@ export function QuotesPage() {
         onClose={() => setQuickCustomerOpen(false)}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
           void loadCustomers();
-          setNotice(
-            reusedExisting
+          const message = reusedExisting
               ? "Using existing customer record."
               : merged
                 ? restored
@@ -870,8 +878,8 @@ export function QuotesPage() {
                   : "Customer merged into existing record."
                 : restored
                   ? "Customer restored."
-                  : "Customer created.",
-          );
+                  : "Customer created.";
+          notify.success(message, { description: `${customer.fullName} is ready for quoting.` });
           if (intent === "quote") {
             navigateToBuilder(customer.id);
           }

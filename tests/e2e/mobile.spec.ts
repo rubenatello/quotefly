@@ -17,6 +17,75 @@ async function expectScreenReaderOnlyText(
 }
 
 test.describe("mobile launch smoke", () => {
+  test("confirmation and action notifications stay usable on a phone", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "mobile-confirmation");
+    const customer = await createCustomerViaApi(request, account, {
+      fullName: "Mobile Confirmation Customer",
+      phone: "555-014-1100",
+      email: "mobile-confirmation@example.com",
+    });
+
+    await addSessionCookie(context, account);
+    await page.goto("/app/customers");
+    await expect(page.getByText(customer.fullName).filter({ visible: true })).toBeVisible({ timeout: 15_000 });
+    await page.getByText(customer.fullName).filter({ visible: true }).first().click();
+
+    const customerDialog = page.getByRole("dialog", { name: "Customer details and activity" });
+    await customerDialog.getByRole("button", { name: "Archive", exact: true }).click();
+
+    const confirmation = page.getByRole("dialog", { name: "Archive customer?" });
+    const confirmButton = confirmation.getByRole("button", { name: "Archive customer" });
+    const cancelButton = confirmation.getByRole("button", { name: "Cancel" });
+    await expect(confirmation).toBeVisible();
+    expect((await confirmButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect((await cancelButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    await expect(confirmButton).toHaveCSS("width", await cancelButton.evaluate((button) => getComputedStyle(button).width));
+
+    await cancelButton.click();
+    await expect(confirmation).toBeHidden();
+    await expect(customerDialog).toBeVisible();
+
+    await customerDialog.getByRole("button", { name: "Archive", exact: true }).click();
+    await page.route(`**/v1/customers/${customer.id}/archive`, async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Archive is temporarily unavailable." }),
+      });
+    });
+    await confirmButton.click();
+
+    const failedToast = page.locator('[data-sonner-toast][data-type="error"]');
+    await expect(failedToast.getByText("Could not archive customer", { exact: true })).toBeVisible();
+    await expect(failedToast).toContainText("Archive is temporarily unavailable.");
+    await expect(confirmation).toBeVisible();
+    expect((await failedToast.getByRole("button", { name: "Dismiss notification" }).boundingBox())?.height).toBeGreaterThanOrEqual(43.5);
+
+    await page.unroute(`**/v1/customers/${customer.id}/archive`);
+    await confirmButton.click();
+
+    const successToast = page.locator('[data-sonner-toast][data-type="success"]');
+    await expect(successToast.getByText("Customer archived", { exact: true })).toBeVisible();
+    await expect(successToast).toContainText(customer.fullName);
+    await expect(confirmation).toBeHidden();
+
+    await page.getByRole("button", { name: "Add customer" }).first().click();
+    const quickCustomerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await quickCustomerDialog.getByLabel("Full name").fill("Unsaved mobile customer");
+    await quickCustomerDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    const discardConfirmation = page.getByRole("dialog", { name: "Discard unsaved customer?" });
+    await expect(discardConfirmation).toBeVisible();
+    await discardConfirmation.getByRole("button", { name: "Cancel" }).click();
+    await expect(quickCustomerDialog).toBeVisible();
+    await quickCustomerDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await discardConfirmation.getByRole("button", { name: "Discard changes" }).click();
+    await expect(quickCustomerDialog).toBeHidden();
+
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
+  });
+
   test("customer and quote surfaces render on mobile viewport", async ({ context, page, request }) => {
     const account = await signUpViaApi(request, "mobile");
     const customer = await createCustomerViaApi(request, account, {

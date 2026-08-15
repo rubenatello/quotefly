@@ -35,6 +35,7 @@ import {
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { formatUsPhoneDisplay, formatUsPhoneInput, toPhoneHrefValue } from "../lib/phone";
+import { notify } from "../lib/notifications";
 
 interface DashboardPageProps {
   session?: {
@@ -779,9 +780,11 @@ export function DashboardPage({ session }: DashboardPageProps) {
       if (canViewQuoteHistory) {
         await loadQuoteHistory();
       }
-      setNotice("Line item deleted.");
+      notify.success("Line item deleted", { description: "Quote totals were recalculated." });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed deleting line item.");
+      notify.error("Line item could not be deleted", {
+        description: err instanceof ApiError ? err.message : "Please try again. The quote was not changed.",
+      });
     } finally {
       setSaving(false);
     }

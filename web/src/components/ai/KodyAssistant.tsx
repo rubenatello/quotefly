@@ -789,8 +789,8 @@ export function KodyAssistant({
           aria-expanded="false"
           data-testid="kody-launcher"
         >
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[0_6px_16px_rgba(47,111,214,0.28)]">
-            <KodySparkIcon size={20} />
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-white p-1 shadow-[0_6px_16px_rgba(47,111,214,0.24)]">
+            <KodySparkIcon size={28} />
           </span>
           <span className="hidden sm:inline">Ask Kody</span>
         </button>
@@ -810,8 +810,8 @@ export function KodyAssistant({
           <header className="flex items-start justify-between gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 backdrop-blur sm:px-5">
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 text-base font-semibold text-[var(--qf-text)]">
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]">
-                  <KodySparkIcon size={20} />
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--qf-border)] bg-white p-1 shadow-[var(--qf-shadow-sm)]">
+                  <KodySparkIcon size={30} />
                 </span>
                 Kody
               </h2>
@@ -857,8 +857,8 @@ export function KodyAssistant({
           <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-inner sm:p-4">
             {!messages.length ? (
               <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-                <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]">
-                  <KodySparkIcon size={24} />
+                <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-[var(--qf-border)] bg-white p-1.5 shadow-[var(--qf-shadow-sm)]">
+                  <KodySparkIcon size={42} />
                 </span>
                 <p className="mt-3 text-base font-semibold text-[var(--qf-text)]">What should Kody help with?</p>
                 <p className="mt-1 max-w-md text-sm leading-6 text-[var(--qf-text-soft)]">{starterText}</p>
@@ -877,8 +877,8 @@ export function KodyAssistant({
                   )}
                 >
                   {message.role === "kody" ? (
-                    <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]">
-                      <KodySparkIcon size={18} thinking={message.pending} />
+                    <span className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-white p-1 shadow-[var(--qf-shadow-sm)]">
+                      <KodySparkIcon size={27} thinking={message.pending} />
                     </span>
                   ) : null}
                   <div

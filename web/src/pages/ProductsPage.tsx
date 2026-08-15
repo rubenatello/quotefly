@@ -37,6 +37,7 @@ import {
 } from "../lib/api";
 import { KodyButton } from "../components/ai/KodyButton";
 import { setSEOMetadata } from "../lib/seo";
+import { notify } from "../lib/notifications";
 
 const TRADE_LABELS: Record<ServiceType, string> = {
   HVAC: "HVAC",
@@ -188,6 +189,7 @@ function ProductEditorModal({
   );
   const [form, setForm] = useState<ProductForm>(initialForm);
   const [error, setError] = useState<string | null>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const isStandard = Boolean(product?.catalogKey);
   const isDirty = (Object.keys(form) as Array<keyof ProductForm>).some(
     (field) => form[field] !== initialForm[field],
@@ -204,7 +206,10 @@ function ProductEditorModal({
 
   function requestClose() {
     if (saving) return;
-    if (isDirty && !window.confirm("Discard your unsaved product changes?")) return;
+    if (isDirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
     onClose();
   }
 
@@ -241,6 +246,7 @@ function ProductEditorModal({
   }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={requestClose}
@@ -360,6 +366,19 @@ function ProductEditorModal({
         <Button onClick={submit} loading={saving}>{product ? "Save changes" : "Add product"}</Button>
       </ModalFooter>
     </Modal>
+    <ConfirmModal
+      open={discardConfirmOpen}
+      onClose={() => setDiscardConfirmOpen(false)}
+      onConfirm={() => {
+        setDiscardConfirmOpen(false);
+        onClose();
+      }}
+      title="Discard unsaved product changes?"
+      description="Pricing, description, and product details changed in this window will be lost."
+      confirmLabel="Discard changes"
+      confirmVariant="warning"
+    />
+    </>
   );
 }
 
@@ -570,7 +589,9 @@ export function ProductsPage() {
     if (!archiveTarget) return;
     if (archiveTarget.catalogKey) {
       setArchiveTarget(null);
-      setError("Standard catalog items stay available. Edit their pricing or description instead.");
+      notify.warning("Standard product stays available", {
+        description: "Edit its pricing or description instead of archiving it.",
+      });
       return;
     }
     setArchiving(true);
@@ -578,10 +599,14 @@ export function ProductsPage() {
     try {
       await api.products.archive(archiveTarget.id);
       setProducts((current) => current.filter((product) => product.id !== archiveTarget.id));
-      setNotice(`${archiveTarget.name} archived. Existing quotes are unchanged.`);
+      notify.success("Product archived", {
+        description: `${archiveTarget.name} was removed from new quote lists. Existing quotes are unchanged.`,
+      });
       setArchiveTarget(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Product could not be archived.");
+      notify.error("Product could not be archived", {
+        description: err instanceof ApiError ? err.message : "Please try again. The product was not changed.",
+      });
     } finally {
       setArchiving(false);
     }

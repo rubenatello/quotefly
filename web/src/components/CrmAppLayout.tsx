@@ -27,6 +27,7 @@ const QuoteBuilderView = lazy(() => import("../views/QuoteBuilderView").then((mo
 const QuoteDeskView = lazy(() => import("../views/QuoteDeskView").then((module) => ({ default: module.QuoteDeskView })));
 const PipelineView = lazy(() => import("../views/PipelineView").then((module) => ({ default: module.PipelineView })));
 const WorkspaceHomePage = lazy(() => import("../pages/WorkspaceHomePage").then((module) => ({ default: module.WorkspaceHomePage })));
+const WorkspaceAboutPage = lazy(() => import("../pages/WorkspaceAboutPage").then((module) => ({ default: module.WorkspaceAboutPage })));
 
 function toDashboardSession(s: AppSession): DashboardSession {
   return {
@@ -182,7 +183,8 @@ export function CrmAppLayout({
                 <Route path="quotes/:quoteId" element={<QuoteDeskView />} />
                 <Route path="history" element={<Navigate to="/app/analytics" replace />} />
                 <Route path="settings" element={<AdminPage session={session} />} />
-                <Route path="settings/users" element={<AdminPage session={session} />} />
+                <Route path="settings/users" element={canManageCatalog ? <AdminPage session={session} /> : <Navigate to="/app/settings" replace />} />
+                <Route path="about" element={<WorkspaceAboutPage session={session} />} />
                 <Route
                   path="internal/admin"
                   element={session.isSuperuser ? <SuperuserAdminPage /> : <Navigate to="/app/settings" replace />}
@@ -197,7 +199,7 @@ export function CrmAppLayout({
                 />
                 <Route
                   path="branding"
-                  element={<BrandingPage tenantId={session.tenantId} effectivePlanCode={session.effectivePlanCode ?? "starter"} />}
+                  element={canManageCatalog ? <BrandingPage tenantId={session.tenantId} effectivePlanCode={session.effectivePlanCode ?? "starter"} /> : <Navigate to="/app/settings" replace />}
                 />
                 <Route
                   path="admin"

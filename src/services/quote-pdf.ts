@@ -77,7 +77,7 @@ interface ResolvedComponentColors {
 }
 
 interface ThemeDefinition {
-  headerStyle: "bar" | "block" | "minimal" | "card";
+  headerStyle: "bar" | "minimal" | "card";
   accentColor: string;
   secondaryColor: string;
   textDark: string;
@@ -90,21 +90,27 @@ interface HeaderFrame {
   metaColor: string;
 }
 
+export const QUOTE_PDF_TEMPLATE_LAYOUTS: Record<QuotePdfTemplateId, Pick<ThemeDefinition, "headerStyle">> = {
+  modern: { headerStyle: "bar" },
+  professional: { headerStyle: "card" },
+  minimal: { headerStyle: "minimal" },
+};
+
 const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
   modern: {
-    headerStyle: "bar",
+    ...QUOTE_PDF_TEMPLATE_LAYOUTS.modern,
     accentColor: "#2a7fd8",
     secondaryColor: "#f8fafc",
     textDark: "#0f172a",
   },
   professional: {
-    headerStyle: "card",
+    ...QUOTE_PDF_TEMPLATE_LAYOUTS.professional,
     accentColor: "#2a7fd8",
     secondaryColor: "#f8fafc",
     textDark: "#0f172a",
   },
   minimal: {
-    headerStyle: "minimal",
+    ...QUOTE_PDF_TEMPLATE_LAYOUTS.minimal,
     accentColor: "#2a7fd8",
     secondaryColor: "#ffffff",
     textDark: "#0f172a",
@@ -275,7 +281,7 @@ function writeHeader(
   const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
   const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
   const logoPosition = safeLogoPosition(data.branding.logoPosition);
-  const innerLeft = left + 18 + (theme.headerStyle === "card" ? 12 : 0);
+  const innerLeft = left + 18;
   const innerRight = right - 18;
   const contentWidth = innerRight - innerLeft;
   const logoFit: [number, number] = theme.headerStyle === "minimal" ? [80, 42] : [92, 48];
@@ -285,16 +291,22 @@ function writeHeader(
   const frameTop = 28;
   const contentTop = frameTop + 18;
   const logoTop = contentTop;
-  const headingTop = contentTop + (logoBuffer ? logoFit[1] + 8 : 0);
+  const centeredLogo = Boolean(logoBuffer && logoPosition === "center");
+  const sideLogo = Boolean(logoBuffer && logoPosition !== "center");
+  const headingTop = contentTop + (centeredLogo ? logoFit[1] + 8 : 2);
+  const headingX =
+    sideLogo && logoPosition === "left" ? innerLeft + logoFit[0] + 16 : innerLeft;
+  const headingWidth = sideLogo ? contentWidth - logoFit[0] - 16 : contentWidth;
+  const headingAlign = logoPosition === "center" ? "center" : logoPosition === "right" ? "right" : "left";
 
   doc.font("Helvetica-Bold").fontSize(titleFontSize);
   const titleHeight = Math.max(
     titleFontSize + 2,
-    Math.ceil(doc.heightOfString(title, { width: contentWidth, align: logoPosition })),
+    Math.ceil(doc.heightOfString(title, { width: headingWidth, align: headingAlign })),
   );
   const subtitleTop = headingTop + titleHeight + 3;
-  const metaTop = subtitleTop + 24;
-  const frameHeight = Math.max(124, metaTop - frameTop + 24);
+  const metaTop = Math.max(subtitleTop + 24, sideLogo ? logoTop + logoFit[1] + 16 : 0);
+  const frameHeight = Math.max(theme.headerStyle === "minimal" ? 104 : 112, metaTop - frameTop + 24);
 
   const drawFrame = (): HeaderFrame => {
     if (theme.headerStyle === "bar") {
@@ -307,12 +319,16 @@ function writeHeader(
     }
 
     if (theme.headerStyle === "card") {
-      doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke(theme.secondaryColor, "#dbe3ef");
-      doc.roundedRect(left + 18, frameTop + 18, 4, frameHeight - 36, 2).fill(colors.headerBgColor);
-      return { top: frameTop, height: frameHeight, textColor: theme.textDark, metaColor: "#475569" };
+      doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke(colors.headerBgColor, colors.headerBgColor);
+      return {
+        top: frameTop,
+        height: frameHeight,
+        textColor: colors.headerTextColor,
+        metaColor: colors.headerTextColor,
+      };
     }
 
-    doc.roundedRect(left, frameTop, width, frameHeight, 16).fillAndStroke("#ffffff", "#dbe3ef");
+    doc.moveTo(left, frameTop + frameHeight).lineTo(right, frameTop + frameHeight).stroke(colors.headerBgColor);
     return { top: frameTop, height: frameHeight, textColor: theme.textDark, metaColor: "#64748b" };
   };
 
@@ -326,6 +342,10 @@ function writeHeader(
       logoX = innerRight - logoFit[0];
     }
 
+    if (theme.headerStyle === "card") {
+      doc.roundedRect(logoX - 6, logoTop - 6, logoFit[0] + 12, logoFit[1] + 12, 8).fill("#ffffff");
+    }
+
     try {
       doc.image(logoBuffer, logoX, logoTop, { fit: logoFit });
     } catch {
@@ -333,9 +353,6 @@ function writeHeader(
     }
   }
 
-  const headingAlign = logoPosition === "center" ? "center" : logoPosition === "right" ? "right" : "left";
-  const headingX = innerLeft;
-  const headingWidth = contentWidth;
   const subtitle = "Customer quote";
 
   doc.fillColor(frame.textColor).font("Helvetica-Bold").fontSize(titleFontSize);
@@ -350,12 +367,13 @@ function writeHeader(
     align: headingAlign,
   });
 
-  doc.text(`Prepared ${createdDate}`, innerLeft, metaTop, {
-    width: contentWidth / 2,
+  const sentDate = data.sentAt ? formatLocalDate(data.sentAt, data.tenant.timezone) : "N/A";
+  doc.text(`Prepared ${createdDate}  |  Sent ${sentDate}`, innerLeft, metaTop, {
+    width: contentWidth * 0.68,
     align: "left",
   });
-  doc.text(quoteLabel, innerLeft + contentWidth / 2, metaTop, {
-    width: contentWidth / 2,
+  doc.text(quoteLabel, innerLeft + contentWidth * 0.68, metaTop, {
+    width: contentWidth * 0.32,
     align: "right",
   });
 
@@ -374,7 +392,7 @@ function drawSectionTitle(doc: PDFKit.PDFDocument, y: number, title: string, sec
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, y: number, minSpace: number): number {
-  const bottomLimit = doc.page.height - 64;
+  const bottomLimit = doc.page.height - 104;
   if (y + minSpace <= bottomLimit) return y;
   doc.addPage();
   return 56;
@@ -484,7 +502,7 @@ function drawLineItemsTable(
 
     do {
       doc.font("Helvetica").fontSize(10);
-      const bottomLimit = doc.page.height - 72;
+      const bottomLimit = doc.page.height - 104;
       const maximumPageTextHeight = bottomLimit - 56 - 24 - 12;
       const fullDescriptionHeight = Math.ceil(
         doc.heightOfString(remainingDescription, { width: 280, align: "left" }),
@@ -583,6 +601,45 @@ function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, tota
   return y + boxHeight + 10;
 }
 
+function drawDocumentFooter(
+  doc: PDFKit.PDFDocument,
+  data: QuotePdfData,
+  footerTextColor: string,
+  quoteFlyMarkBuffer: Buffer | null,
+): void {
+  const footerText = buildFooterText(data);
+  doc.font("Helvetica").fontSize(9);
+  const footerTextHeight = Math.ceil(doc.heightOfString(footerText, { width: 516, align: "center" }));
+  const attributionHeight = data.branding.showQuoteFlyAttribution ? 17 : 0;
+  const footerHeight = 9 + footerTextHeight + 4 + attributionHeight;
+  let y = doc.page.height - 40 - footerHeight;
+
+  doc.moveTo(48, y).lineTo(564, y).stroke("#d8d8d8");
+  y += 8;
+  doc.font("Helvetica").fontSize(9).fillColor(footerTextColor);
+  doc.text(footerText, 48, y, { width: 516, align: "center" });
+  y = doc.y + 4;
+
+  if (!data.branding.showQuoteFlyAttribution) return;
+
+  const attributionText = "Created with QuoteFly";
+  doc.font("Helvetica").fontSize(8).fillColor(footerTextColor);
+  const textWidth = doc.widthOfString(attributionText);
+  const iconSize = quoteFlyMarkBuffer ? 10 : 0;
+  const gap = quoteFlyMarkBuffer ? 5 : 0;
+  const totalWidth = iconSize + gap + textWidth;
+  const startX = 306 - totalWidth / 2;
+
+  if (quoteFlyMarkBuffer) {
+    doc.image(quoteFlyMarkBuffer, startX, y - 1, { fit: [iconSize, iconSize] });
+  }
+
+  doc.text(attributionText, startX + iconSize + gap, y, {
+    width: textWidth,
+    align: "left",
+  });
+}
+
 export async function generateQuotePdfBuffer(
   data: QuotePdfData,
   options: QuotePdfRenderOptions = {},
@@ -629,20 +686,6 @@ export async function generateQuotePdfBuffer(
     );
     y = partyCardBottom + 20;
 
-    y = ensureSpace(doc, y, 62);
-    doc.moveTo(48, y).lineTo(564, y).stroke("#e2e8f0");
-    y += 14;
-    doc.fillColor(componentColors.sectionTitleColor).font("Helvetica-Bold").fontSize(11);
-    doc.text("Prepared", 48, y, { width: 230 });
-    doc.text("Sent", 314, y, { width: 250 });
-    y += 16;
-    doc.fillColor("#222222").font("Helvetica-Bold").fontSize(10);
-    doc.text(formatLocalDate(data.createdAt, data.tenant.timezone), 48, y, { width: 230 });
-    doc.text(data.sentAt ? formatLocalDate(data.sentAt, data.tenant.timezone) : "N/A", 314, y, {
-      width: 250,
-    });
-    y += 24;
-
     y = drawSectionTitle(doc, y, "Overview", componentColors.sectionTitleColor);
     doc.font("Helvetica").fontSize(10).fillColor("#222222");
     doc.text(data.scopeText, 48, y, { width: 516 });
@@ -683,34 +726,7 @@ export async function generateQuotePdfBuffer(
 
     y = drawTotals(doc, y, data, componentColors.totalsColor);
 
-    const footerText = buildFooterText(data);
-    doc.font("Helvetica").fontSize(9);
-    const footerTextHeight = Math.ceil(doc.heightOfString(footerText, { width: 516, align: "center" }));
-    y = ensureSpace(doc, y, footerTextHeight + (data.branding.showQuoteFlyAttribution ? 42 : 24));
-    doc.moveTo(48, y).lineTo(564, y).stroke("#d8d8d8");
-    y += 8;
-    doc.font("Helvetica").fontSize(9).fillColor(componentColors.footerTextColor);
-    doc.text(footerText, 48, y, { width: 516, align: "center" });
-    y = doc.y + 4;
-
-    if (data.branding.showQuoteFlyAttribution) {
-      const attributionText = "Created with QuoteFly";
-      doc.font("Helvetica").fontSize(8).fillColor(componentColors.footerTextColor);
-      const textWidth = doc.widthOfString(attributionText);
-      const iconSize = quoteFlyMarkBuffer ? 10 : 0;
-      const gap = quoteFlyMarkBuffer ? 5 : 0;
-      const totalWidth = iconSize + gap + textWidth;
-      const startX = 306 - totalWidth / 2;
-
-      if (quoteFlyMarkBuffer) {
-        doc.image(quoteFlyMarkBuffer, startX, y - 1, { fit: [iconSize, iconSize] });
-      }
-
-      doc.text(attributionText, startX + iconSize + gap, y, {
-        width: textWidth,
-        align: "left",
-      });
-    }
+    drawDocumentFooter(doc, data, componentColors.footerTextColor, quoteFlyMarkBuffer);
 
     doc.end();
   });

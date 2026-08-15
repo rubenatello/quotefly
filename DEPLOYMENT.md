@@ -148,8 +148,9 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 5. Verify health, readiness, migrations, webhook processing, and paid access.
 6. Verify the Resend sending domain and complete a real password-reset delivery smoke test.
 7. Deploy Vercel production with production `VITE_API_BASE_URL`.
-8. Run production smoke checks with a beta test account.
-9. Enable only the providers that passed sandbox smoke checks.
+8. Run `npm run seo:sitemap:live` after the Vercel deployment and confirm Search Console has the stable `https://www.quotefly.us/sitemap.xml` URL submitted.
+9. Run production smoke checks with a beta test account.
+10. Enable only the providers that passed sandbox smoke checks.
 
 ## Smoke Checks
 

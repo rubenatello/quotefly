@@ -3,7 +3,6 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import {
   ArrowRight,
-  BrushCleaning,
   FilePlus2,
   FileText,
   LayoutDashboard,
@@ -13,6 +12,8 @@ import {
   UserPlus2,
   UserRoundCog,
   Clock3,
+  BadgeInfo,
+  Palette,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { WorkspaceNavigationId } from "./workspace-navigation";
@@ -25,6 +26,7 @@ interface CrmCommandPaletteProps {
   onOpenChange: (open: boolean) => void;
   onNavigate: (page: CommandPage) => void;
   onQuickAction: (action: CommandAction) => void;
+  allowedPages?: readonly WorkspaceNavigationId[];
 }
 
 type CommandItem = {
@@ -90,7 +92,14 @@ const COMMAND_ITEMS: CommandItem[] = [
     label: "Branding",
     description: "Manage company details, templates, and PDF styling.",
     page: "branding",
-    icon: <BrushCleaning size={16} />,
+    icon: <Palette size={16} />,
+    group: "Workspace",
+  },
+  {
+    label: "About Workspace",
+    description: "Copy your workspace ID and account context for QuoteFly support.",
+    page: "about",
+    icon: <BadgeInfo size={16} />,
     group: "Workspace",
   },
   {
@@ -156,7 +165,11 @@ export function CrmCommandPalette({
   onOpenChange,
   onNavigate,
   onQuickAction,
+  allowedPages,
 }: CrmCommandPaletteProps) {
+  const visibleCommandItems = allowedPages
+    ? COMMAND_ITEMS.filter((item) => !item.page || allowedPages.includes(item.page))
+    : COMMAND_ITEMS;
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -196,7 +209,7 @@ export function CrmCommandPalette({
 
               <CommandGroup
                 heading="Actions"
-                items={COMMAND_ITEMS.filter((item) => item.group === "Actions")}
+                items={visibleCommandItems.filter((item) => item.group === "Actions")}
                 onSelect={(item) => {
                   if (item.action) onQuickAction(item.action);
                   onOpenChange(false);
@@ -205,7 +218,7 @@ export function CrmCommandPalette({
 
               <CommandGroup
                 heading="Workflow"
-                items={COMMAND_ITEMS.filter((item) => item.group === "Workflow")}
+                items={visibleCommandItems.filter((item) => item.group === "Workflow")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);
                   onOpenChange(false);
@@ -214,7 +227,7 @@ export function CrmCommandPalette({
 
               <CommandGroup
                 heading="Workspace"
-                items={COMMAND_ITEMS.filter((item) => item.group === "Workspace")}
+                items={visibleCommandItems.filter((item) => item.group === "Workspace")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);
                   onOpenChange(false);

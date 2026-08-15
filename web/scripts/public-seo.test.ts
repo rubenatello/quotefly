@@ -11,6 +11,7 @@ import {
   PUBLIC_SITE_URL,
   publicCanonicalUrl,
 } from "../src/lib/public-seo-data";
+import { renderPublicSitemap } from "./sitemap";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(webRoot, "dist");
@@ -121,6 +122,9 @@ test("social and visible marketing images are valid JPEG assets with expected di
     ["gardening-watering.jpg", { width: 1000, height: 1500 }],
     ["landscaping-field-work.jpg", { width: 1600, height: 1031 }],
     ["roofing-materials.jpg", { width: 1600, height: 1067 }],
+    ["hvac-service.jpg", { width: 1536, height: 1024 }],
+    ["plumbing-service.jpg", { width: 1536, height: 1024 }],
+    ["flooring-installation.jpg", { width: 1536, height: 1024 }],
   ] as const;
   for (const [asset, dimensions] of solutionsAssets) {
     const assetPath = join(distDir, "images", "solutions", asset);
@@ -198,9 +202,17 @@ test("robots and sitemap use the canonical host and cover all public routes", as
   assert.ok(robots.includes(`Host: ${new URL(PUBLIC_SITE_URL).host}`));
   assert.ok(robots.includes(`Sitemap: ${PUBLIC_SITE_URL}/sitemap.xml`));
 
+  const expectedSitemap = renderPublicSitemap();
+  const trackedSitemap = await readFile(join(webRoot, "public", "sitemap.xml"), "utf8");
   const sitemap = await readFile(join(distDir, "sitemap.xml"), "utf8");
+  assert.equal(trackedSitemap, expectedSitemap, "tracked sitemap must match the public SEO catalog");
+  assert.equal(sitemap, expectedSitemap, "deployed sitemap must match the public SEO catalog");
   const locations = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), (match) => match[1]);
+  const lastModifiedDates = Array.from(sitemap.matchAll(/<lastmod>([^<]+)<\/lastmod>/g), (match) => match[1]);
   assert.deepEqual(new Set(locations), new Set(PUBLIC_ROUTE_PATHS.map(publicCanonicalUrl)));
+  assert.deepEqual(lastModifiedDates, PUBLIC_ROUTE_PATHS.map((path) => PUBLIC_ROUTE_SEO[path].lastModified));
   assert.equal(locations.length, PUBLIC_ROUTE_PATHS.length);
   assert.doesNotMatch(sitemap, /https:\/\/quotefly\.us/);
+  assert.doesNotMatch(sitemap, /<priority>|<changefreq>/);
+  assert.doesNotMatch(sitemap, /\/app(?:\/|<)/);
 });

@@ -20,6 +20,18 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await demoView.getByRole("button", { name: "Edit quote", exact: true }).click();
   await expect(page.getByText("Editable quote sheet", { exact: true })).toBeVisible();
 
+  const productStory = page.getByRole("region", { name: "QuoteFly product story" });
+  await productStory.scrollIntoViewIfNeeded();
+  await expect(productStory.getByRole("group", { name: /1 of 4: Capture/i })).toBeVisible();
+  const nextStorySlide = productStory.getByRole("button", { name: "Next story slide" });
+  expect((await nextStorySlide.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await nextStorySlide.click();
+  await expect(productStory.getByRole("group", { name: /2 of 4: Draft with Kody/i })).toBeVisible();
+  await productStory.focus();
+  await page.keyboard.press("End");
+  await expect(productStory.getByRole("group", { name: /4 of 4: Follow through/i })).toBeVisible();
+  await expect(page.getByText(/slides do not auto-advance/i)).toBeVisible();
+
   const landingOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(landingOverflow).toBeLessThanOrEqual(1);
 
@@ -48,6 +60,28 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
 
   const solutionsOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(solutionsOverflow).toBeLessThanOrEqual(1);
+
+  const tradeRoutes = [
+    ["/solutions/hvac", /HVAC technician servicing/i],
+    ["/solutions/plumbing", /Residential plumber repairing/i],
+    ["/solutions/flooring", /Flooring installer aligning/i],
+    ["/solutions/roofing", /Roofing contractor carrying/i],
+    ["/solutions/landscaping", /Landscaping professional preparing/i],
+    ["/solutions/construction", /Construction professional framing/i],
+  ] as const;
+
+  for (const [route, imageName] of tradeRoutes) {
+    await page.goto(route);
+    await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO[route].heading })).toBeVisible();
+    await expect(page.getByRole("img", { name: imageName })).toBeVisible();
+    const tradeOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(tradeOverflow).toBeLessThanOrEqual(1);
+  }
+
+  const industryLinks = page.locator("footer").getByRole("link");
+  for (const industry of ["HVAC", "Plumbing", "Flooring", "Roofing", "Landscaping", "Construction"]) {
+    await expect(industryLinks.filter({ hasText: industry })).toHaveCount(1);
+  }
 
   await page.goto("/privacy");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/privacy"].heading })).toBeVisible();

@@ -10,7 +10,12 @@ export const PUBLIC_ROUTE_PATHS = [
   "/pricing",
   "/services",
   "/solutions",
+  "/solutions/hvac",
+  "/solutions/plumbing",
+  "/solutions/flooring",
+  "/solutions/roofing",
   "/solutions/landscaping",
+  "/solutions/construction",
   "/about",
   "/support",
   "/privacy",
@@ -23,6 +28,8 @@ export type PublicRoutePath = (typeof PUBLIC_ROUTE_PATHS)[number];
 
 export type PublicRouteSeo = {
   path: PublicRoutePath;
+  /** Date of the last significant customer-visible content, structured-data, or link update. */
+  lastModified: string;
   title: string;
   description: string;
   heading: string;
@@ -33,6 +40,7 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
+    lastModified: "2026-08-14",
     title: "Easy Quoting Software for Contractors | QuoteFly",
     description:
       "The easiest quoting software for on-the-go contractors and professionals. Manage customers, build estimates, create branded PDFs, and follow up from any device.",
@@ -43,6 +51,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/pricing": {
     path: "/pricing",
+    lastModified: "2026-08-13",
     title: "Contractor Quoting Software Pricing | QuoteFly",
     description:
       `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial. Review the current contractor CRM, estimating, and PDF quote features.`,
@@ -53,6 +62,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/services": {
     path: "/services",
+    lastModified: "2026-08-01",
     title: "Customer Management and Quoting Services | QuoteFly",
     description:
       "Explore QuoteFly customer management, estimates, branded quote PDFs, sharing, follow-up, and pipeline analytics for small contractors.",
@@ -63,6 +73,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
+    lastModified: "2026-08-14",
     title: "Quoting Solutions for Contractors by Trade | QuoteFly",
     description:
       "See how QuoteFly solves customer, estimating, pricing, PDF, and follow-up problems for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",
@@ -71,8 +82,53 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
       "Turn fresh job details into clear customer quotes with one mobile workflow for customer records, pricing, branded PDFs, and follow-up.",
     schemaType: "CollectionPage",
   },
+  "/solutions/hvac": {
+    path: "/solutions/hvac",
+    lastModified: "2026-08-14",
+    title: "HVAC Quoting and Estimating Software | QuoteFly",
+    description:
+      "Create HVAC estimates for service, equipment replacement, ductwork, startup, maintenance, and customer upgrade options with QuoteFly.",
+    heading: "HVAC quotes that make repair and replacement options clear",
+    summary:
+      "Build HVAC estimates from reusable service, equipment, labor, and upgrade items, then send a branded quote and keep follow-up visible.",
+    schemaType: "WebPage",
+  },
+  "/solutions/plumbing": {
+    path: "/solutions/plumbing",
+    lastModified: "2026-08-14",
+    title: "Plumbing Quote and Estimate Software | QuoteFly",
+    description:
+      "Create plumbing estimates for service calls, repairs, fixtures, water heaters, repiping, materials, and replacement options with QuoteFly.",
+    heading: "Plumbing quotes that keep diagnosis, repair, and replacement choices clear",
+    summary:
+      "Turn a plumbing diagnosis into a customer-ready estimate with reusable work, clear options, branded PDFs, and practical follow-up.",
+    schemaType: "WebPage",
+  },
+  "/solutions/flooring": {
+    path: "/solutions/flooring",
+    lastModified: "2026-08-14",
+    title: "Flooring Estimating and Quote Software | QuoteFly",
+    description:
+      "Create flooring estimates for square footage, demolition, floor preparation, material, waste, stairs, transitions, and finishing with QuoteFly.",
+    heading: "Flooring estimates that protect prep work, quantities, and margin",
+    summary:
+      "Build clear flooring quotes with measured material, preparation, labor, waste, transitions, finishes, and customer options kept organized.",
+    schemaType: "WebPage",
+  },
+  "/solutions/roofing": {
+    path: "/solutions/roofing",
+    lastModified: "2026-08-14",
+    title: "Roofing Estimate and Quote Software | QuoteFly",
+    description:
+      "Create roofing estimates for repairs, tear-off, materials, underlayment, flashing, ventilation, disposal, decking allowances, and upgrades.",
+    heading: "Roofing quotes that make the full system and allowances visible",
+    summary:
+      "Build customer-ready roofing quotes that explain tear-off, materials, system components, allowances, upgrades, and the next follow-up.",
+    schemaType: "WebPage",
+  },
   "/solutions/landscaping": {
     path: "/solutions/landscaping",
+    lastModified: "2026-08-13",
     title: "Landscaping and Gardening Quote Software | QuoteFly",
     description:
       "Create landscaping and gardening estimates with hourly, per-visit, square-foot, material, and recurring-service pricing in QuoteFly.",
@@ -81,8 +137,20 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
       "Build clear landscaping estimates from reusable labor, material, area, and recurring-service items, then share a branded quote and track follow-up.",
     schemaType: "WebPage",
   },
+  "/solutions/construction": {
+    path: "/solutions/construction",
+    lastModified: "2026-08-14",
+    title: "Construction Estimating and Quote Software | QuoteFly",
+    description:
+      "Create construction estimates for renovations, additions, repairs, labor, materials, subcontract work, allowances, and customer alternates.",
+    heading: "Construction quotes that organize complex work into a clear decision",
+    summary:
+      "Organize construction phases, labor, materials, allowances, and alternates into a branded customer quote with visible follow-up.",
+    schemaType: "WebPage",
+  },
   "/about": {
     path: "/about",
+    lastModified: "2026-08-01",
     title: "About QuoteFly | Contractor Quoting Software",
     description:
       "Learn why QuoteFly is being built as a focused quoting and lightweight CRM tool for contractors who work from the field.",
@@ -93,6 +161,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/support": {
     path: "/support",
+    lastModified: "2026-08-10",
     title: "QuoteFly Support",
     description:
       "Contact QuoteFly for help with account access, billing, customer setup, quote workflows, PDFs, and mobile or browser issues.",
@@ -103,6 +172,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/privacy": {
     path: "/privacy",
+    lastModified: "2026-08-11",
     title: "Privacy Policy | QuoteFly",
     description:
       "Review the information QuoteFly collects, how it is used, how service providers are involved, and how to request privacy assistance.",
@@ -113,6 +183,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/data-privacy": {
     path: "/data-privacy",
+    lastModified: "2026-08-01",
     title: "Data Privacy and Security | QuoteFly",
     description:
       "Review QuoteFly's approach to tenant separation, access controls, hosted infrastructure, data exports, and security reporting.",
@@ -123,6 +194,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/terms": {
     path: "/terms",
+    lastModified: "2026-08-11",
     title: "Terms of Service | QuoteFly",
     description:
       "Review the terms for QuoteFly accounts, workspace responsibilities, acceptable use, billing, service availability, and termination.",
@@ -133,6 +205,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/cookies": {
     path: "/cookies",
+    lastModified: "2026-08-11",
     title: "Cookie Policy | QuoteFly",
     description:
       "Review how QuoteFly uses essential browser storage and optional analytics choices for the website and application.",

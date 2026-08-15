@@ -11,6 +11,7 @@ export type WorkspacePage =
   | "branding"
   | "settings"
   | "settings-users"
+  | "about"
   | "internal-admin";
 
 export type WorkspaceNavigationId =
@@ -22,7 +23,8 @@ export type WorkspaceNavigationId =
   | "analytics"
   | "settings"
   | "settings-users"
-  | "branding";
+  | "branding"
+  | "about";
 
 export type WorkspaceIconKey =
   | "home"
@@ -33,7 +35,8 @@ export type WorkspaceIconKey =
   | "analytics"
   | "settings"
   | "team"
-  | "branding";
+  | "branding"
+  | "about";
 
 export interface WorkspaceNavigationItem {
   id: WorkspaceNavigationId;
@@ -52,9 +55,10 @@ export const WORKSPACE_OPERATIONS_LINKS: readonly WorkspaceNavigationItem[] = [
 ] as const;
 
 export const WORKSPACE_SETTINGS_LINKS: readonly WorkspaceNavigationItem[] = [
-  { id: "settings", label: "Business", path: "/app/settings", icon: "settings" },
-  { id: "settings-users", label: "Team", path: "/app/settings/users", icon: "team" },
+  { id: "settings", label: "Settings", path: "/app/settings", icon: "settings" },
+  { id: "settings-users", label: "Team & users", path: "/app/settings/users", icon: "team" },
   { id: "branding", label: "Branding", path: "/app/branding", icon: "branding" },
+  { id: "about", label: "About workspace", path: "/app/about", icon: "about" },
 ] as const;
 
 export const WORKSPACE_PAGE_META: Record<
@@ -138,6 +142,12 @@ export const WORKSPACE_PAGE_META: Record<
     activeNavigation: "settings-users",
     headingPlacement: "shell",
   },
+  about: {
+    label: "About workspace",
+    hint: "Find account, plan, and workspace identifiers for support.",
+    activeNavigation: "about",
+    headingPlacement: "shell",
+  },
   "internal-admin": {
     label: "Administration",
     hint: "Review internal platform controls and operational quality.",
@@ -157,6 +167,7 @@ export function workspacePageFromPath(pathname: string): WorkspacePage {
   if (pathname.startsWith("/app/build")) return "build";
   if (pathname.startsWith("/app/follow-up")) return "follow-up";
   if (pathname.startsWith("/app/settings/users")) return "settings-users";
+  if (pathname.startsWith("/app/about")) return "about";
   if (pathname.startsWith("/app/settings")) return "settings";
   if (pathname.startsWith("/app/setup")) return "setup";
   if (pathname.startsWith("/app/branding")) return "branding";

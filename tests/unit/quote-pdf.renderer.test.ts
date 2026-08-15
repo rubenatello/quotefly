@@ -5,10 +5,12 @@ import {
   decodeSupportedLogoDataUrl,
   generateQuotePdfBuffer,
   normalizeQuotePdfTemplateId,
+  QUOTE_PDF_TEMPLATE_LAYOUTS,
   type QuotePdfData,
   type QuotePdfLogoPosition,
   type QuotePdfTemplateId,
 } from "../../src/services/quote-pdf";
+import { QUOTE_TEMPLATE_OPTIONS } from "../../web/src/components/quotes/quote-template";
 
 const INTERNAL_COST_SENTINEL = 4321.09;
 
@@ -103,6 +105,39 @@ test("renders all canonical templates and logo positions", async () => {
       assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
       assert.ok(countPdfPages(pdf) >= 1, `${templateId}/${logoPosition} should contain a page`);
     }
+  }
+});
+
+test("browser preview and PDF renderer use the same canonical template layout contract", () => {
+  const browserLayouts = Object.fromEntries(
+    QUOTE_TEMPLATE_OPTIONS.map(({ id, headerStyle }) => [id, { headerStyle }]),
+  );
+
+  assert.deepEqual(browserLayouts, QUOTE_PDF_TEMPLATE_LAYOUTS);
+});
+
+test("a compact customer quote stays on one page without a footer-only overflow page", async () => {
+  for (const templateId of ["modern", "professional", "minimal"] satisfies QuotePdfTemplateId[]) {
+    const data = await buildPdfData(templateId, "left");
+    data.title = "Labor";
+    data.scopeText = "Labor and materials required to complete the approved customer scope.";
+    data.tenant.name = "QuoteFly Test Contractor";
+    data.branding.businessEmail = "support@quotefly.us";
+    data.branding.businessPhone = "(555) 555-0114";
+    data.branding.addressLine1 = null;
+    data.branding.addressLine2 = null;
+    data.branding.city = null;
+    data.branding.state = null;
+    data.branding.postalCode = null;
+    data.lineItems = [
+      { description: "Labor\nInstallation labor", quantity: 24, unitPrice: 60 },
+      { description: "Materials\nCustomer-selected materials", quantity: 1, unitPrice: 3_400 },
+    ];
+    data.customerPriceSubtotal = 4_840;
+    data.totalAmount = 4_840;
+
+    const pdf = await generateQuotePdfBuffer(data);
+    assert.equal(countPdfPages(pdf), 1, `${templateId} should not create a footer-only second page`);
   }
 });
 

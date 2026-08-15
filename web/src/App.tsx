@@ -7,6 +7,7 @@ import { Footer } from "./components/Footer";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { CookieConsentBanner } from "./components/CookieConsentBanner";
 import { useTheme } from "./components/theme/theme-context";
+import { AppNotifications } from "./components/ui/AppNotifications";
 import {
   api,
   ApiError,
@@ -15,13 +16,13 @@ import {
 } from "./lib/api";
 import type { AppSession, SessionRecovery } from "./lib/app-session";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
-import { Toaster } from "sonner";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
 const ServicesPage = lazy(() => import("./pages/ServicesPage").then((module) => ({ default: module.ServicesPage })));
 const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
 const LandscapingSolutionsPage = lazy(() => import("./pages/LandscapingSolutionsPage").then((module) => ({ default: module.LandscapingSolutionsPage })));
+const TradeSolutionsPage = lazy(() => import("./pages/TradeSolutionsPage").then((module) => ({ default: module.TradeSolutionsPage })));
 const AboutPage = lazy(() => import("./pages/AboutPage").then((module) => ({ default: module.AboutPage })));
 const SupportPage = lazy(() => import("./pages/SupportPage").then((module) => ({ default: module.SupportPage })));
 const PrivacyPage = lazy(() => import("./pages/PrivacyPage").then((module) => ({ default: module.PrivacyPage })));
@@ -122,6 +123,11 @@ function MarketingLayout({
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions/landscaping" element={<LandscapingSolutionsPage onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/hvac" element={<TradeSolutionsPage trade="hvac" onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/plumbing" element={<TradeSolutionsPage trade="plumbing" onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/flooring" element={<TradeSolutionsPage trade="flooring" onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/roofing" element={<TradeSolutionsPage trade="roofing" onOpenAuth={onOpenAuth} />} />
+            <Route path="solutions/construction" element={<TradeSolutionsPage trade="construction" onOpenAuth={onOpenAuth} />} />
             <Route path="about" element={<AboutPage onOpenAuth={onOpenAuth} />} />
             <Route
               path="support"
@@ -371,7 +377,7 @@ function AppRoutes() {
         </Suspense>
       ) : null}
       <CookieConsentBanner />
-      <Toaster position="top-right" richColors closeButton theme={resolvedTheme} />
+      <AppNotifications theme={resolvedTheme} />
     </>
   );
 }

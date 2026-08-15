@@ -1,16 +1,14 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Search } from "lucide-react";
+import { BadgeInfo, Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UsersRound } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { cn } from "../lib/utils";
 import {
   AnalyticsIcon,
   CustomerIcon,
-  InvoiceIcon,
   QuoteIcon,
-  SettingsIcon,
 } from "./Icons";
 import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
@@ -45,13 +43,15 @@ interface CrmShellProps {
 
 function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
   if (icon === "home") return <LayoutDashboard size={15} />;
-  if (icon === "customers" || icon === "team") return <CustomerIcon size={15} />;
+  if (icon === "customers") return <CustomerIcon size={15} />;
+  if (icon === "team") return <UsersRound size={16} />;
   if (icon === "quotes") return <QuoteIcon size={15} />;
   if (icon === "products") return <PackageSearch size={15} />;
   if (icon === "follow-up") return <Clock3 size={15} />;
   if (icon === "analytics") return <AnalyticsIcon size={15} />;
-  if (icon === "branding") return <InvoiceIcon size={14} />;
-  return <SettingsIcon size={14} />;
+  if (icon === "branding") return <Palette size={16} />;
+  if (icon === "about") return <BadgeInfo size={16} />;
+  return <Settings2 size={16} />;
 }
 
 const OPERATIONS_LINKS: readonly CrmNavLink[] = WORKSPACE_OPERATIONS_LINKS.map((item) => ({
@@ -160,6 +160,10 @@ export function CrmShell({
   const operationsLinks = canManageCatalog
     ? OPERATIONS_LINKS
     : OPERATIONS_LINKS.filter((link) => link.path !== "products");
+  const settingsLinks = canManageCatalog
+    ? SETTINGS_LINKS
+    : SETTINGS_LINKS.filter((link) => link.path === "settings" || link.path === "about");
+  const allowedNavigationPages = [...operationsLinks, ...settingsLinks].map((link) => link.path);
 
   useEffect(() => {
     setSEOMetadata({
@@ -180,6 +184,7 @@ export function CrmShell({
         onQuickAction={handleQuickAction}
         onLogout={onLogout}
         currentLabel={pageMeta.label}
+        canManageWorkspace={canManageCatalog}
       />
       {commandOpen ? (
         <Suspense fallback={null}>
@@ -188,6 +193,7 @@ export function CrmShell({
             onOpenChange={setCommandOpen}
             onNavigate={(page) => handleNavigate(page)}
             onQuickAction={handleQuickAction}
+            allowedPages={allowedNavigationPages}
           />
         </Suspense>
       ) : null}
@@ -205,7 +211,7 @@ export function CrmShell({
           onCloseMobile={() => setMobileOpen(false)}
           onNavigate={handleNavigate}
           operationsLinks={operationsLinks}
-          settingsLinks={SETTINGS_LINKS}
+          settingsLinks={settingsLinks}
           onLogout={onLogout}
           onRequestFeature={handleRequestFeature}
           planName={planName}
@@ -297,7 +303,8 @@ export function CrmShell({
                           { label: "Open customers", page: "customers" },
                           { label: "Open products", page: "products" },
                           { label: "Open settings", page: "settings" },
-                          { label: "Open branding", page: "branding" },
+                          ...(canManageCatalog ? [{ label: "Open branding", page: "branding" } as const] : []),
+                          { label: "About workspace", page: "about" },
                         ] as const).map((item) => (
                           <DropdownMenuPrimitive.Item
                             key={item.page}

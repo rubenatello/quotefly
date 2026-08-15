@@ -8,6 +8,7 @@ import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser } from "../lib/api";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { notify } from "../lib/notifications";
 
 type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
 
@@ -466,6 +467,8 @@ export function CustomersPage() {
   const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
   const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
+  const [discardCustomerChangesOpen, setDiscardCustomerChangesOpen] = useState(false);
+  const pendingCustomerCloseActionRef = useRef<(() => void) | null>(null);
   const [selectedCustomerDetail, setSelectedCustomerDetail] = useState<Customer | null>(null);
   const [selectedActivityQuotes, setSelectedActivityQuotes] = useState<CustomerQuoteSummary[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -724,17 +727,25 @@ export function CustomersPage() {
   async function confirmCustomerRetentionAction() {
     if (!customerRetentionAction || customerRetentionSaving) return;
 
+    const action = customerRetentionAction;
     setCustomerRetentionSaving(true);
+    setError(null);
     try {
-      if (customerRetentionAction.type === "archive") {
-        await api.customers.archive(customerRetentionAction.row.customer.id);
-        setNotice("Customer archived.");
-      } else if (customerRetentionAction.type === "delete") {
-        await api.customers.delete(customerRetentionAction.row.customer.id);
-        setNotice("Customer deleted from the active workspace.");
+      if (action.type === "archive") {
+        await api.customers.archive(action.row.customer.id);
+        notify.success("Customer archived", {
+          description: `${action.row.customer.fullName} and related active quotes left the active workspace. History remains retained.`,
+        });
+      } else if (action.type === "delete") {
+        await api.customers.delete(action.row.customer.id);
+        notify.success("Customer removed from the workspace", {
+          description: `${action.row.customer.fullName} and related active quotes remain retained for audit history.`,
+        });
       } else {
-        await api.customers.restore(customerRetentionAction.row.customer.id);
-        setNotice("Customer restored. Retained quotes were not restored automatically.");
+        await api.customers.restore(action.row.customer.id);
+        notify.success("Customer restored", {
+          description: `${action.row.customer.fullName} is active again. Retained quotes were not restored automatically.`,
+        });
       }
       await Promise.all([loadCustomerPage(), loadCustomers(), loadQuotes()]);
       activityRequestIdRef.current += 1;
@@ -742,18 +753,36 @@ export function CustomersPage() {
       setActivityCustomerId(null);
       setCustomerRetentionAction(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${customerRetentionAction.type} customer.`);
+      notify.error(`Could not ${action.type} customer`, {
+        description: err instanceof Error ? err.message : "Please try again. Your customer record was not changed.",
+      });
     } finally {
       setCustomerRetentionSaving(false);
     }
   }
 
-  function closeActivityModal() {
-    if ((detailsChanged || notesChanged) && !window.confirm("Discard unsaved customer changes?")) return false;
+  function finishClosingActivityModal() {
     activityRequestIdRef.current += 1;
     detailRequestIdRef.current += 1;
     setActivityCustomerId(null);
-    return true;
+  }
+
+  function closeActivityModal(afterClose?: () => void) {
+    if (detailsChanged || notesChanged) {
+      pendingCustomerCloseActionRef.current = afterClose ?? null;
+      setDiscardCustomerChangesOpen(true);
+      return;
+    }
+    finishClosingActivityModal();
+    afterClose?.();
+  }
+
+  function discardCustomerChangesAndClose() {
+    const afterClose = pendingCustomerCloseActionRef.current;
+    pendingCustomerCloseActionRef.current = null;
+    setDiscardCustomerChangesOpen(false);
+    finishClosingActivityModal();
+    afterClose?.();
   }
 
   return (
@@ -907,8 +936,7 @@ export function CustomersPage() {
         onClose={closeQuickCustomerModal}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
           void Promise.all([loadCustomerPage(), loadCustomers()]);
-          setNotice(
-            reusedExisting
+          const message = reusedExisting
               ? "Using existing customer record."
               : merged
                 ? restored
@@ -916,8 +944,8 @@ export function CustomersPage() {
                   : "Customer merged into existing record."
                 : restored
                   ? "Customer restored."
-                  : "Customer created.",
-          );
+                  : "Customer created.";
+          notify.success(message, { description: `${customer.fullName} is ready in your workspace.` });
           if (intent === "quote") {
             navigateToBuilder(customer.id);
           }
@@ -1069,10 +1097,7 @@ export function CustomersPage() {
                     size="sm"
                     icon={<FilePlus2 size={14} />}
                     disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
-                    onClick={() => {
-                      if (!closeActivityModal()) return;
-                      navigateToBuilder(selectedActivityRow.customer.id);
-                    }}
+                    onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                   >
                     New Quote
                   </Button>
@@ -1082,10 +1107,7 @@ export function CustomersPage() {
                     <button
                       key={quote.id}
                       type="button"
-                      onClick={() => {
-                        if (!closeActivityModal()) return;
-                        navigateToQuote(quote.id);
-                      }}
+                      onClick={() => closeActivityModal(() => navigateToQuote(quote.id))}
                       className={`flex min-h-[64px] w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue ${index > 0 ? "border-t border-slate-200" : ""}`}
                     >
                       <span className="min-w-0">
@@ -1139,10 +1161,7 @@ export function CustomersPage() {
                             <button
                               type="button"
                               className="rounded text-left text-sm font-semibold text-slate-900 hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
-                              onClick={() => {
-                                if (!closeActivityModal()) return;
-                                navigateToQuote(item.quoteId!);
-                              }}
+                              onClick={() => closeActivityModal(() => navigateToQuote(item.quoteId!))}
                             >
                               {item.title}
                             </button>
@@ -1157,10 +1176,7 @@ export function CustomersPage() {
                             <button
                               type="button"
                               className="text-xs font-semibold text-quotefly-blue hover:underline"
-                              onClick={() => {
-                                if (!closeActivityModal()) return;
-                                navigateToQuote(item.quoteId!);
-                              }}
+                              onClick={() => closeActivityModal(() => navigateToQuote(item.quoteId!))}
                             >
                               Open quote
                             </button>
@@ -1246,14 +1262,11 @@ export function CustomersPage() {
                 variant="secondary"
                 className="shadow-[0_8px_20px_rgba(244,139,37,0.22)]"
               />
-              <Button variant="outline" onClick={closeActivityModal}>
+              <Button variant="outline" onClick={() => closeActivityModal()}>
                 Close
               </Button>
               <Button
-                onClick={() => {
-                  if (!closeActivityModal()) return;
-                  navigateToBuilder(selectedActivityRow.customer.id);
-                }}
+                onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                 disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
                 title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? "Restore this customer before starting a quote" : undefined}
               >
@@ -1263,6 +1276,19 @@ export function CustomersPage() {
           </ModalFooter>
         ) : null}
       </Modal>
+
+      <ConfirmModal
+        open={discardCustomerChangesOpen}
+        onClose={() => {
+          pendingCustomerCloseActionRef.current = null;
+          setDiscardCustomerChangesOpen(false);
+        }}
+        onConfirm={discardCustomerChangesAndClose}
+        title="Discard unsaved customer changes?"
+        description="Contact details or notes changed in this window will be lost."
+        confirmLabel="Discard changes"
+        confirmVariant="warning"
+      />
 
       <ConfirmModal
         open={Boolean(customerRetentionAction)}

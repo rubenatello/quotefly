@@ -1,5 +1,5 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Command, FilePlus2, LifeBuoy, MoreHorizontal, Search, UserPlus2 } from "lucide-react";
+import { BadgeInfo, Command, FilePlus2, LifeBuoy, MoreHorizontal, Palette, Search, Settings2, UserPlus2 } from "lucide-react";
 import type { Ref } from "react";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
@@ -16,6 +16,7 @@ interface CrmMobileHeaderProps {
   onQuickAction: (action: "new-customer" | "new-quote") => void;
   onLogout: () => void;
   currentLabel: string;
+  canManageWorkspace: boolean;
 }
 
 export function CrmMobileHeader({
@@ -28,6 +29,7 @@ export function CrmMobileHeader({
   onQuickAction,
   onLogout,
   currentLabel,
+  canManageWorkspace,
 }: CrmMobileHeaderProps) {
   return (
     <header
@@ -116,13 +118,24 @@ export function CrmMobileHeader({
                   onSelect={() => onNavigate("settings")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
+                  <Settings2 size={15} aria-hidden="true" />
                   Open settings
                 </DropdownMenuPrimitive.Item>
+                {canManageWorkspace ? (
+                  <DropdownMenuPrimitive.Item
+                    onSelect={() => onNavigate("branding")}
+                    className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
+                  >
+                    <Palette size={15} aria-hidden="true" />
+                    Open branding
+                  </DropdownMenuPrimitive.Item>
+                ) : null}
                 <DropdownMenuPrimitive.Item
-                  onSelect={() => onNavigate("branding")}
+                  onSelect={() => onNavigate("about")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
-                  Open branding
+                  <BadgeInfo size={15} aria-hidden="true" />
+                  About workspace
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item asChild>
                   <a
