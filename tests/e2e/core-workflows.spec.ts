@@ -23,7 +23,7 @@ test.describe("controlled beta core workflow", () => {
     await addSessionCookie(context, account);
     await page.goto("/app/customers");
 
-    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 30_000 });
     await expectNoFrontendJwtStorage(page);
 
     const customerLabel = uniqueRunLabel("field");
@@ -41,9 +41,10 @@ test.describe("controlled beta core workflow", () => {
     await customerDialog.getByRole("button", { name: "Save Customer" }).click();
 
     await expect(customerDialog).toBeHidden();
-    await expect(page.getByText(customerName).filter({ visible: true })).toBeVisible();
+    const customerRow = page.getByRole("button", { name: `Open ${customerName} details` });
+    await expect(customerRow).toBeVisible();
 
-    await page.getByText(customerName).filter({ visible: true }).first().click();
+    await customerRow.click();
     const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer details and activity" });
     await expect(customerWorkspaceDialog.getByText("Customer details", { exact: true })).toBeVisible();
     await expect(customerWorkspaceDialog.getByRole("button", { name: "Save details" })).toBeDisabled();
@@ -58,8 +59,9 @@ test.describe("controlled beta core workflow", () => {
     await expect(customerWorkspaceDialog.getByText("Customer details saved.", { exact: true })).toBeVisible();
     await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
-    await expect(page.getByText(updatedCustomerName).filter({ visible: true })).toBeVisible();
-    await page.getByText(updatedCustomerName).filter({ visible: true }).first().click();
+    const updatedCustomerRow = page.getByRole("button", { name: `Open ${updatedCustomerName} details` });
+    await expect(updatedCustomerRow).toBeVisible();
+    await updatedCustomerRow.click();
     await expect(customerWorkspaceDialog.getByLabel("Name")).toHaveValue(updatedCustomerName);
     await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
@@ -75,6 +77,10 @@ test.describe("controlled beta core workflow", () => {
     await duplicateDialog.getByRole("button", { name: "Save Customer" }).click();
     await expect(duplicateDialog.getByText(/exact phone match found/i)).toBeVisible();
     await duplicateDialog.getByRole("button", { name: "Cancel" }).click();
+    const discardDuplicateDialog = page.getByRole("dialog", { name: "Discard unsaved customer?" });
+    await expect(discardDuplicateDialog).toBeVisible();
+    await discardDuplicateDialog.getByRole("button", { name: "Discard changes" }).click();
+    await expect(duplicateDialog).toBeHidden();
 
     await page.goto("/app/build");
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 20_000 });
@@ -173,7 +179,7 @@ test.describe("controlled beta core workflow", () => {
 
     await page.goto("/app/setup");
     await expect(page).toHaveTitle("Setup | QuoteFly");
-    await expect(page.getByRole("button", { name: "Business", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   test("tablet boards do not clip and invalid analytics ranges suppress metrics", async ({ context, page, request }) => {

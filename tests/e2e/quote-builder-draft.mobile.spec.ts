@@ -46,8 +46,10 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(restoredDialog.getByLabel("Phone")).toHaveValue("(555) 010-9876");
   await expect(restoredDialog.getByLabel("Email")).toHaveValue("mobile-draft@example.com");
   await expect(restoredDialog.getByLabel("Customer notes")).toHaveValue("Gate code survives refresh.");
-  page.once("dialog", (dialog) => dialog.accept());
   await restoredDialog.getByRole("button", { name: "Cancel" }).click();
+  const discardCustomerDialog = page.getByRole("dialog", { name: "Discard unsaved customer?" });
+  await expect(discardCustomerDialog).toBeVisible();
+  await discardCustomerDialog.getByRole("button", { name: "Discard changes" }).click();
   await expect(restoredDialog).toBeHidden();
   const backAfterReload = page.getByRole("button", { name: "Back", exact: true });
   if (await backAfterReload.isVisible()) await backAfterReload.click();
