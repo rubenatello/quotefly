@@ -239,12 +239,12 @@ export function CrmShell({
           <div className="sticky top-0 z-30 hidden border-b border-qf-border/80 bg-qf-surface/95 backdrop-blur-xl lg:block">
             <div className="flex w-full items-center justify-between gap-4 px-5 py-2 xl:px-8 2xl:px-10">
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">
                   <span>QuoteFly workspace</span>
-                  <span className="h-1 w-1 rounded-full bg-slate-300" />
+                  <span className="h-1 w-1 rounded-full bg-[var(--qf-border-strong)]" />
                   <span>{pageMeta.label}</span>
                 </div>
-                <p className="mt-1 truncate text-sm text-slate-600">{pageMeta.hint}</p>
+                <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{pageMeta.hint}</p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -283,9 +283,9 @@ export function CrmShell({
                           .toUpperCase()}
                       </span>
                       <span className="hidden text-left xl:block">
-                        <span className="block max-w-[160px] truncate text-sm font-semibold text-slate-900">{fullName ?? "QuoteFly User"}</span>
+                        <span className="block max-w-[160px] truncate text-sm font-semibold text-[var(--qf-text)]">{fullName ?? "QuoteFly User"}</span>
                       </span>
-                      <MoreHorizontal size={16} className="text-slate-400" />
+                      <MoreHorizontal size={16} className="text-[var(--qf-text-muted)]" />
                     </button>
                   </DropdownMenuPrimitive.Trigger>
                   <DropdownMenuPrimitive.Portal>

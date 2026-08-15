@@ -32,7 +32,7 @@ export function WorkspaceJumpBar({
             title={link.hint ?? link.label}
             className="inline-flex items-center gap-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-2.5 py-1.5 text-left text-xs font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-panel-muted)]"
           >
-            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-[10px] font-semibold text-[var(--qf-text-muted)]">
               {index + 1}
             </span>
             <span className="font-semibold text-[var(--qf-text)]">{link.label}</span>
@@ -92,7 +92,7 @@ export function WorkspaceRailCard({
 }) {
   return (
     <div className={cn("rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3.5", className)}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{eyebrow}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{eyebrow}</p>
       <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{title}</h3>
       <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{description}</p>
       {children ? <div className="mt-4">{children}</div> : null}

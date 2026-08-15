@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { AppLoadingScreen } from "./AppLoadingScreen";
+import { WorkspaceRouteLoading } from "./AppLoadingScreen";
 import { CrmShell } from "./CrmShell";
 import { BillingRequiredScreen } from "./billing/BillingRequiredScreen";
 import { TrialConversionBanner } from "./billing/TrialConversionBanner";
 import { BottomTabBar } from "./crm/BottomTabBar";
 import {
+  WORKSPACE_PAGE_META,
   workspacePageFromPath,
   workspacePathForNavigation,
   type WorkspaceNavigationId,
@@ -163,14 +164,14 @@ export function CrmAppLayout({
         onNavigateToBuilder={() => navigate("/app/build")}
       >
         <main id="main-content" className="qf-workspace-main min-h-screen bg-qf-canvas px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
-          <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
-            <div className="mx-auto w-full max-w-[1840px]">
-              {session.isTrial ? (
-                <TrialConversionBanner
-                  trialEndsAtUtc={session.trialEndsAtUtc}
-                  ownerView={session.role.trim().toLowerCase() === "owner"}
-                />
-              ) : null}
+          <div className="mx-auto w-full max-w-[1840px]">
+            {session.isTrial ? (
+              <TrialConversionBanner
+                trialEndsAtUtc={session.trialEndsAtUtc}
+                ownerView={session.role.trim().toLowerCase() === "owner"}
+              />
+            ) : null}
+            <Suspense fallback={<WorkspaceRouteLoading message={`Loading ${WORKSPACE_PAGE_META[currentPage].label.toLowerCase()}...`} />}>
               <Routes>
                 <Route index element={<WorkspaceHomePage />} />
                 <Route path="customers" element={<CustomersPage />} />
@@ -211,8 +212,8 @@ export function CrmAppLayout({
                 />
                 <Route path="*" element={<Navigate to="/app" replace />} />
               </Routes>
-            </div>
-          </Suspense>
+            </Suspense>
+          </div>
         </main>
         <BottomTabBar />
         <Suspense fallback={null}>

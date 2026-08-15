@@ -706,7 +706,7 @@ export function AnalyticsPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+        <div className="qf-horizontal-filter-strip mt-4 flex snap-x gap-2 overflow-x-auto pb-1">
           {RANGE_OPTIONS.map((option) => (
             <RangeButton
               key={option.value}

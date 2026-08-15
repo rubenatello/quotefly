@@ -430,10 +430,10 @@ interface ModalProps {
 }
 
 const MODAL_SIZES: Record<ModalSize, string> = {
-  sm: "max-w-md",
-  md: "max-w-lg",
-  lg: "max-w-2xl",
-  xl: "max-w-4xl",
+  sm: "sm:max-w-md",
+  md: "sm:max-w-lg",
+  lg: "sm:max-w-2xl",
+  xl: "sm:max-w-4xl",
 };
 
 export function Modal({
@@ -464,12 +464,13 @@ export function Modal({
             if (!closeOnBackdrop) event.preventDefault();
           }}
           className={cn(
-            "qf-theme-scope fixed left-1/2 top-1/2 z-[110] flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]",
+            "qf-theme-scope fixed inset-x-0 bottom-0 z-[110] flex max-h-[calc(100dvh-0.75rem)] w-full flex-col overflow-hidden rounded-t-[28px] border border-b-0 border-[var(--qf-border)] bg-[var(--qf-panel)] pb-[env(safe-area-inset-bottom)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-1/2 sm:max-h-[90vh] sm:w-[calc(100vw-2rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[24px] sm:border-b sm:pb-0",
             MODAL_SIZES[size],
             panelClassName,
           )}
         >
           <DialogPrimitive.Title className="sr-only">{ariaLabel ?? "QuoteFly dialog"}</DialogPrimitive.Title>
+          <span aria-hidden="true" className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--qf-border-strong)] sm:hidden" />
           {children}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

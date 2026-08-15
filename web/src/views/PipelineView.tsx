@@ -112,14 +112,14 @@ function MetricTile({
     tone === "blue"
       ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]"
       : tone === "orange"
-        ? "bg-[var(--qf-warning-strong)] text-white"
+        ? "bg-[var(--qf-action-secondary)] text-[var(--qf-action-secondary-text)]"
       : tone === "emerald"
           ? "bg-[var(--qf-success-strong)] text-white"
           : "bg-slate-800 text-white";
 
   return (
     <div data-testid="follow-up-metric" className={`min-w-0 rounded-xl px-3 py-3 sm:px-4 ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-75">{label}</p>
       <p className="mt-2 truncate text-xl font-bold tracking-tight sm:text-2xl">{currency ? money(value) : value}</p>
     </div>
   );
@@ -157,7 +157,7 @@ function QueueTabs({
             onClick={() => onChange(tab.key)}
             className={`inline-flex min-h-[44px] min-w-0 items-center justify-center gap-1.5 rounded-xl border px-1.5 py-2 text-[11px] font-medium transition sm:min-h-[36px] sm:flex-none sm:rounded-full sm:px-3 sm:py-1.5 sm:text-sm ${
               active
-                ? "border-[var(--qf-selected-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
+                ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)] text-[var(--qf-link)]"
                 : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
             }`}
           >

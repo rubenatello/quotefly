@@ -37,6 +37,10 @@ test.describe("mobile launch smoke", () => {
     const confirmButton = confirmation.getByRole("button", { name: "Archive customer" });
     const cancelButton = confirmation.getByRole("button", { name: "Cancel" });
     await expect(confirmation).toBeVisible();
+    const confirmationBox = await confirmation.boundingBox();
+    const mobileViewport = page.viewportSize();
+    expect(confirmationBox?.width).toBeGreaterThanOrEqual((mobileViewport?.width ?? 0) - 1);
+    expect((confirmationBox?.y ?? 0) + (confirmationBox?.height ?? 0)).toBeGreaterThanOrEqual((mobileViewport?.height ?? 0) - 1);
     expect((await confirmButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     expect((await cancelButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await expect(confirmButton).toHaveCSS("width", await cancelButton.evaluate((button) => getComputedStyle(button).width));
@@ -101,7 +105,9 @@ test.describe("mobile launch smoke", () => {
 
     await page.goto("/app/customers");
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("region", { name: "Trial and billing" })).toContainText(/days? left/i);
+    const trialBanner = page.getByRole("region", { name: "Trial and billing" });
+    await expect(trialBanner).toContainText(/days? left/i);
+    expect((await trialBanner.boundingBox())?.height).toBeLessThan(190);
     await expect(page.getByRole("button", { name: /choose basic/i })).toBeVisible();
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 

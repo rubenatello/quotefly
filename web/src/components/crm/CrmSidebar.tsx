@@ -187,7 +187,7 @@ export function CrmSidebar({
 
           {!collapsed ? (
             <div className="flex items-center justify-between px-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Navigation</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Navigation</p>
             </div>
           ) : null}
 

@@ -50,15 +50,17 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
   return (
     <section
       aria-label="Trial and billing"
-      className={`mb-4 rounded-2xl border px-4 py-3 shadow-sm ${
-        urgent ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50"
+      className={`mb-4 rounded-2xl border px-3 py-2.5 shadow-[var(--qf-shadow-sm)] sm:px-4 sm:py-3 ${
+        urgent
+          ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)]"
+          : "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
       }`}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={urgent ? "amber" : "blue"}>Full trial</Badge>
-            <p className="text-sm font-semibold text-slate-950">
+            <p className="text-sm font-semibold text-[var(--qf-text)]">
               {daysRemaining === null
                 ? `${BASIC_PLAN.trialDays}-day trial active`
                 : daysRemaining === 0
@@ -66,17 +68,22 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
                   : `${daysRemaining} ${daysRemaining === 1 ? "day" : "days"} left`}
             </p>
           </div>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-xs leading-5 text-[var(--qf-text-soft)] sm:hidden">
+            {endsOn ? `Free through ${endsOn}. ` : "Free through your trial. "}
+            First month {basicFirstPaidMonthPriceLabel()}, then {basicMonthlyPriceLabel()}.
+          </p>
+          <p className="mt-1 hidden text-sm text-[var(--qf-text-soft)] sm:block">
             Checkout keeps access free{endsOn ? ` until at least ${endsOn}` : " through your trial"}.
             {` Your first paid month is ${basicFirstPaidMonthPriceLabel()}, then ${basicMonthlyPriceLabel()}.`}
           </p>
         </div>
         {ownerView ? (
-          <Button type="button" onClick={() => void startCheckout()} loading={loading} disabled={loading}>
-            Choose Basic — {basicFirstPaidMonthPriceLabel()} first month
+          <Button type="button" onClick={() => void startCheckout()} loading={loading} disabled={loading} className="shrink-0">
+            <span className="sm:hidden">Choose Basic · {basicFirstPaidMonthPriceLabel()}</span>
+            <span className="hidden sm:inline">Choose Basic — {basicFirstPaidMonthPriceLabel()} first month</span>
           </Button>
         ) : (
-          <p className="text-sm font-medium text-amber-800">Ask the workspace owner to choose Basic.</p>
+          <p className="text-sm font-medium text-[var(--qf-warning-text)]">Ask the workspace owner to choose Basic.</p>
         )}
       </div>
       {error ? (

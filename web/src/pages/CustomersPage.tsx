@@ -189,7 +189,7 @@ function CustomerPipelineFilterStrip({
 }) {
   return (
     <div className="space-y-2">
-      <div className="flex snap-x snap-mandatory items-center gap-2 overflow-x-auto pb-2" role="group" aria-label="Customer stage filters">
+      <div className="qf-horizontal-filter-strip flex snap-x snap-mandatory items-center gap-2 overflow-x-auto pb-2" role="group" aria-label="Customer stage filters">
         <StageFilterButton stage="ALL" count={totalCount} active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
         {CUSTOMER_STAGE_ORDER.map((stage) => (
           <StageFilterButton key={stage} stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />

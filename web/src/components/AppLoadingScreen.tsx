@@ -52,3 +52,48 @@ export function AppLoadingScreen({ message = "Loading...", recovery }: AppLoadin
     </div>
   );
 }
+
+export function WorkspaceRouteLoading({ message = "Loading workspace..." }: { message?: string }) {
+  return (
+    <div role="status" aria-live="polite" aria-label={message} className="space-y-4 sm:space-y-5">
+      <span className="sr-only">{message}</span>
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-2">
+          <div className="h-3 w-28 animate-pulse rounded-full bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+          <div className="h-5 w-52 max-w-[64vw] animate-pulse rounded-lg bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+        </div>
+        <div className="hidden h-11 w-32 animate-pulse rounded-xl bg-[var(--qf-selected)] sm:block" aria-hidden="true" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div key={index} className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)]">
+            <div className="h-9 w-9 animate-pulse rounded-xl bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+            <div className="mt-5 h-6 w-16 animate-pulse rounded-lg bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+            <div className="mt-2 h-3 w-24 animate-pulse rounded-full bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+          </div>
+        ))}
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]">
+        <div className="border-b border-[var(--qf-border)] p-4 sm:p-5">
+          <div className="h-4 w-36 animate-pulse rounded-md bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+          <div className="mt-2 h-3 w-64 max-w-[75vw] animate-pulse rounded-full bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+        </div>
+        <div className="divide-y divide-[var(--qf-border)]">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div key={index} className="flex items-center gap-3 p-4 sm:px-5">
+              <div className="h-10 w-10 shrink-0 animate-pulse rounded-xl bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="h-3.5 w-2/5 animate-pulse rounded-full bg-[var(--qf-interactive-active)]" aria-hidden="true" />
+                <div className="h-3 w-3/5 animate-pulse rounded-full bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+              </div>
+              <div className="h-9 w-20 animate-pulse rounded-xl bg-[var(--qf-panel-muted)]" aria-hidden="true" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -15,6 +15,21 @@
   isolation: isolate;
 }
 
+.qf-horizontal-filter-strip {
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 0.25rem;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.qf-horizontal-filter-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.qf-horizontal-filter-strip > * {
+  scroll-snap-align: start;
+}
+
 .qf-theme-scope {
   color: var(--qf-text);
 }

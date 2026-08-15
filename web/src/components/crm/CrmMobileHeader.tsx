@@ -58,10 +58,10 @@ export function CrmMobileHeader({
           >
             <div className="flex items-center gap-2">
               <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 shrink-0 rounded-lg" />
-              <p className="truncate text-sm font-semibold text-slate-900">{currentLabel}</p>
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{currentLabel}</p>
             </div>
             <div className="mt-0.5 flex items-center gap-2">
-              <p className="truncate text-xs text-slate-500">QuoteFly workspace</p>
+              <p className="truncate text-xs text-[var(--qf-text-muted)]">QuoteFly workspace</p>
             </div>
           </button>
         </div>

@@ -694,7 +694,7 @@ export function QuotesPage() {
         />
       </div>
 
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+      <div className="qf-horizontal-filter-strip -mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
         <StageCountCard label="All" count={sortedQuotes.length} stage="ALL" active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")} />
         {QUOTE_STAGE_ORDER.map((stage) => (
           <StageCountCard
