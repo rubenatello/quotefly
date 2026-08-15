@@ -23,6 +23,7 @@ import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { MarketingAction } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { setPublicSEOMetadata } from "../lib/seo";
+import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 
 interface SolutionsPageProps {
   onOpenAuth: () => void;
@@ -340,7 +341,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="problems-heading">
         <div className="mx-auto max-w-7xl">
           <div data-marketing-reveal className="mx-auto max-w-3xl text-center">
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-orange">The real problem</p>
+            <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--qf-brand-orange-text)]">The real problem</p>
             <h2 id="problems-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               The work changes. The quoting headaches do not.
             </h2>
@@ -401,7 +402,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                     </span>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold tracking-[0.16em] text-quotefly-orange">{step.number}</span>
+                        <span className="text-xs font-bold tracking-[0.16em] text-[var(--qf-brand-orange-text)]">{step.number}</span>
                         <h3 className="font-bold text-slate-950">{step.title}</h3>
                       </div>
                       <p className="mt-1 text-sm leading-6 text-slate-600">{step.detail}</p>
@@ -618,7 +619,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
           </span>
           <h2 className="mx-auto mt-5 max-w-3xl text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">Give your next quote the same care you give the work.</h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-slate-600">
-            Start with a sample customer, price a real job, and review the customer-facing PDF during your 14-day trial. No credit card required.
+            Start with a sample customer, price a real job, and review the customer-facing PDF during your {BASIC_PLAN.trialDays}-day trial. No credit card required. Your first paid month is {basicFirstPaidMonthPriceLabel()}.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <MarketingAction

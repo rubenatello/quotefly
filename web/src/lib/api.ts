@@ -43,6 +43,7 @@ export function apiTelemetryRoute(path: string): string {
   if (pathname === "/v1/auth/me") return "/v1/auth/me";
   if (pathname.startsWith("/v1/auth/")) return "/v1/auth/:action";
   if (pathname.startsWith("/v1/internal/ai-quality/assistant-test")) return "/v1/internal/ai-quality/assistant-test";
+  if (pathname.startsWith("/v1/internal/ai-quality/feedback")) return "/v1/internal/ai-quality/feedback";
   if (pathname.startsWith("/v1/ai/assistant")) return "/v1/ai/assistant";
   if (pathname.startsWith("/v1/ai/business-insights")) return "/v1/ai/business-insights";
   if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/activity")) return "/v1/customers/:id/activity";
@@ -479,6 +480,38 @@ export type InternalDataCatalogField = {
   ragStatus: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
   analyticsStatus: "ELIGIBLE" | "EXCLUDED" | "REVIEW_REQUIRED";
   requiredAccess: string[];
+};
+
+export type InternalAiAssistantFeedback = {
+  id: string;
+  rating: AiAssistantFeedbackRating;
+  note?: string | null;
+  createdAt: string;
+  tenant: {
+    id: string;
+    name: string;
+  };
+  usage: {
+    eventType: string;
+    purpose: string;
+    model?: string | null;
+    confidenceLevel?: string | null;
+    createdAt: string;
+  };
+};
+
+export type InternalAiAssistantFeedbackResponse = {
+  windowDays: number;
+  windowStartUtc: string;
+  generatedAtUtc: string;
+  summary: {
+    total: number;
+    up: number;
+    down: number;
+    withNote: number;
+  };
+  notesIncluded: boolean;
+  feedback: InternalAiAssistantFeedback[];
 };
 
 export type InternalDataCatalogModel = {
@@ -1425,12 +1458,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-    submitAssistantFeedback: (auditEventId: string, rating: AiAssistantFeedbackRating) =>
-      request<{ feedback: { rating: AiAssistantFeedbackRating; updatedAt: string } }>(
+    submitAssistantFeedback: (
+      auditEventId: string,
+      body: { rating: AiAssistantFeedbackRating; note?: string | null },
+    ) =>
+      request<{ feedback: { rating: AiAssistantFeedbackRating; note: string | null; updatedAt: string } }>(
         `/v1/ai/assistant/${encodeURIComponent(auditEventId)}/feedback`,
         {
           method: "POST",
-          body: JSON.stringify({ rating }),
+          body: JSON.stringify(body),
         },
       ),
 
@@ -1515,6 +1551,14 @@ export const api = {
           `/v1/internal/ai-quality/tenants${toQueryString({
             days: query?.days,
             limit: query?.limit,
+          })}`,
+        ),
+      feedback: (query?: { days?: number; limit?: number; includeNotes?: boolean }) =>
+        request<InternalAiAssistantFeedbackResponse>(
+          `/v1/internal/ai-quality/feedback${toQueryString({
+            days: query?.days,
+            limit: query?.limit,
+            includeNotes: query?.includeNotes,
           })}`,
         ),
     },

@@ -12,7 +12,7 @@ import {
   type TenantUsageSnapshot,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
-import { BASIC_PLAN, basicMonthlyPriceLabel } from "../lib/plans";
+import { BASIC_PLAN, basicFirstPaidMonthPriceLabel, basicMonthlyPriceLabel } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
@@ -78,6 +78,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     historyText: `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
+      `${BASIC_PLAN.trialDays}-day free trial; eligible first paid month ${basicFirstPaidMonthPriceLabel()}`,
       `${BASIC_PLAN.quotesPerMonth} quotes per month`,
       "Quick customer intake and pipeline tracking",
       "PDF quote generation",

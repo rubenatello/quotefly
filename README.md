@@ -106,6 +106,7 @@ Use Tailwind utility classes directly in React components.
 - `STRIPE_SECRET_KEY`: Stripe secret key (`sk_test_...` or `sk_live_...`)
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret (`whsec_...`)
 - `STRIPE_PRICE_ID_STARTER`: Stripe starter plan price id (`price_...`)
+- `STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF`: Stripe coupon configured as `50% off`, duration `once`
 - `STRIPE_PRICE_ID_PROFESSIONAL`: Stripe professional plan price id (`price_...`)
 - `STRIPE_PRICE_ID_ENTERPRISE`: Stripe enterprise plan price id (`price_...`)
 - `APP_URL`: frontend URL (e.g. `http://localhost:5173`, `https://quotefly.us`)

@@ -86,7 +86,7 @@ Budget ceiling output from baseline:
 
 Launch working caps aligned to baseline:
 
-- Starter: `$1.25` (owner-approved launch cap; about 6.6% of the `$19` plan price)
+- Starter: `$1.25` (owner-approved launch cap; about 4.3% of the `$29` recurring plan price)
 - Professional: `$11.00`
 - Enterprise: `$56.00`
 

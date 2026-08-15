@@ -32,6 +32,7 @@ const EnvSchema = z.object({
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_PRICE_ID_STARTER: z.string().default(""),
+  STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: z.string().default(""),
   STRIPE_PRICE_ID_PROFESSIONAL: z.string().default(""),
   STRIPE_PRICE_ID_ENTERPRISE: z.string().default(""),
   SUPERUSER_EMAILS: z.string().default(""),
@@ -143,6 +144,11 @@ const EnvSchema = z.object({
     ["STRIPE_SECRET_KEY", value.STRIPE_SECRET_KEY, /^(?:sk|rk)_(?:test|live)_/],
     ["STRIPE_WEBHOOK_SECRET", value.STRIPE_WEBHOOK_SECRET, /^whsec_/],
     ["STRIPE_PRICE_ID_STARTER", value.STRIPE_PRICE_ID_STARTER, /^price_/],
+    [
+      "STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF",
+      value.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF,
+      /\S/,
+    ],
     ["RESEND_API_KEY", value.RESEND_API_KEY, /\S/],
     ["PASSWORD_RESET_EMAIL_FROM", value.PASSWORD_RESET_EMAIL_FROM, /\S/],
   ] as const;

@@ -211,10 +211,18 @@ describe("AI assistant", () => {
       method: "POST",
       url: `/v1/ai/assistant/${body.assistant.auditEventId}/feedback`,
       headers: { cookie: owner.cookie },
-      payload: { rating: "DOWN" },
+      payload: {
+        rating: "DOWN",
+        note: "I asked about products, but Kody searched customers instead.",
+      },
     });
     expect(firstFeedback.statusCode).toBe(200);
-    expect(firstFeedback.json()).toMatchObject({ feedback: { rating: "DOWN" } });
+    expect(firstFeedback.json()).toMatchObject({
+      feedback: {
+        rating: "DOWN",
+        note: "I asked about products, but Kody searched customers instead.",
+      },
+    });
 
     const changedFeedback = await app.inject({
       method: "POST",
@@ -223,7 +231,12 @@ describe("AI assistant", () => {
       payload: { rating: "UP" },
     });
     expect(changedFeedback.statusCode).toBe(200);
-    expect(changedFeedback.json()).toMatchObject({ feedback: { rating: "UP" } });
+    expect(changedFeedback.json()).toMatchObject({
+      feedback: {
+        rating: "UP",
+        note: "I asked about products, but Kody searched customers instead.",
+      },
+    });
 
     const storedFeedback = await prisma.aiAssistantFeedback.findMany({
       where: { aiUsageEventId: body.assistant.auditEventId },
@@ -233,8 +246,17 @@ describe("AI assistant", () => {
       tenantId: owner.tenant.id,
       actorUserId: owner.user.id,
       rating: "UP",
+      note: "I asked about products, but Kody searched customers instead.",
       deletedAtUtc: null,
     });
+
+    const oversizedNote = await app.inject({
+      method: "POST",
+      url: `/v1/ai/assistant/${body.assistant.auditEventId}/feedback`,
+      headers: { cookie: owner.cookie },
+      payload: { rating: "DOWN", note: "x".repeat(501) },
+    });
+    expect(oversizedNote.statusCode).toBe(400);
 
     for (const session of [otherTenant, workspaceAdmin]) {
       const forbiddenFeedback = await app.inject({

@@ -25,6 +25,12 @@ const AiQualityTenantsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(25),
 });
 
+const AiQualityFeedbackQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(180).default(30),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+  includeNotes: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+}).strict();
+
 function daysAgoUtc(days: number): Date {
   const now = new Date();
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
@@ -422,6 +428,118 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       tradeBreakdown,
     };
   });
+
+  app.get(
+    "/internal/ai-quality/feedback",
+    {
+      config: authenticatedAiRateLimit(
+        "internal-ai-quality-feedback",
+        app.env.NODE_ENV === "test" ? 10_000 : 30,
+      ),
+      preHandler: [app.authenticate],
+    },
+    async (request, reply) => {
+      const claims = requireSuperuserAccess(request, reply);
+      if (!claims) return reply;
+      const query = AiQualityFeedbackQuerySchema.parse(request.query);
+      const windowStartUtc = daysAgoUtc(query.days);
+      const where = {
+        deletedAtUtc: null,
+        createdAt: { gte: windowStartUtc },
+        aiUsageEvent: { deletedAtUtc: null },
+      } as const;
+
+      const [ratingGroups, withNoteCount, feedbackRows] = await Promise.all([
+        app.prisma.aiAssistantFeedback.groupBy({
+          by: ["rating"],
+          where,
+          _count: { _all: true },
+        }),
+        app.prisma.aiAssistantFeedback.count({
+          where: { ...where, note: { not: null } },
+        }),
+        query.includeNotes
+          ? app.prisma.aiAssistantFeedback.findMany({
+              where,
+              orderBy: { createdAt: "desc" },
+              take: query.limit,
+              select: {
+                id: true,
+                rating: true,
+                note: true,
+                createdAt: true,
+                tenant: { select: { id: true, name: true } },
+                aiUsageEvent: {
+                  select: {
+                    eventType: true,
+                    purpose: true,
+                    model: true,
+                    confidenceLevel: true,
+                    createdAt: true,
+                  },
+                },
+              },
+            })
+          : app.prisma.aiAssistantFeedback.findMany({
+              where,
+              orderBy: { createdAt: "desc" },
+              take: query.limit,
+              select: {
+                id: true,
+                rating: true,
+                createdAt: true,
+                tenant: { select: { id: true, name: true } },
+                aiUsageEvent: {
+                  select: {
+                    eventType: true,
+                    purpose: true,
+                    model: true,
+                    confidenceLevel: true,
+                    createdAt: true,
+                  },
+                },
+              },
+            }),
+      ]);
+
+      const ratingCounts = new Map(ratingGroups.map((group) => [group.rating, group._count._all]));
+      const total = Array.from(ratingCounts.values()).reduce((sum, value) => sum + value, 0);
+
+      await recordSuperuserAuditEvent(app.prisma, {
+        actorUserId: claims.userId,
+        requestId: request.id,
+        action: query.includeNotes ? "AI_QUALITY_FEEDBACK_NOTES_VIEWED" : "AI_QUALITY_FEEDBACK_VIEWED",
+        targetType: "AiAssistantFeedback",
+        metadata: {
+          windowDays: query.days,
+          includeNotes: query.includeNotes,
+          returnedCount: feedbackRows.length,
+          noteCount: withNoteCount,
+        },
+      });
+
+      return {
+        windowDays: query.days,
+        windowStartUtc,
+        generatedAtUtc: new Date(),
+        summary: {
+          total,
+          up: ratingCounts.get("UP") ?? 0,
+          down: ratingCounts.get("DOWN") ?? 0,
+          withNote: withNoteCount,
+        },
+        notesIncluded: query.includeNotes,
+        feedback: feedbackRows.map((feedback) => ({
+          id: feedback.id,
+          rating: feedback.rating,
+          ...(query.includeNotes && "note" in feedback ? { note: feedback.note } : {}),
+          createdAt: feedback.createdAt,
+          tenant: feedback.tenant,
+          usage: feedback.aiUsageEvent,
+        })),
+      };
+    },
+  );
 
   app.get("/internal/ai-quality/tenants", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);

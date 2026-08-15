@@ -211,7 +211,7 @@ export function QuoteAiPromptModal({
           <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-white px-4 py-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-[color:rgba(242,140,40,0.12)] text-[var(--qf-brand-orange)]">
+                <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--qf-brand-orange-soft)] text-[var(--qf-brand-orange-text)]">
                   <Sparkles size={18} />
                 </div>
                 <div className="min-w-0">
@@ -249,7 +249,7 @@ export function QuoteAiPromptModal({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[color:rgba(242,140,40,0.18)] bg-[color:rgba(242,140,40,0.05)] px-4 py-3.5 shadow-[0_10px_24px_rgba(242,140,40,0.06)]">
+            <div className="rounded-2xl border border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)] px-4 py-3.5 shadow-[0_10px_24px_rgba(249,105,40,0.08)]">
               <Select
                 label="Trade"
                 value={serviceType}
@@ -307,7 +307,7 @@ export function QuoteAiPromptModal({
           </div>
 
           {loading ? (
-            <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-[linear-gradient(135deg,rgba(47,111,214,0.08),rgba(242,140,40,0.06))] px-4 py-4 shadow-[0_10px_24px_rgba(47,111,214,0.05)]">
+            <div className="rounded-2xl border border-[color:rgba(47,111,214,0.16)] bg-[linear-gradient(135deg,var(--qf-brand-blue-soft),var(--qf-brand-orange-soft))] px-4 py-4 shadow-[0_10px_24px_rgba(47,111,214,0.05)]">
               <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -356,7 +356,7 @@ export function QuoteAiPromptModal({
                                 isComplete
                                   ? "flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white"
                                   : isCurrent
-                                    ? "flex h-6 w-6 items-center justify-center rounded-full bg-[var(--qf-brand-orange)] text-white shadow-[0_6px_18px_rgba(242,140,40,0.24)]"
+                                    ? "flex h-6 w-6 items-center justify-center rounded-full bg-[var(--qf-brand-orange)] text-[var(--qf-brand-orange-contrast)] shadow-[0_6px_18px_rgba(249,105,40,0.24)]"
                                     : "flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400"
                               }
                             >

@@ -18,7 +18,7 @@ export function PrivacyPage() {
         "Account data such as name, email address, company name, role, and workspace membership.",
         "Customer and quote data that you add to the workspace, including names, phone numbers, emails, addresses, notes, scopes, line items, internal costs, customer prices, and generated documents.",
         "AI inputs and usage records, including prompts, relevant customer or quote context, model details, and usage telemetry when you choose an AI-assisted feature.",
-        "Support and product-feedback submissions, including your contact details, company name, feature ideas, and any text you choose to provide.",
+        "Support and product-feedback submissions, including your contact details, company name, feature ideas, Kody response ratings, and any optional feedback note you choose to provide.",
         "Operational data such as sign-in activity, usage events, device or browser details, and billing metadata needed to run the service.",
       ],
     },
@@ -29,7 +29,7 @@ export function PrivacyPage() {
         "To prepare quote drafts or revisions with OpenAI when you intentionally use an AI-assisted feature. You must review AI output before relying on or sending it.",
         "To secure accounts, prevent abuse, troubleshoot issues, and improve product performance.",
         "To communicate about the service, support requests, billing updates, and important account notices.",
-        "To review feature requests, contact you about submitted ideas, and guide product improvements.",
+        "To review feature requests and Kody response feedback, improve QuoteFly prompts and evaluations, contact you about submitted ideas, and guide product improvements. Kody feedback is not automatically used to train a shared model.",
       ],
     },
     {

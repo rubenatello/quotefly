@@ -174,6 +174,7 @@ describe("superuser data-governance control plane", () => {
     for (const url of [
       "/v1/internal/ai-quality/summary?days=30",
       "/v1/internal/ai-quality/tenants?days=30&limit=25",
+      "/v1/internal/ai-quality/feedback?days=30&limit=25",
     ]) {
       const aiQualityResponse = await app.inject({
         method: "GET",
@@ -187,12 +188,80 @@ describe("superuser data-governance control plane", () => {
     expect(auditEvents.map((event) => event.action)).toEqual(expect.arrayContaining([
       "AI_QUALITY_SUMMARY_VIEWED",
       "AI_QUALITY_TENANT_LIST_VIEWED",
+      "AI_QUALITY_FEEDBACK_VIEWED",
     ]));
     const auditText = JSON.stringify(auditEvents);
     expect(auditText).not.toContain("Private");
     expect(auditText).not.toContain(privateOwnerEmail);
     expect(auditText).not.toContain(privateCustomerEmail);
     expect(auditText).not.toContain(privateProviderId);
+  });
+
+  test("keeps Kody feedback notes redacted by default and audits explicit superuser reveal", async () => {
+    const superuser = await signUp("superuser-integration@example.com", "Superuser");
+    const ordinary = await signUp("ordinary-feedback-review@example.com", "Ordinary");
+    const tenant = await signUp("feedback-note-tenant@example.com", "Feedback Tenant");
+    const note = "Kody searched customers when I explicitly asked to add a product.";
+    const usageEvent = await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: tenant.tenant.id,
+        actorUserId: tenant.user.id,
+        eventType: "BUSINESS_INSIGHT",
+        purpose: "BUSINESS_INSIGHT",
+        classification: "C1_BUSINESS_INTERNAL",
+        model: "gpt-test",
+        confidenceLevel: "medium",
+      },
+    });
+    await prisma.aiAssistantFeedback.create({
+      data: {
+        tenantId: tenant.tenant.id,
+        actorUserId: tenant.user.id,
+        aiUsageEventId: usageEvent.id,
+        rating: "DOWN",
+        note,
+      },
+    });
+
+    const forbidden = await app.inject({
+      method: "GET",
+      url: "/v1/internal/ai-quality/feedback?includeNotes=true",
+      headers: { cookie: ordinary.cookie },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const redacted = await app.inject({
+      method: "GET",
+      url: "/v1/internal/ai-quality/feedback?days=30&limit=25",
+      headers: { cookie: superuser.cookie },
+    });
+    expect(redacted.statusCode).toBe(200);
+    expect(redacted.json()).toMatchObject({
+      notesIncluded: false,
+      summary: { total: 1, down: 1, withNote: 1 },
+    });
+    expect(redacted.body).not.toContain(note);
+
+    const revealed = await app.inject({
+      method: "GET",
+      url: "/v1/internal/ai-quality/feedback?days=30&limit=25&includeNotes=true",
+      headers: { cookie: superuser.cookie },
+    });
+    expect(revealed.statusCode).toBe(200);
+    expect(revealed.json()).toMatchObject({
+      notesIncluded: true,
+      feedback: [{ rating: "DOWN", note }],
+    });
+
+    const revealAudit = await prisma.superuserAuditEvent.findFirstOrThrow({
+      where: {
+        actorUserId: superuser.user.id,
+        action: "AI_QUALITY_FEEDBACK_NOTES_VIEWED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(revealAudit.metadata).toMatchObject({ includeNotes: true, returnedCount: 1, noteCount: 1 });
+    expect(JSON.stringify(revealAudit)).not.toContain(note);
   });
 
   test("audits superuser Kody diagnostic runs without raw prompt content", async () => {
@@ -331,7 +400,7 @@ describe("superuser data-governance control plane", () => {
     expect(body.run).toMatchObject({
       status: "PASSED",
       modelCount: 32,
-      fieldCount: 464,
+      fieldCount: 465,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

@@ -505,6 +505,7 @@ model AiAssistantFeedback {
   aiUsageEventId String
   actorUserId    String
   rating         AiAssistantFeedbackRating
+  note           String?                   @db.VarChar(500)
   createdAt      DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime                  @updatedAt @db.Timestamptz(3)
   deletedAtUtc   DateTime?                 @db.Timestamptz(3)

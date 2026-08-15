@@ -7,6 +7,7 @@ import {
   type AiAssistantRequestedTool,
   type AiAssistantResponse,
   type DataClassification,
+  type InternalAiAssistantFeedbackResponse,
   type InternalAiQualitySummary,
   type InternalAiQualityTenantRow,
 } from "../lib/api";
@@ -82,6 +83,8 @@ export function SuperuserAiPage() {
   const navigate = useNavigate();
   const [summary, setSummary] = useState<InternalAiQualitySummary | null>(null);
   const [tenants, setTenants] = useState<InternalAiQualityTenantRow[]>([]);
+  const [feedbackReview, setFeedbackReview] = useState<InternalAiAssistantFeedbackResponse | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [testPrompt, setTestPrompt] = useState("Rank profitable jobs by service for the last 90 days.");
@@ -111,16 +114,31 @@ export function SuperuserAiPage() {
     setLoading(true);
     setError(null);
     try {
-      const [summaryResult, tenantResult] = await Promise.all([
+      const [summaryResult, tenantResult, feedbackResult] = await Promise.all([
         api.internal.aiQuality.summary({ days: 30 }),
         api.internal.aiQuality.tenants({ days: 30, limit: 25 }),
+        api.internal.aiQuality.feedback({ days: 30, limit: 25 }),
       ]);
       setSummary(summaryResult);
       setTenants(tenantResult.tenants);
+      setFeedbackReview(feedbackResult);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed loading superuser AI metrics.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function setFeedbackNotesVisible(includeNotes: boolean) {
+    if (feedbackLoading) return;
+    setFeedbackLoading(true);
+    setError(null);
+    try {
+      setFeedbackReview(await api.internal.aiQuality.feedback({ days: 30, limit: 25, includeNotes }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed loading Kody feedback.");
+    } finally {
+      setFeedbackLoading(false);
     }
   }
 
@@ -368,6 +386,64 @@ export function SuperuserAiPage() {
           <MetricCard label="No-patch rate" value={`${summary.quality.noPatchRatePct.toFixed(1)}%`} />
           <MetricCard label="Low-confidence" value={`${summary.quality.lowConfidenceRatePct.toFixed(1)}%`} />
         </div>
+      ) : null}
+
+      {feedbackReview ? (
+        <Card variant="elevated" padding="lg" data-testid="superuser-kody-feedback-review">
+          <CardHeader
+            title="Kody response feedback"
+            subtitle="Ratings are visible by default. Optional notes are customer-confidential and require an audited reveal. Use them to improve prompts and eval cases—not as automatic model-training data."
+            actions={(
+              <Button
+                type="button"
+                variant="outline"
+                loading={feedbackLoading}
+                onClick={() => void setFeedbackNotesVisible(!feedbackReview.notesIncluded)}
+              >
+                {feedbackReview.notesIncluded ? "Hide notes" : "Reveal notes"}
+              </Button>
+            )}
+          />
+          <div className="grid gap-3 sm:grid-cols-4">
+            <MetricCard label="Ratings (30d)" value={feedbackReview.summary.total.toLocaleString()} />
+            <MetricCard label="Helpful" value={feedbackReview.summary.up.toLocaleString()} />
+            <MetricCard label="Needs work" value={feedbackReview.summary.down.toLocaleString()} />
+            <MetricCard label="With notes" value={feedbackReview.summary.withNote.toLocaleString()} />
+          </div>
+          <div className="mt-4 overflow-hidden rounded-xl border border-[var(--qf-border)]">
+            {feedbackReview.feedback.length ? (
+              <div className="divide-y divide-[var(--qf-border)]">
+                {feedbackReview.feedback.map((feedback) => (
+                  <div key={feedback.id} className="grid gap-2 bg-[var(--qf-panel)] px-3 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone={feedback.rating === "UP" ? "emerald" : "amber"}>
+                          {feedback.rating === "UP" ? "Helpful" : "Needs work"}
+                        </Badge>
+                        <span className="font-semibold text-[var(--qf-text)]">{feedback.tenant.name}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
+                        {feedback.usage.purpose} · {feedback.usage.eventType} · {feedback.usage.model ?? "No model"}
+                      </p>
+                      {feedbackReview.notesIncluded ? (
+                        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-[var(--qf-panel-muted)] px-3 py-2 text-sm leading-5 text-[var(--qf-text)]">
+                          {feedback.note || "No note provided."}
+                        </p>
+                      ) : null}
+                    </div>
+                    <time className="text-xs text-[var(--qf-text-muted)]" dateTime={feedback.createdAt}>
+                      {new Date(feedback.createdAt).toLocaleDateString()}
+                    </time>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="bg-[var(--qf-panel)] px-3 py-6 text-center text-sm text-[var(--qf-text-muted)]">
+                No Kody ratings in this window yet.
+              </p>
+            )}
+          </div>
+        </Card>
       ) : null}
 
       {summary ? (

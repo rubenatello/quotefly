@@ -40,7 +40,7 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-15",
     title: "Easy Quoting Software for Contractors | QuoteFly",
     description:
       "The easiest quoting software for on-the-go contractors and professionals. Manage customers, build estimates, create branded PDFs, and follow up from any device.",
@@ -51,10 +51,10 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/pricing": {
     path: "/pricing",
-    lastModified: "2026-08-13",
+    lastModified: "2026-08-15",
     title: "Contractor Quoting Software Pricing | QuoteFly",
     description:
-      `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial. Review the current contractor CRM, estimating, and PDF quote features.`,
+      `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial, with the first paid month 50% off. Review the contractor CRM, estimating, and PDF quote features.`,
     heading: "Contractor quoting software pricing",
     summary:
       "Start with the current Basic plan for customer intake, quote creation, branded PDFs, and quote tracking.",
@@ -73,7 +73,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-15",
     title: "Quoting Solutions for Contractors by Trade | QuoteFly",
     description:
       "See how QuoteFly solves customer, estimating, pricing, PDF, and follow-up problems for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",

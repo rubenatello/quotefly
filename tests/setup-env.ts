@@ -23,6 +23,7 @@ process.env.OPENAI_API_KEY = "";
 process.env.STRIPE_SECRET_KEY ||= "sk_test_quotefly_integration";
 process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_integration";
 process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";
+process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF ||= "quotefly_basic_first_month_half_off";
 process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";
 process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
 process.env.QUICKBOOKS_CLIENT_ID ||= "quickbooks-integration-client";

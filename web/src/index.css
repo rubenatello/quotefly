@@ -4,12 +4,12 @@
 
 @theme {
   --color-quotefly-primary: #2f6fd6;
-  --color-quotefly-secondary: #f28c28;
+  --color-quotefly-secondary: var(--qf-brand-orange);
   --color-quotefly-accent: #4c5fa8;
   --color-quotefly-deep: #1f2f55;
   --color-quotefly-ink: #101828;
   --color-quotefly-blue: #2f6fd6;
-  --color-quotefly-orange: #f28c28;
+  --color-quotefly-orange: var(--qf-brand-orange);
   --color-quotefly-gold: #4c5fa8;
   --font-sans: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-display: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -17,6 +17,11 @@
 
 :root {
   color-scheme: light;
+  /*
+   * QuoteFly palette
+   * Brand colors identify QuoteFly. Semantic colors communicate UI state.
+   * Do not substitute the brand orange for warnings or use it as body text.
+   */
   --qf-canvas-rgb: 244 247 251;
   --qf-panel-rgb: 255 255 255;
   --qf-panel-muted-rgb: 245 247 251;
@@ -29,18 +34,23 @@
   --qf-text: rgb(var(--qf-text-rgb));
   --qf-text-soft: rgb(var(--qf-text-soft-rgb));
   --qf-brand-blue: #2f6fd6;
-  --qf-brand-orange: #f28c28;
+  --qf-brand-orange: #f96928;
+  --qf-brand-orange-hover: #ea5717;
+  --qf-brand-orange-active: #e45212;
+  --qf-brand-orange-contrast: #2b1307;
+  --qf-brand-orange-text: #a63b0b;
+  --qf-brand-orange-border: #f8b38f;
   --qf-link: #245fc2;
   --qf-brand-blue-soft: rgba(47, 111, 214, 0.08);
-  --qf-brand-orange-soft: rgba(242, 140, 40, 0.1);
+  --qf-brand-orange-soft: rgba(249, 105, 40, 0.1);
   --qf-action-primary: #2f6fd6;
   --qf-action-primary-hover: #285fbb;
   --qf-action-primary-active: #214fa6;
   --qf-action-primary-text: #ffffff;
-  --qf-action-secondary: #a94708;
-  --qf-action-secondary-hover: #8f3d06;
-  --qf-action-secondary-active: #743105;
-  --qf-action-secondary-text: #ffffff;
+  --qf-action-secondary: #f96928;
+  --qf-action-secondary-hover: #ea5717;
+  --qf-action-secondary-active: #e45212;
+  --qf-action-secondary-text: #2b1307;
   --qf-shell-surface: rgba(255, 255, 255, 0.9);
   --qf-shell-border: rgba(216, 226, 238, 0.95);
   --qf-panel: #ffffff;
@@ -95,18 +105,23 @@ html.dark {
   --qf-text: rgb(var(--qf-text-rgb));
   --qf-text-soft: rgb(var(--qf-text-soft-rgb));
   --qf-brand-blue: #8bb7ff;
-  --qf-brand-orange: #ffb15f;
+  --qf-brand-orange: #f96928;
+  --qf-brand-orange-hover: #ff7e42;
+  --qf-brand-orange-active: #ea5717;
+  --qf-brand-orange-contrast: #2b1307;
+  --qf-brand-orange-text: #ff9b67;
+  --qf-brand-orange-border: #8b4829;
   --qf-link: #8bb7ff;
   --qf-brand-blue-soft: rgba(83, 145, 255, 0.14);
-  --qf-brand-orange-soft: rgba(242, 140, 40, 0.15);
+  --qf-brand-orange-soft: rgba(249, 105, 40, 0.16);
   --qf-action-primary: #2f6fd6;
   --qf-action-primary-hover: #285fbb;
   --qf-action-primary-active: #214fa6;
   --qf-action-primary-text: #ffffff;
-  --qf-action-secondary: #ffad55;
-  --qf-action-secondary-hover: #ffc078;
-  --qf-action-secondary-active: #f59a3c;
-  --qf-action-secondary-text: #211306;
+  --qf-action-secondary: #f96928;
+  --qf-action-secondary-hover: #ff7e42;
+  --qf-action-secondary-active: #ea5717;
+  --qf-action-secondary-text: #2b1307;
   --qf-shell-surface: rgba(15, 25, 43, 0.92);
   --qf-shell-border: rgba(43, 58, 82, 0.96);
   --qf-panel: rgb(var(--qf-panel-rgb));

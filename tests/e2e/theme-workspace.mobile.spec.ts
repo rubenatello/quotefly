@@ -45,6 +45,36 @@ async function expectReadableControl(locator: Locator, minimum = 4.5) {
   ).toBeGreaterThanOrEqual(minimum);
 }
 
+async function expectQuoteFlyOrangePalette(page: Page) {
+  const colors = await page.evaluate(() => {
+    const rootStyles = getComputedStyle(document.documentElement);
+    const resolvePair = (foreground: string, background: string) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${foreground})`;
+      probe.style.backgroundColor = `var(${background})`;
+      document.body.appendChild(probe);
+      const styles = getComputedStyle(probe);
+      const pair = { foreground: styles.color, background: styles.backgroundColor };
+      probe.remove();
+      return pair;
+    };
+
+    return {
+      brandOrange: rootStyles.getPropertyValue("--qf-brand-orange").trim().toLowerCase(),
+      action: resolvePair("--qf-action-secondary-text", "--qf-action-secondary"),
+      actionHover: resolvePair("--qf-action-secondary-text", "--qf-action-secondary-hover"),
+      actionActive: resolvePair("--qf-action-secondary-text", "--qf-action-secondary-active"),
+      accentText: resolvePair("--qf-brand-orange-text", "--qf-panel"),
+    };
+  });
+
+  expect(colors.brandOrange).toBe("#f96928");
+  expect(contrastRatio(colors.action.foreground, colors.action.background)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.actionHover.foreground, colors.actionHover.background)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.actionActive.foreground, colors.actionActive.background)).toBeGreaterThanOrEqual(4.5);
+  expect(contrastRatio(colors.accentText.foreground, colors.accentText.background)).toBeGreaterThanOrEqual(4.5);
+}
+
 test("workspace controls remain readable in light and dark themes", async ({ context, page, request }) => {
   const account = await signUpViaApi(request, "theme-mobile");
   await createCustomerViaApi(request, account, {
@@ -62,6 +92,7 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await expect(page.locator("h1")).toHaveCount(1);
   const addCustomer = page.getByRole("button", { name: "Add customer", exact: true }).first();
   await expectReadableControl(addCustomer);
+  await expectQuoteFlyOrangePalette(page);
   await captureThemeScreenshot(page, "light-mobile-customers");
 
   await page.evaluate(() => window.localStorage.setItem("qf_theme_preference", "dark"));
@@ -69,6 +100,7 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.getByText("Theme Check Customer").filter({ visible: true })).toBeVisible();
   await expectReadableControl(addCustomer);
+  await expectQuoteFlyOrangePalette(page);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);
@@ -80,6 +112,7 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   const kodyPanel = page.getByTestId("kody-chat-panel");
   await expect(kodyPanel).toBeVisible();
   await expect(kodyLauncher).toHaveCount(0);
+  await kodyPanel.getByTestId("kody-quick-prompts").locator("summary").click();
   const draftQuoteQuickAction = kodyPanel.getByTestId("kody-quick-draft_quote");
   await expect(draftQuoteQuickAction).toHaveCount(1);
   await expect(kodyPanel.getByText("Draft a quote from job notes", { exact: true })).toHaveCount(0);

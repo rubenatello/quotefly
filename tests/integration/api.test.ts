@@ -22,6 +22,8 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
 const stripeProviderMocks = vi.hoisted(() => ({
   retrieveSubscription: vi.fn(),
   retrieveCheckoutSession: vi.fn(),
+  retrievePrice: vi.fn(),
+  retrieveCoupon: vi.fn(),
   createCustomer: vi.fn(),
   createCheckoutSession: vi.fn(),
 }));
@@ -39,6 +41,8 @@ vi.mock("stripe", async () => {
       super(...args);
       this.subscriptions.retrieve = stripeProviderMocks.retrieveSubscription as typeof this.subscriptions.retrieve;
       this.checkout.sessions.retrieve = stripeProviderMocks.retrieveCheckoutSession as typeof this.checkout.sessions.retrieve;
+      this.prices.retrieve = stripeProviderMocks.retrievePrice as typeof this.prices.retrieve;
+      this.coupons.retrieve = stripeProviderMocks.retrieveCoupon as typeof this.coupons.retrieve;
       this.customers.create = stripeProviderMocks.createCustomer as typeof this.customers.create;
       this.checkout.sessions.create = stripeProviderMocks.createCheckoutSession as typeof this.checkout.sessions.create;
     }
@@ -203,6 +207,23 @@ describe("QuoteFly API integration", () => {
   beforeEach(() => {
     stripeProviderMocks.retrieveSubscription.mockReset();
     stripeProviderMocks.retrieveCheckoutSession.mockReset();
+    stripeProviderMocks.retrievePrice.mockReset().mockResolvedValue({
+      id: process.env.STRIPE_PRICE_ID_STARTER,
+      object: "price",
+      active: true,
+      currency: "usd",
+      type: "recurring",
+      unit_amount: 2900,
+      recurring: { interval: "month", interval_count: 1 },
+    } as Stripe.Price);
+    stripeProviderMocks.retrieveCoupon.mockReset().mockResolvedValue({
+      id: process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF,
+      object: "coupon",
+      valid: true,
+      duration: "once",
+      percent_off: 50,
+      amount_off: null,
+    } as Stripe.Coupon);
     stripeProviderMocks.createCustomer.mockReset();
     stripeProviderMocks.createCheckoutSession.mockReset();
     transactionalEmailMocks.isConfigured.mockReset().mockReturnValue(true);
@@ -257,6 +278,23 @@ describe("QuoteFly API integration", () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: "Invalid email or password." });
+  });
+
+  test("creates new workspaces with an exact 20-day internal trial", async () => {
+    const beforeSignup = Date.now();
+    const session = await signUp("twenty-day-trial");
+    const tenant = await prisma.tenant.findUniqueOrThrow({
+      where: { id: session.tenant.id },
+      select: { trialStartsAtUtc: true, trialEndsAtUtc: true, subscriptionStatus: true },
+    });
+
+    expect(tenant.subscriptionStatus).toBe("trialing");
+    expect(tenant.trialStartsAtUtc).not.toBeNull();
+    expect(tenant.trialEndsAtUtc).not.toBeNull();
+    expect(tenant.trialStartsAtUtc!.getTime()).toBeGreaterThanOrEqual(beforeSignup);
+    expect(tenant.trialEndsAtUtc!.getTime() - tenant.trialStartsAtUtc!.getTime()).toBe(
+      20 * 24 * 60 * 60 * 1000,
+    );
   });
 
   test("resets a password with a single-use token and revokes existing sessions", async () => {
@@ -2072,6 +2110,14 @@ describe("QuoteFly API integration", () => {
     expect(activeParams.success_url).toContain("/app/settings?billing=success&session_id={CHECKOUT_SESSION_ID}");
     expect(activeParams.cancel_url).toContain("/app/settings?billing=cancel");
     expect(activeParams.payment_method_collection).toBe("always");
+    expect(activeParams.discounts).toEqual([
+      { coupon: process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF },
+    ]);
+    expect(activeParams.allow_promotion_codes).toBeUndefined();
+    expect(activeParams.metadata?.introOffer).toBe("basic_first_paid_month_half_off");
+    expect(activeParams.subscription_data?.metadata?.introOffer).toBe(
+      "basic_first_paid_month_half_off",
+    );
     expect(activeParams.subscription_data?.trial_end).toBeGreaterThanOrEqual(
       Math.ceil(activeTrialTenant.trialEndsAtUtc!.getTime() / 1000),
     );
@@ -2102,6 +2148,9 @@ describe("QuoteFly API integration", () => {
     expect(expiredResponse.statusCode).toBe(200);
     const expiredParams = stripeProviderMocks.createCheckoutSession.mock.calls[0]?.[0] as Stripe.Checkout.SessionCreateParams;
     expect(expiredParams.subscription_data?.trial_end).toBeUndefined();
+    expect(expiredParams.discounts).toEqual([
+      { coupon: process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF },
+    ]);
 
     const stripeTrial = await signUp("billing-real-stripe-trial");
     await prisma.tenant.update({
@@ -2119,6 +2168,74 @@ describe("QuoteFly API integration", () => {
       payload: { planCode: "starter" },
     });
     expect(stripeTrialResponse.statusCode).toBe(409);
+  });
+
+  test("does not repeat the introductory discount after a prior Stripe subscription", async () => {
+    const session = await signUp("billing-returning-subscriber");
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        stripeCustomerId: `cus_returning_${Date.now()}`,
+        stripeSubscriptionId: `sub_canceled_${Date.now()}`,
+        subscriptionStatus: "canceled",
+        trialEndsAtUtc: new Date(Date.now() - 60_000),
+      },
+    });
+    stripeProviderMocks.createCheckoutSession.mockImplementationOnce(
+      async (params: Stripe.Checkout.SessionCreateParams) => ({
+        id: `cs_returning_${Date.now()}`,
+        url: "https://checkout.stripe.test/returning",
+        expires_at: params.expires_at,
+      }),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(session.cookie),
+      payload: { planCode: "starter" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const params = stripeProviderMocks.createCheckoutSession.mock.calls[0]?.[0] as Stripe.Checkout.SessionCreateParams;
+    expect(params.discounts).toBeUndefined();
+    expect(params.allow_promotion_codes).toBeUndefined();
+    expect(params.metadata?.introOffer).toBe("none");
+    expect(params.subscription_data?.metadata?.introOffer).toBe("none");
+    expect(stripeProviderMocks.retrieveCoupon).not.toHaveBeenCalled();
+  });
+
+  test("fails checkout closed when Stripe Basic pricing does not match the published offer", async () => {
+    const session = await signUp("billing-price-mismatch");
+    stripeProviderMocks.retrievePrice.mockResolvedValueOnce({
+      id: process.env.STRIPE_PRICE_ID_STARTER,
+      object: "price",
+      active: true,
+      currency: "usd",
+      type: "recurring",
+      unit_amount: 1900,
+      recurring: { interval: "month", interval_count: 1 },
+    } as Stripe.Price);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout-session",
+      headers: authHeaders(session.cookie),
+      payload: { planCode: "starter" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(parseJson<{ error: string }>(response)).toEqual({
+      error: "Billing checkout is temporarily unavailable.",
+    });
+    expect(stripeProviderMocks.createCustomer).not.toHaveBeenCalled();
+    expect(stripeProviderMocks.createCheckoutSession).not.toHaveBeenCalled();
+    await expect(
+      prisma.tenant.findUniqueOrThrow({
+        where: { id: session.tenant.id },
+        select: { stripeCheckoutAttemptId: true },
+      }),
+    ).resolves.toMatchObject({ stripeCheckoutAttemptId: null });
   });
 
   test("refuses duplicate paid subscriptions and resumes the canonical open checkout", async () => {

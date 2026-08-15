@@ -1,11 +1,12 @@
 import { Prisma } from "@prisma/client";
-import { FastifyPluginAsync, FastifyReply } from "fastify";
-import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { createHash, randomBytes } from "node:crypto";
+import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
 import { enqueueTenantWorkPresetAiIndexJobs } from "../lib/ai-index-jobs";
+import { BASIC_TRIAL_DAYS } from "../lib/billing-offer";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
 import { isSuperuserEmail } from "../lib/superuser";
@@ -20,7 +21,6 @@ import {
 const BCRYPT_ROUNDS = 12;
 const JWT_TTL = "7d";
 const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
-const TRIAL_DAYS = 14;
 const BCRYPT_DUMMY_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.OQhW8q5f8B5s4NfR4xYfJwRoTSesFiW";
 const SignInRateLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } } as const;
 const AuthMeRateLimit = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } } as const;
@@ -157,7 +157,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const passwordHash = await bcrypt.hash(payload.password, BCRYPT_ROUNDS);
     const baseSlug = slugifyCompanyName(payload.companyName);
     const trialStartsAtUtc = new Date();
-    const trialEndsAtUtc = new Date(trialStartsAtUtc.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+    const trialEndsAtUtc = new Date(
+      trialStartsAtUtc.getTime() + BASIC_TRIAL_DAYS * 24 * 60 * 60 * 1000,
+    );
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const slug = nextSlugCandidate(baseSlug, attempt);

@@ -45,7 +45,7 @@ export function QuoteLineSectionField({
           aria-pressed={isAlternate}
           className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition ${compact ? "min-h-[36px] py-1" : "min-h-[44px] py-2 sm:min-h-[36px] sm:py-1"} ${
             isAlternate
-              ? "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-white shadow-[var(--qf-shadow-sm)]"
+              ? "border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] text-[var(--qf-brand-orange-contrast)] shadow-[var(--qf-shadow-sm)]"
               : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >

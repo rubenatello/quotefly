@@ -3,7 +3,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
-import { BASIC_PLAN } from "../lib/plans";
+import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from "./ui";
 
 interface AuthModalProps {
@@ -355,7 +355,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
       <ModalFooter className="justify-center bg-slate-50 text-center text-xs text-slate-400">
         <p>
-          {BASIC_PLAN.trialDays}-day free trial &middot; No credit card required &middot;{" "}
+          {BASIC_PLAN.trialDays}-day free trial &middot; If you continue, first paid month {basicFirstPaidMonthPriceLabel()} &middot;{" "}
           <Link to="/terms" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
             Terms
           </Link>{" "}

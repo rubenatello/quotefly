@@ -119,6 +119,7 @@ describe("security boundary helpers", () => {
       STRIPE_SECRET_KEY: "sk_live_quotefly_test_value",
       STRIPE_WEBHOOK_SECRET: "whsec_quotefly_test_value",
       STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
+      STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: "quotefly_basic_first_month_half_off",
       STRIPE_PRICE_ID_PROFESSIONAL: "",
       STRIPE_PRICE_ID_ENTERPRISE: "",
       RESEND_API_KEY: "re_quotefly_test_value",
@@ -136,6 +137,9 @@ describe("security boundary helpers", () => {
     expect(() => parseEnv({ ...productionEnv, STRIPE_WEBHOOK_SECRET: "" })).toThrow(
       /STRIPE_WEBHOOK_SECRET must be configured for a paid production launch/i,
     );
+    expect(() =>
+      parseEnv({ ...productionEnv, STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: "" }),
+    ).toThrow(/STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF must be configured for a paid production launch/i);
     expect(() => parseEnv({ ...productionEnv, RESEND_API_KEY: "", PASSWORD_RESET_EMAIL_FROM: "" })).toThrow(
       /RESEND_API_KEY must be configured for a paid production launch/i,
     );

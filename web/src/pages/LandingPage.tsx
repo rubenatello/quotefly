@@ -6,6 +6,7 @@ import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingPitchDeck } from "../components/marketing/LandingPitchDeck";
 import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
+import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 
 const SEO_FAQS = [
   {
@@ -123,7 +124,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <div className="text-center lg:text-left">
             <div className="qf-hero-badge mb-5 inline-flex items-center gap-2 rounded-full border border-quotefly-blue/15 bg-white/80 px-4 py-2 text-sm font-semibold text-quotefly-blue shadow-sm backdrop-blur">
               <Sparkles size={15} aria-hidden="true" />
-              Free for 14 days. No credit card required.
+              Free for {BASIC_PLAN.trialDays} days. No credit card required.
             </div>
 
             <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-[-0.045em] text-slate-950 sm:text-5xl lg:mx-0 lg:text-[3.6rem] lg:leading-[1.04]">
@@ -257,7 +258,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       <MarketingCta
         title="Ready to stop losing time on quotes?"
-        description="Start your free trial today. Full access, clean setup, and a contractor-first workflow from day one."
+        description={`Start free for ${BASIC_PLAN.trialDays} days. If you continue with Basic, your first paid month is ${basicFirstPaidMonthPriceLabel()}, then $${BASIC_PLAN.monthlyPriceUsd}/month.`}
         actionLabel="Start Free Trial Now"
         onAction={onOpenAuth}
       />

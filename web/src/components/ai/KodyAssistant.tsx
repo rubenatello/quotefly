@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
+  ChevronDown,
+  Clock3,
   FilePlus2,
-  LockKeyhole,
   Search,
   Send,
   ShieldCheck,
@@ -71,6 +72,14 @@ const QUICK_PROMPTS: QuickPrompt[] = [
     description: "Revenue-only status summary.",
     prompt: "Summarize my sales pipeline for the last 90 days.",
     icon: <BarChart3 size={15} />,
+    submitImmediately: true,
+  },
+  {
+    tool: "FOLLOW_UP_QUEUE",
+    label: "Needs follow-up",
+    description: "See who needs attention today and why.",
+    prompt: "Who needs follow-up today, and why?",
+    icon: <Clock3 size={15} />,
     submitImmediately: true,
   },
   {
@@ -325,19 +334,31 @@ function KodyResponse({
   const visibleAnswer = formatVisibleAnswer(response.answer);
   const [feedback, setFeedback] = useState<AiAssistantFeedbackRating | null>(null);
   const [feedbackStatus, setFeedbackStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [showFeedbackNote, setShowFeedbackNote] = useState(false);
+  const [lastFeedbackSave, setLastFeedbackSave] = useState<"rating" | "note" | null>(null);
 
-  async function submitFeedback(rating: AiAssistantFeedbackRating) {
+  async function submitFeedback(rating: AiAssistantFeedbackRating, nextNote?: string | null) {
     if (feedbackStatus === "saving" || response.auditEventId === "audit-unavailable") return;
     const previousFeedback = feedback;
     setFeedback(rating);
+    if (rating === "DOWN") setShowFeedbackNote(true);
     setFeedbackStatus("saving");
     try {
-      await api.ai.submitAssistantFeedback(response.auditEventId, rating);
+      const result = await api.ai.submitAssistantFeedback(response.auditEventId, {
+        rating,
+        ...(nextNote !== undefined ? { note: nextNote } : {}),
+      });
+      setFeedback(result.feedback.rating);
+      if (nextNote !== undefined) setFeedbackNote(result.feedback.note ?? "");
+      setLastFeedbackSave(nextNote === undefined ? "rating" : "note");
       setFeedbackStatus("saved");
       track("kody_feedback", {
         rating,
         tool: response.diagnostics.resolvedTool,
         answerMode: response.diagnostics.answerMode,
+        hasNote: Boolean(nextNote),
+        noteLength: nextNote?.length ?? 0,
       });
     } catch {
       setFeedback(previousFeedback);
@@ -347,7 +368,7 @@ function KodyResponse({
 
   return (
     <div className="space-y-3">
-      <div className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)]">
+      <div className="space-y-3">
         {response.conversation.mode === "SHIFTED" && response.conversation.acknowledgement ? (
           <p
             className="mb-3 rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-2 text-sm leading-5 text-[var(--qf-text-soft)]"
@@ -362,7 +383,7 @@ function KodyResponse({
 
         {response.actions.length ? (
           <div className="mt-3 flex flex-wrap gap-2">
-            {response.actions.slice(0, 4).map((action, index) => (
+            {response.actions.slice(0, 3).map((action, index) => (
               <Button
                 key={`${action.type}-${index}`}
                 type="button"
@@ -376,8 +397,8 @@ function KodyResponse({
           </div>
         ) : null}
 
-        <div className="mt-3 flex min-h-11 flex-wrap items-center gap-2 border-t border-[var(--qf-border)] pt-3">
-          <span className="mr-1 text-xs font-medium text-[var(--qf-text-muted)]">Was this helpful?</span>
+        <div className="flex min-h-11 flex-wrap items-center gap-2 border-t border-[var(--qf-border)] pt-3">
+          <span className="mr-1 text-xs font-medium text-[var(--qf-text-muted)]">Helpful?</span>
           <button
             type="button"
             onClick={() => void submitFeedback("UP")}
@@ -421,20 +442,83 @@ function KodyResponse({
             {feedbackStatus === "saving"
               ? "Saving feedback..."
               : feedbackStatus === "saved"
-                ? "Thanks—this helps Kody improve."
+                ? lastFeedbackSave === "note"
+                  ? "Thanks—your note was saved."
+                  : "Thanks—this helps Kody improve."
                 : feedbackStatus === "error"
                   ? "Feedback didn’t save. Try again."
                   : ""}
           </span>
+          {feedback && !showFeedbackNote ? (
+            <button
+              type="button"
+              onClick={() => setShowFeedbackNote(true)}
+              className="ml-auto min-h-11 rounded-lg px-2 text-xs font-semibold text-[var(--qf-info-text)] hover:bg-[var(--qf-info-surface)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+            >
+              Add a note
+            </button>
+          ) : null}
         </div>
+        {feedback && showFeedbackNote ? (
+          <div
+            className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3"
+            data-testid="kody-feedback-note-panel"
+          >
+            <Textarea
+              data-testid="kody-feedback-note"
+              label={feedback === "DOWN" ? "What should Kody do differently? (optional)" : "What worked well? (optional)"}
+              value={feedbackNote}
+              onChange={(event) => setFeedbackNote(event.target.value)}
+              maxLength={500}
+              rows={2}
+              className="min-h-[76px] resize-none"
+              placeholder="Example: I asked for products, but the answer searched customers."
+              disabled={feedbackStatus === "saving"}
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] leading-4 text-[var(--qf-text-muted)]">
+                {feedbackNote.length}/500 · Avoid customer contact details or secrets.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button type="button" size="sm" variant="ghost" onClick={() => setShowFeedbackNote(false)}>
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  loading={feedbackStatus === "saving"}
+                  onClick={() => void submitFeedback(feedback, feedbackNote.trim() || null)}
+                >
+                  Save note
+                </Button>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] leading-4 text-[var(--qf-text-muted)]">
+              QuoteFly uses this feedback to improve Kody’s prompts and evaluations. It is not sent as a new Kody request.
+            </p>
+          </div>
+        ) : null}
       </div>
 
       {response.results.length ? (
-        <div className="grid gap-2">
-          {response.results.slice(0, 4).map((result, index) => (
-            <KodyResultCard key={`${response.auditEventId}-${index}`} result={result} index={index} />
-          ))}
-        </div>
+        <details
+          className="group rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2 shadow-[var(--qf-shadow-sm)]"
+          data-testid="kody-results"
+        >
+          <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[var(--qf-text)] marker:hidden">
+            <span>View {response.results.length} {response.results.length === 1 ? "result" : "results"}</span>
+            <ChevronDown
+              size={16}
+              className="text-[var(--qf-text-muted)] transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
+            {response.results.slice(0, 4).map((result, index) => (
+              <KodyResultCard key={`${response.auditEventId}-${index}`} result={result} index={index} />
+            ))}
+          </div>
+        </details>
       ) : null}
 
       <details
@@ -496,14 +580,13 @@ export function KodyAssistant({
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
-  const showQuickPrompts = messages.length === 0;
   const visibleQuickPrompts = canViewInternalCosts
     ? QUICK_PROMPTS
     : QUICK_PROMPTS.filter((quickPrompt) => quickPrompt.tool !== "RANK_PROFITABLE_JOBS");
 
   const starterText = useMemo(() => {
-    if (messages.length) return "Ask a follow-up or choose another Kody action.";
-    return "Ask Kody to find customers, draft quotes, summarize pipeline, or rank profitable work.";
+    if (messages.length) return "Ask a follow-up in plain language. Kody will keep the recent conversation in mind.";
+    return "Ask about customers, quotes, follow-ups, products, pipeline, or job profitability.";
   }, [messages.length]);
 
   const closeKody = useCallback((source: "button" | "keyboard") => {
@@ -815,9 +898,7 @@ export function KodyAssistant({
                 </span>
                 Kody
               </h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--qf-text-soft)]">
-                Ask, keep working, or let Kody move you to the right page.
-              </p>
+              <p className="mt-1 text-xs leading-5 text-[var(--qf-text-soft)]">Your QuoteFly workspace assistant.</p>
             </div>
             <button
               type="button"
@@ -830,8 +911,18 @@ export function KodyAssistant({
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 bg-[var(--qf-panel-muted)] p-3 sm:p-4">
-          {showQuickPrompts ? (
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <details
+            className="group shrink-0 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]"
+            data-testid="kody-quick-prompts"
+          >
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-[var(--qf-text)] marker:hidden">
+              <span>Try a prompt</span>
+              <span className="inline-flex items-center gap-2 text-xs font-medium text-[var(--qf-text-muted)]">
+                {visibleQuickPrompts.length} ideas
+                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden="true" />
+              </span>
+            </summary>
+            <div className="grid gap-2 border-t border-[var(--qf-border)] p-2 sm:grid-cols-2">
               {visibleQuickPrompts.map((quickPrompt) => (
                 <button
                   key={quickPrompt.label}
@@ -840,32 +931,28 @@ export function KodyAssistant({
                   disabled={loading}
                   data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
                   className={cn(
-                    "rounded-2xl border bg-[var(--qf-panel)] p-3 text-left shadow-[var(--qf-shadow-sm)] transition hover:-translate-y-0.5 hover:border-[var(--qf-info-border)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60",
+                    "flex min-h-12 items-center gap-2 rounded-xl border bg-[var(--qf-panel)] px-3 py-2 text-left transition hover:border-[var(--qf-info-border)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60",
                     selectedTool === quickPrompt.tool ? "border-[var(--qf-focus)] ring-2 ring-[var(--qf-focus-ring)]" : "border-[var(--qf-border)]",
                   )}
                 >
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]">
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]">
                     {quickPrompt.icon}
                   </span>
-                  <span className="mt-2 block text-sm font-semibold text-[var(--qf-text)]">{quickPrompt.label}</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-[var(--qf-text-muted)]">{quickPrompt.description}</span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-[var(--qf-text)]">{quickPrompt.label}</span>
+                    <span className="block truncate text-xs text-[var(--qf-text-muted)]">{quickPrompt.description}</span>
+                  </span>
                 </button>
               ))}
             </div>
-          ) : null}
+          </details>
 
           <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-inner sm:p-4">
             {!messages.length ? (
-              <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-                <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-[var(--qf-border)] bg-white p-1.5 shadow-[var(--qf-shadow-sm)]">
-                  <KodySparkIcon size={42} />
-                </span>
-                <p className="mt-3 text-base font-semibold text-[var(--qf-text)]">What should Kody help with?</p>
+              <div className="flex min-h-[160px] flex-col items-center justify-center px-4 text-center">
+                <p className="text-base font-semibold text-[var(--qf-text)]">What can I help you get done?</p>
                 <p className="mt-1 max-w-md text-sm leading-6 text-[var(--qf-text-soft)]">{starterText}</p>
-                <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-1.5 text-xs font-medium text-[var(--qf-text-soft)]">
-                  <LockKeyhole size={13} />
-                  Backend-only AI. Tenant-scoped data.
-                </div>
+                <p className="mt-3 text-xs font-medium text-[var(--qf-info-text)]">Workspace-only · You approve every change</p>
               </div>
             ) : (
               messages.map((message) => (
@@ -894,7 +981,7 @@ export function KodyAssistant({
                     {message.pending ? (
                       <LoadingState
                         title={message.text}
-                        description="Backend-only AI. Tenant-scoped retrieval. No browser API key."
+                        description="Checking your workspace safely."
                         variant="compact"
                         className="border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
                       />
@@ -934,15 +1021,15 @@ export function KodyAssistant({
                   void submitPrompt();
                 }
               }}
-              rows={3}
+              rows={2}
               label="Ask Kody"
-              placeholder="Example: Draft a quote for Ruben, 20 squares asphalt shingle roof replacement, about $12,000."
-              className="min-h-[88px] resize-none"
+              placeholder="Ask about a customer, quote, follow-up, product, or job..."
+              className="min-h-[72px] resize-none"
               disabled={loading}
             />
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-[var(--qf-text-muted)]">
-                Kody can suggest actions, but you review before creating, saving, or sending.
+                Review before saving or sending.
               </p>
               <Button type="submit" loading={loading} disabled={!prompt.trim()} icon={<Send size={14} />}>
                 Send

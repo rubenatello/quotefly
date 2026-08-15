@@ -62,7 +62,7 @@ const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
 function statusClass(status: QuoteStatus): string {
   if (status === "ACCEPTED") return "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]";
   if (status === "REJECTED") return "text-red-600 border-red-200 bg-red-50";
-  if (status === "SENT_TO_CUSTOMER") return "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]";
+  if (status === "SENT_TO_CUSTOMER") return "text-[var(--qf-brand-orange-text)] border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)]";
   if (status === "READY_FOR_REVIEW") return "text-amber-700 border-amber-200 bg-amber-50";
   return "text-slate-600 border-slate-200 bg-slate-50";
 }
@@ -146,7 +146,7 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
 
   return {
     label: "Needs Follow-Up",
-    className: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
+    className: "text-[var(--qf-brand-orange-text)] border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)]",
     icon: <ClockIcon size={12} />,
   };
 }
@@ -171,7 +171,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
   if (eventType === "LINE_ITEM_CHANGED") {
     return {
       label: "Line Items",
-      className: "text-quotefly-orange border-quotefly-orange/20 bg-quotefly-orange/[0.06]",
+      className: "text-[var(--qf-brand-orange-text)] border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)]",
       icon: <InvoiceIcon size={12} />,
     };
   }
@@ -341,7 +341,7 @@ function PipelineStage({
     tone === "blue"
       ? "border-quotefly-blue/15 bg-quotefly-blue/[0.05] text-quotefly-blue"
       : tone === "orange"
-        ? "border-quotefly-orange/15 bg-quotefly-orange/[0.06] text-quotefly-orange"
+        ? "border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)] text-[var(--qf-brand-orange-text)]"
         : tone === "emerald"
           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
           : "border-slate-200 bg-slate-50 text-slate-600";

@@ -7,7 +7,7 @@ import {
   ApiError,
   type TenantEntitlements,
 } from "../../lib/api";
-import { BASIC_PLAN, basicMonthlyPriceLabel } from "../../lib/plans";
+import { BASIC_PLAN, basicFirstPaidMonthPriceLabel, basicMonthlyPriceLabel } from "../../lib/plans";
 
 type BillingAction = "checkout" | "portal" | "refresh" | null;
 
@@ -163,6 +163,11 @@ export function BillingRequiredScreen({
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Basic</p>
                   <p className="mt-2 text-3xl font-bold text-slate-950">{basicMonthlyPriceLabel()}</p>
+                  {!canOpenPortal ? (
+                    <p className="mt-1 text-sm font-semibold text-emerald-700">
+                      First paid month {basicFirstPaidMonthPriceLabel()} for eligible workspaces
+                    </p>
+                  ) : null}
                 </div>
                 <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-quotefly-blue shadow-sm">
                   <PriceIcon size={20} />
@@ -194,7 +199,7 @@ export function BillingRequiredScreen({
                     disabled={!ownerView || billingAction !== null}
                     loading={billingAction === "checkout"}
                   >
-                    Start Basic - {basicMonthlyPriceLabel()}
+                    Start Basic — {basicFirstPaidMonthPriceLabel()} first month
                   </Button>
                 )}
                 <Button
@@ -241,7 +246,7 @@ export function BillingRequiredScreen({
               disabled={!ownerView || billingAction !== null}
               loading={billingAction === "checkout"}
             >
-              Start Basic - {basicMonthlyPriceLabel()}
+              Start Basic — {basicFirstPaidMonthPriceLabel()} first month
             </Button>
           )}
           <Button

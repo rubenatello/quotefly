@@ -49,7 +49,8 @@ npm run verify:launch
 | `VITE_API_BASE_URL` | No | Required | `https://api-staging.quotefly.us` | Only public web env needed for API routing |
 | `STRIPE_SECRET_KEY` | Required for billing | No | Stripe test key | Use live key only after webhook smoke passes |
 | `STRIPE_WEBHOOK_SECRET` | Required for billing | No | Stripe test webhook secret | Webhook endpoint: `/v1/billing/webhook` |
-| `STRIPE_PRICE_ID_STARTER` | Required for sellable Basic | No | Basic test price ID | Basic is the only launch sellable plan |
+| `STRIPE_PRICE_ID_STARTER` | Required for sellable Basic | No | Basic test price ID | Must be an active USD `$29` recurring monthly Price |
+| `STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF` | Required for sellable Basic | No | Basic test coupon ID | Must be a valid `once`, `50%` coupon; QuoteFly applies it only to eligible first-time subscriptions |
 | `STRIPE_PRICE_ID_PROFESSIONAL` | Optional | No | test placeholder | Keep off-sale until enabled |
 | `STRIPE_PRICE_ID_ENTERPRISE` | Optional | No | test placeholder | Keep off-sale until enabled |
 | `RESEND_API_KEY` | Required | No | Resend test/staging key | Backend-only; verify the production sending domain before launch |
@@ -72,6 +73,17 @@ npm run verify:launch
 | `SUPERUSER_EMAILS` | Optional | No | owner emails | Restrict internal admin/AI quality access |
 
 Never commit production secrets. Keep all production values in Vercel, Railway, Render, Stripe, Intuit, Twilio, and OpenAI provider settings.
+
+### Stripe Basic offer setup
+
+Before deploying the `$29` billing contract:
+
+1. Create a new active Stripe Price for `USD $29.00`, recurring every month. Stripe Prices are immutable, so do not reuse the former `$19` Price.
+2. Create a Stripe Coupon for `50%` off with duration `once`. Leave it unrestricted or restrict it to the same Basic Product used by the `$29` Price.
+3. Set `STRIPE_PRICE_ID_STARTER` to the new Price ID and `STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF` to the Coupon ID on the Railway API service before deploying the code.
+4. In Stripe test mode, start Checkout once during an active QuoteFly trial and once after expiration. Confirm the first paid invoice is discounted to `$14.50`, later invoices are `$29.00`, and no promotion-code field is shown.
+
+The API verifies the Price amount, currency, cadence, Coupon percentage, one-time duration, validity, and Product restriction before creating a new Checkout Session. A mismatch fails closed with a generic `503` and a sanitized configuration code in API logs.
 
 ## API Deploy
 
@@ -160,8 +172,8 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 - Create customer, search customer, and verify duplicate warning.
 - Create manual quote with one line item.
 - Open quote desk, download PDF, mark sent, and verify send log after an outbound event.
-- Admin billing screen shows Basic as sellable and Professional/Enterprise as disabled/coming soon.
-- An active trial can start Stripe Checkout, retains its promised remaining trial, and activates after a signed webhook.
+- Admin billing screen shows Basic at `$29/month` with a 20-day trial and Professional/Enterprise as disabled/coming soon.
+- An active trial can start Stripe Checkout, retains its promised remaining trial, receives the automatic one-time 50% first-paid-month discount, and activates after a signed webhook.
 - A canceled checkout resumes, and past-due billing can open the portal on a mobile viewport.
 - Forgot-password delivers through the verified sender and the single-use reset link succeeds.
 - QuickBooks shows disconnected or configured state without crashing.

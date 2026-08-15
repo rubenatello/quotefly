@@ -57,6 +57,16 @@ function parseJpegDimensions(buffer: Buffer): { width: number; height: number } 
   throw new Error("JPEG dimensions were not found.");
 }
 
+test("publishes the current Basic price, trial, and introductory offer", () => {
+  assert.equal(PUBLIC_BASIC_PLAN.monthlyPriceUsd, 29);
+  assert.equal(PUBLIC_BASIC_PLAN.trialDays, 20);
+  assert.equal(PUBLIC_BASIC_PLAN.firstPaidMonthDiscountPercent, 50);
+  assert.equal(PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd, 14.5);
+  assert.match(PUBLIC_ROUTE_SEO["/pricing"].description, /\$29/);
+  assert.match(PUBLIC_ROUTE_SEO["/pricing"].description, /20-day trial/);
+  assert.match(PUBLIC_ROUTE_SEO["/pricing"].description, /first paid month 50% off/i);
+});
+
 test("every public route has unique raw crawlable HTML", async () => {
   const titles = new Set<string>();
   const descriptions = new Set<string>();

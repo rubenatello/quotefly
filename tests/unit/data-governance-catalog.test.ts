@@ -75,4 +75,7 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     assert.equal(fields.get(fieldName)?.analyticsStatus, "ELIGIBLE", fieldName);
     assert.equal(fields.get(fieldName)?.ragStatus, "EXCLUDED", fieldName);
   }
+
+  assert.equal(fields.get("AiAssistantFeedback.note")?.classification, "C2_CUSTOMER_CONFIDENTIAL");
+  assert.equal(fields.get("AiAssistantFeedback.note")?.ragStatus, "EXCLUDED");
 });

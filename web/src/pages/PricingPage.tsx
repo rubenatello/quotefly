@@ -22,6 +22,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       seats: `${PUBLIC_BASIC_PLAN.teamMembers} users included`,
       description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
+      offer: `${PUBLIC_BASIC_PLAN.trialDays}-day free trial · first paid month $${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}`,
       features: [
         `Up to ${PUBLIC_BASIC_PLAN.quotesPerMonth} quotes/month`,
         `Est. AI prompts: ~${PUBLIC_BASIC_PLAN.estimatedAiPromptsPerMonth}/month`,
@@ -42,6 +43,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       seats: "15 users included",
       description: "For growing teams that need deeper reporting, quote history, and accounting workflows.",
+      offer: null,
       features: [
         "Everything in Basic, plus:",
         "Est. AI prompts: ~6,800/month",
@@ -62,6 +64,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       period: "/month",
       seats: "Unlimited users",
       description: "For larger operations that need deeper automation, integration controls, and rollout support.",
+      offer: null,
       features: [
         "Everything in Professional, plus:",
         "Est. AI prompts: ~34,600/month",
@@ -88,7 +91,11 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Is there a free trial?",
-      a: "Yes. Every workspace starts with a 14-day free trial so you can test the CRM, quoting flow, and PDF output.",
+      a: `Yes. Every workspace starts with a ${PUBLIC_BASIC_PLAN.trialDays}-day free trial with no credit card required, so you can test the CRM, quoting flow, and PDF output.`,
+    },
+    {
+      q: "How does the first-month discount work?",
+      a: `If you choose Basic, the first paid month is $${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)} (${PUBLIC_BASIC_PLAN.firstPaidMonthDiscountPercent}% off). Basic is $${PUBLIC_BASIC_PLAN.monthlyPriceUsd}/month after that. The introductory discount applies once to an eligible workspace and is automatically added at checkout.`,
     },
     {
       q: "Can I change plans later?",
@@ -160,6 +167,11 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                     <span className="text-4xl font-bold text-slate-900">{plan.price}</span>
                     <span className="text-slate-600">{plan.period}</span>
                   </div>
+                  {plan.offer ? (
+                    <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+                      {plan.offer}
+                    </p>
+                  ) : null}
                   <div className="mt-3 inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-800">
                     {plan.seats}
                   </div>
@@ -218,7 +230,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
       <MarketingCta
         title="Start with Basic"
-        description="No credit card required. Get full access to the launch workflow for 14 days."
+        description={`No credit card required. Get full access for ${PUBLIC_BASIC_PLAN.trialDays} days. If you continue, your first paid month is $${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}, then $${PUBLIC_BASIC_PLAN.monthlyPriceUsd}/month.`}
         actionLabel="Start Free Trial"
         onAction={onOpenAuth}
         supportingText={

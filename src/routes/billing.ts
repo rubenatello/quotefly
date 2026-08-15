@@ -4,6 +4,11 @@ import { FastifyPluginAsync, FastifyRequest } from "fastify";
 import Stripe from "stripe";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import {
+  BASIC_INTRO_OFFER_CODE,
+  isExpectedBasicIntroCouponForPrice,
+  isExpectedBasicMonthlyPrice,
+} from "../lib/billing-offer";
 import { resolveSubscriptionItemBilling } from "../lib/subscription";
 
 const PlanCodeSchema = z.enum(["starter", "professional", "enterprise"]);
@@ -479,6 +484,49 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    const introOfferEligible = tenant.stripeSubscriptionId === null;
+    const introCouponId = app.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF.trim();
+    if (introOfferEligible && !introCouponId) {
+      request.log.error(
+        { tenantId: tenant.id, configurationCode: "BASIC_INTRO_COUPON_MISSING" },
+        "Stripe Basic offer configuration is incomplete.",
+      );
+      return reply.code(503).send({ error: "Billing checkout is temporarily unavailable." });
+    }
+
+    try {
+      const [configuredPrice, configuredCoupon] = await Promise.all([
+        stripe.prices.retrieve(priceId),
+        introOfferEligible ? stripe.coupons.retrieve(introCouponId) : Promise.resolve(null),
+      ]);
+      const validPrice = isExpectedBasicMonthlyPrice(configuredPrice);
+      const validCoupon =
+        configuredCoupon === null ||
+        isExpectedBasicIntroCouponForPrice(configuredCoupon, configuredPrice);
+      if (!validPrice || !validCoupon) {
+        request.log.error(
+          {
+            tenantId: tenant.id,
+            configurationCode: "BASIC_STRIPE_OFFER_MISMATCH",
+            validPrice,
+            validCoupon,
+          },
+          "Stripe Basic offer does not match the QuoteFly billing contract.",
+        );
+        return reply.code(503).send({ error: "Billing checkout is temporarily unavailable." });
+      }
+    } catch (error) {
+      request.log.error(
+        {
+          tenantId: tenant.id,
+          configurationCode: "BASIC_STRIPE_OFFER_LOOKUP_FAILED",
+          errorType: safeWebhookError(error),
+        },
+        "Unable to verify the Stripe Basic offer.",
+      );
+      return reply.code(503).send({ error: "Billing checkout is temporarily unavailable." });
+    }
+
     let attemptId =
       tenant.stripeCheckoutAttemptId &&
       tenant.stripeCheckoutAttemptExpiresAtUtc &&
@@ -599,12 +647,20 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
           "/app/settings?billing=success&session_id={CHECKOUT_SESSION_ID}",
         ),
         cancel_url: buildAppUrl(app.env.APP_URL, "/app/settings?billing=cancel"),
-        allow_promotion_codes: true,
+        ...(introOfferEligible ? { discounts: [{ coupon: introCouponId }] } : {}),
         payment_method_collection: "always",
         expires_at: Math.floor(attemptExpiresAt.getTime() / 1000),
-        metadata: { tenantId: tenant.id, planCode: payload.planCode },
+        metadata: {
+          tenantId: tenant.id,
+          planCode: payload.planCode,
+          introOffer: introOfferEligible ? BASIC_INTRO_OFFER_CODE : "none",
+        },
         subscription_data: {
-          metadata: { tenantId: tenant.id, planCode: payload.planCode },
+          metadata: {
+            tenantId: tenant.id,
+            planCode: payload.planCode,
+            introOffer: introOfferEligible ? BASIC_INTRO_OFFER_CODE : "none",
+          },
           ...(remainingInternalTrialEnd ? { trial_end: remainingInternalTrialEnd } : {}),
         },
       },

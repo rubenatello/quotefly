@@ -48,6 +48,7 @@ jobs:
       STRIPE_SECRET_KEY: sk_test_quotefly_ci
       STRIPE_WEBHOOK_SECRET: whsec_quotefly_ci
       STRIPE_PRICE_ID_STARTER: price_test_starter
+      STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: quotefly_basic_first_month_half_off
       STRIPE_PRICE_ID_PROFESSIONAL: price_test_professional
       STRIPE_PRICE_ID_ENTERPRISE: price_test_enterprise
       QUICKBOOKS_ENVIRONMENT: sandbox

@@ -9,12 +9,12 @@ export default {
     extend: {
       colors: {
         "quotefly-primary": "#2F6FD6",
-        "quotefly-secondary": "#F28C28",
+        "quotefly-secondary": "var(--qf-brand-orange)",
         "quotefly-accent": "#4C5FA8",
         "quotefly-deep": "#1F2F55",
         "quotefly-ink": "#101828",
         "quotefly-blue": "#2F6FD6",
-        "quotefly-orange": "#F28C28",
+        "quotefly-orange": "var(--qf-brand-orange)",
         "quotefly-gold": "#4C5FA8",
         "quotefly-success": "#059669",
         "quotefly-warning": "#d97706",

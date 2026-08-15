@@ -13,6 +13,7 @@ import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { getJwtClaims } from "../lib/auth";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { loadTenantEntitlements } from "../lib/subscription";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 
 const AssistantFeedbackParamsSchema = z.object({
   auditEventId: z.string().trim().min(1).max(191),
@@ -20,6 +21,7 @@ const AssistantFeedbackParamsSchema = z.object({
 
 const AssistantFeedbackBodySchema = z.object({
   rating: z.enum(["UP", "DOWN"]),
+  note: z.string().trim().max(500).nullable().optional(),
 }).strict();
 
 export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
@@ -89,9 +91,11 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const claims = getJwtClaims(request);
       const { auditEventId } = AssistantFeedbackParamsSchema.parse(request.params);
-      const { rating } = AssistantFeedbackBodySchema.parse(request.body);
+      const payload = AssistantFeedbackBodySchema.parse(request.body);
+      const noteProvided = Object.prototype.hasOwnProperty.call(payload, "note");
+      const note = payload.note?.trim() || null;
 
-      const feedback = await measureRequestPerformance(request, "db", () => app.prisma.$transaction(async (tx) => {
+      const feedback = await measureRequestPerformance(request, "db", () => withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
         const usageEvent = await tx.aiUsageEvent.findFirst({
           where: {
             id: auditEventId,
@@ -116,14 +120,17 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
             tenantId: claims.tenantId,
             aiUsageEventId: usageEvent.id,
             actorUserId: claims.userId,
-            rating,
+            rating: payload.rating,
+            note,
           },
           update: {
-            rating,
+            rating: payload.rating,
+            ...(noteProvided ? { note } : {}),
             deletedAtUtc: null,
           },
           select: {
             rating: true,
+            note: true,
             updatedAt: true,
           },
         });
@@ -136,6 +143,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       return {
         feedback: {
           rating: feedback.rating,
+          note: feedback.note,
           updatedAt: feedback.updatedAt,
         },
       };

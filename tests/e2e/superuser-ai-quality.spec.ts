@@ -103,6 +103,35 @@ test("superuser AI quality page can run a Kody response test with diagnostics", 
     });
   });
 
+  await page.route(`${apiBaseUrl}/v1/internal/ai-quality/feedback*`, async (route) => {
+    const includeNotes = new URL(route.request().url()).searchParams.get("includeNotes") === "true";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        windowDays: 30,
+        windowStartUtc: "2026-07-13T00:00:00.000Z",
+        generatedAtUtc: "2026-08-12T18:00:00.000Z",
+        summary: { total: 2, up: 1, down: 1, withNote: 1 },
+        notesIncluded: includeNotes,
+        feedback: [{
+          id: "feedback-one",
+          rating: "DOWN",
+          ...(includeNotes ? { note: "Kody searched customers instead of drafting a product." } : {}),
+          createdAt: "2026-08-12T17:00:00.000Z",
+          tenant: { id: "tenant-redacted", name: "QuoteFly Beta Test" },
+          usage: {
+            eventType: "BUSINESS_INSIGHT",
+            purpose: "BUSINESS_INSIGHT",
+            model: "gpt-test",
+            confidenceLevel: "medium",
+            createdAt: "2026-08-12T16:59:00.000Z",
+          },
+        }],
+      }),
+    });
+  });
+
   const aiRequests: Array<{
     message?: string;
     tool?: string;
@@ -193,6 +222,11 @@ test("superuser AI quality page can run a Kody response test with diagnostics", 
 
   const consoleCard = page.getByTestId("superuser-kody-test-console");
   await expect(consoleCard).toBeVisible();
+  const feedbackReview = page.getByTestId("superuser-kody-feedback-review");
+  await expect(feedbackReview).toContainText("Needs work");
+  await expect(feedbackReview).not.toContainText("Kody searched customers instead of drafting a product.");
+  await feedbackReview.getByRole("button", { name: "Reveal notes" }).click();
+  await expect(feedbackReview).toContainText("Kody searched customers instead of drafting a product.");
   await consoleCard.getByLabel("Search hint").fill("roofing margin");
   await consoleCard.getByLabel("Limit").fill("5");
   await consoleCard.getByRole("button", { name: "Run Kody test" }).click();

@@ -190,7 +190,7 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 const CARD_VARIANTS: Record<CardVariant, string> = {
   default: "border-[var(--qf-border)] bg-[var(--qf-panel)]",
   blue: "border-[color:rgba(47,111,214,0.14)] bg-[var(--qf-panel-subtle)]",
-  amber: "border-[color:rgba(242,140,40,0.18)] bg-[var(--qf-brand-orange-soft)]",
+  amber: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)]",
   elevated: "border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]",
 };
 
@@ -240,7 +240,7 @@ interface BadgeProps {
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   blue: "border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]",
-  orange: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",
+  orange: "border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)] text-[var(--qf-brand-orange-text)]",
   emerald: "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]",
   red: "border-[var(--qf-danger-border)] bg-[var(--qf-danger-surface)] text-[var(--qf-danger-text)]",
   amber: "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]",

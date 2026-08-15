@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { ApiError, api } from "../../lib/api";
-import { BASIC_PLAN, basicMonthlyPriceLabel } from "../../lib/plans";
+import {
+  BASIC_PLAN,
+  basicFirstPaidMonthPriceLabel,
+  basicMonthlyPriceLabel,
+} from "../../lib/plans";
 import { Alert, Badge, Button } from "../ui";
 
 type TrialConversionBannerProps = {
@@ -63,13 +67,13 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
             </p>
           </div>
           <p className="mt-1 text-sm text-slate-600">
-            Keep customer, quote, PDF, and follow-up access for {basicMonthlyPriceLabel()}.
-            {endsOn ? ` Checkout now keeps access free until at least ${endsOn}.` : ""}
+            Checkout keeps access free{endsOn ? ` until at least ${endsOn}` : " through your trial"}.
+            {` Your first paid month is ${basicFirstPaidMonthPriceLabel()}, then ${basicMonthlyPriceLabel()}.`}
           </p>
         </div>
         {ownerView ? (
           <Button type="button" onClick={() => void startCheckout()} loading={loading} disabled={loading}>
-            Keep QuoteFly — {basicMonthlyPriceLabel()}
+            Choose Basic — {basicFirstPaidMonthPriceLabel()} first month
           </Button>
         ) : (
           <p className="text-sm font-medium text-amber-800">Ask the workspace owner to choose Basic.</p>

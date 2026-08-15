@@ -6,7 +6,9 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 
 ### Starter (`starter`)
 
-- Price: `$19/month`
+- Price: `$29/month`
+- Trial: `20 days`, no credit card required at workspace signup
+- Introductory offer: eligible first-time Basic subscriptions receive `50%` off the first paid month (`$14.50`), then renew at `$29/month`
 - Launch availability: `Sellable now`
 - Intended buyer: solo operators and early-stage contractors
 - Core limits:
@@ -64,17 +66,18 @@ This document defines the three paid SaaS tiers and the Stripe product/price map
 - Kody answers, AI drafts, and AI revisions consume monthly AI budget when they call an AI provider.
 - Manual quote edits do not consume AI budget.
 - Operationally, enforce a per-tenant monthly AI spend cap as the primary margin guardrail.
-- The 14-day trial keeps full workflow feature access but uses the Basic `$1.25` AI spend ceiling.
+- The 20-day trial keeps full workflow feature access but uses the Basic `$1.25` AI spend ceiling.
 - Customer-facing UI shows usage percentage and an estimated number of requests remaining, not internal provider-cost details.
 - Recalculate spend caps using `scripts/tier-unit-economics.mjs` before changing tier prices or AI budget allocations.
 
 ## Stripe Product Setup
 
-Create three recurring monthly Prices in Stripe:
+Create three recurring monthly Prices in Stripe and one introductory coupon:
 
 - `QuoteFly Starter Monthly` -> `STRIPE_PRICE_ID_STARTER`
 - `QuoteFly Professional Monthly` -> `STRIPE_PRICE_ID_PROFESSIONAL`
 - `QuoteFly Enterprise Monthly` -> `STRIPE_PRICE_ID_ENTERPRISE`
+- `QuoteFly Basic First Paid Month Half Off` (`50%`, duration `once`) -> `STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF`
 
 Current launch posture:
 
@@ -92,6 +95,7 @@ Recommended metadata on each Stripe Product:
 Backend (`.env` and Railway):
 
 - `STRIPE_PRICE_ID_STARTER=price_...`
+- `STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF=...`
 - `STRIPE_PRICE_ID_PROFESSIONAL=price_...`
 - `STRIPE_PRICE_ID_ENTERPRISE=price_...`
 
