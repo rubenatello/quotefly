@@ -102,7 +102,7 @@ test.describe("mobile launch smoke", () => {
     await page.goto("/app/customers");
     await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole("region", { name: "Trial and billing" })).toContainText(/days? left/i);
-    await expect(page.getByRole("button", { name: /keep quotefly/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /choose basic/i })).toBeVisible();
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
     const mobileMenu = page.getByRole("button", { name: "Open navigation" });
