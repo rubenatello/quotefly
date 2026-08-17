@@ -36,7 +36,9 @@ jobs:
         run: npm ci
 
       - name: Run synthetic Kody provider evaluation
-        run: npm run eval:assistant:provider | tee kody-provider-eval.json
+        run: |
+          set -o pipefail
+          npm run eval:assistant:provider | tee kody-provider-eval.json
 
       - name: Upload evaluation evidence
         if: always()

@@ -165,49 +165,56 @@ const cases: EvalCase[] = [
   },
 ];
 
-const { composeAssistantAnswer } = await import("../src/lib/ai-assistant-composer");
-const results = [];
-for (const evalCase of cases) {
-  const startedAt = performance.now();
-  const output = await composeAssistantAnswer(evalCase.input);
-  const durationMs = Number((performance.now() - startedAt).toFixed(1));
-  const failures: string[] = [];
-  if (output.answerMode !== "LLM_COMPOSED") failures.push("provider composition fell back to deterministic output");
-  for (const pattern of evalCase.required) {
-    if (!pattern.test(output.answer)) failures.push(`missing required pattern ${pattern}`);
+async function main() {
+  const { composeAssistantAnswer } = await import("../src/lib/ai-assistant-composer");
+  const results = [];
+  for (const evalCase of cases) {
+    const startedAt = performance.now();
+    const output = await composeAssistantAnswer(evalCase.input);
+    const durationMs = Number((performance.now() - startedAt).toFixed(1));
+    const failures: string[] = [];
+    if (output.answerMode !== "LLM_COMPOSED") failures.push("provider composition fell back to deterministic output");
+    for (const pattern of evalCase.required) {
+      if (!pattern.test(output.answer)) failures.push(`missing required pattern ${pattern}`);
+    }
+    for (const pattern of evalCase.forbidden) {
+      if (pattern.test(output.answer)) failures.push(`matched forbidden pattern ${pattern}`);
+    }
+    if (durationMs > 15_000) failures.push(`latency ${durationMs}ms exceeded 15000ms`);
+    results.push({
+      name: evalCase.name,
+      passed: failures.length === 0,
+      failures,
+      answerMode: output.answerMode,
+      model: output.model,
+      durationMs,
+      promptTokens: output.telemetry?.promptTokens ?? 0,
+      completionTokens: output.telemetry?.completionTokens ?? 0,
+      estimatedCostUsd: output.telemetry?.estimatedCostUsd ?? 0,
+    });
   }
-  for (const pattern of evalCase.forbidden) {
-    if (pattern.test(output.answer)) failures.push(`matched forbidden pattern ${pattern}`);
-  }
-  if (durationMs > 15_000) failures.push(`latency ${durationMs}ms exceeded 15000ms`);
-  results.push({
-    name: evalCase.name,
-    passed: failures.length === 0,
-    failures,
-    answerMode: output.answerMode,
-    model: output.model,
-    durationMs,
-    promptTokens: output.telemetry?.promptTokens ?? 0,
-    completionTokens: output.telemetry?.completionTokens ?? 0,
-    estimatedCostUsd: output.telemetry?.estimatedCostUsd ?? 0,
-  });
+
+  const durations = results.map((entry) => entry.durationMs).sort((left, right) => left - right);
+  const p95Index = Math.max(0, Math.ceil(durations.length * 0.95) - 1);
+  const totalEstimatedCostUsd = Number(results.reduce((total, entry) => total + entry.estimatedCostUsd, 0).toFixed(6));
+  const passed = results.filter((entry) => entry.passed).length;
+  const report = {
+    suite: "ai-assistant-provider-synthetic",
+    dataPolicy: "Synthetic fixtures only; no tenant or production data.",
+    endpointStorage: "store=false",
+    passed,
+    total: results.length,
+    score: passed / results.length,
+    p95DurationMs: durations[p95Index] ?? 0,
+    totalEstimatedCostUsd,
+    results,
+  };
+
+  console.log(JSON.stringify(report, null, 2));
+  if (passed !== results.length || totalEstimatedCostUsd > 0.05) process.exitCode = 1;
 }
 
-const durations = results.map((entry) => entry.durationMs).sort((left, right) => left - right);
-const p95Index = Math.max(0, Math.ceil(durations.length * 0.95) - 1);
-const totalEstimatedCostUsd = Number(results.reduce((total, entry) => total + entry.estimatedCostUsd, 0).toFixed(6));
-const passed = results.filter((entry) => entry.passed).length;
-const report = {
-  suite: "ai-assistant-provider-synthetic",
-  dataPolicy: "Synthetic fixtures only; no tenant or production data.",
-  endpointStorage: "store=false",
-  passed,
-  total: results.length,
-  score: passed / results.length,
-  p95DurationMs: durations[p95Index] ?? 0,
-  totalEstimatedCostUsd,
-  results,
-};
-
-console.log(JSON.stringify(report, null, 2));
-if (passed !== results.length || totalEstimatedCostUsd > 0.05) process.exitCode = 1;
+void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : "Provider evaluation failed.");
+  process.exitCode = 1;
+});
