@@ -119,7 +119,7 @@ function MetricTile({
 
   return (
     <div data-testid="follow-up-metric" className={`min-w-0 rounded-xl px-3 py-3 sm:px-4 ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-75">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em]">{label}</p>
       <p className="mt-2 truncate text-xl font-bold tracking-tight sm:text-2xl">{currency ? money(value) : value}</p>
     </div>
   );

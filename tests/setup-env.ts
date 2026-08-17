@@ -30,6 +30,7 @@ process.env.QUICKBOOKS_CLIENT_ID ||= "quickbooks-integration-client";
 process.env.QUICKBOOKS_CLIENT_SECRET ||= "quickbooks-integration-secret";
 process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
+process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY ||= "quickbooks-integration-encryption-key-v2";
 process.env.ENABLE_TWILIO_SMS = "true";
 process.env.TWILIO_WEBHOOK_AUTH_TOKEN ||= "twilio-integration-webhook-auth-token";
 appendEnvList("SUPERUSER_EMAILS", ["superuser-integration@example.com"]);

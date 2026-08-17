@@ -1,0 +1,48 @@
+name: Kody provider evaluation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 13 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: Synthetic provider-backed Kody quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_ASSISTANT_MODEL: gpt-4o-mini
+      OPENAI_ASSISTANT_TIMEOUT_MS: "12000"
+      OPENAI_COST_INPUT_PER_1M_USD: "0.15"
+      OPENAI_COST_OUTPUT_PER_1M_USD: "0.60"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require the provider evaluation secret
+        run: test -n "$OPENAI_API_KEY" || { echo "Repository secret OPENAI_API_KEY is required."; exit 1; }
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run synthetic Kody provider evaluation
+        run: npm run eval:assistant:provider | tee kody-provider-eval.json
+
+      - name: Upload evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kody-provider-eval-${{ github.run_id }}
+          path: kody-provider-eval.json
+          if-no-files-found: error
+          retention-days: 30

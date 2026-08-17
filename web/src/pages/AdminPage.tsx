@@ -636,7 +636,7 @@ export function AdminPage({ session }: AdminPageProps) {
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(0,1.35fr)_minmax(460px,580px)] 2xl:items-start">
           <div className="min-w-0 max-w-3xl space-y-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Workspace control center</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-600">Workspace control center</p>
               <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">Keep billing, integrations, and team access aligned.</h2>
             </div>
             <p className="text-sm text-slate-600 sm:text-base">{billingSummaryText}</p>

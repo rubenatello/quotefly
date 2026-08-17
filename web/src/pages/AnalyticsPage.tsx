@@ -315,7 +315,7 @@ function MetricCard({
     <div className={`rounded-xl border px-3 py-3 text-white sm:rounded-2xl sm:px-4 sm:py-4 ${toneClasses}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white">{label}</p>
           <p className="mt-2 text-xl font-bold tracking-tight text-white sm:text-[1.9rem]">{value}</p>
           <p className="mt-1 hidden text-xs leading-5 text-white/70 sm:block">{hint}</p>
         </div>

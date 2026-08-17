@@ -4,10 +4,10 @@ import {
   isQuoteDraftTimestampFresh,
   prepareQuoteBuilderDraftStorage,
   purgeQuoteBuilderDraftStorage,
-  QUOTE_DRAFT_MAX_AGE_MS,
   quoteBuilderDraftStorageKey,
   quoteDeskDraftStorageKey,
   readQuoteBuilderDraft,
+  removeQuoteBuilderDraft,
   writeQuoteBuilderDraft,
 } from "../src/lib/quote-builder-draft-storage";
 
@@ -24,34 +24,47 @@ class MemoryStorage {
 function installWindow() {
   const localStorage = new MemoryStorage();
   const sessionStorage = new MemoryStorage();
-  const documentTarget = new EventTarget() as EventTarget & { visibilityState: "visible" | "hidden" };
-  documentTarget.visibilityState = "visible";
-  const intervalCallbacks: Array<() => void> = [];
-  const clearedIntervalIds: number[] = [];
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: {
-      localStorage,
-      sessionStorage,
-      setInterval(callback: () => void) {
-        intervalCallbacks.push(callback);
-        return intervalCallbacks.length;
-      },
-      clearInterval(intervalId: number) {
-        clearedIntervalIds.push(intervalId);
-      },
-    },
+    value: { localStorage, sessionStorage },
   });
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: documentTarget,
-  });
-  return { localStorage, sessionStorage, documentTarget, intervalCallbacks, clearedIntervalIds };
+  return { localStorage, sessionStorage };
 }
 
-test("draft keys bind tenant, user, and quote scope", () => {
-  assert.equal(quoteBuilderDraftStorageKey("tenant a", "user/1"), "qf:quote-draft:v1:tenant%20a:user%2F1:new");
-  assert.equal(quoteDeskDraftStorageKey("tenant a", "user/1", "quote#9"), "qf:quote-draft:v1:tenant%20a:user%2F1:quote:quote%239");
+function installDraftApi() {
+  const drafts = new Map<string, { payload: Record<string, unknown>; savedAtUtc: string; expiresAtUtc: string }>();
+  const calls: Array<{ method: string; scope: string; keepalive: boolean }> = [];
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      const scope = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+      const method = (init?.method ?? "GET").toUpperCase();
+      calls.push({ method, scope, keepalive: Boolean(init?.keepalive) });
+      if (method === "DELETE") {
+        drafts.delete(scope);
+        return new Response(null, { status: 204 });
+      }
+      if (method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { payload: Record<string, unknown> };
+        const savedAtUtc = new Date().toISOString();
+        const draft = {
+          payload: { ...body.payload, savedAtUtc },
+          savedAtUtc,
+          expiresAtUtc: new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString(),
+        };
+        drafts.set(scope, draft);
+        return Response.json({ draft });
+      }
+      return Response.json({ draft: drafts.get(scope) ?? null });
+    },
+  });
+  return { calls, drafts };
+}
+
+test("draft scopes reveal no tenant, user, or customer information", () => {
+  assert.equal(quoteBuilderDraftStorageKey("tenant a", "user/1"), "new");
+  assert.equal(quoteDeskDraftStorageKey("tenant a", "user/1", "quote_9"), "quote:quote_9");
 });
 
 test("draft timestamps expire after the bounded recovery window", () => {
@@ -60,54 +73,52 @@ test("draft timestamps expire after the bounded recovery window", () => {
   assert.equal(isQuoteDraftTimestampFresh("2026-08-09T23:00:00.000Z", now), false);
 });
 
-test("session preparation retains only fresh drafts for the active identity", () => {
+test("session preparation physically removes every legacy plaintext browser draft", () => {
   const { localStorage, sessionStorage } = installWindow();
-  const activeKey = quoteDeskDraftStorageKey("tenant-1", "user-1", "quote-1");
-  const otherKey = quoteDeskDraftStorageKey("tenant-2", "user-2", "quote-2");
-  const fresh = JSON.stringify({ savedAtUtc: new Date().toISOString(), value: "fresh" });
-  localStorage.setItem(activeKey, fresh);
-  localStorage.setItem(otherKey, fresh);
-  sessionStorage.setItem("qf:quote-builder-draft:v2:legacy", fresh);
+  localStorage.setItem("qf:quote-draft:v1:tenant:user:new", "sensitive quote data");
+  localStorage.setItem("qf:quote-builder-draft:v1:legacy", "sensitive customer data");
+  sessionStorage.setItem("qf:quote-draft:v1:session", "sensitive pricing data");
+  localStorage.setItem("unrelated", "preserved");
 
   prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
 
-  assert.equal(localStorage.getItem(activeKey), fresh);
-  assert.equal(localStorage.getItem(otherKey), null);
+  assert.equal(localStorage.length, 1);
+  assert.equal(localStorage.getItem("unrelated"), "preserved");
   assert.equal(sessionStorage.length, 0);
 });
 
-test("write, read, and logout purge enforce the draft lifecycle", () => {
-  const { localStorage } = installWindow();
+test("write, read, remove, and keepalive use only the authenticated server recovery API", async () => {
+  const { localStorage, sessionStorage } = installWindow();
+  const { calls, drafts } = installDraftApi();
   prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
-  const key = quoteBuilderDraftStorageKey("tenant-1", "user-1");
-  const value = JSON.stringify({ savedAtUtc: new Date().toISOString(), title: "Repair" });
+  const scope = quoteBuilderDraftStorageKey("tenant-1", "user-1");
+  const value = JSON.stringify({ version: 1, savedAtUtc: new Date().toISOString(), title: "Repair" });
 
-  assert.equal(writeQuoteBuilderDraft(key, value), true);
-  assert.equal(readQuoteBuilderDraft(key), value);
-  purgeQuoteBuilderDraftStorage();
+  const savedAtUtc = await writeQuoteBuilderDraft(scope, value, { keepalive: true });
+  assert.ok(savedAtUtc);
+  assert.match(await readQuoteBuilderDraft(scope) ?? "", /Repair/);
   assert.equal(localStorage.length, 0);
-  assert.equal(writeQuoteBuilderDraft(key, value), false);
+  assert.equal(sessionStorage.length, 0);
+  assert.equal(drafts.size, 1);
+  assert.deepEqual(calls.map(({ method, scope: calledScope }) => [method, calledScope]), [
+    ["PUT", "new"],
+    ["GET", "new"],
+  ]);
+  assert.equal(calls[0]?.keepalive, true);
+
+  await removeQuoteBuilderDraft(scope);
+  assert.equal(drafts.size, 0);
 });
 
-test("visibility and bounded timer sweeps physically remove expired drafts", () => {
-  const { localStorage, documentTarget, intervalCallbacks } = installWindow();
+test("logout disables new recovery writes and still purges legacy browser keys", async () => {
+  const { localStorage } = installWindow();
+  const { calls } = installDraftApi();
   prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
-  const visibilityExpiredKey = quoteDeskDraftStorageKey("tenant-1", "user-1", "visibility-expired");
-  const timerExpiredKey = quoteDeskDraftStorageKey("tenant-1", "user-1", "timer-expired");
-  const freshKey = quoteDeskDraftStorageKey("tenant-1", "user-1", "fresh");
-  const expired = JSON.stringify({ savedAtUtc: new Date(Date.now() - QUOTE_DRAFT_MAX_AGE_MS - 1).toISOString() });
-  const fresh = JSON.stringify({ savedAtUtc: new Date().toISOString() });
-
-  localStorage.setItem(visibilityExpiredKey, expired);
-  localStorage.setItem(freshKey, fresh);
-  documentTarget.dispatchEvent(new Event("visibilitychange"));
-  assert.equal(localStorage.getItem(visibilityExpiredKey), null);
-  assert.equal(localStorage.getItem(freshKey), fresh);
-
-  localStorage.setItem(timerExpiredKey, expired);
-  assert.ok(intervalCallbacks.length > 0);
-  intervalCallbacks.at(-1)?.();
-  assert.equal(localStorage.getItem(timerExpiredKey), null);
-  assert.equal(localStorage.getItem(freshKey), fresh);
+  localStorage.setItem("qf:quote-draft:v1:tenant:user:new", "sensitive");
   purgeQuoteBuilderDraftStorage();
+
+  const value = JSON.stringify({ version: 1, savedAtUtc: new Date().toISOString(), title: "Repair" });
+  assert.equal(await writeQuoteBuilderDraft("new", value), null);
+  assert.equal(localStorage.length, 0);
+  assert.equal(calls.length, 0);
 });

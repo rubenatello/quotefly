@@ -46,6 +46,7 @@ export function apiTelemetryRoute(path: string): string {
   if (pathname.startsWith("/v1/internal/ai-quality/feedback")) return "/v1/internal/ai-quality/feedback";
   if (pathname.startsWith("/v1/ai/assistant")) return "/v1/ai/assistant";
   if (pathname.startsWith("/v1/ai/business-insights")) return "/v1/ai/business-insights";
+  if (pathname.startsWith("/v1/quote-drafts/")) return "/v1/quote-drafts/:scope";
   if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/activity")) return "/v1/customers/:id/activity";
   if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/archive")) return "/v1/customers/:id/archive";
   if (pathname.startsWith("/v1/customers/") && pathname.endsWith("/restore")) return "/v1/customers/:id/restore";
@@ -231,6 +232,17 @@ export class ApiError extends Error {
 export type AuthPayload = {
   user: { id: string; email: string; fullName: string };
   tenant: { id: string; name: string; slug: string };
+};
+
+export type QuoteDraftRecoveryPayload = Record<string, unknown> & {
+  version: 1;
+  savedAtUtc: string;
+};
+
+export type QuoteDraftRecovery = {
+  payload: QuoteDraftRecoveryPayload;
+  savedAtUtc: string;
+  expiresAtUtc: string;
 };
 
 export type PlanCode = "starter" | "professional" | "enterprise";
@@ -1411,6 +1423,27 @@ export const api = {
       request<{ message: string }>("/v1/feedback/feature-requests", {
         method: "POST",
         body: JSON.stringify(body),
+      }),
+  },
+
+  quoteDrafts: {
+    get: (scope: string) =>
+      request<{ draft: QuoteDraftRecovery | null }>(`/v1/quote-drafts/${encodeURIComponent(scope)}`),
+
+    save: (scope: string, payload: QuoteDraftRecoveryPayload, options?: { keepalive?: boolean }) =>
+      request<{ draft: Pick<QuoteDraftRecovery, "savedAtUtc" | "expiresAtUtc"> }>(
+        `/v1/quote-drafts/${encodeURIComponent(scope)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ payload }),
+          keepalive: options?.keepalive,
+        },
+      ),
+
+    remove: (scope: string, options?: { keepalive?: boolean }) =>
+      request<void>(`/v1/quote-drafts/${encodeURIComponent(scope)}`, {
+        method: "DELETE",
+        keepalive: options?.keepalive,
       }),
   },
 

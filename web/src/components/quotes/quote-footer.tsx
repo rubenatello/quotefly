@@ -48,7 +48,7 @@ export function QuoteAttributionFooter({
       {showQuoteFlyAttribution ? (
         <div
           className={`flex items-center justify-center gap-1.5 text-[11px] ${
-            textColor ? "" : "text-slate-400"
+            textColor ? "" : "text-slate-600"
           } ${footerText ? "mt-1.5" : ""}`}
           style={textColor ? { color: textColor } : undefined}
         >

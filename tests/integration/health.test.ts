@@ -13,6 +13,7 @@ function buildHealthServer(
     $queryRaw: queryRaw,
   });
   app.decorate("env", { NODE_ENV: nodeEnv });
+  app.decorate("rateLimitRedis", null);
   app.register(healthRoutes, { prefix: "/v1" });
   openApps.push(app);
   return app;
@@ -44,6 +45,7 @@ describe("health and readiness routes", () => {
         { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
         { tableName: "AiRetrievalChunk", enabled: true, forced: true },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+        { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
       ];
     });
     const app = buildHealthServer(queryRaw);
@@ -134,6 +136,7 @@ describe("health and readiness routes", () => {
         { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
         { tableName: "AiRetrievalChunk", enabled: true, forced: false },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+        { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
       ];
     });
     const app = buildHealthServer(queryRaw);
@@ -155,6 +158,7 @@ describe("health and readiness routes", () => {
           { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+          { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
         ];
       }
       return [{
@@ -184,6 +188,7 @@ describe("health and readiness routes", () => {
           { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+          { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
         ];
       }
       return [{

@@ -67,8 +67,6 @@ export function InlineCustomerLookup({
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--qf-text-muted)]" />
             <input
               aria-label="Find customer by name, phone, or email"
-              aria-expanded={query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase()}
-              aria-controls="inline-customer-results"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={

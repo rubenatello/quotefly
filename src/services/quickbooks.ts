@@ -5,6 +5,7 @@ import type { env } from "../config/env";
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
 const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const QUICKBOOKS_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+const QUICKBOOKS_SECRET_ENVELOPE_VERSION = "v2";
 
 type RuntimeEnv = typeof env;
 
@@ -547,33 +548,72 @@ export async function ensureQuickBooksAccessToken(
 }
 
 export function encryptQuickBooksSecret(runtimeEnv: RuntimeEnv, value: string): string {
-  const key = createHash("sha256").update(runtimeEnv.JWT_SECRET).digest();
+  if (!value) {
+    throw new Error("QuickBooks secret value is required.");
+  }
+
+  const encryptionSecret = runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim() || runtimeEnv.JWT_SECRET;
+  const key = createHash("sha256").update(encryptionSecret).digest();
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  return `${iv.toString("base64url")}.${authTag.toString("base64url")}.${encrypted.toString("base64url")}`;
+  return [
+    QUICKBOOKS_SECRET_ENVELOPE_VERSION,
+    iv.toString("base64url"),
+    authTag.toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(".");
 }
 
 export function decryptQuickBooksSecret(runtimeEnv: RuntimeEnv, encryptedValue: string): string {
-  const [ivPart, authTagPart, payloadPart] = encryptedValue.split(".");
-  if (!ivPart || !authTagPart || !payloadPart) {
+  const parts = encryptedValue.split(".");
+  const isCurrentEnvelope = parts.length === 4 && parts[0] === QUICKBOOKS_SECRET_ENVELOPE_VERSION;
+  const isLegacyEnvelope = parts.length === 3;
+  if (!isCurrentEnvelope && !isLegacyEnvelope) {
     throw new Error("QuickBooks secret payload is invalid.");
   }
 
-  const key = createHash("sha256").update(runtimeEnv.JWT_SECRET).digest();
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(ivPart, "base64url"),
-  );
-  decipher.setAuthTag(Buffer.from(authTagPart, "base64url"));
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(payloadPart, "base64url")),
-    decipher.final(),
-  ]);
+  const [ivPart, authTagPart, payloadPart] = isCurrentEnvelope ? parts.slice(1) : parts;
+  if (
+    !ivPart ||
+    !authTagPart ||
+    !payloadPart ||
+    ![ivPart, authTagPart, payloadPart].every((part) => /^[A-Za-z0-9_-]+$/.test(part))
+  ) {
+    throw new Error("QuickBooks secret payload is invalid.");
+  }
 
-  return decrypted.toString("utf8");
+  const iv = Buffer.from(ivPart, "base64url");
+  const authTag = Buffer.from(authTagPart, "base64url");
+  const encryptedPayload = Buffer.from(payloadPart, "base64url");
+  if (iv.length !== 12 || authTag.length !== 16 || encryptedPayload.length === 0) {
+    throw new Error("QuickBooks secret payload is invalid.");
+  }
+
+  const candidateSecrets = isCurrentEnvelope
+    ? [
+        runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim() || runtimeEnv.JWT_SECRET,
+        runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim(),
+      ].filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
+    : [runtimeEnv.JWT_SECRET];
+
+  for (const candidateSecret of candidateSecrets) {
+    try {
+      const key = createHash("sha256").update(candidateSecret).digest();
+      const decipher = createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([
+        decipher.update(encryptedPayload),
+        decipher.final(),
+      ]);
+      return decrypted.toString("utf8");
+    } catch {
+      // Rotation deliberately tries the previous key without exposing which key failed.
+    }
+  }
+
+  throw new Error("QuickBooks secret payload is invalid.");
 }
 
 export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {

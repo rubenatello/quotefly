@@ -15,6 +15,7 @@ export const AI_RETRIEVAL_RLS_TABLES = [
   "AiRetrievalChunk",
   "AiRetrievalAuditEvent",
   "AiIndexJob",
+  "QuoteDraftRecovery",
 ] as const;
 
 export type AiRetrievalRlsStatus = Readonly<{

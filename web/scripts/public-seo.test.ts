@@ -188,6 +188,10 @@ test("Vercel applies browser security headers to every route", async () => {
   assert.match(globalHeaders.get("Content-Security-Policy") ?? "", /default-src 'self'/);
   assert.match(globalHeaders.get("Content-Security-Policy") ?? "", /frame-ancestors 'none'/);
   assert.match(globalHeaders.get("Content-Security-Policy") ?? "", /object-src 'none'/);
+  assert.doesNotMatch(
+    globalHeaders.get("Content-Security-Policy") ?? "",
+    /script-src[^;]*'unsafe-inline'/,
+  );
   assert.equal(globalHeaders.get("Strict-Transport-Security"), "max-age=31536000");
   assert.equal(globalHeaders.get("X-Content-Type-Options"), "nosniff");
   assert.equal(globalHeaders.get("X-Frame-Options"), "DENY");

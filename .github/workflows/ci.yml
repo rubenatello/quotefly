@@ -26,11 +26,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
+      TEST_RATE_LIMIT_REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-jwt-secret-for-quotefly-builds-at-least-32-chars
       APP_URL: http://localhost:5173
       API_URL: http://localhost:4000

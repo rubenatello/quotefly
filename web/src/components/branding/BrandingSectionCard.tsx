@@ -12,7 +12,7 @@ export interface BrandingSummaryTileProps {
 export function BrandingSummaryTile({ label, children, className }: BrandingSummaryTileProps) {
   return (
     <div className={cn("rounded-[20px] border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3", className)}>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{label}</p>
       <div className="mt-2">{children}</div>
     </div>
   );
@@ -58,7 +58,7 @@ export function BrandingSectionCard({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-display text-lg font-semibold text-slate-900">{title}</h2>
               {completionLabel ? (
-                <span className="rounded-full bg-quotefly-blue/[0.08] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-quotefly-blue">
+                <span className="rounded-full bg-quotefly-blue/[0.08] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--qf-link)]">
                   {completionLabel}
                 </span>
               ) : null}

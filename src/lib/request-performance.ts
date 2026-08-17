@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-export type RequestPerformanceMetric = "auth" | "workspace" | "db" | "ai";
+export type RequestPerformanceMetric = "auth" | "workspace" | "db" | "ai" | "rate_limit";
 
 type RequestPerformanceState = {
   startNs: bigint;
@@ -89,7 +89,7 @@ export function applyRequestPerformanceHeaders(
 
   const summary = getRequestPerformanceSummary(request);
   const tokens = [serverTimingToken("app", summary.durationMs)];
-  for (const metric of ["auth", "workspace", "db", "ai"] as const) {
+  for (const metric of ["auth", "workspace", "db", "ai", "rate_limit"] as const) {
     const durationMs = summary.metrics[metric];
     if (durationMs !== undefined) {
       tokens.push(serverTimingToken(metric, durationMs));

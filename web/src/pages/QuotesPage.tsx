@@ -168,9 +168,9 @@ function MetricCard({
       <div className={`absolute bottom-0 left-0 top-0 w-1 ${barClasses}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="pl-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">{label}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white">{label}</p>
           <p className="mt-1.5 text-xl font-bold tracking-tight text-white sm:text-[1.65rem]">{value}</p>
-          <p className="mt-1 hidden text-xs text-white/70 sm:block">{hint}</p>
+          <p className="mt-1 hidden text-xs text-white sm:block">{hint}</p>
         </div>
         <span className={`inline-flex h-9 w-9 items-center justify-center rounded-full sm:h-10 sm:w-10 ${iconClasses}`}>
           {icon}
@@ -205,7 +205,7 @@ function StageCountCard({
       aria-pressed={active}
     >
       <div className="flex items-center gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{label}</p>
+        <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${active ? "text-[var(--qf-link)]" : "text-[var(--qf-text-muted)]"}`}>{label}</p>
         {stage === "ALL" ? (
           <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-1 text-[10px] font-bold text-[var(--qf-text-muted)]">
             All

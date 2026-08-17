@@ -119,7 +119,7 @@ export function QuoteSheetEditor({
             </div>
             <div className="flex shrink-0 items-center gap-1.5 self-start">
               {logoPosition === "right" ? logo : null}
-              <Badge tone="blue" icon={<FileText size={12} />} className="hidden border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-brand-blue)] sm:inline-flex">
+              <Badge tone="blue" icon={<FileText size={12} />} className="hidden border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-link)] sm:inline-flex">
                 Customer view
               </Badge>
               {actions}

@@ -11,10 +11,15 @@ const mode = argumentValue("--mode") ?? "public";
 const includeSuperuserReads = process.argv.includes("--include-superuser-reads");
 const sessionCookie = process.env.QF_HEALTH_SESSION_COOKIE;
 const timeoutMs = Number(argumentValue("--timeout-ms") ?? "20000");
+const maxDurationValue = argumentValue("--max-duration-ms");
+const maxDurationMs = maxDurationValue === undefined ? null : Number(maxDurationValue);
 
 if (!baseUrl || !/^https?:\/\//.test(baseUrl)) throw new Error("A valid --base-url or QF_API_BASE_URL is required.");
 if (!["public", "authenticated"].includes(mode)) throw new Error("--mode must be public or authenticated.");
 if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000) throw new Error("--timeout-ms must be between 1000 and 60000.");
+if (maxDurationMs !== null && (!Number.isFinite(maxDurationMs) || maxDurationMs < 100 || maxDurationMs > timeoutMs)) {
+  throw new Error("--max-duration-ms must be between 100 and --timeout-ms.");
+}
 if (mode === "authenticated" && !sessionCookie) throw new Error("QF_HEALTH_SESSION_COOKIE is required for authenticated probes.");
 
 const results = [];
@@ -40,7 +45,8 @@ async function probe(label, requestPath, expectedStatuses, captureJson = false) 
       status: response.status,
       durationMs,
       requestId: response.headers.get("x-request-id"),
-      passed: expected && response.status < 500,
+      passed: expected && response.status < 500 && (maxDurationMs === null || durationMs <= maxDurationMs),
+      latencyPassed: maxDurationMs === null || durationMs <= maxDurationMs,
     };
     results.push(result);
     if (!captureJson) {
@@ -80,8 +86,11 @@ if (mode === "public") {
   const quotes = await probe("quote list", "/v1/quotes?limit=1&offset=0", readStatuses, true);
   await probe("product catalog", "/v1/products", readStatuses);
   await probe("organization users", "/v1/org/users", readStatuses);
+  await probe("workspace overview", "/v1/workspace/overview", readStatuses);
+  await probe("tenant summary", "/v1/tenants", readStatuses);
   await probe("onboarding setup", "/v1/onboarding/setup", readStatuses);
   await probe("recommended presets", "/v1/onboarding/presets/recommended", readStatuses);
+  await probe("new quote recovery draft", "/v1/quote-drafts/new", readStatuses);
   if (tenantId) await probe("tenant branding", `/v1/tenants/${encodeURIComponent(tenantId)}/branding`, readStatuses);
 
   const customerId = customers.json?.customers?.[0]?.id;
@@ -112,7 +121,8 @@ if (mode === "public") {
 
 for (const result of results) {
   const status = result.status ?? result.error;
-  console.log(`${result.passed ? "PASS" : "FAIL"} ${result.label}: ${status} in ${result.durationMs}ms${result.requestId ? ` request=${result.requestId}` : ""}`);
+  const latency = result.latencyPassed === false ? ` over ${maxDurationMs}ms threshold` : "";
+  console.log(`${result.passed ? "PASS" : "FAIL"} ${result.label}: ${status} in ${result.durationMs}ms${latency}${result.requestId ? ` request=${result.requestId}` : ""}`);
 }
 console.log(`Summary: ${results.filter((result) => result.passed).length}/${results.length} probes passed.`);
 if (results.some((result) => !result.passed)) process.exitCode = 1;

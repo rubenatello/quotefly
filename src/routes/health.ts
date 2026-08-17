@@ -78,12 +78,6 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           requireRuntimeRole: app.env.NODE_ENV === "production",
         });
       });
-
-      return {
-        status: "ready",
-        service: SERVICE_NAME,
-        timestamp: new Date().toISOString(),
-      };
     } catch (error) {
       request.log.error(
         { dependency: "database", errorCode: readinessErrorCode(error) },
@@ -92,5 +86,25 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
 
       return reply.code(503).send({ error: "Service is not ready." });
     }
+
+    if (app.rateLimitRedis) {
+      try {
+        await measureRequestPerformance(request, "rate_limit", async () => {
+          await app.rateLimitRedis?.ping();
+        });
+      } catch (error) {
+        request.log.error(
+          { dependency: "rate_limit_store", errorCode: readinessErrorCode(error) },
+          "Readiness dependency check failed.",
+        );
+        return reply.code(503).send({ error: "Service is not ready." });
+      }
+    }
+
+    return {
+      status: "ready",
+      service: SERVICE_NAME,
+      timestamp: new Date().toISOString(),
+    };
   });
 };

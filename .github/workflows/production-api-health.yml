@@ -1,0 +1,74 @@
+name: Production API read health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,37 * * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-api-read-health
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Public non-mutating health probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT_TITLE: "[monitor] Production API read health failing"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Warm the public boundary
+        run: node .agents/skills/quotefly-api-health-audit/scripts/probe-read-endpoints.mjs --base-url https://api.quotefly.us --mode public --timeout-ms 10000
+
+      - name: Run three bounded samples
+        id: health
+        shell: bash
+        run: |
+          set -o pipefail
+          : > production-api-health.txt
+          for sample in 1 2 3; do
+            echo "Sample $sample" | tee -a production-api-health.txt
+            npm run api:health:public 2>&1 | tee -a production-api-health.txt
+          done
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-api-health-${{ github.run_id }}
+          path: production-api-health.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Open a deduplicated incident
+        if: failure()
+        shell: bash
+        run: |
+          existing="$(gh issue list --state open --search "${INCIDENT_TITLE} in:title" --json number,title --jq 'map(select(.title == "[monitor] Production API read health failing")) | .[0].number')"
+          if [ -z "$existing" ]; then
+            gh issue create --title "$INCIDENT_TITLE" --body "The scheduled non-mutating production API probe failed. Review workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} and correlate its request IDs with Railway logs. No response bodies or tenant data are recorded."
+          else
+            echo "Incident #$existing is already open."
+          fi
+
+      - name: Close the incident after recovery
+        if: success()
+        shell: bash
+        run: |
+          existing="$(gh issue list --state open --search "${INCIDENT_TITLE} in:title" --json number,title --jq 'map(select(.title == "[monitor] Production API read health failing")) | .[0].number')"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "The scheduled public API probes recovered in ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          fi

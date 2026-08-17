@@ -167,7 +167,7 @@ function StageFilterButton({
         {stage === "ALL" ? "A" : stageInitial(stage)}
       </span>
       <div className="min-w-0 flex-1">
-        <p className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${active ? "text-white/80" : "text-slate-500"}`}>
+        <p className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${active ? "text-white" : "text-slate-500"}`}>
           {label}
         </p>
         <p className={`mt-0.5 text-sm font-bold ${active ? "text-white" : "text-slate-950"}`}>{count}</p>
@@ -195,7 +195,7 @@ function CustomerPipelineFilterStrip({
           <StageFilterButton key={stage} stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
         ))}
       </div>
-      <p className="px-1 text-xs text-slate-500">Filter the customer list by the next stage in the quoting workflow.</p>
+      <p className="px-1 text-xs text-[var(--qf-text-muted)]">Filter the customer list by the next stage in the quoting workflow.</p>
     </div>
   );
 }

@@ -39,6 +39,8 @@ npm run verify:launch
 | --- | --- | --- | --- | --- |
 | `DATABASE_URL` | Required | No | pooled Neon URL using `quotefly_runtime` | API-only runtime role; must not own tables or have `BYPASSRLS` |
 | `DIRECT_DATABASE_URL` | No (release job only) | No | direct Neon URL using migration owner | Isolated release/migration commands only; never add to the API service, web app, or browser |
+| `RATE_LIMIT_REDIS_URL` | Required for multiple API replicas | No | private Railway Redis URL | Shared Fastify rate-limit counters; use `rediss://` when the provider requires TLS |
+| `RATE_LIMIT_REQUIRE_SHARED_STORE` | Recommended for production scale-out | No | `false` for one replica | Set `true` before adding a second API replica so startup fails closed without Redis |
 | `JWT_SECRET` | Required | No | 32+ char random secret | Unique per environment; rotate through provider env |
 | `APP_URL` | Required | No | `https://staging.quotefly.us` | Production web URL, for redirects and CORS inputs |
 | `API_URL` | Required | No | `https://api-staging.quotefly.us` | Production API URL |
@@ -59,6 +61,7 @@ npm run verify:launch
 | `SUPPORT_EMAIL` | Required | No | `support@quotefly.us` | Confirm the monitored inbox receives account and billing requests |
 | `OPENAI_API_KEY` | Required for AI | No | staging key or empty | Empty disables real provider calls; AI stays beta |
 | `OPENAI_MODEL` | Optional | No | `gpt-4o-mini` | Track quality and spend before launch expansion |
+| `OPENAI_ASSISTANT_TIMEOUT_MS` | Optional | No | `12000` | Fail closed to deterministic Kody output when provider composition is slow |
 | `OPENAI_EMBEDDING_MODEL` | Optional | No | `text-embedding-3-small` | Keep consistent with indexed RAG chunks; changing it requires reindexing |
 | `OPENAI_EMBEDDING_COST_PER_1M_USD` | Optional | No | `0.02` | Estimated input cost used for tenant AI spend metering; keep aligned with the configured embedding model |
 | `ENABLE_AI_INDEX_WORKER` | Optional | No | `false` | Keep false until all canonical mutation paths have transactional enqueue coverage and staging race tests pass |
@@ -67,6 +70,8 @@ npm run verify:launch
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
 | `QUICKBOOKS_ENVIRONMENT` | Required if configured | No | `sandbox` | Use `production` only after Intuit production approval |
+| `QUICKBOOKS_TOKEN_ENCRYPTION_KEY` | Required if configured | No | independent 32+ char random secret | Must differ from `JWT_SECRET`; encrypts newly stored OAuth tokens |
+| `QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS` | Rotation only | No | prior encryption secret | Keep only while old token ciphertext is being refreshed; must differ from current and JWT keys |
 | `ENABLE_TWILIO_SMS` | Optional | No | `false` | Must remain false in production until sender authorization is implemented |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Provider setup | No | Twilio test credentials | Required only when SMS provider is enabled |
 | `TWILIO_WEBHOOK_AUTH_TOKEN` | Provider setup | No | random secret | Required for webhook validation |
@@ -98,6 +103,7 @@ Railway/Render settings:
 - Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
 - Keep the API service region physically close to the managed Postgres region. For Railway + Neon, choose matching or nearest available US regions before optimizing code.
 - Use the Neon pooled connection string for API runtime traffic and a direct connection only for Prisma CLI/migration work.
+- A single API replica can use the bounded in-memory rate-limit store. Before adding another replica, provision Railway Redis in the same region, set `RATE_LIMIT_REDIS_URL`, set `RATE_LIMIT_REQUIRE_SHARED_STORE=true`, and confirm `/v1/ready` includes a successful Redis ping.
 - After the RLS migration creates the `NOLOGIN` role, set a generated password with the Neon owner connection, enable `LOGIN`, and use that role only in Railway's pooled `DATABASE_URL`. Keep the owner URL as `DIRECT_DATABASE_URL` only in the separate release/migration job. Never use `neondb_owner`, `postgres`, or another table owner as the running API role; Neon documents that owner/superuser-style roles can bypass RLS.
 - Disable Neon scale-to-zero, or set a production-safe suspend timeout, before selling accounts that expect mobile-app-like response times.
 
@@ -115,6 +121,7 @@ Baseline production targets:
 
 - `/v1/health`: p95 under 500ms from US clients.
 - `/v1/ready`: p95 under 750ms when the database is warm.
+- GitHub's `Production API read health` workflow probes liveness, readiness, and the unauthenticated session boundary three times every 30 minutes. It fails any probe over 2.5 seconds, retains a sanitized report for 14 days, and opens one deduplicated GitHub incident until the probe recovers.
 - Customers and quotes list endpoints: p95 under 1.5s for beta tenants.
 - Kody first visible response/progress: under 500ms; complete simple lookup/summary under 5s; complete quote drafting under 15s.
 

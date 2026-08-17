@@ -66,7 +66,7 @@ export function BrandQuickSetup({
       <div className="border-b border-[var(--qf-border)] bg-[var(--qf-panel-subtle)] px-5 py-5 sm:px-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-quotefly-blue">Start here</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--qf-link)]">Start here</p>
             <h2 id="quick-brand-setup-title" className="mt-2 font-display text-2xl font-semibold text-[var(--qf-text)]">
               Build your quote look in three steps
             </h2>
@@ -108,7 +108,7 @@ export function BrandQuickSetup({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-base font-semibold text-[var(--qf-text)]">{template.name}</p>
-                      <p className="mt-1 text-xs font-medium uppercase tracking-wide text-[var(--qf-text-muted)]">{template.bestFor}</p>
+                      <p className="mt-1 text-xs font-medium uppercase tracking-wide text-[var(--qf-text-soft)]">{template.bestFor}</p>
                     </div>
                     <span
                       className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
@@ -177,7 +177,7 @@ export function BrandQuickSetup({
                         onClick={() => onLogoPositionChange(option.value)}
                         className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-2 text-xs font-semibold transition ${
                           active
-                            ? "border-quotefly-blue bg-[var(--qf-selected)] text-quotefly-blue"
+                            ? "border-quotefly-blue bg-[var(--qf-selected)] text-[var(--qf-link)]"
                             : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
                         }`}
                         aria-pressed={active}

@@ -72,10 +72,10 @@ export function CookiePolicyPage() {
                   <td className="px-4 py-3">180 days</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-medium text-slate-900">Quote draft and UI preferences</td>
+                  <td className="px-4 py-3 font-medium text-slate-900">UI preferences</td>
                   <td className="px-4 py-3">Essential local storage</td>
-                  <td className="px-4 py-3">Recovers in-progress quote and customer work on this device and remembers workspace display preferences.</td>
-                  <td className="px-4 py-3">Drafts: up to 12 hours; preferences: until cleared</td>
+                  <td className="px-4 py-3">Remembers workspace display preferences on this device.</td>
+                  <td className="px-4 py-3">Until cleared</td>
                 </tr>
                 <tr>
                   <td className="px-4 py-3 font-medium text-slate-900">Optional analytics</td>
@@ -88,6 +88,9 @@ export function CookiePolicyPage() {
           </div>
           <p className="mt-4 text-sm text-slate-600">
             An organization may configure a different session-cookie name for its deployment. Essential storage is not used for advertising.
+          </p>
+          <p className="mt-3 text-sm text-slate-600">
+            In-progress quote recovery drafts are stored securely in the authenticated QuoteFly workspace for up to 12 hours. QuoteFly does not store their contents in browser local or session storage.
           </p>
         </PolicySection>
 

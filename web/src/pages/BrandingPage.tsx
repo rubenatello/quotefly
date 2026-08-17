@@ -783,7 +783,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   <p className="text-sm font-semibold text-slate-900">
                     {showQuoteFlyAttribution ? "Visible on quotes" : "Hidden on quotes"}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-xs text-slate-600">
                     {effectivePlanCode === "starter"
                       ? "Starter always shows QuoteFly attribution."
                       : "Professional and Enterprise can hide it."}
@@ -1043,7 +1043,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     <div className="rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
                         <Upload size={28} className="mx-auto mb-3 text-slate-400" />
                         <p className="text-sm font-medium text-slate-700">Add your business logo</p>
-                        <p className="mt-1 text-xs text-slate-400">PNG or JPG, automatically resized for previews and PDFs.</p>
+                        <p className="mt-1 text-xs text-slate-600">PNG or JPG, automatically resized for previews and PDFs.</p>
                         <Button
                           type="button"
                           variant="outline"
@@ -1261,7 +1261,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-8">
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Customer-facing output</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">Customer-facing output</p>
                     <p className="mt-1 text-sm text-slate-600">
                       This is the style your customer will open, print, or forward.
                     </p>

@@ -241,7 +241,7 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace</p> : null}
+          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Workspace</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
             {settingsLinks.map((link) => {
               const active = isWorkspaceNavigationActive(link.path, currentPage);
@@ -298,10 +298,10 @@ export function CrmSidebar({
           {!collapsed && aiSpendLimitUsd !== null && usage ? (
             <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">
                   {showTrialBadge ? "Full trial access" : displayPlanName}
                 </p>
-                <span className="text-xs font-semibold text-slate-900">
+                <span className="text-xs font-semibold text-[var(--qf-text)]">
                   {usagePercentLabel}
                 </span>
               </div>

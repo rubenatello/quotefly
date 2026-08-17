@@ -291,6 +291,23 @@ model PasswordResetToken {
   @@index([expiresAtUtc])
 }
 
+model QuoteDraftRecovery {
+  id           String     @id @default(cuid())
+  tenantId     String
+  tenantUserId String
+  scope        String     @db.VarChar(191)
+  payload      Json
+  savedAtUtc   DateTime   @db.Timestamptz(3)
+  expiresAtUtc DateTime   @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
+  tenantUser   TenantUser @relation(fields: [tenantUserId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@unique([tenantId, tenantUserId, scope])
+  @@index([tenantId, tenantUserId, expiresAtUtc])
+  @@index([expiresAtUtc])
+}
+
 model TenantUser {
   id                String     @id @default(cuid())
   tenantId          String
@@ -302,6 +319,7 @@ model TenantUser {
   user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   assignedCustomers Customer[] @relation("CustomerAssignee")
   assignedQuotes    Quote[]    @relation("QuoteAssignee")
+  quoteDrafts       QuoteDraftRecovery[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId])

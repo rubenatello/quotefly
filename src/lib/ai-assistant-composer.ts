@@ -190,7 +190,11 @@ let providerForTest: AiAssistantCompositionProvider | null = null;
 
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    openaiClient = new OpenAI({
+      apiKey: env.OPENAI_API_KEY,
+      timeout: env.OPENAI_ASSISTANT_TIMEOUT_MS,
+      maxRetries: 1,
+    });
   }
   return openaiClient;
 }
@@ -475,6 +479,7 @@ async function defaultCompositionProvider(
 ): Promise<AiAssistantCompositionProviderResult> {
   const completion = await getOpenAI().chat.completions.create({
     model: request.model,
+    store: false,
     temperature: 0.2,
     max_tokens: COMPOSER_MAX_TOKENS,
     response_format: request.responseFormat,

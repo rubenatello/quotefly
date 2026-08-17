@@ -445,14 +445,18 @@ function hasMeaningfulBuilderDraft(draft: BuilderDraftData) {
   return quoteIsMeaningful || linesAreMeaningful || customerIsMeaningful;
 }
 
-function writeStoredBuilderDraft(storageKey: string, draft: BuilderDraftData) {
+async function writeStoredBuilderDraft(
+  storageKey: string,
+  draft: BuilderDraftData,
+  options?: { keepalive?: boolean },
+) {
   if (!hasMeaningfulBuilderDraft(draft)) {
-    removeQuoteBuilderDraft(storageKey);
+    await removeQuoteBuilderDraft(storageKey, options);
     return null;
   }
   const savedAtUtc = new Date().toISOString();
   const stored = JSON.stringify({ ...draft, version: 1, savedAtUtc } satisfies StoredBuilderDraft);
-  return writeQuoteBuilderDraft(storageKey, stored) ? savedAtUtc : null;
+  return writeQuoteBuilderDraft(storageKey, stored, options);
 }
 
 const QUOTE_BUILDER_LINE_GRID_COLUMNS =
@@ -586,60 +590,59 @@ export function QuoteBuilderView() {
 
   useEffect(() => {
     if (!draftStorageKey) return;
-    let hydrationDeferred = false;
+    let cancelled = false;
     quoteCreationCompletedRef.current = false;
     setDraftRestored(false);
     if (draftRecoveryStorageKeyRef.current !== draftStorageKey) {
       draftRecoveryStorageKeyRef.current = draftStorageKey;
       setDraftRecoveryMessage(null);
     }
-    try {
-      const raw = readQuoteBuilderDraft(draftStorageKey);
-      if (!raw) {
-        setHydratedDraftStorageKey(draftStorageKey);
-        return;
-      }
-      const stored = parseStoredBuilderDraft(raw);
-      if (!stored || !hasMeaningfulBuilderDraft(stored)) {
-        removeQuoteBuilderDraft(draftStorageKey);
-        setDraftRecoveryMessage("An incompatible saved draft was cleared safely.");
-        setHydratedDraftStorageKey(draftStorageKey);
-        return;
-      }
-      if (selectedCustomerIdRef.current && stored.quote.customerId !== selectedCustomerIdRef.current) {
-        hydrationDeferred = true;
-        setConflictingStoredDraft(stored);
-        return;
-      }
-      setQuoteForm((current) => ({
-        ...current,
-        customerId: stored.quote.customerId,
-        serviceType: stored.quote.serviceType,
-        title: stored.quote.title,
-        scopeText: stored.quote.scopeText,
-        taxAmount: stored.quote.taxAmount,
-        internalCostSubtotal: "0",
-        customerPriceSubtotal: "0",
-      }));
-      setDraftLines(stored.lines.map((line) => makeEditableQuoteLine(line)));
-      setMobilePane(stored.mobilePane);
-      setQuickCustomerOpen(stored.quickCustomerOpen);
-      setQuickCustomerForm(stored.quickCustomerForm);
-      setLastAppliedAiRunId(stored.lastAppliedAiRunId);
-      setDraftSavedAtUtc(stored.savedAtUtc);
-      setDraftPersistenceFailed(false);
-      setDraftRestored(true);
-      setConflictingStoredDraft(null);
-    } catch {
+    void (async () => {
+      let hydrationDeferred = false;
       try {
-        removeQuoteBuilderDraft(draftStorageKey);
+        const raw = await readQuoteBuilderDraft(draftStorageKey);
+        if (cancelled) return;
+        if (!raw) return;
+        const stored = parseStoredBuilderDraft(raw);
+        if (!stored || !hasMeaningfulBuilderDraft(stored)) {
+          await removeQuoteBuilderDraft(draftStorageKey);
+          if (!cancelled) setDraftRecoveryMessage("An incompatible saved draft was cleared safely.");
+          return;
+        }
+        if (selectedCustomerIdRef.current && stored.quote.customerId !== selectedCustomerIdRef.current) {
+          hydrationDeferred = true;
+          setConflictingStoredDraft(stored);
+          return;
+        }
+        setQuoteForm((current) => ({
+          ...current,
+          customerId: stored.quote.customerId,
+          serviceType: stored.quote.serviceType,
+          title: stored.quote.title,
+          scopeText: stored.quote.scopeText,
+          taxAmount: stored.quote.taxAmount,
+          internalCostSubtotal: "0",
+          customerPriceSubtotal: "0",
+        }));
+        setDraftLines(stored.lines.map((line) => makeEditableQuoteLine(line)));
+        setMobilePane(stored.mobilePane);
+        setQuickCustomerOpen(stored.quickCustomerOpen);
+        setQuickCustomerForm(stored.quickCustomerForm);
+        setLastAppliedAiRunId(stored.lastAppliedAiRunId);
+        setDraftSavedAtUtc(stored.savedAtUtc);
+        setDraftPersistenceFailed(false);
+        setDraftRestored(true);
+        setConflictingStoredDraft(null);
       } catch {
-        // Storage can be unavailable in locked-down browser modes; the builder remains usable in memory.
+        await removeQuoteBuilderDraft(draftStorageKey);
+        if (!cancelled) setDraftRecoveryMessage("The saved draft could not be read and was cleared safely.");
+      } finally {
+        if (!cancelled && !hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
       }
-      setDraftRecoveryMessage("The saved draft could not be read and was cleared safely.");
-    } finally {
-      if (!hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [draftStorageKey, setQuoteForm]);
 
   useEffect(() => {
@@ -699,21 +702,28 @@ export function QuoteBuilderView() {
 
   useEffect(() => {
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || quoteCreationCompletedRef.current) return;
-    const savedAtUtc = writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft);
-    setDraftSavedAtUtc(savedAtUtc);
-    setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft).then((savedAtUtc) => {
+        if (cancelled) return;
+        setDraftSavedAtUtc(savedAtUtc);
+        setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
+      });
+    }, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [currentBuilderDraft, draftStorageKey, hasMeaningfulDraft, hydratedDraftStorageKey]);
 
   useEffect(() => {
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey) return;
     const persistLatestDraft = () => {
       if (quoteCreationCompletedRef.current || !latestDraftRef.current) return;
-      writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current);
+      void writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current, { keepalive: true });
     };
-    window.addEventListener("beforeunload", persistLatestDraft);
     window.addEventListener("pagehide", persistLatestDraft);
     return () => {
-      window.removeEventListener("beforeunload", persistLatestDraft);
       window.removeEventListener("pagehide", persistLatestDraft);
       persistLatestDraft();
     };
@@ -1093,7 +1103,7 @@ export function QuoteBuilderView() {
 
   function startFreshForSelectedCustomer() {
     if (!draftStorageKey) return;
-    removeQuoteBuilderDraft(draftStorageKey);
+    void removeQuoteBuilderDraft(draftStorageKey);
     setConflictingStoredDraft(null);
     setDraftRestored(false);
     setDraftSavedAtUtc(null);
@@ -1103,7 +1113,7 @@ export function QuoteBuilderView() {
 
   function clearStoredBuilderDraft() {
     quoteCreationCompletedRef.current = true;
-    if (draftStorageKey) removeQuoteBuilderDraft(draftStorageKey);
+    if (draftStorageKey) void removeQuoteBuilderDraft(draftStorageKey);
     setDraftSavedAtUtc(null);
     setDraftPersistenceFailed(false);
     setDraftRestored(false);
@@ -1268,9 +1278,9 @@ export function QuoteBuilderView() {
           data-testid="quote-builder-draft-conflict"
           className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
         >
-          <p className="text-sm font-semibold">Saved quote draft found</p>
+          <p className="text-sm font-semibold">Workspace recovery draft found</p>
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-            This tab has a saved draft for a different customer. Choose which quote you want to continue.
+            Your workspace has a recovery draft for a different customer. Choose which quote you want to continue.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Button variant="outline" size="sm" onClick={restoreConflictingDraft}>
@@ -1305,7 +1315,7 @@ export function QuoteBuilderView() {
                 <p className="truncate text-xs text-[var(--qf-text-soft)]">
                   {draftPersistenceFailed
                     ? "Keep this tab open until the quote is created."
-                    : `Saved in this browser${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}
+                    : `Saved securely to your workspace${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}
                 </p>
               </div>
             </div>
@@ -1842,7 +1852,7 @@ export function QuoteBuilderView() {
         onClose={cancelNavigation}
         onConfirm={continueNavigation}
         title="Leave this quote draft?"
-        description="Your draft is saved in this browser for up to 12 hours and can be restored when you return."
+        description="Your draft is saved securely to your workspace for up to 12 hours and can be restored when you return."
         confirmLabel="Keep draft and leave"
         confirmVariant="warning"
       />

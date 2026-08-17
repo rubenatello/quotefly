@@ -40,6 +40,7 @@ export function applyE2eEnv() {
   process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";
   process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
   process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
+  process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY ||= "quickbooks-e2e-encryption-key-v2-value";
   process.env.ENABLE_TWILIO_SMS ||= "false";
   appendEnvList("SUPERUSER_EMAILS", [
     "superuser-e2e@example.com",

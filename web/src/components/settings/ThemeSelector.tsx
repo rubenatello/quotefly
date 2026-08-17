@@ -84,7 +84,7 @@ export function ThemeSelector() {
                   {option.label}
                   {selected ? <Check size={15} className="text-[var(--qf-link)]" aria-hidden="true" /> : null}
                 </span>
-                <span className="mt-1 block text-xs leading-5 text-[var(--qf-text-muted)]">
+                <span className={cn("mt-1 block text-xs leading-5", selected ? "text-[var(--qf-text-soft)]" : "text-[var(--qf-text-muted)]")}>
                   {option.description}
                 </span>
               </span>

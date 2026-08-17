@@ -251,10 +251,14 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
   };
 }
 
-function persistStoredDeskDraft(storageKey: string, draft: StoredDeskDraft) {
+async function persistStoredDeskDraft(
+  storageKey: string,
+  draft: StoredDeskDraft,
+  options?: { keepalive?: boolean },
+) {
   const savedAtUtc = new Date().toISOString();
   const stored = { ...draft, savedAtUtc } satisfies StoredDeskDraft;
-  return writeQuoteDeskDraft(storageKey, JSON.stringify(stored)) ? savedAtUtc : null;
+  return writeQuoteDeskDraft(storageKey, JSON.stringify(stored), options);
 }
 const QUOTE_DESK_HEADER_GRID_COLUMNS =
   "xl:grid-cols-[minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_106px_130px] 2xl:grid-cols-[minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_110px_140px]";
@@ -753,48 +757,62 @@ export function QuoteDeskView() {
 
   useEffect(() => {
     if (!deskDraftStorageKey || !selectedQuote || hydratedDeskDraftKey === deskDraftStorageKey) return;
+    let cancelled = false;
     preventDeskDraftPersistenceRef.current = false;
     setDeskDraftRestored(false);
     setDeskDraftRecoveryMessage(null);
-    try {
-      const raw = readQuoteDeskDraft(deskDraftStorageKey);
-      if (!raw) {
-        setHydratedDeskDraftKey(deskDraftStorageKey);
-        return;
+    void (async () => {
+      let hydrationDeferred = false;
+      try {
+        const raw = await readQuoteDeskDraft(deskDraftStorageKey);
+        if (cancelled) return;
+        if (!raw) return;
+        const stored = parseStoredDeskDraft(raw);
+        if (!stored || stored.quoteId !== selectedQuote.id) {
+          await removeQuoteDeskDraft(deskDraftStorageKey);
+          if (!cancelled) setDeskDraftRecoveryMessage("An incompatible saved quote draft was cleared safely.");
+          return;
+        }
+        if (stored.baseUpdatedAtUtc !== selectedQuote.updatedAt) {
+          hydrationDeferred = true;
+          setConflictingDeskDraft(stored);
+          return;
+        }
+        applyStoredDeskDraft(stored);
+      } catch {
+        await removeQuoteDeskDraft(deskDraftStorageKey);
+        if (!cancelled) setDeskDraftRecoveryMessage("The saved quote draft could not be read and was cleared safely.");
+      } finally {
+        if (!cancelled && !hydrationDeferred) setHydratedDeskDraftKey(deskDraftStorageKey);
       }
-      const stored = parseStoredDeskDraft(raw);
-      if (!stored || stored.quoteId !== selectedQuote.id) {
-        removeQuoteDeskDraft(deskDraftStorageKey);
-        setDeskDraftRecoveryMessage("An incompatible saved quote draft was cleared safely.");
-        setHydratedDeskDraftKey(deskDraftStorageKey);
-        return;
-      }
-      if (stored.baseUpdatedAtUtc !== selectedQuote.updatedAt) {
-        setConflictingDeskDraft(stored);
-        return;
-      }
-      applyStoredDeskDraft(stored);
-      setHydratedDeskDraftKey(deskDraftStorageKey);
-    } catch {
-      removeQuoteDeskDraft(deskDraftStorageKey);
-      setDeskDraftRecoveryMessage("The saved quote draft could not be read and was cleared safely.");
-      setHydratedDeskDraftKey(deskDraftStorageKey);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [applyStoredDeskDraft, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote]);
 
   useEffect(() => {
     if (!deskDraftStorageKey || hydratedDeskDraftKey !== deskDraftStorageKey || !currentDeskDraft) return;
     if (!hasUnsavedQuoteSheetChanges) {
-      removeQuoteDeskDraft(deskDraftStorageKey);
+      void removeQuoteDeskDraft(deskDraftStorageKey);
       setDeskDraftSavedAtUtc(null);
       setDeskDraftPersistenceFailed(false);
       setDeskDraftRestored(false);
       return;
     }
     if (preventDeskDraftPersistenceRef.current) return;
-    const savedAtUtc = persistStoredDeskDraft(deskDraftStorageKey, currentDeskDraft);
-    setDeskDraftSavedAtUtc(savedAtUtc);
-    setDeskDraftPersistenceFailed(!savedAtUtc);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void persistStoredDeskDraft(deskDraftStorageKey, currentDeskDraft).then((savedAtUtc) => {
+        if (cancelled) return;
+        setDeskDraftSavedAtUtc(savedAtUtc);
+        setDeskDraftPersistenceFailed(!savedAtUtc);
+      });
+    }, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [currentDeskDraft, deskDraftStorageKey, hasUnsavedQuoteSheetChanges, hydratedDeskDraftKey]);
 
   useEffect(() => {
@@ -802,7 +820,7 @@ export function QuoteDeskView() {
     const persistLatestDraft = () => {
       const latest = latestDeskDraftRef.current;
       if (!latest?.hasChanges || preventDeskDraftPersistenceRef.current) return;
-      persistStoredDeskDraft(deskDraftStorageKey, latest.draft);
+      void persistStoredDeskDraft(deskDraftStorageKey, latest.draft, { keepalive: true });
     };
     window.addEventListener("pagehide", persistLatestDraft);
     return () => {
@@ -820,7 +838,7 @@ export function QuoteDeskView() {
 
   function clearStoredDeskDraft() {
     preventDeskDraftPersistenceRef.current = true;
-    if (deskDraftStorageKey) removeQuoteDeskDraft(deskDraftStorageKey);
+    if (deskDraftStorageKey) void removeQuoteDeskDraft(deskDraftStorageKey);
     setDeskDraftSavedAtUtc(null);
     setDeskDraftPersistenceFailed(false);
     setDeskDraftRestored(false);
@@ -834,17 +852,17 @@ export function QuoteDeskView() {
     if (!conflictingDeskDraft || !deskDraftStorageKey) return;
     applyStoredDeskDraft(conflictingDeskDraft);
     setHydratedDeskDraftKey(deskDraftStorageKey);
-    setNotice("Restored the browser draft. Review it against the latest saved quote before saving.");
+    setNotice("Restored your recovery draft. Review it against the latest saved quote before saving.");
   }
 
   function useLatestSavedQuote() {
     if (!deskDraftStorageKey) return;
-    removeQuoteDeskDraft(deskDraftStorageKey);
+    void removeQuoteDeskDraft(deskDraftStorageKey);
     setConflictingDeskDraft(null);
     setHydratedDeskDraftKey(deskDraftStorageKey);
     setDeskDraftRestored(false);
     setDeskDraftSavedAtUtc(null);
-    setNotice("Using the latest saved quote. The older browser draft was discarded.");
+    setNotice("Using the latest saved quote. The older recovery draft was discarded.");
   }
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
@@ -1464,12 +1482,12 @@ export function QuoteDeskView() {
       ) : null}
       {conflictingDeskDraft ? (
         <div role="alert" className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]">
-          <p className="text-sm font-semibold">This quote changed after the browser draft was saved</p>
+          <p className="text-sm font-semibold">This quote changed after the recovery draft was saved</p>
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-            Use the latest saved quote, or restore the browser draft and review it carefully before saving.
+            Use the latest saved quote, or restore the recovery draft and review it carefully before saving.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <Button variant="outline" size="sm" onClick={restoreConflictingDeskDraft}>Restore browser draft</Button>
+            <Button variant="outline" size="sm" onClick={restoreConflictingDeskDraft}>Restore recovery draft</Button>
             <Button size="sm" onClick={useLatestSavedQuote}>Use latest saved quote</Button>
           </div>
         </div>
@@ -1987,7 +2005,7 @@ export function QuoteDeskView() {
                     </Button>
                   </div> : null}
                 </div>
-                <p className="text-xs text-slate-500">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
+                <p className="text-xs text-[var(--qf-text-soft)]">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
               </div>
             </Card>
 

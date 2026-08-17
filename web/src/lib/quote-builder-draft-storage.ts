@@ -1,28 +1,23 @@
+import { api, type QuoteDraftRecoveryPayload } from "./api";
+
 const QUOTE_DRAFT_STORAGE_BASE = "qf:quote-draft:";
 const LEGACY_QUOTE_DRAFT_STORAGE_BASE = "qf:quote-builder-draft:";
 export const QUOTE_DRAFT_STORAGE_PREFIX = `${QUOTE_DRAFT_STORAGE_BASE}v1:`;
 export const QUOTE_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
-export const QUOTE_DRAFT_CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 
 let writesEnabled = true;
-let activeIdentityPrefix: string | null = null;
-let cleanupTimerId: number | null = null;
-let visibilityCleanup: (() => void) | null = null;
-
-function localStorageTarget() {
-  return typeof window === "undefined" ? null : window.localStorage;
-}
-
-function identityPrefix(tenantId: string, userId: string) {
-  return `${QUOTE_DRAFT_STORAGE_PREFIX}${encodeURIComponent(tenantId)}:${encodeURIComponent(userId)}:`;
-}
+let activeIdentity: { tenantId: string; userId: string } | null = null;
 
 export function quoteBuilderDraftStorageKey(tenantId: string, userId: string) {
-  return `${identityPrefix(tenantId, userId)}new`;
+  void tenantId;
+  void userId;
+  return "new";
 }
 
 export function quoteDeskDraftStorageKey(tenantId: string, userId: string, quoteId: string) {
-  return `${identityPrefix(tenantId, userId)}quote:${encodeURIComponent(quoteId)}`;
+  void tenantId;
+  void userId;
+  return `quote:${quoteId}`;
 }
 
 export function isQuoteDraftTimestampFresh(savedAtUtc: string, now = Date.now()) {
@@ -30,125 +25,84 @@ export function isQuoteDraftTimestampFresh(savedAtUtc: string, now = Date.now())
   return Number.isFinite(savedAt) && savedAt <= now + 60_000 && now - savedAt <= QUOTE_DRAFT_MAX_AGE_MS;
 }
 
-function storedDraftIsFresh(raw: string) {
+function parseFreshDraft(raw: string): QuoteDraftRecoveryPayload | null {
   try {
     const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const savedAtUtc = (value as { savedAtUtc?: unknown }).savedAtUtc;
-    return typeof savedAtUtc === "string" && isQuoteDraftTimestampFresh(savedAtUtc);
+    const version = (value as { version?: unknown }).version;
+    return version === 1 && typeof savedAtUtc === "string" && isQuoteDraftTimestampFresh(savedAtUtc)
+      ? value as QuoteDraftRecoveryPayload
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function removeQuoteDraftKeys(target: Storage, options?: { keepIdentityPrefix?: string }) {
+function removeLegacyQuoteDraftKeys(target: Storage) {
   for (let index = target.length - 1; index >= 0; index -= 1) {
     const key = target.key(index);
     if (!key) continue;
-
-    if (key.startsWith(LEGACY_QUOTE_DRAFT_STORAGE_BASE)) {
+    if (key.startsWith(QUOTE_DRAFT_STORAGE_BASE) || key.startsWith(LEGACY_QUOTE_DRAFT_STORAGE_BASE)) {
       target.removeItem(key);
-      continue;
     }
-
-    if (!key.startsWith(QUOTE_DRAFT_STORAGE_BASE)) continue;
-    const raw = target.getItem(key);
-    const belongsToCurrentIdentity = Boolean(options?.keepIdentityPrefix && key.startsWith(options.keepIdentityPrefix));
-    if (!belongsToCurrentIdentity || !raw || !storedDraftIsFresh(raw)) target.removeItem(key);
   }
 }
 
-function stopQuoteDraftCleanup() {
-  if (typeof window !== "undefined" && cleanupTimerId !== null) window.clearInterval(cleanupTimerId);
-  cleanupTimerId = null;
-  if (typeof document !== "undefined" && visibilityCleanup) {
-    document.removeEventListener("visibilitychange", visibilityCleanup);
-  }
-  visibilityCleanup = null;
-}
-
-function cleanupActiveIdentityDrafts() {
-  if (!activeIdentityPrefix) return;
+function purgeLegacyBrowserDrafts() {
   try {
-    const target = localStorageTarget();
-    if (target) removeQuoteDraftKeys(target, { keepIdentityPrefix: activeIdentityPrefix });
-    if (typeof window !== "undefined") removeQuoteDraftKeys(window.sessionStorage);
+    if (typeof window === "undefined") return;
+    removeLegacyQuoteDraftKeys(window.localStorage);
+    removeLegacyQuoteDraftKeys(window.sessionStorage);
   } catch {
     // Browser storage restrictions must not interrupt the authenticated workspace.
   }
 }
 
-function startQuoteDraftCleanup() {
-  stopQuoteDraftCleanup();
-  if (typeof window === "undefined") return;
-
-  visibilityCleanup = () => {
-    if (typeof document === "undefined" || document.visibilityState !== "hidden") cleanupActiveIdentityDrafts();
-  };
-  if (typeof document !== "undefined") document.addEventListener("visibilitychange", visibilityCleanup);
-  cleanupTimerId = window.setInterval(cleanupActiveIdentityDrafts, QUOTE_DRAFT_CLEANUP_INTERVAL_MS);
-}
-
 export function prepareQuoteBuilderDraftStorage(tenantId: string, userId: string) {
-  const currentIdentityPrefix = identityPrefix(tenantId, userId);
-  activeIdentityPrefix = currentIdentityPrefix;
-  try {
-    const target = localStorageTarget();
-    if (target) removeQuoteDraftKeys(target, { keepIdentityPrefix: currentIdentityPrefix });
-    if (typeof window !== "undefined") removeQuoteDraftKeys(window.sessionStorage);
-  } catch {
-    // Storage restrictions must not prevent a valid session from loading.
-  } finally {
-    writesEnabled = true;
-  }
-  startQuoteDraftCleanup();
+  purgeLegacyBrowserDrafts();
+  activeIdentity = { tenantId, userId };
+  writesEnabled = true;
   return quoteBuilderDraftStorageKey(tenantId, userId);
 }
 
 export function purgeQuoteBuilderDraftStorage() {
   writesEnabled = false;
-  stopQuoteDraftCleanup();
-  activeIdentityPrefix = null;
-  try {
-    const target = localStorageTarget();
-    if (target) removeQuoteDraftKeys(target);
-    if (typeof window !== "undefined") removeQuoteDraftKeys(window.sessionStorage);
-  } catch {
-    // Session cleanup must continue when browser storage is unavailable.
-  }
+  activeIdentity = null;
+  purgeLegacyBrowserDrafts();
 }
 
-export function readQuoteBuilderDraft(storageKey: string) {
+export async function readQuoteBuilderDraft(storageKey: string) {
   try {
-    const target = localStorageTarget();
-    const raw = target?.getItem(storageKey) ?? null;
-    if (!raw) return null;
-    if (storedDraftIsFresh(raw)) return raw;
-    target?.removeItem(storageKey);
-    return null;
+    const { draft } = await api.quoteDrafts.get(storageKey);
+    if (!draft) return null;
+    if (!isQuoteDraftTimestampFresh(draft.savedAtUtc)) {
+      await api.quoteDrafts.remove(storageKey).catch(() => undefined);
+      return null;
+    }
+    return JSON.stringify({ ...draft.payload, savedAtUtc: draft.savedAtUtc });
   } catch {
     return null;
   }
 }
 
-export function writeQuoteBuilderDraft(storageKey: string, value: string) {
-  if (!writesEnabled || !storedDraftIsFresh(value)) return false;
+export async function writeQuoteBuilderDraft(storageKey: string, value: string, options?: { keepalive?: boolean }) {
+  const payload = parseFreshDraft(value);
+  if (!writesEnabled || !payload || !activeIdentity) return null;
   try {
-    const target = localStorageTarget();
-    if (!target) return false;
-    target.setItem(storageKey, value);
-    return true;
+    const { draft } = await api.quoteDrafts.save(storageKey, {
+      ...payload,
+      recoveryIdentity: activeIdentity,
+    }, options);
+    return draft.savedAtUtc;
   } catch {
-    return false;
+    return null;
   }
 }
 
-export function removeQuoteBuilderDraft(storageKey: string) {
-  try {
-    localStorageTarget()?.removeItem(storageKey);
-  } catch {
-    // The in-memory quote editor remains usable when browser storage is unavailable.
-  }
+export async function removeQuoteBuilderDraft(storageKey: string, options?: { keepalive?: boolean }) {
+  if (!writesEnabled) return;
+  await api.quoteDrafts.remove(storageKey, options).catch(() => undefined);
 }
 
 export const readQuoteDeskDraft = readQuoteBuilderDraft;

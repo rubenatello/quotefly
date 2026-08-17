@@ -26,6 +26,7 @@ function buildPerformanceHeaderApp(includeServerTiming: boolean) {
   });
   app.get("/probe/:id", async (request) => {
     await measureRequestPerformance(request, "db", async () => undefined);
+    await measureRequestPerformance(request, "rate_limit", async () => undefined);
     return { ok: true };
   });
 
@@ -49,6 +50,6 @@ test("server timing can be exposed for local diagnostics without path data", asy
 
   assert.equal(response.statusCode, 200);
   assert.match(response.headers["x-request-id"] as string, /\S/);
-  assert.match(response.headers["server-timing"] as string, /^app;dur=\d+(?:\.\d+)?, db;dur=\d+(?:\.\d+)?$/);
+  assert.match(response.headers["server-timing"] as string, /^app;dur=\d+(?:\.\d+)?, db;dur=\d+(?:\.\d+)?, rate_limit;dur=\d+(?:\.\d+)?$/);
   assert.doesNotMatch(response.headers["server-timing"] as string, /secret-customer-id/);
 });

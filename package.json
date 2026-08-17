@@ -12,10 +12,12 @@
     "dev:all": "concurrently -k -n API,WEB,DB \"npm run dev:api\" \"npm run dev:web\" \"npm run prisma:studio\"",
     "eval:ai": "tsx scripts/ai-quote-eval.ts --mode=parser",
     "eval:assistant": "tsx scripts/ai-assistant-eval.ts",
+    "eval:assistant:provider": "tsx scripts/ai-assistant-provider-eval.ts",
     "eval:retrieval": "tsx scripts/ai-retrieval-eval.ts",
     "eval:ai:model": "tsx scripts/ai-quote-eval.ts --mode=ai",
     "build": "tsc -p tsconfig.json",
     "api:routes:audit": "node .agents/skills/quotefly-api-health-audit/scripts/inventory-routes.mjs",
+    "api:health:public": "node .agents/skills/quotefly-api-health-audit/scripts/probe-read-endpoints.mjs --base-url https://api.quotefly.us --mode public --timeout-ms 10000 --max-duration-ms 2500",
     "build:web": "npm --prefix web run build",
     "seo:sitemap:generate": "npm --prefix web run generate:sitemap",
     "seo:sitemap:check": "npm --prefix web run check:sitemap",
@@ -24,7 +26,7 @@
     "prisma:validate": "prisma validate",
     "test:integration": "vitest run --config vitest.config.ts",
     "test:security": "tsx --test scripts/security-boundary.test.ts",
-    "test:unit": "tsx --test tests/unit/ai-retrieval-chunking.test.ts tests/unit/ai-retrieval-ranking.test.ts tests/unit/ai-data-governance.test.ts tests/unit/ai-assistant-composer.test.ts tests/unit/ai-assistant-routing.test.ts tests/unit/billing-offer.test.ts tests/unit/bounded-concurrency.test.ts tests/unit/data-governance-catalog.test.ts tests/unit/request-performance.test.ts tests/unit/subscription-ai-budget.test.ts tests/unit/tenant-rls.test.ts tests/unit/brand-logo.test.ts tests/unit/onboarding-branding-preservation.test.ts tests/unit/quote-brand-asset.test.ts tests/unit/quote-pdf.renderer.test.ts tests/unit/work-preset-catalog.test.ts web/scripts/api-telemetry.test.ts web/scripts/kody-response-normalization.test.ts web/scripts/kody-spark-icon.test.ts web/scripts/quote-draft-storage.test.ts web/scripts/quote-form-validation.test.ts web/scripts/theme-contrast.test.ts web/scripts/theme-preference.test.ts",
+    "test:unit": "tsx --test tests/unit/ai-retrieval-chunking.test.ts tests/unit/ai-retrieval-ranking.test.ts tests/unit/ai-data-governance.test.ts tests/unit/ai-assistant-composer.test.ts tests/unit/ai-assistant-routing.test.ts tests/unit/billing-offer.test.ts tests/unit/bounded-concurrency.test.ts tests/unit/data-governance-catalog.test.ts tests/unit/request-performance.test.ts tests/unit/shared-rate-limit.test.ts tests/unit/subscription-ai-budget.test.ts tests/unit/tenant-rls.test.ts tests/unit/brand-logo.test.ts tests/unit/onboarding-branding-preservation.test.ts tests/unit/quickbooks-token-encryption.test.ts tests/unit/quote-brand-asset.test.ts tests/unit/quote-pdf.renderer.test.ts tests/unit/work-preset-catalog.test.ts web/scripts/api-telemetry.test.ts web/scripts/kody-response-normalization.test.ts web/scripts/kody-spark-icon.test.ts web/scripts/quote-draft-storage.test.ts web/scripts/quote-form-validation.test.ts web/scripts/theme-contrast.test.ts web/scripts/theme-preference.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "audit:all": "node --test scripts/dependency-audit-policy.test.mjs && node scripts/audit-dependencies.mjs",
@@ -58,6 +60,7 @@
     "dotenv": "^17.4.1",
     "fastify": "^5.8.4",
     "fastify-raw-body": "^5.0.0",
+    "ioredis": "^5.11.1",
     "js-tiktoken": "^1.0.21",
     "openai": "^6.34.0",
     "pdfkit": "^0.18.0",
@@ -67,6 +70,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.60.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.5.2",
@@ -80,6 +84,9 @@
     "node": ">=22.0.0"
   },
   "overrides": {
-    "@fastify/static": "10.1.2"
+    "@fastify/static": "10.1.2",
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.1"
+    }
   }
 }

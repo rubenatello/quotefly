@@ -64,7 +64,7 @@ export function WorkspaceSection({
     <section id={id} className={cn("scroll-mt-28 space-y-2.5", className)}>
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-quotefly-blue">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-link)]">
             {step}
           </p>
           <h2 className="mt-1 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{title}</h2>

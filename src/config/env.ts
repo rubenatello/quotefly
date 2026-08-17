@@ -18,12 +18,15 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1),
   DIRECT_DATABASE_URL: z.string().min(1).optional(),
+  RATE_LIMIT_REDIS_URL: z.string().default(""),
+  RATE_LIMIT_REQUIRE_SHARED_STORE: BooleanFromEnv.default(false),
   JWT_SECRET: z.string().min(32),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_ASSISTANT_MODEL: z.string().default(""),
   OPENAI_ASSISTANT_COMPOSITION_ENABLED: BooleanFromEnv.default(true),
+  OPENAI_ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(12_000),
   ENABLE_AI_INDEX_WORKER: BooleanFromEnv.default(false),
   AI_INDEX_INLINE_REFRESH: BooleanFromEnv.default(true),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
@@ -51,6 +54,8 @@ const EnvSchema = z.object({
   QUICKBOOKS_ENVIRONMENT: z.enum(["sandbox", "production"]).default("production"),
   QUICKBOOKS_REDIRECT_URI: OptionalUrlFromEnv,
   QUICKBOOKS_WEBHOOK_VERIFIER: z.string().default(""),
+  QUICKBOOKS_TOKEN_ENCRYPTION_KEY: z.string().default(""),
+  QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: z.string().default(""),
   ENABLE_TWILIO_SMS: BooleanFromEnv.default(false),
   TWILIO_ACCOUNT_SID: z.string().default(""),
   TWILIO_AUTH_TOKEN: z.string().default(""),
@@ -80,6 +85,28 @@ const EnvSchema = z.object({
       code: "custom",
       path: ["DIRECT_DATABASE_URL"],
       message: "DIRECT_DATABASE_URL must not be present in the production API runtime; provide it only to the isolated migration job.",
+    });
+  }
+  const rateLimitRedisUrl = value.RATE_LIMIT_REDIS_URL.trim();
+  if (rateLimitRedisUrl) {
+    try {
+      const parsedRateLimitUrl = new URL(rateLimitRedisUrl);
+      if (parsedRateLimitUrl.protocol !== "redis:" && parsedRateLimitUrl.protocol !== "rediss:") {
+        throw new Error("unsupported protocol");
+      }
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        path: ["RATE_LIMIT_REDIS_URL"],
+        message: "RATE_LIMIT_REDIS_URL must be a valid redis:// or rediss:// connection URL.",
+      });
+    }
+  }
+  if (value.RATE_LIMIT_REQUIRE_SHARED_STORE && !rateLimitRedisUrl) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["RATE_LIMIT_REDIS_URL"],
+      message: "RATE_LIMIT_REDIS_URL is required when shared rate limiting is enforced.",
     });
   }
   if (value.JWT_SECRET === DEFAULT_JWT_SECRET || value.JWT_SECRET.includes("change-me")) {
@@ -138,6 +165,59 @@ const EnvSchema = z.object({
       path: [value.RESEND_API_KEY ? "PASSWORD_RESET_EMAIL_FROM" : "RESEND_API_KEY"],
       message: "RESEND_API_KEY and PASSWORD_RESET_EMAIL_FROM must be configured together.",
     });
+  }
+
+  const quickBooksClientConfigured = Boolean(value.QUICKBOOKS_CLIENT_ID.trim());
+  const quickBooksSecretConfigured = Boolean(value.QUICKBOOKS_CLIENT_SECRET.trim());
+  if (quickBooksClientConfigured !== quickBooksSecretConfigured) {
+    ctx.addIssue({
+      code: "custom",
+      path: [quickBooksClientConfigured ? "QUICKBOOKS_CLIENT_SECRET" : "QUICKBOOKS_CLIENT_ID"],
+      message: "QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET must be configured together.",
+    });
+  }
+
+  const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
+  const quickBooksPreviousEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim();
+  if (quickBooksClientConfigured && quickBooksSecretConfigured && quickBooksEncryptionKey.length < 32) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be at least 32 characters when QuickBooks is configured.",
+    });
+  }
+  if (quickBooksEncryptionKey && quickBooksEncryptionKey === value.JWT_SECRET) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be independent from JWT_SECRET.",
+    });
+  }
+  if (quickBooksPreviousEncryptionKey) {
+    if (quickBooksPreviousEncryptionKey.length < 32) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be at least 32 characters when provided.",
+      });
+    }
+    if (!quickBooksEncryptionKey) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY is required when a previous rotation key is configured.",
+      });
+    }
+    if (
+      quickBooksPreviousEncryptionKey === quickBooksEncryptionKey ||
+      quickBooksPreviousEncryptionKey === value.JWT_SECRET
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be independent from current encryption and JWT keys.",
+      });
+    }
   }
 
   const requiredPaidLaunchValues = [

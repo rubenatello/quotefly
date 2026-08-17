@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import jwt from "@fastify/jwt";
 import fastifyRawBody from "fastify-raw-body";
 import { PrismaClient } from "@prisma/client";
+import Redis from "ioredis";
 import { ZodError } from "zod";
 import { env } from "./config/env";
 import { getJwtClaims, LiveAuthMembershipSelect } from "./lib/auth";
@@ -16,6 +17,7 @@ import { healthRoutes } from "./routes/health";
 import { tenantRoutes } from "./routes/tenants";
 import { customerRoutes } from "./routes/customers";
 import { quoteRoutes } from "./routes/quotes";
+import { quoteDraftRoutes } from "./routes/quote-drafts";
 import { smsRoutes } from "./routes/sms";
 import { authRoutes } from "./routes/auth";
 import { brandingRoutes } from "./routes/branding";
@@ -140,6 +142,7 @@ declare module "fastify" {
   interface FastifyInstance {
     prisma: PrismaClient;
     env: typeof env;
+    rateLimitRedis: Redis | null;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
@@ -160,6 +163,27 @@ export function buildServer() {
 
   app.decorate("prisma", prisma);
   app.decorate("env", env);
+  const rateLimitRedis = env.RATE_LIMIT_REDIS_URL.trim()
+    ? new Redis(env.RATE_LIMIT_REDIS_URL.trim(), {
+        connectionName: "quotefly-rate-limit",
+        connectTimeout: 1_000,
+        commandTimeout: 1_000,
+        maxRetriesPerRequest: 1,
+        retryStrategy: (attempt) => Math.min(attempt * 100, 1_000),
+      })
+    : null;
+  if (rateLimitRedis) {
+    rateLimitRedis.on("error", (error: Error & { code?: string }) => {
+      app.log.error(
+        { dependency: "rate_limit_store", errorCode: error.code ?? error.name },
+        "Shared rate-limit store error.",
+      );
+    });
+    app.addHook("onClose", async () => {
+      rateLimitRedis.disconnect(false);
+    });
+  }
+  app.decorate("rateLimitRedis", rateLimitRedis);
   app.decorateRequest("liveAuthMembership", null);
 
   // An app-level workspace-access hook and a route preHandler can both invoke
@@ -185,6 +209,9 @@ export function buildServer() {
   app.register(rateLimit, {
     max: env.NODE_ENV === "test" ? 10_000 : 100,
     timeWindow: "1 minute",
+    nameSpace: "quotefly-rate-limit-",
+    skipOnError: false,
+    ...(rateLimitRedis ? { redis: rateLimitRedis } : {}),
   });
   app.register(jwt, {
     secret: env.JWT_SECRET,
@@ -347,6 +374,7 @@ export function buildServer() {
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
+  app.register(quoteDraftRoutes, { prefix: "/v1" });
   app.register(billingRoutes, { prefix: "/v1" });
   app.register(onboardingRoutes, { prefix: "/v1" });
   app.register(productRoutes, { prefix: "/v1" });

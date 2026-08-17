@@ -149,6 +149,57 @@ describe("security boundary helpers", () => {
         STRIPE_PRICE_ID_PROFESSIONAL: productionEnv.STRIPE_PRICE_ID_STARTER,
       }),
     ).toThrow(/Stripe plan price ids must be unique/i);
+
+    const quickBooksProductionEnv = {
+      ...productionEnv,
+      QUICKBOOKS_CLIENT_ID: "quickbooks-production-client",
+      QUICKBOOKS_CLIENT_SECRET: "quickbooks-production-secret",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "",
+    } satisfies NodeJS.ProcessEnv;
+    expect(() => parseEnv(quickBooksProductionEnv)).toThrow(
+      /QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be at least 32 characters/i,
+    );
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+    })).not.toThrow();
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: quickBooksProductionEnv.JWT_SECRET,
+    })).toThrow(/must be independent from JWT_SECRET/i);
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "short-previous-key",
+    })).toThrow(/PREVIOUS must be at least 32 characters/i);
+  });
+
+  it("validates the shared production rate-limit store when scale-out is enforced", () => {
+    const base = {
+      ...process.env,
+      NODE_ENV: "production",
+      ...productionDatabaseEnv,
+      JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+      APP_URL: "https://app.quotefly.example",
+      API_URL: "https://api.quotefly.example",
+      SESSION_COOKIE_SAME_SITE: "lax",
+      ENABLE_TWILIO_SMS: "false",
+      STRIPE_SECRET_KEY: "sk_live_quotefly_test_value",
+      STRIPE_WEBHOOK_SECRET: "whsec_quotefly_test_value",
+      STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
+      STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: "quotefly_basic_first_month_half_off",
+      RESEND_API_KEY: "re_quotefly_test_value",
+      PASSWORD_RESET_EMAIL_FROM: "QuoteFly <support@quotefly.example>",
+    } satisfies NodeJS.ProcessEnv;
+
+    expect(() => parseEnv({ ...base, RATE_LIMIT_REQUIRE_SHARED_STORE: "true", RATE_LIMIT_REDIS_URL: "" })).toThrow(
+      /required when shared rate limiting is enforced/i,
+    );
+    expect(() => parseEnv({ ...base, RATE_LIMIT_REQUIRE_SHARED_STORE: "true", RATE_LIMIT_REDIS_URL: "https://redis.example" })).toThrow(
+      /valid redis:\/\/ or rediss:\/\//i,
+    );
+    expect(() => parseEnv({ ...base, RATE_LIMIT_REQUIRE_SHARED_STORE: "true", RATE_LIMIT_REDIS_URL: "rediss://redis.example:6380" })).not.toThrow();
   });
 
   it("neutralizes spreadsheet formulas in tenant-controlled QuickBooks CSV cells", () => {
