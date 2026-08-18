@@ -99,6 +99,7 @@ Railway/Render settings:
 - Build command: `npm ci && npm run prisma:generate && npm run build`.
 - Start command: `npm run start:prod` (runtime only; production env validation rejects any `DIRECT_DATABASE_URL`).
 - Run `npm run prisma:migrate:deploy` from a dedicated release job or CI environment that has `DIRECT_DATABASE_URL`. Do not add the owner URL to the Railway API service variables. Railway pre-deploy commands run separately, but inherit the service environment, so a separate migration service/job or deployment workflow is required for true credential separation.
+- For Railway, connect the `quotefly-migrations` service to this repository's `main` branch and set its custom config-file path to `/railway.migrations.json`. That service is a one-shot process with no HTTP healthcheck and a `NEVER` restart policy. Keep GitHub autodeploy disabled until migration-before-API ordering is automated; deploy it manually before redeploying the API candidate.
 - Process liveness: `GET /v1/health`.
 - Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
 - Keep the API service region physically close to the managed Postgres region. For Railway + Neon, choose matching or nearest available US regions before optimizing code.

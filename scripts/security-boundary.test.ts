@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildQuickBooksInvoiceCsv } from "../src/services/quickbooks-csv";
 import {
@@ -18,6 +19,21 @@ process.env.ENABLE_TWILIO_SMS = "false";
 process.env.RESEND_API_KEY = "re_security_test";
 process.env.PASSWORD_RESET_EMAIL_FROM = "QuoteFly <support@quotefly.us>";
 process.env.SUPPORT_EMAIL = "support@quotefly.us";
+
+test("Railway keeps migration-owner execution isolated from the long-running API", () => {
+  const apiConfig = JSON.parse(
+    readFileSync(new URL("../railway.json", import.meta.url), "utf8"),
+  ) as { deploy?: Record<string, unknown> };
+  const migrationConfig = JSON.parse(
+    readFileSync(new URL("../railway.migrations.json", import.meta.url), "utf8"),
+  ) as { deploy?: Record<string, unknown> };
+
+  assert.equal(apiConfig.deploy?.startCommand, "npm start");
+  assert.equal(apiConfig.deploy?.healthcheckPath, "/v1/ready");
+  assert.equal(migrationConfig.deploy?.startCommand, "npm run prisma:migrate:deploy");
+  assert.equal(migrationConfig.deploy?.healthcheckPath, null);
+  assert.equal(migrationConfig.deploy?.restartPolicyType, "NEVER");
+});
 
 test("credentialed CORS never reflects an untrusted origin", async () => {
   const { buildServer } = await import("../src/app");
