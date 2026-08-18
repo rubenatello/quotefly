@@ -163,11 +163,29 @@ test.describe("controlled beta core workflow", () => {
   });
 
   test("desktop navigation stays consistent across collapse and secondary routes", async ({ context, page, request }) => {
+    test.setTimeout(90_000);
     const account = await signUpViaApi(request, "desktop-navigation");
     await addSessionCookie(context, account);
 
     await page.goto("/app/customers");
+    const sidebar = page.getByTestId("workspace-sidebar");
+    const activeCustomersLink = page.getByRole("button", { name: "Customers", exact: true });
+    await expect(sidebar).toBeVisible({ timeout: 30_000 });
+    await expect(sidebar).toHaveAttribute("data-collapsed", "false");
+    await expect(activeCustomersLink).toHaveAttribute("data-current", "true");
+    const quickCommands = page.getByRole("group", { name: "Quick commands" });
+    const newCustomerCommand = quickCommands.getByRole("button", { name: "New customer", exact: true });
+    const newQuoteCommand = quickCommands.getByRole("button", { name: "New quote", exact: true });
+    await expect(newCustomerCommand).toBeVisible();
+    await expect(newQuoteCommand).toBeVisible();
+    await expect(newCustomerCommand).toHaveText("");
+    await expect(newQuoteCommand).toHaveText("");
+    await newCustomerCommand.hover();
+    await expect(page.getByRole("tooltip", { name: "New customer" })).toBeVisible();
+    await activeCustomersLink.hover();
+    await expect.poll(() => activeCustomersLink.evaluate((element) => getComputedStyle(element, "::before").opacity)).toBe("1");
     await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect(sidebar).toHaveAttribute("data-collapsed", "true");
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();

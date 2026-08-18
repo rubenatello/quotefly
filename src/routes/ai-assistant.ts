@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
-import { assistantToolConsumesAiBudget, resolveAssistantTool, runAiAssistant } from "../lib/ai-assistant";
+import { runAiAssistant } from "../lib/ai-assistant";
 import {
   AssistantRequestSchema,
   normalizeAssistantContext,
@@ -35,8 +35,6 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
     const payload = AssistantRequestSchema.parse(request.body);
     const context = normalizeAssistantContext(payload.context);
     const conversation = normalizeAssistantConversation(payload.conversation);
-    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context, conversation);
-
     const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
     }));
@@ -49,7 +47,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       claims.tenantId,
       entitlements,
     ));
-    if (blocked && assistantToolConsumesAiBudget(resolvedTool)) {
+    if (blocked) {
       return reply.code(402).send({
         code: "AI_USAGE_LIMIT_REACHED",
         error: "This workspace has reached its AI usage limit for the current billing period.",

@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { QuoteStatus } from "@prisma/client";
+import { Prisma, type QuoteStatus } from "@prisma/client";
+import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext } from "../lib/access-policy";
-import { tenantActiveCustomerScope, tenantActiveQuoteScope } from "../lib/query-scope";
+import { PaginationQuerySchema, tenantActiveCustomerScope, tenantActiveQuoteScope } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { assignedRecordScope } from "../lib/workspace-assignment";
 
@@ -29,7 +30,252 @@ function attentionPriority(reason: AttentionReason) {
   return 4;
 }
 
+const FollowUpQueueSchema = z.enum(["new", "quoted", "closed", "afterSale", "recent"]);
+const FollowUpQuerySchema = PaginationQuerySchema.extend({
+  queue: FollowUpQueueSchema.default("new"),
+  search: z.string().trim().min(1).max(120).optional(),
+});
+
+type FollowUpRow = {
+  customerId: string;
+  customerName: string;
+  phone: string;
+  email: string | null;
+  quoteId: string | null;
+  quoteTitle: string | null;
+  totalAmount: Prisma.Decimal | null;
+  status: string | null;
+  jobStatus: string | null;
+  afterSaleFollowUpStatus: string | null;
+  afterSaleFollowUpDueAtUtc: Date | null;
+  followUpStatus: string;
+  createdAt: Date;
+};
+
+type FollowUpCountsRow = {
+  newCount: bigint;
+  quotedCount: bigint;
+  closedCount: bigint;
+  afterSaleCount: bigint;
+  recentCount: bigint;
+};
+
+function escapeLikePattern(value: string) {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function followUpCte(input: {
+  tenantId: string;
+  assignedTenantUserId: string | null;
+  search?: string;
+}) {
+  const searchPattern = input.search ? `%${escapeLikePattern(input.search)}%` : null;
+  const searchSql = searchPattern
+    ? Prisma.sql`AND (
+        customer."fullName" ILIKE ${searchPattern} ESCAPE E'\\\\'
+        OR customer."email" ILIKE ${searchPattern} ESCAPE E'\\\\'
+        OR customer."phone" ILIKE ${searchPattern} ESCAPE E'\\\\'
+        OR latest_quote."title" ILIKE ${searchPattern} ESCAPE E'\\\\'
+      )`
+    : Prisma.empty;
+
+  return Prisma.sql`
+    WITH scoped AS (
+      SELECT
+        customer."id" AS "customerId",
+        customer."fullName" AS "customerName",
+        customer."phone",
+        customer."email",
+        customer."followUpStatus"::text AS "customerFollowUpStatus",
+        customer."createdAt" AS "customerCreatedAt",
+        latest_quote."id" AS "quoteId",
+        latest_quote."title" AS "quoteTitle",
+        latest_quote."totalAmount",
+        latest_quote."status"::text AS "status",
+        latest_quote."jobStatus"::text AS "jobStatus",
+        latest_quote."afterSaleFollowUpStatus"::text AS "afterSaleFollowUpStatus",
+        latest_quote."afterSaleFollowUpDueAtUtc",
+        latest_quote."updatedAt" AS "quoteUpdatedAt"
+      FROM "Customer" customer
+      LEFT JOIN LATERAL (
+        SELECT quote.*
+        FROM "Quote" quote
+        WHERE quote."tenantId" = ${input.tenantId}
+          AND quote."customerId" = customer."id"
+          AND quote."archivedAtUtc" IS NULL
+          AND quote."deletedAtUtc" IS NULL
+          AND (${input.assignedTenantUserId}::text IS NULL OR quote."assignedTenantUserId" = ${input.assignedTenantUserId})
+        ORDER BY quote."updatedAt" DESC, quote."id" DESC
+        LIMIT 1
+      ) latest_quote ON TRUE
+      WHERE customer."tenantId" = ${input.tenantId}
+        AND customer."archivedAtUtc" IS NULL
+        AND customer."deletedAtUtc" IS NULL
+        AND (${input.assignedTenantUserId}::text IS NULL OR customer."assignedTenantUserId" = ${input.assignedTenantUserId})
+        ${searchSql}
+    ), classified AS (
+      SELECT
+        scoped.*,
+        CASE
+          WHEN scoped."quoteId" IS NULL OR scoped."status" IN ('DRAFT', 'READY_FOR_REVIEW') THEN 'new'
+          WHEN scoped."status" = 'SENT_TO_CUSTOMER' THEN 'quoted'
+          WHEN scoped."status" = 'ACCEPTED' AND scoped."afterSaleFollowUpStatus" = 'DUE' THEN 'afterSale'
+          WHEN scoped."status" = 'ACCEPTED' AND scoped."afterSaleFollowUpStatus" <> 'COMPLETED' THEN 'closed'
+          ELSE NULL
+        END AS "queueKey",
+        CASE
+          WHEN scoped."status" = 'ACCEPTED' THEN 'WON'
+          WHEN scoped."status" = 'REJECTED' THEN 'LOST'
+          ELSE scoped."customerFollowUpStatus"
+        END AS "effectiveFollowUpStatus"
+      FROM scoped
+    )`;
+}
+
 export const workspaceRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/workspace/follow-up", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const recordScope = assignedRecordScope(access);
+    const query = FollowUpQuerySchema.parse(request.query);
+    const cte = followUpCte({
+      tenantId: claims.tenantId,
+      assignedTenantUserId: recordScope.assignedTenantUserId ?? null,
+      search: query.search,
+    });
+    const queueFilter = query.queue === "recent"
+      ? Prisma.sql`TRUE`
+      : Prisma.sql`"queueKey" = ${query.queue}`;
+    const orderSql = query.queue === "recent"
+      ? Prisma.sql`"customerCreatedAt" DESC, "customerId" DESC`
+      : query.queue === "closed"
+        ? Prisma.sql`
+            CASE "jobStatus"
+              WHEN 'NOT_STARTED' THEN 0
+              WHEN 'SCHEDULED' THEN 1
+              WHEN 'IN_PROGRESS' THEN 2
+              WHEN 'COMPLETED' THEN 3
+              ELSE 4
+            END,
+            COALESCE("quoteUpdatedAt", "customerCreatedAt") ASC,
+            "customerId" ASC`
+        : query.queue === "afterSale"
+          ? Prisma.sql`COALESCE("afterSaleFollowUpDueAtUtc", 'epoch'::timestamptz) ASC, COALESCE("quoteUpdatedAt", "customerCreatedAt") ASC, "customerId" ASC`
+          : Prisma.sql`
+              CASE "effectiveFollowUpStatus"
+                WHEN 'NEEDS_FOLLOW_UP' THEN 0
+                WHEN 'FOLLOWED_UP' THEN 1
+                WHEN 'WON' THEN 2
+                WHEN 'LOST' THEN 3
+                ELSE 4
+              END,
+              COALESCE("quoteUpdatedAt", "customerCreatedAt") ASC,
+              "customerId" ASC`;
+    const quoteScope = {
+      ...tenantActiveQuoteScope(claims.tenantId),
+      ...recordScope,
+    };
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+
+    const [rows, countRows, acceptedRevenue, monthlyQuotes] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
+      app.prisma.$queryRaw<FollowUpRow[]>(Prisma.sql`
+        ${cte}
+        SELECT
+          "customerId",
+          "customerName",
+          "phone",
+          "email",
+          "quoteId",
+          "quoteTitle",
+          "totalAmount",
+          "status",
+          "jobStatus",
+          "afterSaleFollowUpStatus",
+          "afterSaleFollowUpDueAtUtc",
+          "effectiveFollowUpStatus" AS "followUpStatus",
+          CASE WHEN ${query.queue} = 'recent' THEN "customerCreatedAt" ELSE COALESCE("quoteUpdatedAt", "customerCreatedAt") END AS "createdAt"
+        FROM classified
+        WHERE ${queueFilter}
+        ORDER BY ${orderSql}
+        LIMIT ${query.limit}
+        OFFSET ${query.offset}
+      `),
+      app.prisma.$queryRaw<FollowUpCountsRow[]>(Prisma.sql`
+        ${cte}
+        SELECT
+          COUNT(*) FILTER (WHERE "queueKey" = 'new')::bigint AS "newCount",
+          COUNT(*) FILTER (WHERE "queueKey" = 'quoted')::bigint AS "quotedCount",
+          COUNT(*) FILTER (WHERE "queueKey" = 'closed')::bigint AS "closedCount",
+          COUNT(*) FILTER (WHERE "queueKey" = 'afterSale')::bigint AS "afterSaleCount",
+          COUNT(*)::bigint AS "recentCount"
+        FROM classified
+      `),
+      app.prisma.quote.aggregate({
+        where: { ...quoteScope, status: "ACCEPTED" },
+        _sum: { totalAmount: true },
+      }),
+      app.prisma.quote.count({
+        where: {
+          ...quoteScope,
+          createdAt: { gte: monthStart },
+        },
+      }),
+    ]));
+
+    const counts = countRows[0] ?? {
+      newCount: 0n,
+      quotedCount: 0n,
+      closedCount: 0n,
+      afterSaleCount: 0n,
+      recentCount: 0n,
+    };
+    const totals = {
+      newLeads: Number(counts.newCount),
+      quotedLeads: Number(counts.quotedCount),
+      closedLeads: Number(counts.closedCount),
+      afterSaleLeads: Number(counts.afterSaleCount),
+      recentLeads: Number(counts.recentCount),
+    };
+    const totalByQueue = {
+      new: totals.newLeads,
+      quoted: totals.quotedLeads,
+      closed: totals.closedLeads,
+      afterSale: totals.afterSaleLeads,
+      recent: totals.recentLeads,
+    };
+
+    reply.header("Cache-Control", "private, no-store");
+    return {
+      items: rows.map((row) => ({
+        customerId: row.customerId,
+        customerName: row.customerName,
+        phone: row.phone,
+        email: row.email,
+        ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+        ...(row.quoteTitle ? { quoteTitle: row.quoteTitle } : {}),
+        ...(row.totalAmount !== null ? { totalAmount: Number(row.totalAmount) } : {}),
+        ...(row.status ? { status: row.status } : {}),
+        ...(row.jobStatus ? { jobStatus: row.jobStatus } : {}),
+        ...(row.afterSaleFollowUpStatus ? { afterSaleFollowUpStatus: row.afterSaleFollowUpStatus } : {}),
+        afterSaleFollowUpDueAtUtc: row.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
+        followUpStatus: row.followUpStatus,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total: totalByQueue[query.queue],
+      },
+      totals,
+      metrics: {
+        acceptedRevenue: Number(acceptedRevenue._sum.totalAmount ?? 0),
+        monthlyQuotes,
+      },
+    };
+  });
+
   app.get("/workspace/overview", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);

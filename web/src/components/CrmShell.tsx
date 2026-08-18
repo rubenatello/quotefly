@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { BadgeInfo, Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UsersRound } from "lucide-react";
+import { BadgeInfo, Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UserRoundPlus, UsersRound } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { cn } from "../lib/utils";
@@ -14,6 +14,7 @@ import { CrmMobileHeader } from "./crm/CrmMobileHeader";
 import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
 import { Modal, ModalBody, ModalHeader } from "./ui";
+import { AppTooltip, AppTooltipProvider } from "./ui/tooltip";
 import {
   WORKSPACE_OPERATIONS_LINKS,
   WORKSPACE_PAGE_META,
@@ -199,7 +200,7 @@ export function CrmShell({
       ) : null}
 
       <div
-        className={`mx-auto w-full max-w-[1920px] lg:grid ${
+        className={`qf-workspace-shell-grid mx-auto w-full max-w-[1920px] lg:grid ${
           sidebarCollapsed ? "lg:grid-cols-[74px_1fr]" : "lg:grid-cols-[228px_1fr]"
         }`}
       >
@@ -248,14 +249,30 @@ export function CrmShell({
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleQuickAction("new-quote")}
-                  className="inline-flex items-center gap-2 rounded-xl border border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] px-3.5 py-2 text-sm font-semibold text-[var(--qf-action-primary-text)] transition hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-action-primary-active)]"
-                >
-                  <FilePlus2 size={15} />
-                  New quote
-                </button>
+                <AppTooltipProvider>
+                  <div className="flex items-center gap-1.5" role="group" aria-label="Quick commands">
+                    <AppTooltip content="New customer" side="bottom">
+                      <button
+                        type="button"
+                        aria-label="New customer"
+                        onClick={() => handleQuickAction("new-customer")}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-qf-border bg-qf-surface text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-selected)]"
+                      >
+                        <UserRoundPlus size={18} aria-hidden="true" />
+                      </button>
+                    </AppTooltip>
+                    <AppTooltip content="New quote" side="bottom">
+                      <button
+                        type="button"
+                        aria-label="New quote"
+                        onClick={() => handleQuickAction("new-quote")}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] transition hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-action-primary-active)]"
+                      >
+                        <FilePlus2 size={18} aria-hidden="true" />
+                      </button>
+                    </AppTooltip>
+                  </div>
+                </AppTooltipProvider>
 
                 <button
                   type="button"
@@ -304,7 +321,7 @@ export function CrmShell({
                           { label: "Open products", page: "products" },
                           { label: "Open settings", page: "settings" },
                           ...(canManageCatalog ? [{ label: "Open branding", page: "branding" } as const] : []),
-                          { label: "About workspace", page: "about" },
+                          { label: "My info", page: "about" },
                         ] as const).map((item) => (
                           <DropdownMenuPrimitive.Item
                             key={item.page}

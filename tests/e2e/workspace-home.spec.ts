@@ -29,14 +29,15 @@ test("members can access support identifiers without seeing management navigatio
   await page.goto("/app");
   await expect(page.getByTestId("workspace-home")).toBeVisible({ timeout: 20_000 });
 
-  await expect(page.getByRole("button", { name: "About workspace", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "My info", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Team & users", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Branding", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Products", exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "About workspace", exact: true }).click();
+  await page.getByRole("button", { name: "My info", exact: true }).click();
   await expect(page.getByText(owner.tenant.id, { exact: true })).toBeVisible();
   await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
+  await expect(page.getByText(member.user.id, { exact: true })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
 
   await page.goto("/app/settings/users");
@@ -101,13 +102,14 @@ test("workspace home summarizes leads, quote momentum, and priority work without
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);
 
-  await page.getByRole("button", { name: "About workspace", exact: true }).click();
+  await page.getByRole("button", { name: "My info", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/about$/);
   await expect(page.getByText(account.tenant.name, { exact: true })).toBeVisible();
   await expect(page.getByText(account.tenant.id, { exact: true })).toBeVisible();
   await expect(page.getByText(account.email, { exact: true })).toBeVisible();
+  await expect(page.getByText(account.user.id, { exact: true })).toBeVisible();
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
-  const copyIdButton = page.getByRole("button", { name: "Copy ID", exact: true });
+  const copyIdButton = page.getByRole("button", { name: "Copy tenant ID", exact: true });
   expect((await copyIdButton.boundingBox())?.height).toBeGreaterThanOrEqual(38);
   await copyIdButton.click();
   await expect(page.getByText("Tenant ID copied", { exact: true })).toBeVisible();

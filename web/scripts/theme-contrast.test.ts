@@ -79,6 +79,9 @@ test("light theme semantic actions and statuses remain readable", () => {
   expectContrast(light, "action-secondary-text", "action-secondary", 4.5, "Secondary button");
   expectContrast(light, "action-secondary-text", "action-secondary-hover", 4.5, "Secondary button hover");
   expectContrast(light, "action-secondary-text", "action-secondary-active", 4.5, "Secondary button active");
+  expectContrast(light, "kody-action-text", "kody-action", 4.5, "Kody button");
+  expectContrast(light, "kody-action-text", "kody-action-hover", 4.5, "Kody button hover");
+  expectContrast(light, "kody-action-text", "kody-action-active", 4.5, "Kody button active");
   expectContrast(light, "success-text", "success-surface", 4.5, "Success status");
   expectContrast(light, "warning-text", "warning-surface", 4.5, "Warning status");
   expectContrast(light, "danger-text", "danger-surface", 4.5, "Danger status");
@@ -92,6 +95,9 @@ test("dark theme semantic actions and statuses remain readable", () => {
   expectContrast(dark, "action-secondary-text", "action-secondary", 4.5, "Dark secondary button");
   expectContrast(dark, "action-secondary-text", "action-secondary-hover", 4.5, "Dark secondary button hover");
   expectContrast(dark, "action-secondary-text", "action-secondary-active", 4.5, "Dark secondary button active");
+  expectContrast(dark, "kody-action-text", "kody-action", 4.5, "Dark Kody button");
+  expectContrast(dark, "kody-action-text", "kody-action-hover", 4.5, "Dark Kody button hover");
+  expectContrast(dark, "kody-action-text", "kody-action-active", 4.5, "Dark Kody button active");
   expectContrast(dark, "success-text", "success-surface", 4.5, "Dark success status");
   expectContrast(dark, "warning-text", "warning-surface", 4.5, "Dark warning status");
   expectContrast(dark, "danger-text", "danger-surface", 4.5, "Dark danger status");

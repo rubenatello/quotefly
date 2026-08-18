@@ -15,6 +15,7 @@ import { DashboardProvider, type DashboardSession } from "./dashboard/DashboardC
 import type { AppSession } from "../lib/app-session";
 
 const KodyAssistant = lazy(() => import("./ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
+const AiUsageMilestoneNotifier = lazy(() => import("./ai/AiUsageMilestoneNotifier").then((module) => ({ default: module.AiUsageMilestoneNotifier })));
 const BrandingPage = lazy(() => import("../pages/BrandingPage").then((module) => ({ default: module.BrandingPage })));
 const SetupPage = lazy(() => import("../pages/SetupPage").then((module) => ({ default: module.SetupPage })));
 const AdminPage = lazy(() => import("../pages/AdminPage").then((module) => ({ default: module.AdminPage })));
@@ -37,6 +38,7 @@ function toDashboardSession(s: AppSession): DashboardSession {
     fullName: s.fullName,
     tenantId: s.tenantId,
     tenantName: s.tenantName,
+    timezone: s.timezone,
     role: s.role.trim().toLowerCase() === "owner" || s.role.trim().toLowerCase() === "admin"
       ? s.role.trim().toLowerCase() as "owner" | "admin"
       : "member",
@@ -158,6 +160,14 @@ export function CrmAppLayout({
       usage={session.usage}
       canManageCatalog={canManageCatalog}
     >
+      <Suspense fallback={null}>
+        <AiUsageMilestoneNotifier
+          tenantId={session.tenantId}
+          userId={session.userId}
+          usage={session.usage}
+          onUsageChanged={onRefreshSession}
+        />
+      </Suspense>
       <DashboardProvider
         session={toDashboardSession(session)}
         onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
@@ -217,7 +227,16 @@ export function CrmAppLayout({
         </main>
         <BottomTabBar />
         <Suspense fallback={null}>
-          <KodyAssistant currentPage={currentPage} canViewInternalCosts={session.role.trim().toLowerCase() !== "member"} />
+          <KodyAssistant
+            currentPage={currentPage}
+            canViewInternalCosts={session.role.trim().toLowerCase() !== "member"}
+            aiUsageLimitReached={
+              session.usage?.monthlyAiLimitReached === true ||
+              (session.usage?.monthlyAiSpendUsagePercent ?? 0) >= 100
+            }
+            aiUsageRenewsAtUtc={session.usage?.periodEndUtc}
+            displayTimeZone={session.timezone}
+          />
         </Suspense>
       </DashboardProvider>
     </CrmShell>

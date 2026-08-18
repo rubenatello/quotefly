@@ -666,7 +666,7 @@ export function AnalyticsPage() {
         actions={
           <KodyButton
             label="Ask Kody for insight"
-            variant="secondary"
+            variant="kody"
             prompt={`Summarize my sales pipeline for ${formatRangeLabel(activeRange)}. Call out quote volume, accepted revenue, stale follow-ups, and one practical action to improve close rate.`}
             tool="SUMMARIZE_PIPELINE"
             context={{

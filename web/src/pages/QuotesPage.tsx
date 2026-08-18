@@ -1,4 +1,4 @@
-﻿import { useMemo, useState, type ReactNode } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Archive, BadgeCheck, CircleDot, Eye, FileText, MoreHorizontal, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
@@ -14,6 +14,8 @@ import {
   ModalBody,
   ModalFooter,
   ModalHeader,
+  PaginationControls,
+  type PageSize,
 } from "../components/ui";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
@@ -372,8 +374,6 @@ function QuoteMobileCard({
 export function QuotesPage() {
   usePageView("quotes");
   const {
-    quotes,
-    loading,
     error,
     notice,
     setError,
@@ -388,7 +388,22 @@ export function QuotesPage() {
     canManageRecordRetention,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<QuoteLifecycleStage | "ALL">("ALL");
+  const [quoteItems, setQuoteItems] = useState<Quote[]>([]);
+  const [quoteTotal, setQuoteTotal] = useState(0);
+  const [quotePage, setQuotePage] = useState(1);
+  const [quotePageSize, setQuotePageSize] = useState<PageSize>(25);
+  const [quoteLoading, setQuoteLoading] = useState(true);
+  const [quoteLoadError, setQuoteLoadError] = useState<string | null>(null);
+  const [quoteSummary, setQuoteSummary] = useState({
+    stageCounts: { DRAFT: 0, READY: 0, SENT: 0, ACCEPTED: 0, DECLINED: 0, INVOICED: 0 } as Record<QuoteLifecycleStage, number>,
+    readyToSendCount: 0,
+    awaitingResponseCount: 0,
+    awaitingResponseAmount: 0,
+    acceptedAmount: 0,
+  });
+  const quoteRequestIdRef = useRef(0);
   const [pdfActionQuote, setPdfActionQuote] = useState<Quote | null>(null);
   const [pdfActionLoading, setPdfActionLoading] = useState<PdfActionType | null>(null);
   const [preparedSend, setPreparedSend] = useState<PreparedSend | null>(null);
@@ -396,44 +411,53 @@ export function QuotesPage() {
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<QuoteRetentionAction>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
 
-  const sortedQuotes = useMemo(() => {
-    return [...quotes].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
-  }, [quotes]);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+      setQuotePage(1);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
 
-  const stageCounts = useMemo(() => {
-    return QUOTE_STAGE_ORDER.reduce<Record<QuoteLifecycleStage, number>>((accumulator, stage) => {
-      accumulator[stage] = sortedQuotes.filter((quote) => quoteLifecycleStage(quote) === stage).length;
-      return accumulator;
-    }, { DRAFT: 0, READY: 0, SENT: 0, ACCEPTED: 0, DECLINED: 0, INVOICED: 0 });
-  }, [sortedQuotes]);
+  const loadQuotePage = useCallback(async () => {
+    const requestId = ++quoteRequestIdRef.current;
+    setQuoteLoading(true);
+    setQuoteLoadError(null);
+    try {
+      const result = await api.quotes.list({
+        limit: quotePageSize,
+        offset: (quotePage - 1) * quotePageSize,
+        search: debouncedSearchTerm || undefined,
+        stage: statusFilter === "ALL" ? undefined : statusFilter,
+      });
+      if (requestId !== quoteRequestIdRef.current) return;
+      setQuoteItems(result.quotes);
+      setQuoteTotal(result.pagination.total);
+      setQuoteSummary(result.summary);
+    } catch (err) {
+      if (requestId !== quoteRequestIdRef.current) return;
+      setQuoteLoadError(err instanceof Error ? err.message : "Failed loading quotes.");
+    } finally {
+      if (requestId === quoteRequestIdRef.current) setQuoteLoading(false);
+    }
+  }, [debouncedSearchTerm, quotePage, quotePageSize, statusFilter]);
 
-  const filteredQuotes = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    return sortedQuotes.filter((quote) => {
-      const lifecycle = quoteLifecycleStage(quote);
-      const matchesStatus = statusFilter === "ALL" || lifecycle === statusFilter;
-      if (!matchesStatus) return false;
-      if (!normalizedSearch) return true;
-      return [
-        quoteNumber(quote.id),
-        quote.title,
-        quote.customer?.fullName ?? "",
-        quote.customer?.phone ?? "",
-        quote.customer?.email ?? "",
-        rawStatusHint(quote),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedSearch);
-    });
-  }, [sortedQuotes, searchTerm, statusFilter]);
+  useEffect(() => {
+    void loadQuotePage();
+  }, [loadQuotePage]);
 
-  const readyToSendQuotes = useMemo(() => sortedQuotes.filter((quote) => quote.status === "READY_FOR_REVIEW"), [sortedQuotes]);
-  const awaitingResponseQuotes = useMemo(() => sortedQuotes.filter((quote) => quote.status === "SENT_TO_CUSTOMER"), [sortedQuotes]);
-  const awaitingAmount = awaitingResponseQuotes.reduce((total, quote) => total + Number(quote.totalAmount), 0);
-  const acceptedAmount = sortedQuotes
-    .filter((quote) => quote.status === "ACCEPTED")
-    .reduce((total, quote) => total + Number(quote.totalAmount), 0);
+  const filteredQuotes = quoteItems;
+  const stageCounts = quoteSummary.stageCounts;
+  const allQuoteCount = QUOTE_STAGE_ORDER.reduce((total, stage) => total + stageCounts[stage], 0);
+  const readyToSendCount = quoteSummary.readyToSendCount;
+  const awaitingResponseCount = quoteSummary.awaitingResponseCount;
+  const awaitingAmount = quoteSummary.awaitingResponseAmount;
+  const acceptedAmount = quoteSummary.acceptedAmount;
+  const totalQuotePages = Math.max(1, Math.ceil(quoteTotal / quotePageSize));
+
+  useEffect(() => {
+    if (quotePage > totalQuotePages) setQuotePage(totalQuotePages);
+  }, [quotePage, totalQuotePages]);
 
   async function getPdfBlob(quoteId: string, options?: { inline?: boolean }) {
     return api.quotes.downloadPdf(quoteId, { inline: options?.inline });
@@ -488,7 +512,7 @@ export function QuotesPage() {
       subject: prepared.draft.subject,
       body: prepared.draft.body,
     });
-    await loadQuotes();
+    await Promise.all([loadQuotes(), loadQuotePage()]);
   }
 
   async function confirmPreparedSend(quote: Quote) {
@@ -650,7 +674,7 @@ export function QuotesPage() {
         });
       }
       setPdfActionQuote((current) => (current?.id === action.quote.id ? null : current));
-      await loadQuotes();
+      await Promise.all([loadQuotes(), loadQuotePage()]);
       setQuoteRetentionAction(null);
     } catch (err) {
       notify.error(`Could not ${action.type} quote`, {
@@ -669,14 +693,14 @@ export function QuotesPage() {
       <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <MetricCard
           label="Ready to send"
-          value={String(readyToSendQuotes.length)}
+          value={String(readyToSendCount)}
           hint="Finished quotes waiting for you"
           icon={<FileText size={18} strokeWidth={2.1} />}
           tone="blue"
         />
         <MetricCard
           label="Waiting on reply"
-          value={String(awaitingResponseQuotes.length)}
+          value={String(awaitingResponseCount)}
           hint="Sent quotes awaiting the customer"
           icon={<Send size={18} strokeWidth={2.1} />}
           tone="orange"
@@ -698,7 +722,7 @@ export function QuotesPage() {
       </div>
 
       <div className="qf-horizontal-filter-strip -mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
-        <StageCountCard label="All" count={sortedQuotes.length} stage="ALL" active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")} />
+        <StageCountCard label="All" count={allQuoteCount} stage="ALL" active={statusFilter === "ALL"} onClick={() => { setStatusFilter("ALL"); setQuotePage(1); }} />
         {QUOTE_STAGE_ORDER.map((stage) => (
           <StageCountCard
             key={stage}
@@ -706,7 +730,7 @@ export function QuotesPage() {
             count={stageCounts[stage]}
             stage={stage}
             active={statusFilter === stage}
-            onClick={() => setStatusFilter(stage)}
+            onClick={() => { setStatusFilter(stage); setQuotePage(1); }}
           />
         ))}
       </div>
@@ -734,7 +758,7 @@ export function QuotesPage() {
         </div>
 
         <div className="mt-4 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
-          {loading ? (
+          {quoteLoading ? (
             <div className="p-4">
               <LoadingState
                 title="Loading quotes"
@@ -743,12 +767,20 @@ export function QuotesPage() {
                 rows={5}
               />
             </div>
+          ) : quoteLoadError ? (
+            <div className="p-4">
+              <EmptyState
+                title="Quotes are temporarily unavailable"
+                description={`${quoteLoadError} No quote records were changed.`}
+                action={<Button variant="outline" onClick={() => void loadQuotePage()}>Try again</Button>}
+              />
+            </div>
           ) : filteredQuotes.length === 0 ? (
             <div className="p-4">
               <EmptyState
-                title={sortedQuotes.length ? "No matching quotes" : "Create your first quote"}
-                description={sortedQuotes.length ? "Clear the search or choose another status." : "Add a customer and build a professional quote in minutes."}
-                action={sortedQuotes.length ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); }}>Clear filters</Button> : <Button onClick={() => navigateToBuilder()}>New quote</Button>}
+                title={debouncedSearchTerm || statusFilter !== "ALL" ? "No matching quotes" : "Create your first quote"}
+                description={debouncedSearchTerm || statusFilter !== "ALL" ? "Clear the search or choose another status." : "Add a customer and build a professional quote in minutes."}
+                action={debouncedSearchTerm || statusFilter !== "ALL" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); setQuotePage(1); }}>Clear filters</Button> : <Button onClick={() => navigateToBuilder()}>New quote</Button>}
               />
             </div>
           ) : (
@@ -787,6 +819,19 @@ export function QuotesPage() {
           )}
         </div>
       </Card>
+
+      <PaginationControls
+        limit={quotePageSize}
+        offset={(quotePage - 1) * quotePageSize}
+        total={quoteTotal}
+        loading={quoteLoading}
+        itemLabel="quotes"
+        onLimitChange={(nextLimit) => {
+          setQuotePageSize(nextLimit);
+          setQuotePage(1);
+        }}
+        onOffsetChange={(nextOffset) => setQuotePage(Math.floor(nextOffset / quotePageSize) + 1)}
+      />
 
       {pdfActionQuote ? (
         <Modal open={true} onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }} size="lg" ariaLabel="PDF quote actions">

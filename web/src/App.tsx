@@ -15,6 +15,7 @@ import {
   type AuthSessionPayload,
 } from "./lib/api";
 import type { AppSession, SessionRecovery } from "./lib/app-session";
+import { browserTimeZone } from "./lib/display-format";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
@@ -65,6 +66,7 @@ function toSession(payload: AuthSessionPayload): AppSession {
     fullName: payload.user.fullName,
     tenantId: payload.tenant.id,
     tenantName: payload.tenant.name,
+    timezone: payload.tenant.timezone?.trim() || browserTimeZone(),
     role: payload.role,
     primaryTrade: payload.tenant.primaryTrade ?? null,
     onboardingCompletedAtUtc: payload.tenant.onboardingCompletedAtUtc ?? null,

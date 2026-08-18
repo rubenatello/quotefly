@@ -30,9 +30,25 @@ export type MonthlyAiUsageSnapshot = {
   monthlySpendLimitUsd: number | null;
   monthlySpendRemainingUsd: number | null;
   monthlySpendUsagePercent: number | null;
+  warningThresholdPercent: AiUsageWarningThreshold | null;
+  limitReached: boolean;
   estimatedPromptCostUsd: number;
   estimatedPromptsRemaining: number | null;
 };
+
+export const AI_USAGE_WARNING_THRESHOLDS = [25, 50, 75, 85, 95, 100] as const;
+export type AiUsageWarningThreshold = (typeof AI_USAGE_WARNING_THRESHOLDS)[number];
+
+export function resolveAiUsageWarningThreshold(
+  usagePercent: number | null | undefined,
+): AiUsageWarningThreshold | null {
+  if (usagePercent === null || usagePercent === undefined || !Number.isFinite(usagePercent)) return null;
+  for (let index = AI_USAGE_WARNING_THRESHOLDS.length - 1; index >= 0; index -= 1) {
+    const threshold = AI_USAGE_WARNING_THRESHOLDS[index];
+    if (threshold !== undefined && usagePercent >= threshold) return threshold;
+  }
+  return null;
+}
 
 export type AiUsageTelemetry = {
   requestCount: number;
@@ -149,6 +165,12 @@ export async function loadMonthlyAiUsageSnapshot(
     monthlySpendLimitUsd !== null && monthlySpendLimitUsd > 0
       ? Number(Math.min((monthlySpendUsedUsd / monthlySpendLimitUsd) * 100, 100).toFixed(2))
       : null;
+  const spendLimitReached =
+    monthlySpendLimitUsd !== null && monthlySpendUsedUsd >= monthlySpendLimitUsd;
+  const creditsLimitReached =
+    monthlySpendLimitUsd === null &&
+    monthlyCreditsLimit !== null &&
+    monthlyCreditsUsed >= monthlyCreditsLimit;
   const observedCostedSamples = costedAggregate._count._all ?? 0;
   const observedCredits = Number(costedAggregate._sum.creditsConsumed ?? 0);
   const observedSpendUsd = Number(costedAggregate._sum.estimatedCostUsd ?? 0);
@@ -180,6 +202,8 @@ export async function loadMonthlyAiUsageSnapshot(
     monthlySpendLimitUsd,
     monthlySpendRemainingUsd,
     monthlySpendUsagePercent,
+    warningThresholdPercent: resolveAiUsageWarningThreshold(monthlySpendUsagePercent),
+    limitReached: spendLimitReached || creditsLimitReached,
     estimatedPromptCostUsd,
     estimatedPromptsRemaining,
   };
@@ -201,12 +225,9 @@ export async function assertAiUsageAvailable(
     now,
   );
   const spendBlocked =
-    snapshot.monthlySpendLimitUsd !== null &&
-    snapshot.monthlySpendUsedUsd >= snapshot.monthlySpendLimitUsd;
+    snapshot.monthlySpendLimitUsd !== null && snapshot.limitReached;
   const creditsBlocked =
-    snapshot.monthlySpendLimitUsd === null &&
-    snapshot.monthlyCreditsLimit !== null &&
-    snapshot.monthlyCreditsUsed >= snapshot.monthlyCreditsLimit;
+    snapshot.monthlySpendLimitUsd === null && snapshot.limitReached;
 
   return {
     blocked: spendBlocked || creditsBlocked,
@@ -376,6 +397,12 @@ export function buildAiUsageResponse(
     snapshot.monthlySpendLimitUsd !== null && snapshot.monthlySpendLimitUsd > 0
       ? Number(Math.min((monthlySpendUsedUsd / snapshot.monthlySpendLimitUsd) * 100, 100).toFixed(2))
       : null;
+  const spendLimitReached =
+    snapshot.monthlySpendLimitUsd !== null && monthlySpendUsedUsd >= snapshot.monthlySpendLimitUsd;
+  const creditsLimitReached =
+    snapshot.monthlySpendLimitUsd === null &&
+    snapshot.monthlyCreditsLimit !== null &&
+    monthlyCreditsUsed >= snapshot.monthlyCreditsLimit;
   const estimatedPromptsRemaining =
     monthlySpendRemainingUsd === null
       ? null
@@ -391,6 +418,8 @@ export function buildAiUsageResponse(
     monthlySpendLimitUsd: snapshot.monthlySpendLimitUsd,
     monthlySpendRemainingUsd,
     monthlySpendUsagePercent,
+    warningThresholdPercent: resolveAiUsageWarningThreshold(monthlySpendUsagePercent),
+    limitReached: spendLimitReached || creditsLimitReached,
     estimatedPromptCostUsd: snapshot.estimatedPromptCostUsd,
     estimatedPromptsRemaining,
     renewsAtUtc: snapshot.periodEndUtc,

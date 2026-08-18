@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -23,8 +23,10 @@ import {
   ModalFooter,
   ModalHeader,
   PageHeader,
+  PaginationControls,
   Select,
   Textarea,
+  type PageSize,
 } from "../components/ui";
 import {
   ApiError,
@@ -441,7 +443,12 @@ export function ProductsPage() {
   const [supportedTrades, setSupportedTrades] = useState<ServiceType[]>([]);
   const [selectedTrade, setSelectedTrade] = useState<ServiceType>("ROOFING");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | WorkPresetCategory>("ALL");
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState<PageSize>(25);
+  const [productTotal, setProductTotal] = useState(0);
+  const [standardProductCount, setStandardProductCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -454,6 +461,7 @@ export function ProductsPage() {
   const [editingProduct, setEditingProduct] = useState<WorkPreset | null>(null);
   const [kodyProductDraft, setKodyProductDraft] = useState<KodyProductDraft | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<WorkPreset | null>(null);
+  const productRequestIdRef = useRef(0);
 
   useEffect(() => {
     setSEOMetadata({
@@ -475,47 +483,51 @@ export function ProductsPage() {
   }, [loading, location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
-    let mounted = true;
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+      setProductPage(1);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchQuery]);
+
+  const loadProductPage = useCallback(async () => {
+    void reloadKey;
+    const requestId = ++productRequestIdRef.current;
     setLoading(true);
     setLoadError(null);
-    api.products
-      .list()
-      .then((result) => {
-        if (!mounted) return;
-        const nextTrade = result.primaryTrade ?? result.supportedTrades[0] ?? "ROOFING";
-        setProducts(result.products);
-        setSupportedTrades(result.supportedTrades);
-        setSelectedTrade(nextTrade);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setLoadError(err instanceof ApiError ? err.message : "Products could not be loaded.");
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
+    try {
+      const result = await api.products.list({
+        serviceType: selectedTrade,
+        category: categoryFilter === "ALL" ? undefined : categoryFilter,
+        search: debouncedSearchQuery || undefined,
+        limit: productPageSize,
+        offset: (productPage - 1) * productPageSize,
       });
+      if (requestId !== productRequestIdRef.current) return;
+      const primaryTrade = result.primaryTrade ?? result.supportedTrades[0] ?? "ROOFING";
+      setProducts(result.products);
+      setProductTotal(result.pagination.total);
+      setStandardProductCount(result.summary.standardCount);
+      setSupportedTrades(result.supportedTrades);
+      if (!supportedTrades.length && selectedTrade === "ROOFING" && primaryTrade !== "ROOFING") {
+        setSelectedTrade(primaryTrade);
+        setProductPage(1);
+      }
+      setLoadError(null);
+    } catch (err) {
+      if (requestId !== productRequestIdRef.current) return;
+      setLoadError(err instanceof ApiError ? err.message : "Products could not be loaded.");
+    } finally {
+      if (requestId === productRequestIdRef.current) setLoading(false);
+    }
+  }, [categoryFilter, debouncedSearchQuery, productPage, productPageSize, reloadKey, selectedTrade, supportedTrades.length]);
 
-    return () => {
-      mounted = false;
-    };
-  }, [reloadKey]);
+  useEffect(() => {
+    void loadProductPage();
+  }, [loadProductPage]);
 
-  const tradeProducts = useMemo(
-    () => products.filter((product) => product.serviceType === selectedTrade),
-    [products, selectedTrade],
-  );
-
-  const visibleProducts = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
-    return tradeProducts.filter((product) => {
-      if (categoryFilter !== "ALL" && product.category !== categoryFilter) return false;
-      if (!normalizedQuery) return true;
-      return `${product.name} ${product.description ?? ""} ${CATEGORY_LABELS[product.category]}`
-        .toLowerCase()
-        .includes(normalizedQuery);
-    });
-  }, [categoryFilter, searchQuery, tradeProducts]);
+  const tradeProducts = products;
+  const visibleProducts = products;
 
   const averageMargin = useMemo(() => {
     const values = tradeProducts
@@ -527,6 +539,11 @@ export function ProductsPage() {
 
   const tradeOptions = (supportedTrades.length ? supportedTrades : Object.keys(TRADE_LABELS) as ServiceType[])
     .map((trade) => ({ value: trade, label: TRADE_LABELS[trade] }));
+  const totalProductPages = Math.max(1, Math.ceil(productTotal / productPageSize));
+
+  useEffect(() => {
+    if (productPage > totalProductPages) setProductPage(totalProductPages);
+  }, [productPage, totalProductPages]);
 
   function openCreateProduct() {
     setEditorError(null);
@@ -572,11 +589,9 @@ export function ProductsPage() {
           )
         : await api.products.create(payload);
 
-      setProducts((current) => {
-        const withoutSaved = current.filter((product) => product.id !== result.product.id);
-        return [...withoutSaved, result.product];
-      });
       setSelectedTrade(result.product.serviceType);
+      setProductPage(1);
+      setReloadKey((value) => value + 1);
       setNotice(editingProduct ? `${result.product.name} updated.` : `${result.product.name} added to your catalog.`);
       setEditorOpen(false);
       setEditingProduct(null);
@@ -601,7 +616,7 @@ export function ProductsPage() {
     setError(null);
     try {
       await api.products.archive(archiveTarget.id);
-      setProducts((current) => current.filter((product) => product.id !== archiveTarget.id));
+      setReloadKey((value) => value + 1);
       notify.success("Product archived", {
         description: `${archiveTarget.name} was removed from new quote lists. Existing quotes are unchanged.`,
       });
@@ -645,24 +660,24 @@ export function ProductsPage() {
         <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-quotefly-blue"><Boxes size={18} /></span>
-            <div><p className="text-xs text-slate-500">Active catalog</p><p className="text-xl font-semibold text-slate-900">{tradeProducts.length}</p></div>
+            <div><p className="text-xs text-slate-500">Active catalog</p><p className="text-xl font-semibold text-slate-900">{productTotal}</p></div>
           </div>
         </Card>
         <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><TrendingUp size={18} /></span>
-            <div><p className="text-xs text-slate-500">Average gross margin</p><p className="text-xl font-semibold text-slate-900">{averageMargin === null ? "—" : `${averageMargin.toFixed(1)}%`}</p></div>
+            <div><p className="text-xs text-slate-500">Page average margin</p><p className="text-xl font-semibold text-slate-900">{averageMargin === null ? "—" : `${averageMargin.toFixed(1)}%`}</p></div>
           </div>
         </Card>
         <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><ShieldCheck size={18} /></span>
-            <div><p className="text-xs text-slate-500">Standard items</p><p className="text-xl font-semibold text-slate-900">{tradeProducts.filter((product) => product.catalogKey).length}</p></div>
+            <div><p className="text-xs text-slate-500">Standard items</p><p className="text-xl font-semibold text-slate-900">{standardProductCount}</p></div>
           </div>
         </Card>
         <Card padding="sm">
           <p className="text-xs text-slate-500">Catalog trade</p>
-          <Select className="mt-1" aria-label="Catalog trade" value={selectedTrade} onChange={(event) => setSelectedTrade(event.target.value as ServiceType)} options={tradeOptions} />
+          <Select className="mt-1" aria-label="Catalog trade" value={selectedTrade} onChange={(event) => { setSelectedTrade(event.target.value as ServiceType); setProductPage(1); }} options={tradeOptions} />
         </Card>
       </div>
 
@@ -678,10 +693,10 @@ export function ProductsPage() {
           <Select
             label="Category"
             value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value as "ALL" | WorkPresetCategory)}
+            onChange={(event) => { setCategoryFilter(event.target.value as "ALL" | WorkPresetCategory); setProductPage(1); }}
             options={[{ value: "ALL", label: "All categories" }, ...CATEGORY_OPTIONS]}
           />
-          <p className="pb-2 text-sm text-slate-500 md:text-right">{visibleProducts.length} shown</p>
+          <p className="pb-2 text-sm text-slate-500 md:text-right">{productTotal} matched</p>
         </div>
       </Card>
 
@@ -705,10 +720,10 @@ export function ProductsPage() {
         <Card>
           <EmptyState
             icon={<Boxes size={24} />}
-            title={tradeProducts.length ? "No products match these filters" : `No ${TRADE_LABELS[selectedTrade]} products yet`}
-            description={tradeProducts.length ? "Clear the search or choose another category." : "Add the work and pricing your team reuses most often."}
-            action={tradeProducts.length
-              ? <Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("ALL"); }}>Clear filters</Button>
+            title={debouncedSearchQuery || categoryFilter !== "ALL" ? "No products match these filters" : `No ${TRADE_LABELS[selectedTrade]} products yet`}
+            description={debouncedSearchQuery || categoryFilter !== "ALL" ? "Clear the search or choose another category." : "Add the work and pricing your team reuses most often."}
+            action={debouncedSearchQuery || categoryFilter !== "ALL"
+              ? <Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("ALL"); setProductPage(1); }}>Clear filters</Button>
               : <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>Add first product</Button>}
           />
         </Card>
@@ -770,6 +785,19 @@ export function ProductsPage() {
           </Card>
         </>
       )}
+
+      <PaginationControls
+        limit={productPageSize}
+        offset={(productPage - 1) * productPageSize}
+        total={productTotal}
+        loading={loading}
+        itemLabel="products"
+        onLimitChange={(nextLimit) => {
+          setProductPageSize(nextLimit);
+          setProductPage(1);
+        }}
+        onOffsetChange={(nextOffset) => setProductPage(Math.floor(nextOffset / productPageSize) + 1)}
+      />
 
       {editorOpen ? (
         <ProductEditorModal

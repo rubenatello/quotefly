@@ -347,7 +347,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
             answer: `Found ${customer.fullName} in this workspace.`,
             results: [{
               customerId: customer.id,
+              followUpType: "SENT_QUOTE",
               fullName: customer.fullName,
+              quoteStatus: "SENT_TO_CUSTOMER",
+              dueSinceUtc: "2026-08-14T21:45:05.103Z",
               phone: customer.phone,
               email: customer.email,
               followUpStatus: "NEW",
@@ -462,6 +465,14 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await kodyDialog.getByTestId("kody-prompt").fill(`Find customer ${customer.fullName}`);
   await kodyDialog.getByRole("button", { name: "Send", exact: true }).click();
   await expect(kodyDialog.getByText(`Found ${customer.fullName} in this workspace.`)).toBeVisible();
+  const resultDetails = kodyDialog.getByTestId("kody-results");
+  await resultDetails.locator("summary").click();
+  await expect(resultDetails).toContainText("Sent Quote");
+  await expect(resultDetails).toContainText("Sent to Customer");
+  await expect(resultDetails).toContainText("Aug 14, 2026");
+  await expect(resultDetails).not.toContainText("SENT_QUOTE");
+  await expect(resultDetails).not.toContainText("SENT_TO_CUSTOMER");
+  await expect(resultDetails).not.toContainText("2026-08-14T21:45:05.103Z");
   const guardrails = kodyDialog.getByTestId("kody-data-guardrails");
   await expect(guardrails).toContainText("Sources & safety");
   await expect(guardrails).toContainText("Workspace-only");

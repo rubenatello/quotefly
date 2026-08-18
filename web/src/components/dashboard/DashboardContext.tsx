@@ -112,6 +112,7 @@ export interface DashboardSession {
   fullName: string;
   tenantId: string;
   tenantName: string;
+  timezone: string;
   role: "owner" | "admin" | "member";
   primaryTrade?: ServiceType | null;
   onboardingCompletedAtUtc?: string | null;
@@ -163,7 +164,6 @@ const QUOTE_EDIT_FIELDS: Array<keyof QuoteEditForm> = [
 const WORKSPACE_COLLECTION_PATHS = new Set([
   "/app/analytics",
   "/app/build",
-  "/app/follow-up",
   "/app/quotes",
 ]);
 

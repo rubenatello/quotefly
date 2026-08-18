@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ArrowRight, Check, Clock3, FileCheck2, Leaf, Repeat2, Ruler, Shovel } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Clock3, FileCheck2, Leaf, Repeat2, Ruler, Shovel } from "lucide-react";
 import { Link } from "react-router-dom";
 import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
 import { setPublicSEOMetadata } from "../lib/seo";
@@ -46,13 +46,14 @@ export function LandscapingSolutionsPage({ onOpenAuth }: LandscapingSolutionsPag
   return (
     <div className="min-h-screen overflow-hidden bg-[#f7f4ee] text-slate-900">
       <section className="relative isolate overflow-hidden bg-emerald-950 px-4 py-14 text-white sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-        <div aria-hidden="true" className="pointer-events-none absolute -left-24 top-10 -z-10 h-80 w-80 rounded-full bg-lime-400/15 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-grid pointer-events-none absolute inset-0 -z-20 opacity-20" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--blue pointer-events-none absolute -left-24 top-10 -z-10 h-80 w-80 rounded-full bg-lime-400/15 blur-3xl" />
         <div className="mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-14">
-          <div>
-            <Link to="/solutions#landscaping" className="inline-flex min-h-11 items-center text-sm font-semibold text-emerald-200 hover:text-white">
-              ← All trade solutions
+          <div className="qf-page-enter">
+            <Link to="/solutions#landscaping" className="flex min-h-11 w-fit items-center gap-2 text-sm font-semibold text-emerald-200 transition hover:text-white">
+              <ArrowLeft size={16} aria-hidden="true" /> All trade solutions
             </Link>
-            <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-sm font-bold text-emerald-100">
+            <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-sm font-bold text-emerald-100">
               <Leaf size={16} aria-hidden="true" /> Landscaping estimating software
             </p>
             <h1 className="mt-6 text-4xl font-bold tracking-[-0.045em] text-white sm:text-5xl lg:text-[3.55rem] lg:leading-[1.03]">
@@ -62,14 +63,14 @@ export function LandscapingSolutionsPage({ onOpenAuth }: LandscapingSolutionsPag
               Build clear estimates for maintenance, planting, irrigation, cleanup, and installation using the pricing unit that fits each part of the job.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <MarketingAction onClick={onOpenAuth} icon={<ArrowRight size={18} aria-hidden="true" />}>
+              <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
                 Start free trial
               </MarketingAction>
               <MarketingAction href="#pricing-methods" variant="dark-secondary">See landscaping pricing methods</MarketingAction>
             </div>
           </div>
 
-          <figure className="relative min-h-[430px] overflow-hidden rounded-[30px] border border-white/15 bg-emerald-900 shadow-[0_32px_90px_rgba(0,0,0,0.34)] sm:min-h-[540px]">
+          <figure className="qf-hero-product relative min-h-[430px] overflow-hidden rounded-[30px] border border-white/15 bg-emerald-900 shadow-[0_32px_90px_rgba(0,0,0,0.34)] sm:min-h-[540px]">
             <img
               src="/images/solutions/landscaping-field-work.jpg"
               alt="Landscaping professional preparing a planted garden bed beside a wheelbarrow"

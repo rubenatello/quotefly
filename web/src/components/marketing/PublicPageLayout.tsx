@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { ArrowRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-type MarketingActionVariant = "primary" | "secondary" | "dark-secondary" | "light";
+type MarketingActionVariant = "primary" | "orange" | "secondary" | "dark-secondary" | "light";
 
 interface MarketingActionProps {
   children: ReactNode;
@@ -20,6 +20,8 @@ interface MarketingActionProps {
 const MARKETING_ACTION_VARIANTS: Record<MarketingActionVariant, string> = {
   primary:
     "bg-quotefly-blue text-white shadow-[0_12px_28px_rgba(47,111,214,0.24)] hover:bg-blue-600 hover:shadow-[0_16px_34px_rgba(47,111,214,0.3)] focus-visible:ring-quotefly-blue/25",
+  orange:
+    "bg-quotefly-orange text-slate-950 shadow-[0_12px_30px_rgba(255,137,18,0.24)] hover:bg-orange-400 hover:shadow-[0_16px_38px_rgba(255,137,18,0.32)] focus-visible:ring-orange-300/35",
   secondary:
     "border border-slate-300 bg-white/80 text-slate-800 hover:border-slate-400 hover:bg-white focus-visible:ring-slate-300/60",
   "dark-secondary":
@@ -88,8 +90,9 @@ export function MarketingHero({
 }: MarketingHeroProps) {
   return (
     <section className="relative isolate overflow-hidden border-b border-stone-200 bg-gradient-to-b from-white to-[#f7f4ee] px-4 py-14 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-      <div aria-hidden="true" className="pointer-events-none absolute -left-28 top-8 -z-10 h-72 w-72 rounded-full bg-quotefly-blue/[0.09] blur-3xl" />
-      <div aria-hidden="true" className="pointer-events-none absolute -right-20 bottom-0 -z-10 h-64 w-64 rounded-full bg-quotefly-orange/[0.1] blur-3xl" />
+      <div aria-hidden="true" className="qf-marketing-grid pointer-events-none absolute inset-0 -z-20 opacity-45" />
+      <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--blue pointer-events-none absolute -left-28 top-8 -z-10 h-72 w-72 rounded-full bg-quotefly-blue/[0.1] blur-3xl" />
+      <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--orange pointer-events-none absolute -right-20 bottom-0 -z-10 h-64 w-64 rounded-full bg-quotefly-orange/[0.12] blur-3xl" />
       <div className={`qf-page-enter mx-auto text-center ${width === "wide" ? "max-w-5xl" : "max-w-4xl"}`}>
         <p className="qf-hero-badge inline-flex items-center gap-2 rounded-full border border-quotefly-blue/15 bg-white/80 px-4 py-2 text-sm font-bold text-quotefly-blue shadow-sm backdrop-blur">
           {Icon ? <Icon size={16} aria-hidden="true" /> : null}
@@ -118,8 +121,9 @@ export function MarketingCta({ title, description, actionLabel, onAction, suppor
   return (
     <section className="border-t border-stone-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
       <div className="qf-page-enter relative mx-auto max-w-5xl overflow-hidden rounded-[30px] bg-slate-950 px-6 py-12 text-center text-white shadow-[0_24px_60px_rgba(15,23,42,0.18)] sm:px-12">
-        <div aria-hidden="true" className="absolute -left-16 -top-20 h-56 w-56 rounded-full bg-quotefly-blue/30 blur-3xl" />
-        <div aria-hidden="true" className="absolute -bottom-24 -right-12 h-56 w-56 rounded-full bg-quotefly-orange/25 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-grid absolute inset-0 opacity-20" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--blue absolute -left-16 -top-20 h-56 w-56 rounded-full bg-quotefly-blue/30 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--orange absolute -bottom-24 -right-12 h-56 w-56 rounded-full bg-quotefly-orange/25 blur-3xl" />
         <h2 className="relative mx-auto max-w-3xl text-3xl font-bold tracking-tight sm:text-4xl">{title}</h2>
         <div className="relative mx-auto mt-4 max-w-2xl text-lg leading-8 text-slate-300">{description}</div>
         <MarketingAction
@@ -131,6 +135,45 @@ export function MarketingCta({ title, description, actionLabel, onAction, suppor
           {actionLabel}
         </MarketingAction>
         {supportingText ? <div className="relative mt-5 text-sm text-slate-400">{supportingText}</div> : null}
+      </div>
+    </section>
+  );
+}
+
+interface MarketingMomentumStripProps {
+  items: readonly string[];
+  ariaLabel?: string;
+  tone?: "navy" | "blue";
+}
+
+export function MarketingMomentumStrip({
+  items,
+  ariaLabel = "QuoteFly workflow highlights",
+  tone = "navy",
+}: MarketingMomentumStripProps) {
+  const list = (
+    <ul className="qf-momentum-list" role="list">
+      {items.map((item) => (
+        <li key={item} className="inline-flex items-center gap-4 whitespace-nowrap text-sm font-bold uppercase tracking-[0.16em] sm:text-base">
+          <span aria-hidden="true" className="h-2 w-2 rounded-full bg-quotefly-orange shadow-[0_0_16px_rgba(255,137,18,0.75)]" />
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <section
+      aria-label={ariaLabel}
+      className={`overflow-hidden border-y py-4 text-white ${
+        tone === "blue"
+          ? "border-blue-400/30 bg-quotefly-blue"
+          : "border-white/10 bg-slate-950"
+      }`}
+    >
+      <div className="qf-momentum-track">
+        {list}
+        <div aria-hidden="true">{list}</div>
       </div>
     </section>
   );

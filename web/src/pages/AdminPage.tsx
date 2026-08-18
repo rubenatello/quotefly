@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -14,10 +14,11 @@ import {
 import { setSEOMetadata } from "../lib/seo";
 import { BASIC_PLAN, basicFirstPaidMonthPriceLabel, basicMonthlyPriceLabel } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
-import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select } from "../components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, PaginationControls, ProgressBar, Select, type PageSize } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import { ThemeSelector } from "../components/settings/ThemeSelector";
 import { notify } from "../lib/notifications";
+import { aiUsageProgressTone } from "../lib/ai-credits";
 
 interface AdminPageProps {
   session?: {
@@ -74,7 +75,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "available",
     summary: "For solo operators and small crews that need clean quoting fast.",
     seatText: `Up to ${BASIC_PLAN.teamMembers} users`,
-    aiQuoteText: `Est. AI prompts: ~${BASIC_PLAN.estimatedAiPromptsPerMonth} / month`,
+    aiQuoteText: "Monthly AI usage included",
     historyText: `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
@@ -92,7 +93,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after launch for stronger visibility, revisions, and accounting workflows.",
     seatText: "Up to 15 users",
-    aiQuoteText: "Est. AI prompts: ~6,800 / month",
+    aiQuoteText: "Higher monthly AI allowance",
     historyText: "180-day quote history",
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
@@ -109,7 +110,7 @@ const PLAN_CARDS: readonly PlanCard[] = [
     launchState: "coming-soon",
     summary: "Staged after Professional for larger operations that need governance and automation.",
     seatText: "Unlimited users",
-    aiQuoteText: "Est. AI prompts: ~34,600 / month",
+    aiQuoteText: "Expanded AI usage and automation",
     historyText: "Unlimited quote history",
     accentClassName: "border-slate-300 bg-slate-100",
     features: [
@@ -227,6 +228,11 @@ export function AdminPage({ session }: AdminPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [members, setMembers] = useState<OrganizationUser[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [debouncedMemberSearch, setDebouncedMemberSearch] = useState("");
+  const [memberPage, setMemberPage] = useState(1);
+  const [memberPageSize, setMemberPageSize] = useState<PageSize>(25);
+  const [memberTotal, setMemberTotal] = useState(0);
   const [teamMembersLimit, setTeamMembersLimit] = useState<number | null>(
     session?.entitlements?.limits.teamMembers ?? null,
   );
@@ -242,6 +248,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
   const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
   const [quickBooksLoading, setQuickBooksLoading] = useState(true);
+  const memberRequestIdRef = useRef(0);
   const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
   const sessionRole = normalizeRole(session?.role ?? "member");
@@ -259,13 +266,49 @@ export function AdminPage({ session }: AdminPageProps) {
     );
 
   useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedMemberSearch(memberSearch.trim());
+      setMemberPage(1);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [memberSearch]);
+
+  const loadMembers = useCallback(async () => {
+    const requestId = ++memberRequestIdRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.org.users.list({
+        limit: memberPageSize,
+        offset: (memberPage - 1) * memberPageSize,
+        search: debouncedMemberSearch || undefined,
+      });
+      if (requestId !== memberRequestIdRef.current) return;
+      setMembers(result.members);
+      setMemberTotal(result.pagination.total);
+      setCanManageUsers(result.policy.canManageUsers);
+      setTeamMembersLimit(result.policy.teamMembersLimit);
+      setTeamMembersUsed(result.policy.teamMembersUsed);
+      setSeatPlanName(result.policy.seatPlanName);
+    } catch (err) {
+      if (requestId !== memberRequestIdRef.current) return;
+      setError(err instanceof ApiError ? err.message : "Failed loading organization users.");
+    } finally {
+      if (requestId === memberRequestIdRef.current) setLoading(false);
+    }
+  }, [debouncedMemberSearch, memberPage, memberPageSize]);
+
+  useEffect(() => {
     setSEOMetadata({
       title: "Organization Admin",
       description: "Manage team members, billing, and workspace access settings.",
     });
-    void loadMembers();
     void loadQuickBooksStatus();
   }, []);
+
+  useEffect(() => {
+    void loadMembers();
+  }, [loadMembers]);
 
   useEffect(() => {
     const billingState = new URLSearchParams(location.search).get("billing");
@@ -290,23 +333,6 @@ export function AdminPage({ session }: AdminPageProps) {
     session?.subscriptionStatus,
     settingsMode,
   ]);
-
-  async function loadMembers() {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await api.org.users.list();
-      setMembers(result.members);
-      setCanManageUsers(result.policy.canManageUsers);
-      setTeamMembersLimit(result.policy.teamMembersLimit);
-      setTeamMembersUsed(result.policy.teamMembersUsed);
-      setSeatPlanName(result.policy.seatPlanName);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading organization users.");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   async function loadQuickBooksStatus() {
     setQuickBooksLoading(true);
@@ -416,11 +442,15 @@ export function AdminPage({ session }: AdminPageProps) {
     if (teamMembersLimit === null) return `${teamMembersUsed} in use · Unlimited`;
     return `${teamMembersUsed} of ${teamMembersLimit} seats in use`;
   }, [teamMembersLimit, teamMembersUsed]);
+  const totalMemberPages = Math.max(1, Math.ceil(memberTotal / memberPageSize));
+
+  useEffect(() => {
+    if (memberPage > totalMemberPages) setMemberPage(totalMemberPages);
+  }, [memberPage, totalMemberPages]);
   const aiBudgetLimit = session?.entitlements?.limits.aiSpendUsdPerMonth ?? null;
   const aiBudgetUsed = session?.usage?.monthlyAiSpendUsd ?? 0;
   const aiUsagePercent = aiBudgetLimit && aiBudgetLimit > 0 ? Math.min((aiBudgetUsed / aiBudgetLimit) * 100, 100) : 0;
   const aiUsagePercentLabel = `${Math.round(aiUsagePercent)}% used`;
-  const aiPromptsRemaining = session?.usage?.monthlyAiEstimatedPromptsRemaining ?? null;
   const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc) : null;
   const adminLinks = [
     { id: "admin-overview", label: "Overview", hint: "Plan + status" },
@@ -557,12 +587,15 @@ export function AdminPage({ session }: AdminPageProps) {
                 <ProgressBar
                   value={aiUsagePercent}
                   label="Monthly AI usage"
+                  tone={aiUsageProgressTone(aiUsagePercent)}
                   hint={
                     aiUsagePercent >= 100
                       ? aiRenewalText
                         ? `Usage limit reached · renews ${aiRenewalText}`
                         : "Usage limit reached"
-                      : `${aiUsagePercentLabel}${aiPromptsRemaining !== null ? ` · ~${aiPromptsRemaining} est. prompts remaining` : ""}${aiRenewalText ? ` · renews ${aiRenewalText}` : ""}`
+                      : aiRenewalText
+                        ? `Renews ${aiRenewalText}`
+                        : undefined
                   }
                   className="mt-3"
                 />
@@ -673,7 +706,9 @@ export function AdminPage({ session }: AdminPageProps) {
               hint={
                 aiBudgetLimit === null
                   ? "No monthly cap"
-                  : `${aiPromptsRemaining !== null ? `~${aiPromptsRemaining} est. prompts remaining` : "Prompt estimate unavailable"}${aiRenewalText ? ` · renews ${aiRenewalText}` : ""}`
+                  : aiRenewalText
+                    ? `Renews ${aiRenewalText}`
+                    : "Monthly limit enforced"
               }
             />
           </div>
@@ -925,8 +960,16 @@ export function AdminPage({ session }: AdminPageProps) {
           <CardHeader
             title="Organization Users"
             subtitle="Owners can edit roles and remove members. Admins can add members. Members are read-only."
-            actions={<Badge tone="slate">{members.length} users</Badge>}
+            actions={<Badge tone="slate">{teamMembersUsed} users</Badge>}
           />
+          <div className="mb-4 max-w-md">
+            <Input
+              label="Search team"
+              value={memberSearch}
+              onChange={(event) => setMemberSearch(event.target.value)}
+              placeholder="Search by name or email"
+            />
+          </div>
           <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
             {members.length ? (
               <>
@@ -1001,6 +1044,20 @@ export function AdminPage({ session }: AdminPageProps) {
                 No organization users found.
               </Card>
             )}
+          </div>
+          <div className="mt-4">
+            <PaginationControls
+              limit={memberPageSize}
+              offset={(memberPage - 1) * memberPageSize}
+              total={memberTotal}
+              loading={loading}
+              itemLabel="team members"
+              onLimitChange={(nextLimit) => {
+                setMemberPageSize(nextLimit);
+                setMemberPage(1);
+              }}
+              onOffsetChange={(nextOffset) => setMemberPage(Math.floor(nextOffset / memberPageSize) + 1)}
+            />
           </div>
         </Card>
             </div>

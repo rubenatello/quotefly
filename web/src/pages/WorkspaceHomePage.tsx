@@ -222,8 +222,8 @@ export function WorkspaceHomePage() {
             <KodyButton
               className="col-span-2 sm:col-span-1"
               size="md"
-              variant="secondary"
-              label="Plan my day"
+              variant="kody"
+              label="Plan with Kody"
               prompt="Review my workspace and tell me the three highest-priority actions I should take today. Focus on new leads, unfinished quotes, sent quotes awaiting follow-up, and after-sale check-ins."
               tool="FOLLOW_UP_QUEUE"
               context={{ currentPage: "dashboard", limit: 6 }}

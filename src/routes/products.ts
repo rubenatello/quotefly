@@ -5,6 +5,8 @@ import { markWorkPresetAiRetrievalSourceDeleted } from "../lib/ai-retrieval";
 import { enqueueAiIndexJob } from "../lib/ai-index-jobs";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
+import { PaginationQuerySchema } from "../lib/query-scope";
+import { measureRequestPerformance } from "../lib/request-performance";
 
 const ServiceTypeEnum = z.enum([
   "HVAC",
@@ -33,8 +35,10 @@ const ProductParamsSchema = z.object({
   productId: z.string().trim().min(1).max(120),
 });
 
-const ProductQuerySchema = z.object({
+const ProductQuerySchema = PaginationQuerySchema.extend({
   serviceType: ServiceTypeEnum.optional(),
+  category: PresetCategoryEnum.optional(),
+  search: z.string().trim().min(1).max(120).optional(),
 });
 
 const ProductFieldsSchema = z.object({
@@ -87,24 +91,39 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const access = buildAccessContext(request);
     const query = ProductQuerySchema.parse(request.query);
 
-    const tenant = await app.prisma.tenant.findFirst({
-      where: { id: claims.tenantId, deletedAtUtc: null },
-      select: { id: true, primaryTrade: true },
-    });
+    const where: Prisma.WorkPresetWhereInput = {
+      tenantId: claims.tenantId,
+      deletedAtUtc: null,
+      ...(query.serviceType ? { serviceType: query.serviceType } : {}),
+      ...(query.category ? { category: query.category } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: "insensitive" } },
+              { description: { contains: query.search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const [tenant, products, total, standardCount] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
+      app.prisma.tenant.findFirst({
+        where: { id: claims.tenantId, deletedAtUtc: null },
+        select: { id: true, primaryTrade: true },
+      }),
+      app.prisma.workPreset.findMany({
+        where,
+        orderBy: [{ serviceType: "asc" }, { category: "asc" }, { name: "asc" }, { id: "asc" }],
+        take: query.limit,
+        skip: query.offset,
+      }),
+      app.prisma.workPreset.count({ where }),
+      app.prisma.workPreset.count({ where: { ...where, catalogKey: { not: null } } }),
+    ]));
 
     if (!tenant) {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
-
-    const products = await app.prisma.workPreset.findMany({
-      where: {
-        tenantId: claims.tenantId,
-        deletedAtUtc: null,
-        ...(query.serviceType ? { serviceType: query.serviceType } : {}),
-      },
-      orderBy: [{ serviceType: "asc" }, { category: "asc" }, { name: "asc" }],
-      take: 200,
-    });
 
     return {
       primaryTrade: tenant.primaryTrade,
@@ -118,6 +137,14 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       policy: {
         canManageCatalog: hasCapability(access, "manageCatalog"),
         canViewInternalCosts: hasCapability(access, "viewInternalCosts"),
+      },
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total,
+      },
+      summary: {
+        standardCount,
       },
     };
   });

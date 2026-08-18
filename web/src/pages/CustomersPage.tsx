@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, Select, Textarea } from "../components/ui";
+import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, PaginationControls, Select, Textarea, type PageSize } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
 import { usePageView } from "../lib/analytics";
@@ -30,7 +30,6 @@ function roleLabelForAssignment(role: OrganizationUser["role"]): string {
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
 const ACTIVITY_PAGE_SIZE = 5;
-const CUSTOMER_PAGE_SIZE = 25;
 
 function stageLabel(stage: CustomerStage) {
   if (stage === "NEW") return "New";
@@ -448,6 +447,7 @@ export function CustomersPage() {
   const [stageFilter, setStageFilter] = useState<CustomerStage | "ALL">("ALL");
   const [lifecycleFilter, setLifecycleFilter] = useState<CustomerLifecycle>("active");
   const [customerPage, setCustomerPage] = useState(1);
+  const [customerPageSize, setCustomerPageSize] = useState<PageSize>(25);
   const [customerItems, setCustomerItems] = useState<Customer[]>([]);
   const [customerTotal, setCustomerTotal] = useState(0);
   const [customerLoading, setCustomerLoading] = useState(true);
@@ -480,7 +480,7 @@ export function CustomersPage() {
   useEffect(() => {
     if (!canManageAssignments) return;
     let mounted = true;
-    api.org.users.list()
+    api.org.users.list({ limit: 100 })
       .then((result) => {
         if (mounted) setWorkspaceMembers(result.members);
       })
@@ -514,8 +514,8 @@ export function CustomersPage() {
     setCustomerLoadError(null);
     try {
       const result = await api.customers.list({
-        limit: CUSTOMER_PAGE_SIZE,
-        offset: (customerPage - 1) * CUSTOMER_PAGE_SIZE,
+        limit: customerPageSize,
+        offset: (customerPage - 1) * customerPageSize,
         search: debouncedSearchTerm || undefined,
         lifecycle: lifecycleFilter,
         stage: stageFilter === "ALL" ? undefined : stageFilter,
@@ -532,7 +532,7 @@ export function CustomersPage() {
     } finally {
       if (requestId === customerRequestIdRef.current) setCustomerLoading(false);
     }
-  }, [customerPage, debouncedSearchTerm, lifecycleFilter, stageFilter]);
+  }, [customerPage, customerPageSize, debouncedSearchTerm, lifecycleFilter, stageFilter]);
 
   useEffect(() => {
     void loadCustomerPage();
@@ -643,7 +643,7 @@ export function CustomersPage() {
   }, [location.pathname, location.search, location.state, navigate, openCustomerDetail]);
 
   const totalActivityPages = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
-  const totalCustomerPages = Math.max(1, Math.ceil(customerTotal / CUSTOMER_PAGE_SIZE));
+  const totalCustomerPages = Math.max(1, Math.ceil(customerTotal / customerPageSize));
   const selectedCustomerInactive = Boolean(selectedActivityRow?.customer.archivedAtUtc || selectedActivityRow?.customer.deletedAtUtc);
 
   useEffect(() => {
@@ -915,32 +915,18 @@ export function CustomersPage() {
         </div>
       </Card>
 
-      {customerTotal > CUSTOMER_PAGE_SIZE ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-slate-600">
-            Showing {(customerPage - 1) * CUSTOMER_PAGE_SIZE + 1}-{Math.min(customerPage * CUSTOMER_PAGE_SIZE, customerTotal)} of {customerTotal}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={customerPage === 1 || customerLoading}
-              onClick={() => setCustomerPage((current) => Math.max(1, current - 1))}
-            >
-              Previous
-            </Button>
-            <span className="text-xs font-medium text-slate-600">Page {customerPage} of {totalCustomerPages}</span>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={customerPage >= totalCustomerPages || customerLoading}
-              onClick={() => setCustomerPage((current) => Math.min(totalCustomerPages, current + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <PaginationControls
+        limit={customerPageSize}
+        offset={(customerPage - 1) * customerPageSize}
+        total={customerTotal}
+        loading={customerLoading}
+        itemLabel="customers"
+        onLimitChange={(nextLimit) => {
+          setCustomerPageSize(nextLimit);
+          setCustomerPage(1);
+        }}
+        onOffsetChange={(nextOffset) => setCustomerPage(Math.floor(nextOffset / customerPageSize) + 1)}
+      />
 
       <QuickCustomerModal
         open={quickCustomerOpen}

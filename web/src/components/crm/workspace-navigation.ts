@@ -58,7 +58,7 @@ export const WORKSPACE_SETTINGS_LINKS: readonly WorkspaceNavigationItem[] = [
   { id: "settings", label: "Settings", path: "/app/settings", icon: "settings" },
   { id: "settings-users", label: "Team & users", path: "/app/settings/users", icon: "team" },
   { id: "branding", label: "Branding", path: "/app/branding", icon: "branding" },
-  { id: "about", label: "About workspace", path: "/app/about", icon: "about" },
+  { id: "about", label: "My info", path: "/app/about", icon: "about" },
 ] as const;
 
 export const WORKSPACE_PAGE_META: Record<
@@ -143,8 +143,8 @@ export const WORKSPACE_PAGE_META: Record<
     headingPlacement: "shell",
   },
   about: {
-    label: "About workspace",
-    hint: "Find account, plan, and workspace identifiers for support.",
+    label: "My info",
+    hint: "See your account, role, plan, and workspace identifiers.",
     activeNavigation: "about",
     headingPlacement: "shell",
   },

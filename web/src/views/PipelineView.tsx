@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { Search } from "lucide-react";
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, QuoteIcon } from "../components/Icons";
-import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select } from "../components/ui";
+import { Alert, Badge, Button, Card, EmptyState, Input, LoadingState, PageHeader, PaginationControls, Select, type PageSize } from "../components/ui";
 import { FollowUpPill, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import type { AfterSaleFollowUpStatus, LeadFollowUpStatus, QuoteJobStatus } from "../lib/api";
+import { api, type AfterSaleFollowUpStatus, type LeadFollowUpStatus, type QuoteJobStatus, type WorkspaceFollowUpItem } from "../lib/api";
 import { usePageView } from "../lib/analytics";
 
-type PipelineLead = ReturnType<typeof useDashboard>["pipeline"]["newLeads"][number];
+type PipelineLead = WorkspaceFollowUpItem;
 type QueueTab = "new" | "quoted" | "closed" | "afterSale" | "recent";
 
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON", "LOST"];
@@ -77,7 +78,6 @@ type QueueConfig = {
   title: string;
   subtitle: string;
   count: number;
-  leads: PipelineLead[];
   actionKind: QueueActionKind;
   tone: "blue" | "orange" | "emerald" | "slate";
   emptyTitle: string;
@@ -391,8 +391,6 @@ function QueueRow({
 export function PipelineView() {
   usePageView("pipeline");
   const {
-    stats,
-    pipeline,
     saving,
     error,
     notice,
@@ -405,22 +403,75 @@ export function PipelineView() {
     selectedQuoteId,
   } = useDashboard();
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
+  const [queueItems, setQueueItems] = useState<PipelineLead[]>([]);
+  const [recentLeads, setRecentLeads] = useState<PipelineLead[]>([]);
+  const [queueSearch, setQueueSearch] = useState("");
+  const [debouncedQueueSearch, setDebouncedQueueSearch] = useState("");
+  const [queuePage, setQueuePage] = useState(1);
+  const [queuePageSize, setQueuePageSize] = useState<PageSize>(25);
+  const [queueTotal, setQueueTotal] = useState(0);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueLoadError, setQueueLoadError] = useState<string | null>(null);
+  const [queueTotals, setQueueTotals] = useState({ newLeads: 0, quotedLeads: 0, closedLeads: 0, afterSaleLeads: 0, recentLeads: 0 });
+  const [queueMetrics, setQueueMetrics] = useState({ acceptedRevenue: 0, monthlyQuotes: 0 });
+  const queueRequestIdRef = useRef(0);
 
-  const nextAttentionCount = pipeline.totals.newLeads + pipeline.totals.quotedLeads;
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedQueueSearch(queueSearch.trim());
+      setQueuePage(1);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [queueSearch]);
+
+  const loadQueuePage = useCallback(async () => {
+    const requestId = ++queueRequestIdRef.current;
+    setQueueLoading(true);
+    setQueueLoadError(null);
+    try {
+      const [result, recentResult] = await Promise.all([
+        api.workspace.followUp({
+          queue: activeTab,
+          search: debouncedQueueSearch || undefined,
+          limit: queuePageSize,
+          offset: (queuePage - 1) * queuePageSize,
+        }),
+        activeTab === "recent" && !debouncedQueueSearch
+          ? Promise.resolve(null)
+          : api.workspace.followUp({ queue: "recent", limit: 4 }),
+      ]);
+      if (requestId !== queueRequestIdRef.current) return;
+      setQueueItems(result.items);
+      setQueueTotal(result.pagination.total);
+      setQueueTotals(result.totals);
+      setQueueMetrics(result.metrics);
+      setRecentLeads(recentResult?.items ?? (activeTab === "recent" ? result.items.slice(0, 4) : []));
+    } catch (err) {
+      if (requestId !== queueRequestIdRef.current) return;
+      setQueueLoadError(err instanceof Error ? err.message : "Follow-up queue could not be loaded.");
+    } finally {
+      if (requestId === queueRequestIdRef.current) setQueueLoading(false);
+    }
+  }, [activeTab, debouncedQueueSearch, queuePage, queuePageSize]);
+
+  useEffect(() => {
+    void loadQueuePage();
+  }, [loadQueuePage]);
+
+  const nextAttentionCount = queueTotals.newLeads + queueTotals.quotedLeads;
   const activeCustomerCount =
-    pipeline.totals.newLeads +
-    pipeline.totals.quotedLeads +
-    pipeline.totals.closedLeads +
-    pipeline.totals.afterSaleLeads;
+    queueTotals.newLeads +
+    queueTotals.quotedLeads +
+    queueTotals.closedLeads +
+    queueTotals.afterSaleLeads;
 
   const queueTabs = useMemo<QueueConfig[]>(() => [
     {
       key: "new",
       label: "New",
-      title: `New Leads (${pipeline.totals.newLeads})`,
+      title: `New Leads (${queueTotals.newLeads})`,
       subtitle: "Untouched leads first, oldest to newest.",
-      count: pipeline.totals.newLeads,
-      leads: pipeline.newLeads,
+      count: queueTotals.newLeads,
       actionKind: "follow_up",
       tone: "blue",
       emptyTitle: "No new leads",
@@ -429,10 +480,9 @@ export function PipelineView() {
     {
       key: "quoted",
       label: "Quoted",
-      title: `Quoted Leads (${pipeline.totals.quotedLeads})`,
+      title: `Quoted Leads (${queueTotals.quotedLeads})`,
       subtitle: "Quoted jobs that still need follow-up.",
-      count: pipeline.totals.quotedLeads,
-      leads: pipeline.quotedLeads,
+      count: queueTotals.quotedLeads,
       actionKind: "follow_up",
       tone: "orange",
       emptyTitle: "No quoted leads",
@@ -441,10 +491,9 @@ export function PipelineView() {
     {
       key: "closed",
       label: "Closed",
-      title: `Closed Leads (${pipeline.totals.closedLeads})`,
+      title: `Closed Leads (${queueTotals.closedLeads})`,
       subtitle: "Accepted jobs that are scheduled or in progress.",
-      count: pipeline.totals.closedLeads,
-      leads: pipeline.closedLeads,
+      count: queueTotals.closedLeads,
       actionKind: "job_status",
       tone: "emerald",
       emptyTitle: "No closed leads",
@@ -453,10 +502,9 @@ export function PipelineView() {
     {
       key: "afterSale",
       label: "Post-job",
-      title: `After-Sale Follow-Up (${pipeline.totals.afterSaleLeads})`,
+      title: `After-Sale Follow-Up (${queueTotals.afterSaleLeads})`,
       subtitle: "Completed jobs waiting on review, referral, or post-job check-in.",
-      count: pipeline.totals.afterSaleLeads,
-      leads: pipeline.afterSaleLeads,
+      count: queueTotals.afterSaleLeads,
       actionKind: "after_sale",
       tone: "slate",
       emptyTitle: "No after-sale follow-up due",
@@ -465,18 +513,35 @@ export function PipelineView() {
     {
       key: "recent",
       label: "Recent",
-      title: "Recently Added Leads",
+      title: `Recently Added Leads (${queueTotals.recentLeads})`,
       subtitle: "Newest customer records, regardless of quote status.",
-      count: pipeline.recentLeads.length,
-      leads: pipeline.recentLeads,
+      count: queueTotals.recentLeads,
       actionKind: "follow_up",
       tone: "blue",
       emptyTitle: "No recent leads",
       emptyDescription: "Customer records will show here once created.",
     },
-  ], [pipeline]);
+  ], [queueTotals]);
 
   const activeQueue = queueTabs.find((tab) => tab.key === activeTab) ?? queueTabs[0];
+  const totalQueuePages = Math.max(1, Math.ceil(queueTotal / queuePageSize));
+
+  useEffect(() => {
+    if (queuePage > totalQueuePages) setQueuePage(totalQueuePages);
+  }, [queuePage, totalQueuePages]);
+
+  async function updateFollowUp(customerId: string, followUpStatus: LeadFollowUpStatus) {
+    await updateLeadFollowUpStatus(customerId, followUpStatus);
+    await loadQueuePage();
+  }
+
+  async function updateLifecycle(
+    quoteId: string,
+    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+  ) {
+    await updateQuoteLifecycle(quoteId, patch);
+    await loadQueuePage();
+  }
 
   return (
     <div className="space-y-5">
@@ -494,9 +559,9 @@ export function PipelineView() {
         <div className="space-y-4">
           <div data-testid="follow-up-metrics" className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
             <MetricTile label="Needs attention" value={nextAttentionCount} tone="orange" />
-            <MetricTile label="New leads" value={pipeline.totals.newLeads} tone="blue" />
-            <MetricTile label="Active work" value={pipeline.totals.closedLeads} tone="emerald" />
-            <MetricTile label="Revenue" value={stats.acceptedRevenue} tone="slate" currency />
+            <MetricTile label="New leads" value={queueTotals.newLeads} tone="blue" />
+            <MetricTile label="Active work" value={queueTotals.closedLeads} tone="emerald" />
+            <MetricTile label="Revenue" value={queueMetrics.acceptedRevenue} tone="slate" currency />
           </div>
 
           <Card variant="default" padding="md" className="overflow-hidden p-0 sm:p-5">
@@ -506,13 +571,44 @@ export function PipelineView() {
                 <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{activeQueue.title}</h2>
                 <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeQueue.subtitle}</p>
               </div>
-              <div className="min-w-0 max-w-full lg:w-auto">
-                <QueueTabs tabs={queueTabs} activeTab={activeTab} onChange={setActiveTab} />
+              <div className="min-w-0 max-w-full space-y-3 lg:w-auto">
+                <Input
+                  aria-label="Search follow-up queue"
+                  icon={<Search size={16} aria-hidden="true" />}
+                  value={queueSearch}
+                  onChange={(event) => setQueueSearch(event.target.value)}
+                  placeholder="Search customer, phone, email, or quote"
+                />
+                <QueueTabs
+                  tabs={queueTabs}
+                  activeTab={activeTab}
+                  onChange={(tab) => {
+                    setActiveTab(tab);
+                    setQueuePage(1);
+                  }}
+                />
               </div>
             </div>
 
             <div data-testid="follow-up-queue" className="overflow-hidden bg-[var(--qf-panel)] sm:rounded-xl sm:border sm:border-[var(--qf-border)]">
-              {activeQueue.leads.length === 0 ? (
+              {queueLoading ? (
+                <div className="p-4">
+                  <LoadingState
+                    title="Loading follow-up queue"
+                    description="Finding the next tenant-scoped customers and jobs that need attention."
+                    variant="table"
+                    rows={5}
+                  />
+                </div>
+              ) : queueLoadError ? (
+                <div className="p-4">
+                  <EmptyState
+                    title="Follow-up is temporarily unavailable"
+                    description={`${queueLoadError} No customer or quote records were changed.`}
+                    action={<Button variant="outline" onClick={() => void loadQueuePage()}>Try again</Button>}
+                  />
+                </div>
+              ) : queueItems.length === 0 ? (
                 <div className="p-4">
                   <EmptyState title={activeQueue.emptyTitle} description={activeQueue.emptyDescription} />
                 </div>
@@ -526,23 +622,37 @@ export function PipelineView() {
                     <span>Action</span>
                   </div>
                   <div className="divide-y divide-[var(--qf-border)]">
-                    {activeQueue.leads.map((lead, index) => (
+                    {queueItems.map((lead, index) => (
                       <QueueRow
                         key={`${lead.customerId}-${lead.quoteId ?? "row"}`}
                         lead={lead}
-                        index={index}
+                        index={(queuePage - 1) * queuePageSize + index}
                         actionKind={activeQueue.actionKind}
                         saving={saving}
                         activeQuoteId={selectedQuoteId}
                         onNavigateToQuote={navigateToQuote}
                         onNavigateToBuilder={navigateToBuilder}
-                        onUpdateFollowUp={(customerId, followUpStatus) => void updateLeadFollowUpStatus(customerId, followUpStatus)}
-                        onUpdateQuoteLifecycle={(quoteId, patch) => void updateQuoteLifecycle(quoteId, patch)}
+                        onUpdateFollowUp={(customerId, followUpStatus) => void updateFollowUp(customerId, followUpStatus)}
+                        onUpdateQuoteLifecycle={(quoteId, patch) => void updateLifecycle(quoteId, patch)}
                       />
                     ))}
                   </div>
                 </>
               )}
+            </div>
+            <div className="mt-4 px-4 pb-4 sm:px-0 sm:pb-0">
+              <PaginationControls
+                limit={queuePageSize}
+                offset={(queuePage - 1) * queuePageSize}
+                total={queueTotal}
+                loading={queueLoading}
+                itemLabel="follow-up records"
+                onLimitChange={(nextLimit) => {
+                  setQueuePageSize(nextLimit);
+                  setQueuePage(1);
+                }}
+                onOffsetChange={(nextOffset) => setQueuePage(Math.floor(nextOffset / queuePageSize) + 1)}
+              />
             </div>
           </Card>
         </div>
@@ -559,7 +669,7 @@ export function PipelineView() {
             <div className="mt-3 space-y-2.5">
               <UtilityRow icon={<ClockIcon size={14} />} label="Needs touch today" value={String(nextAttentionCount)} />
               <UtilityRow icon={<CustomerIcon size={14} />} label="Active customers" value={String(activeCustomerCount)} />
-              <UtilityRow icon={<QuoteIcon size={14} />} label="Quotes this month" value={String(stats.monthlyQuotes)} />
+              <UtilityRow icon={<QuoteIcon size={14} />} label="Quotes this month" value={String(queueMetrics.monthlyQuotes)} />
             </div>
             <div className="mt-4 grid gap-2">
               <Button fullWidth variant="outline" onClick={() => navigateToBuilder()}>
@@ -576,8 +686,8 @@ export function PipelineView() {
           <Card variant="default" padding="md">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Recent leads</p>
             <div className="mt-3 space-y-2.5">
-              {pipeline.recentLeads.slice(0, 4).length > 0 ? (
-                pipeline.recentLeads.slice(0, 4).map((lead) => (
+              {recentLeads.length > 0 ? (
+                recentLeads.map((lead) => (
                   <button
                     key={`${lead.customerId}-${lead.quoteId ?? "recent"}`}
                     type="button"

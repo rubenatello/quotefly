@@ -250,8 +250,9 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
   return (
     <div className="min-h-screen overflow-hidden bg-[#f7f4ee] text-slate-900">
       <section className="relative isolate overflow-hidden bg-slate-950 px-4 py-14 text-white sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-        <div aria-hidden="true" className="pointer-events-none absolute -left-32 top-0 -z-10 h-96 w-96 rounded-full bg-quotefly-blue/20 blur-3xl" />
-        <div aria-hidden="true" className="pointer-events-none absolute -right-32 bottom-0 -z-10 h-80 w-80 rounded-full bg-quotefly-orange/15 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-grid pointer-events-none absolute inset-0 -z-20 opacity-25" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--blue pointer-events-none absolute -left-32 top-0 -z-10 h-96 w-96 rounded-full bg-quotefly-blue/20 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--orange pointer-events-none absolute -right-32 bottom-0 -z-10 h-80 w-80 rounded-full bg-quotefly-orange/15 blur-3xl" />
 
         <div className="mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-14">
           <div className="text-center lg:text-left">
@@ -269,6 +270,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <MarketingAction
                 onClick={onOpenAuth}
+                variant="orange"
                 icon={<ArrowRight size={18} aria-hidden="true" />}
               >
                 Start free trial

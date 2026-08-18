@@ -25,8 +25,14 @@ import {
   type AiAssistantTool,
   type DataClassification,
 } from "../../lib/api";
-import { formatAiUsageNotice } from "../../lib/ai-credits";
+import {
+  formatAiRenewalDate,
+  formatAiUsageNotice,
+  publishAiUsageUpdate,
+  type AiUsageUpdateDetail,
+} from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
+import { formatBackendLabel, formatShortLocalDate, isDateResultKey } from "../../lib/display-format";
 import { cn } from "../../lib/utils";
 import { Alert, Button, ConfirmModal, IconButton, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
@@ -160,7 +166,11 @@ function formatKey(key: string) {
     .replace(/^./, (character) => character.toUpperCase());
 }
 
-function formatResultValue(key: string, value: string | number | boolean | null) {
+function formatResultValue(
+  key: string,
+  value: string | number | boolean | null,
+  displayTimeZone?: string | null,
+) {
   if (value === null) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
@@ -170,13 +180,11 @@ function formatResultValue(key: string, value: string | number | boolean | null)
     if (/percent|rate/i.test(key)) return `${value}%`;
     return value.toLocaleString();
   }
-  if (/AtUtc$|Date$/i.test(key)) {
-    const date = new Date(value);
-    if (Number.isFinite(date.getTime())) {
-      return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-    }
+  if (isDateResultKey(key)) {
+    const formattedDate = formatShortLocalDate(value, displayTimeZone);
+    if (formattedDate) return formattedDate;
   }
-  return value;
+  return formatBackendLabel(value);
 }
 
 function visibleResultEntries(result: Record<string, string | number | boolean | null>) {
@@ -186,7 +194,7 @@ function visibleResultEntries(result: Record<string, string | number | boolean |
 }
 
 function resultTitle(result: Record<string, string | number | boolean | null>, fallback: string) {
-  return (
+  const title = (
     getString(result.fullName) ??
     getString(result.title) ??
     getString(result.serviceType) ??
@@ -194,6 +202,7 @@ function resultTitle(result: Record<string, string | number | boolean | null>, f
     getString(result.status) ??
     fallback
   );
+  return formatBackendLabel(title);
 }
 
 function classificationMeta(classification: DataClassification) {
@@ -294,9 +303,11 @@ function actionConfirmationCopy(action: AiAssistantAction) {
 function KodyResultCard({
   result,
   index,
+  displayTimeZone,
 }: {
   result: Record<string, string | number | boolean | null>;
   index: number;
+  displayTimeZone?: string | null;
 }) {
   const entries = visibleResultEntries(result);
   return (
@@ -312,7 +323,7 @@ function KodyResultCard({
           {entries.map(([key, value]) => (
             <div key={key} className="flex items-start justify-between gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{formatKey(key)}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value)}</dd>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value, displayTimeZone)}</dd>
             </div>
           ))}
         </dl>
@@ -325,10 +336,12 @@ function KodyResponse({
   response,
   usageNotice,
   onAction,
+  displayTimeZone,
 }: {
   response: AiAssistantResponse["assistant"];
   usageNotice?: string;
   onAction: (action: AiAssistantAction) => void;
+  displayTimeZone?: string | null;
 }) {
   const track = useTrack();
   const meta = classificationMeta(response.maxClassification);
@@ -517,7 +530,12 @@ function KodyResponse({
           </summary>
           <div className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
             {response.results.slice(0, 4).map((result, index) => (
-              <KodyResultCard key={`${response.auditEventId}-${index}`} result={result} index={index} />
+              <KodyResultCard
+                key={`${response.auditEventId}-${index}`}
+                result={result}
+                index={index}
+                displayTimeZone={displayTimeZone}
+              />
             ))}
           </div>
         </details>
@@ -557,9 +575,15 @@ function KodyResponse({
 export function KodyAssistant({
   currentPage,
   canViewInternalCosts = false,
+  aiUsageLimitReached = false,
+  aiUsageRenewsAtUtc,
+  displayTimeZone,
 }: {
   currentPage?: WorkspacePage;
   canViewInternalCosts?: boolean;
+  aiUsageLimitReached?: boolean;
+  aiUsageRenewsAtUtc?: string | null;
+  displayTimeZone?: string | null;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -582,6 +606,10 @@ export function KodyAssistant({
   const pendingMessageIdRef = useRef<string | null>(null);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
+  const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc);
+  const aiUsageLimitMessage = aiUsageRenewalLabel
+    ? `Kody and AI tools are paused until your monthly usage resets on ${aiUsageRenewalLabel}.`
+    : "Kody and AI tools are paused until your monthly usage resets.";
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
   const visibleQuickPrompts = canViewInternalCosts
     ? QUICK_PROMPTS
@@ -684,6 +712,10 @@ export function KodyAssistant({
   async function submitPrompt(options?: { prompt?: string; tool?: AiAssistantTool | "AUTO" }) {
     const messageText = (options?.prompt ?? prompt).trim();
     if (!messageText || loading) return;
+    if (aiUsageLimitReached) {
+      setError(aiUsageLimitMessage);
+      return;
+    }
     const tool = options?.tool ?? selectedTool;
     const context = {
       ...(contextOverride ?? {}),
@@ -745,9 +777,18 @@ export function KodyAssistant({
           ? current.map((message) => (message.id === pendingMessageId ? replacement : message))
           : [...current, replacement];
       });
+      publishAiUsageUpdate(response.usage);
       setSelectedTool("AUTO");
       setContextOverride(null);
     } catch (err) {
+      const errorCode =
+        err instanceof ApiError && err.details && typeof err.details === "object"
+          ? (err.details as { code?: unknown }).code
+          : null;
+      if (errorCode === "AI_USAGE_LIMIT_REACHED") {
+        const usage = (err as ApiError).details as { usage?: AiUsageUpdateDetail };
+        if (usage.usage) publishAiUsageUpdate(usage.usage);
+      }
       const message =
         err instanceof ApiError
           ? err.message
@@ -881,7 +922,7 @@ export function KodyAssistant({
             track("kody_open", { page: currentContextPage });
           }}
           className={cn(
-            "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-[52px] min-h-[52px] items-center gap-2 rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-2.5 text-sm font-semibold text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] transition hover:-translate-y-0.5 hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:px-3.5 lg:right-6",
+            "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-14 min-h-14 items-center gap-2.5 rounded-2xl border border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] px-2 text-sm font-semibold text-[var(--qf-kody-action-text)] shadow-[0_10px_26px_rgba(249,105,40,0.32)] transition hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_14px_30px_rgba(249,105,40,0.38)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-kody-action-active)] sm:px-3.5 lg:right-6",
             hasMobileActionDock
               ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)] lg:bottom-[7rem] xl:bottom-6"
               : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)] lg:bottom-6",
@@ -890,8 +931,8 @@ export function KodyAssistant({
           aria-expanded="false"
           data-testid="kody-launcher"
         >
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-avatar-surface)] p-1 shadow-[0_6px_16px_rgba(47,111,214,0.24)]">
-            <KodySparkIcon size={28} />
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-black/10 bg-white/85 p-0.5 shadow-[0_6px_16px_rgba(47,111,214,0.24)]">
+            <KodySparkIcon size={34} />
           </span>
           <span className="hidden sm:inline">Ask Kody</span>
         </button>
@@ -945,7 +986,7 @@ export function KodyAssistant({
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 bg-[var(--qf-panel-muted)] p-3 sm:p-4">
-          <details
+          {!aiUsageLimitReached ? <details
             ref={quickPromptsRef}
             className="group shrink-0 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]"
             data-testid="kody-quick-prompts"
@@ -963,7 +1004,7 @@ export function KodyAssistant({
                   key={quickPrompt.label}
                   type="button"
                   onClick={() => handleQuickPrompt(quickPrompt)}
-                  disabled={loading}
+                  disabled={loading || aiUsageLimitReached}
                   data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
                   className={cn(
                     "flex min-h-11 items-center gap-2 rounded-xl border bg-[var(--qf-panel)] px-2.5 py-2 text-left transition hover:border-[var(--qf-info-border)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-12 sm:px-3",
@@ -980,7 +1021,9 @@ export function KodyAssistant({
                 </button>
               ))}
             </div>
-          </details>
+          </details> : (
+            <Alert tone="warning">{aiUsageLimitMessage}</Alert>
+          )}
 
           <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-inner sm:p-4">
             {!messages.length ? (
@@ -1021,7 +1064,12 @@ export function KodyAssistant({
                         className="border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
                       />
                     ) : message.response ? (
-                      <KodyResponse response={message.response} usageNotice={message.usageNotice} onAction={handleAction} />
+                      <KodyResponse
+                        response={message.response}
+                        usageNotice={message.usageNotice}
+                        onAction={handleAction}
+                        displayTimeZone={displayTimeZone}
+                      />
                     ) : (
                       <p className="text-sm leading-6">{message.text}</p>
                     )}
@@ -1061,9 +1109,9 @@ export function KodyAssistant({
               rows={1}
               maxLength={2_000}
               aria-label="Ask Kody"
-              placeholder="Ask Kody about your workspace..."
+              placeholder={aiUsageLimitReached ? "Monthly AI limit reached" : "Ask Kody about your workspace..."}
               className="max-h-32 min-h-11 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
-              disabled={loading}
+              disabled={loading || aiUsageLimitReached}
             />
             <IconButton
               type="submit"
@@ -1071,7 +1119,7 @@ export function KodyAssistant({
               icon={<Send size={17} />}
               label="Send"
               loading={loading}
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() || aiUsageLimitReached}
               className="rounded-xl"
             />
           </form>

@@ -555,6 +555,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           monthlyAiSpendLimitUsd: aiUsageSnapshot.monthlySpendLimitUsd,
           monthlyAiSpendRemainingUsd: aiUsageSnapshot.monthlySpendRemainingUsd,
           monthlyAiSpendUsagePercent: aiUsageSnapshot.monthlySpendUsagePercent,
+          monthlyAiSpendWarningThresholdPercent: aiUsageSnapshot.warningThresholdPercent,
+          monthlyAiLimitReached: aiUsageSnapshot.limitReached,
           monthlyAiEstimatedPromptsRemaining: aiUsageSnapshot.estimatedPromptsRemaining,
         },
       },

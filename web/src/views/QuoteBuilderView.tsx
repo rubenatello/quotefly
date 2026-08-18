@@ -29,8 +29,8 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
-import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
+import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
+import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
 import {
   quoteBuilderDraftStorageKey,
   isQuoteDraftTimestampFresh,
@@ -534,13 +534,11 @@ export function QuoteBuilderView() {
       formatAiUsageAvailability({
         usedUsd: session?.usage?.monthlyAiSpendUsd,
         limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
-        estimatedPromptsRemaining: session?.usage?.monthlyAiEstimatedPromptsRemaining,
         renewsAtUtc: session?.usage?.periodEndUtc,
       }),
     [
       session?.entitlements?.limits.aiSpendUsdPerMonth,
       session?.usage?.monthlyAiSpendUsd,
-      session?.usage?.monthlyAiEstimatedPromptsRemaining,
       session?.usage?.periodEndUtc,
     ],
   );
@@ -938,6 +936,7 @@ export function QuoteBuilderView() {
       void loadCustomers();
       setAiModalOpen(false);
       setMobilePane("editor");
+      publishAiUsageUpdate(usage);
       const usageSummary = formatAiUsageNotice(usage);
       const patchSummary = [
         patch.updated ? `updated ${patch.updated}` : null,
@@ -950,6 +949,10 @@ export function QuoteBuilderView() {
         `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then create the quote.`,
       );
     } catch (err) {
+      if (err instanceof ApiError && err.details && typeof err.details === "object") {
+        const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
+        if (usage) publishAiUsageUpdate(usage);
+      }
       const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
       setAiErrorMessage(message);
       setError(message);
@@ -1238,7 +1241,7 @@ export function QuoteBuilderView() {
             ) : null}
             <KodyButton
               label="Draft with Kody"
-              variant="secondary"
+              variant="kody"
               prompt={[
                 activeCustomer ? `Draft a quote for ${activeCustomer.fullName}.` : "Draft a new quote.",
                 `Trade: ${quoteForm.serviceType}.`,

@@ -71,3 +71,25 @@ test("dark mobile Kody panel is readable and accessible without page overflow", 
     .toBeLessThanOrEqual(1);
   await expectNoSeriousAccessibilityViolations(page, "dark mobile Kody panel");
 });
+
+test("dashboard Kody actions stay bright, legible, and visually prominent", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "accessibility-kody-dashboard");
+  await addSessionCookie(context, account);
+  await page.goto("/app");
+  await expect(page.getByTestId("workspace-home")).toBeVisible({ timeout: 30_000 });
+
+  const dashboardAction = page.getByRole("button", { name: "Plan with Kody", exact: true });
+  await expect(dashboardAction).toBeVisible();
+  await expect(dashboardAction).toHaveCSS("background-color", "rgb(255, 138, 31)");
+  await expect(dashboardAction).toHaveCSS("color", "rgb(17, 17, 17)");
+
+  const actionMascot = dashboardAction.locator('img[src="/images/kody/kody-ai.png"]');
+  await expect(actionMascot).toBeVisible();
+  expect((await actionMascot.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(22);
+
+  const launcher = page.getByTestId("kody-launcher");
+  await expect(launcher).toBeVisible();
+  await expect(launcher).toHaveCSS("background-color", "rgb(255, 138, 31)");
+  await expect(launcher).toHaveCSS("color", "rgb(17, 17, 17)");
+  expect((await launcher.locator('img[src="/images/kody/kody-ai.png"]').boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(34);
+});

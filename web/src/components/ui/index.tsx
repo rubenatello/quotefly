@@ -6,7 +6,7 @@ import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
 
-type ButtonVariant = "primary" | "secondary" | "outline" | "ghost" | "danger" | "success" | "warning";
+type ButtonVariant = "primary" | "secondary" | "kody" | "outline" | "ghost" | "danger" | "success" | "warning";
 type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -22,6 +22,8 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
     "border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] active:border-[var(--qf-action-primary-active)] active:bg-[var(--qf-action-primary-active)]",
   secondary:
     "border-[var(--qf-action-secondary)] bg-[var(--qf-action-secondary)] text-[var(--qf-action-secondary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-secondary-hover)] hover:bg-[var(--qf-action-secondary-hover)] active:border-[var(--qf-action-secondary-active)] active:bg-[var(--qf-action-secondary-active)]",
+  kody:
+    "border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] text-[var(--qf-kody-action-text)] shadow-[0_8px_20px_rgba(249,105,40,0.24)] hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_10px_24px_rgba(249,105,40,0.3)] active:border-[var(--qf-kody-action-active)] active:bg-[var(--qf-kody-action-active)]",
   outline:
     "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
   ghost: "border-transparent bg-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
@@ -684,14 +686,22 @@ export function ProgressBar({
   value,
   label,
   hint,
+  tone = "default",
   className = "",
 }: {
   value: number;
   label?: string;
   hint?: string;
+  tone?: "default" | "warning" | "danger";
   className?: string;
 }) {
   const clampedValue = Math.max(0, Math.min(100, value));
+  const barTone =
+    tone === "danger"
+      ? "bg-[var(--qf-danger-text)]"
+      : tone === "warning"
+        ? "bg-[var(--qf-kody-action)]"
+        : "bg-[var(--qf-action-primary)]";
 
   return (
     <div className={`space-y-1.5 ${className}`}>
@@ -701,9 +711,16 @@ export function ProgressBar({
           {hint ? <span>{hint}</span> : null}
         </div>
       )}
-      <div className="h-2 overflow-hidden rounded-full bg-[var(--qf-interactive-active)]">
+      <div
+        role="progressbar"
+        aria-label={label ?? "Progress"}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Number(clampedValue.toFixed(2))}
+        className="h-2 overflow-hidden rounded-full bg-[var(--qf-interactive-active)]"
+      >
         <div
-          className="h-full rounded-full bg-[var(--qf-action-primary)] transition-[width] duration-500 ease-out"
+          className={`h-full rounded-full transition-[width,background-color] duration-500 ease-out ${barTone}`}
           style={{ width: `${clampedValue}%` }}
         />
       </div>
@@ -747,6 +764,81 @@ export function PageHeader({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export type PageSize = 25 | 50 | 100;
+
+export function PaginationControls({
+  limit,
+  offset,
+  total,
+  loading = false,
+  itemLabel = "records",
+  onLimitChange,
+  onOffsetChange,
+}: {
+  limit: PageSize;
+  offset: number;
+  total: number;
+  loading?: boolean;
+  itemLabel?: string;
+  onLimitChange: (limit: PageSize) => void;
+  onOffsetChange: (offset: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(totalPages, Math.floor(offset / limit) + 1);
+  const rangeStart = total === 0 ? 0 : offset + 1;
+  const rangeEnd = Math.min(offset + limit, total);
+
+  return (
+    <nav
+      aria-label={`${itemLabel} pagination`}
+      className="flex flex-col gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 shadow-[var(--qf-shadow-sm)] sm:flex-row sm:items-end sm:justify-between sm:px-4"
+    >
+      <div className="flex items-end justify-between gap-3 sm:justify-start">
+        <Select
+          label="Rows per page"
+          aria-label={`Rows per page for ${itemLabel}`}
+          className="min-w-[92px]"
+          value={String(limit)}
+          disabled={loading}
+          options={[
+            { value: "25", label: "25" },
+            { value: "50", label: "50" },
+            { value: "100", label: "100" },
+          ]}
+          onChange={(event) => onLimitChange(Number(event.target.value) as PageSize)}
+        />
+        <p className="pb-2 text-sm text-[var(--qf-text-soft)]" aria-live="polite">
+          {rangeStart}-{rangeEnd} of {total}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:flex">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={loading || currentPage <= 1}
+          onClick={() => onOffsetChange(Math.max(0, offset - limit))}
+          aria-label={`Previous page of ${itemLabel}`}
+        >
+          Previous
+        </Button>
+        <span className="min-w-[92px] text-center text-xs font-semibold text-[var(--qf-text-soft)]">
+          Page {currentPage} of {totalPages}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={loading || currentPage >= totalPages}
+          onClick={() => onOffsetChange(offset + limit)}
+          aria-label={`Next page of ${itemLabel}`}
+        >
+          Next
+        </Button>
+      </div>
+    </nav>
   );
 }
 

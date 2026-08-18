@@ -132,9 +132,36 @@ const UpdateQuoteSchema = z
 
 const ListQuotesQuerySchema = PaginationQuerySchema.extend({
   status: QuoteStatusSchema.optional(),
+  stage: z.enum(["DRAFT", "READY", "SENT", "ACCEPTED", "DECLINED", "INVOICED"]).optional(),
   customerId: z.string().min(1).optional(),
   search: z.string().trim().min(1).max(120).optional(),
 });
+
+type QuoteLifecycleStage = NonNullable<z.infer<typeof ListQuotesQuerySchema>["stage"]>;
+
+function quoteLifecycleWhere(stage: QuoteLifecycleStage): Prisma.QuoteWhereInput {
+  const syncedInvoice = {
+    quickBooksInvoiceSyncs: {
+      some: {
+        deletedAtUtc: null,
+        status: "SYNCED" as const,
+        quickBooksInvoiceId: { not: null },
+      },
+    },
+  };
+
+  if (stage === "INVOICED") return syncedInvoice;
+  if (stage === "ACCEPTED") {
+    return {
+      status: "ACCEPTED",
+      NOT: syncedInvoice,
+    };
+  }
+  if (stage === "DECLINED") return { status: "REJECTED" };
+  if (stage === "SENT") return { status: "SENT_TO_CUSTOMER" };
+  if (stage === "READY") return { status: "READY_FOR_REVIEW" };
+  return { status: "DRAFT" };
+}
 
 const ExportQuickBooksInvoicesCsvSchema = z.object({
   quoteIds: z.array(z.string().min(1)).min(1).max(100),
@@ -3317,6 +3344,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         limit: blockedBySpend ? snapshot.monthlySpendLimitUsd : entitlements.limits.aiQuotesPerMonth,
         used: blockedBySpend ? snapshot.monthlySpendUsedUsd : snapshot.monthlyCreditsUsed,
         renewsAtUtc: snapshot.periodEndUtc,
+        usage: buildAiUsageResponse(snapshot, { consumedCredits: 0, consumedSpendUsd: 0 }),
       });
     }
 
@@ -4196,8 +4224,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const query = ListQuotesQuerySchema.parse(request.query);
+    const quoteIdSearch = query.search?.replace(/^QF-/i, "");
 
-    const where: Prisma.QuoteWhereInput = {
+    const summaryWhere: Prisma.QuoteWhereInput = {
       ...tenantActiveQuoteScope(claims.tenantId),
       ...assignedRecordScope(access),
       ...(query.status ? { status: query.status } : {}),
@@ -4205,18 +4234,25 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       ...(query.search
         ? {
             OR: [
+              ...(quoteIdSearch ? [{ id: { contains: quoteIdSearch, mode: "insensitive" as const } }] : []),
               { title: { contains: query.search, mode: "insensitive" } },
               { scopeText: { contains: query.search, mode: "insensitive" } },
               { customer: { fullName: { contains: query.search, mode: "insensitive" } } },
+              { customer: { phone: { contains: query.search } } },
+              { customer: { email: { contains: query.search, mode: "insensitive" } } },
             ],
           }
         : {}),
     };
 
-    const [quotes, total] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
+    const where: Prisma.QuoteWhereInput = query.stage
+      ? { AND: [summaryWhere, quoteLifecycleWhere(query.stage)] }
+      : summaryWhere;
+
+    const [quotes, total, statusGroups, invoicedCount] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
       app.prisma.quote.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
         take: query.limit,
         skip: query.offset,
         include: {
@@ -4256,7 +4292,24 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
       }),
       app.prisma.quote.count({ where }),
+      app.prisma.quote.groupBy({
+        by: ["status"],
+        where: summaryWhere,
+        _count: { _all: true },
+        _sum: { totalAmount: true },
+      }),
+      app.prisma.quote.count({
+        where: {
+          AND: [summaryWhere, quoteLifecycleWhere("INVOICED")],
+        },
+      }),
     ]));
+
+    const statusSummary = new Map(statusGroups.map((group) => [group.status, {
+      count: group._count._all,
+      amount: Number(group._sum.totalAmount ?? 0),
+    }]));
+    const acceptedCount = statusSummary.get("ACCEPTED")?.count ?? 0;
 
     return {
       quotes,
@@ -4264,6 +4317,20 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         limit: query.limit,
         offset: query.offset,
         total,
+      },
+      summary: {
+        stageCounts: {
+          DRAFT: statusSummary.get("DRAFT")?.count ?? 0,
+          READY: statusSummary.get("READY_FOR_REVIEW")?.count ?? 0,
+          SENT: statusSummary.get("SENT_TO_CUSTOMER")?.count ?? 0,
+          ACCEPTED: Math.max(0, acceptedCount - invoicedCount),
+          DECLINED: statusSummary.get("REJECTED")?.count ?? 0,
+          INVOICED: invoicedCount,
+        },
+        readyToSendCount: statusSummary.get("READY_FOR_REVIEW")?.count ?? 0,
+        awaitingResponseCount: statusSummary.get("SENT_TO_CUSTOMER")?.count ?? 0,
+        awaitingResponseAmount: statusSummary.get("SENT_TO_CUSTOMER")?.amount ?? 0,
+        acceptedAmount: statusSummary.get("ACCEPTED")?.amount ?? 0,
       },
     };
   });

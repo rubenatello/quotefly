@@ -6,7 +6,6 @@ export const BASIC_PLAN = {
   firstPaidMonthDiscountPercent: 50,
   firstPaidMonthPriceUsd: 14.5,
   quotesPerMonth: 600,
-  estimatedAiPromptsPerMonth: 770,
   teamMembers: 7,
   quoteHistoryDays: 30,
 } as const;

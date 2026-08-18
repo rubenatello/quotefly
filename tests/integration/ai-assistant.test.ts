@@ -1180,17 +1180,6 @@ describe("AI assistant", () => {
 
   test("workspace navigation is whitelisted and keeps provider usage at zero", async () => {
     const owner = await signUp("assistant-navigation-owner");
-    await prisma.aiUsageEvent.create({
-      data: {
-        tenantId: owner.tenant.id,
-        eventType: "BUSINESS_INSIGHT",
-        purpose: "BUSINESS_INSIGHT",
-        classification: "C2_CUSTOMER_CONFIDENTIAL",
-        creditsConsumed: 770,
-        requestCount: 770,
-        estimatedCostUsd: 1.25,
-      },
-    });
     const response = await app.inject({
       method: "POST",
       url: "/v1/ai/assistant",
@@ -1278,17 +1267,42 @@ describe("AI assistant", () => {
         actions: [expect.objectContaining({ requiresConfirmation: true })],
       },
     });
+  });
 
-    const paidAiResponse = await app.inject({
-      method: "POST",
-      url: "/v1/ai/assistant",
-      headers: { cookie: owner.cookie },
-      payload: { message: "Find customer Ruben", tool: "SEARCH_CUSTOMERS" },
+  test("Kody blocks every tool after the tenant reaches its monthly AI budget", async () => {
+    const owner = await signUp("assistant-budget-cutoff-owner");
+    await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: owner.tenant.id,
+        eventType: "BUSINESS_INSIGHT",
+        purpose: "BUSINESS_INSIGHT",
+        classification: "C2_CUSTOMER_CONFIDENTIAL",
+        creditsConsumed: 770,
+        requestCount: 770,
+        estimatedCostUsd: 1.25,
+      },
     });
-    expect(paidAiResponse.statusCode).toBe(402);
-    expect(paidAiResponse.json()).toMatchObject({
-      code: "AI_USAGE_LIMIT_REACHED",
-      feature: "aiSpendUsdPerMonth",
-    });
+
+    for (const payload of [
+      { message: "Take me to products", tool: "AUTO" },
+      { message: "Add a product called Cleanup Labor for $85 per hour.", tool: "AUTO" },
+      { message: "Find customer Ruben", tool: "SEARCH_CUSTOMERS" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload,
+      });
+      expect(response.statusCode).toBe(402);
+      expect(response.json()).toMatchObject({
+        code: "AI_USAGE_LIMIT_REACHED",
+        feature: "aiSpendUsdPerMonth",
+        usage: {
+          warningThresholdPercent: 100,
+          limitReached: true,
+        },
+      });
+    }
   });
 });

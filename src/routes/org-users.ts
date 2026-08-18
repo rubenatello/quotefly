@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { getJwtClaims } from "../lib/auth";
 import { loadTenantEntitlements } from "../lib/subscription";
+import { PaginationQuerySchema } from "../lib/query-scope";
+import { measureRequestPerformance } from "../lib/request-performance";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -22,6 +24,10 @@ const UpdateOrgUserRoleSchema = z.object({
 
 const TenantUserParamsSchema = z.object({
   tenantUserId: z.string().min(1),
+});
+
+const ListOrgUsersQuerySchema = PaginationQuerySchema.extend({
+  search: z.string().trim().min(1).max(120).optional(),
 });
 
 function normalizeRole(role: string): "owner" | "admin" | "member" {
@@ -49,6 +55,7 @@ function roleCapabilities(role: string) {
 export const orgUserRoutes: FastifyPluginAsync = async (app) => {
   app.get("/org/users", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const query = ListOrgUsersQuerySchema.parse(request.query);
 
     const membership = await app.prisma.tenantUser.findFirst({
       where: {
@@ -64,13 +71,29 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "No active tenant membership for this user." });
     }
 
-    const [members, entitlements, assignmentCounts] = await Promise.all([
+    const activeMemberWhere: Prisma.TenantUserWhereInput = {
+      tenantId: claims.tenantId,
+      deletedAtUtc: null,
+      user: { deletedAtUtc: null },
+    };
+    const where: Prisma.TenantUserWhereInput = {
+      ...activeMemberWhere,
+      user: {
+        deletedAtUtc: null,
+        ...(query.search
+          ? {
+              OR: [
+                { fullName: { contains: query.search, mode: "insensitive" } },
+                { email: { contains: query.search, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+    };
+
+    const [members, total, activeMemberTotal, entitlements] = await measureRequestPerformance(request, "db", () => Promise.all([
       app.prisma.tenantUser.findMany({
-        where: {
-          tenantId: claims.tenantId,
-          deletedAtUtc: null,
-          user: { deletedAtUtc: null },
-        },
+        where,
         include: {
           user: {
             select: {
@@ -80,14 +103,6 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
               createdAt: true,
             },
           },
-        },
-        orderBy: [{ role: "asc" }, { createdAt: "asc" }],
-      }),
-      loadTenantEntitlements(app.prisma, claims.tenantId, { userEmail: claims.email }),
-      app.prisma.tenantUser.findMany({
-        where: { tenantId: claims.tenantId, deletedAtUtc: null },
-        select: {
-          id: true,
           _count: {
             select: {
               assignedCustomers: { where: { archivedAtUtc: null, deletedAtUtc: null } },
@@ -95,9 +110,14 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
             },
           },
         },
+        orderBy: [{ role: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        take: query.limit,
+        skip: query.offset,
       }),
-    ]);
-    const assignmentsByMembership = new Map(assignmentCounts.map((member) => [member.id, member._count]));
+      app.prisma.tenantUser.count({ where }),
+      app.prisma.tenantUser.count({ where: activeMemberWhere }),
+      loadTenantEntitlements(app.prisma, claims.tenantId, { userEmail: claims.email }),
+    ]));
 
     return {
       members: members.map((member) => ({
@@ -106,7 +126,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
         role: normalizeRole(member.role),
         createdAt: member.createdAt,
         capabilities: roleCapabilities(member.role),
-        assignments: assignmentsByMembership.get(member.id) ?? { assignedCustomers: 0, assignedQuotes: 0 },
+        assignments: member._count,
         user: {
           id: member.user.id,
           email: member.user.email,
@@ -117,12 +137,17 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       policy: {
         canManageUsers: canManageUsers(membership.role),
         teamMembersLimit: entitlements?.limits.teamMembers ?? null,
-        teamMembersUsed: members.length,
+        teamMembersUsed: activeMemberTotal,
         teamMembersRemaining: entitlements?.limits.teamMembers === null || entitlements?.limits.teamMembers === undefined
           ? null
-          : Math.max(entitlements.limits.teamMembers - members.length, 0),
+          : Math.max(entitlements.limits.teamMembers - activeMemberTotal, 0),
         seatPlanCode: entitlements?.seatPlanCode ?? "starter",
         seatPlanName: entitlements?.seatPlanName ?? "Basic",
+      },
+      pagination: {
+        limit: query.limit,
+        offset: query.offset,
+        total,
       },
     };
   });

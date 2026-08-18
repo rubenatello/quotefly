@@ -4,7 +4,7 @@ import { setPublicSEOMetadata } from "../lib/seo";
 import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingPitchDeck } from "../components/marketing/LandingPitchDeck";
-import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
+import { MarketingAction, MarketingCta, MarketingMomentumStrip } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 
@@ -117,43 +117,49 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
   return (
     <div className="min-h-screen overflow-hidden bg-stone-50 text-slate-900">
-      <section className="relative isolate px-4 py-14 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-        <div aria-hidden="true" className="pointer-events-none absolute -left-28 top-10 -z-10 h-80 w-80 rounded-full bg-quotefly-blue/[0.08] blur-3xl" />
-        <div aria-hidden="true" className="pointer-events-none absolute -right-24 bottom-8 -z-10 h-72 w-72 rounded-full bg-quotefly-orange/[0.09] blur-3xl" />
+      <section className="relative isolate overflow-hidden bg-slate-950 px-4 py-14 text-white sm:px-6 sm:py-20 lg:px-8 lg:py-24">
+        <div aria-hidden="true" className="qf-marketing-grid pointer-events-none absolute inset-0 -z-20 opacity-30" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--blue pointer-events-none absolute -left-28 top-10 -z-10 h-80 w-80 rounded-full bg-quotefly-blue/25 blur-3xl" />
+        <div aria-hidden="true" className="qf-marketing-orbit qf-marketing-orbit--orange pointer-events-none absolute -right-24 bottom-8 -z-10 h-72 w-72 rounded-full bg-quotefly-orange/20 blur-3xl" />
         <div className="mx-auto grid max-w-7xl items-center gap-9 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)] lg:gap-12">
           <div className="text-center lg:text-left">
-            <div className="qf-hero-badge mb-5 inline-flex items-center gap-2 rounded-full border border-quotefly-blue/15 bg-white/80 px-4 py-2 text-sm font-semibold text-quotefly-blue shadow-sm backdrop-blur">
+            <div className="qf-hero-badge mb-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-sm font-semibold text-blue-200 shadow-sm backdrop-blur">
               <Sparkles size={15} aria-hidden="true" />
               Free for {BASIC_PLAN.trialDays} days. No credit card required.
             </div>
 
-            <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-[-0.045em] text-slate-950 sm:text-5xl lg:mx-0 lg:text-[3.6rem] lg:leading-[1.04]">
-              The easiest quoting software for <span className="relative whitespace-nowrap text-quotefly-blue">on-the-go<span aria-hidden="true" className="absolute inset-x-0 -bottom-1 h-1 rounded-full bg-quotefly-orange/70" /></span> contractors and professionals
+            <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-[-0.05em] text-white sm:text-5xl lg:mx-0 lg:text-[3.8rem] lg:leading-[1.01]">
+              Win the work before the paperwork slows you down.
             </h1>
 
-            <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600 sm:text-xl lg:mx-0">
+            <p className="mx-auto mt-5 max-w-2xl bg-gradient-to-r from-blue-300 via-cyan-300 to-orange-300 bg-clip-text text-xl font-bold leading-8 text-transparent sm:text-2xl lg:mx-0">
+              Quote faster. Follow up smarter. Stay in control.
+            </p>
+
+            <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
               Find the customer, price the work, preview the quote, and keep follow-up moving—without going back to the office.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <MarketingAction
                 onClick={onOpenAuth}
+                variant="orange"
                 icon={<ArrowRight size={18} aria-hidden="true" />}
               >
                 Start Free Trial
               </MarketingAction>
               <MarketingAction
                 href="#workflow"
-                variant="secondary"
+                variant="dark-secondary"
               >
                 See how it works
               </MarketingAction>
             </div>
 
-            <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-600 lg:justify-start">
+            <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-300 lg:justify-start">
               {["Customer-first workflow", "Mobile-ready", "Branded quote PDFs"].map((item) => (
                 <span key={item} className="inline-flex items-center gap-1.5">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-50 text-emerald-700"><Check size={12} aria-hidden="true" /></span>
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-300/20"><Check size={12} aria-hidden="true" /></span>
                   {item}
                 </span>
               ))}
@@ -164,11 +170,23 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         </div>
       </section>
 
+      <MarketingMomentumStrip
+        tone="blue"
+        items={[
+          "Find the customer",
+          "Draft with Kody",
+          "Price the work",
+          "Review the margin",
+          "Preview the PDF",
+          "Send and follow up",
+        ]}
+      />
+
       <LandingPitchDeck onOpenAuth={onOpenAuth} />
 
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
         <div className="mx-auto max-w-6xl">
-          <div data-marketing-reveal className="mx-auto mb-12 max-w-2xl text-center">
+          <div data-marketing-reveal="scale" className="mx-auto mb-12 max-w-2xl text-center">
             <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">Built for the field</p>
             <h2 className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">Everything needed to move a quote forward</h2>
             <p className="mt-4 text-slate-600">Focused tools for the work between a new customer request and a confident yes.</p>
@@ -178,7 +196,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             {features.map((feature, index) => (
               <div
                 key={feature.title}
-                data-marketing-reveal
+                data-marketing-reveal={index % 2 === 0 ? "left" : "right"}
                 style={{ transitionDelay: `${index * 55}ms` }}
                 className="qf-hover-lift rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/25 hover:shadow-[0_18px_38px_rgba(15,23,42,0.09)]"
               >

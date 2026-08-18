@@ -290,6 +290,8 @@ export type TenantUsageSnapshot = {
   monthlyAiSpendLimitUsd?: number | null;
   monthlyAiSpendRemainingUsd?: number | null;
   monthlyAiSpendUsagePercent?: number | null;
+  monthlyAiSpendWarningThresholdPercent?: 25 | 50 | 75 | 85 | 95 | 100 | null;
+  monthlyAiLimitReached?: boolean;
   monthlyAiEstimatedPromptsRemaining?: number | null;
 };
 
@@ -304,6 +306,7 @@ export type AuthSessionPayload = {
     id: string;
     name: string;
     slug: string;
+    timezone?: string;
     primaryTrade?: ServiceType | null;
     onboardingCompletedAtUtc?: string | null;
     subscriptionStatus?: string;
@@ -1012,6 +1015,8 @@ export type AiUsageSummary = {
   monthlySpendLimitUsd: number | null;
   monthlySpendRemainingUsd: number | null;
   monthlySpendUsagePercent: number | null;
+  warningThresholdPercent?: 25 | 50 | 75 | 85 | 95 | 100 | null;
+  limitReached?: boolean;
   estimatedPromptCostUsd: number;
   estimatedPromptsRemaining: number | null;
   renewsAtUtc: string;
@@ -1413,9 +1418,54 @@ export type WorkspaceOverview = {
   }>;
 };
 
+export type WorkspaceFollowUpQueue = "new" | "quoted" | "closed" | "afterSale" | "recent";
+
+export type WorkspaceFollowUpItem = {
+  customerId: string;
+  customerName: string;
+  phone: string;
+  email?: string | null;
+  quoteId?: string;
+  quoteTitle?: string;
+  totalAmount?: number;
+  status?: QuoteStatus;
+  jobStatus?: QuoteJobStatus;
+  afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
+  afterSaleFollowUpDueAtUtc?: string | null;
+  followUpStatus: LeadFollowUpStatus;
+  createdAt: string;
+};
+
+export type WorkspaceFollowUpResponse = {
+  items: WorkspaceFollowUpItem[];
+  pagination: Pagination;
+  totals: {
+    newLeads: number;
+    quotedLeads: number;
+    closedLeads: number;
+    afterSaleLeads: number;
+    recentLeads: number;
+  };
+  metrics: {
+    acceptedRevenue: number;
+    monthlyQuotes: number;
+  };
+};
+
 export const api = {
   workspace: {
     overview: () => request<WorkspaceOverview>("/v1/workspace/overview"),
+    followUp: (query?: {
+      queue?: WorkspaceFollowUpQueue;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }) => request<WorkspaceFollowUpResponse>(`/v1/workspace/follow-up${toQueryString({
+      queue: query?.queue,
+      search: query?.search,
+      limit: query?.limit,
+      offset: query?.offset,
+    })}`),
   },
 
   feedback: {
@@ -1772,13 +1822,27 @@ export const api = {
   },
 
   products: {
-    list: (serviceType?: ServiceType) =>
+    list: (query?: {
+      serviceType?: ServiceType;
+      category?: WorkPresetCategory;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
       request<{
         primaryTrade?: ServiceType | null;
         supportedTrades: ServiceType[];
         products: WorkPreset[];
         policy: { canManageCatalog: boolean; canViewInternalCosts: boolean };
-      }>(`/v1/products${toQueryString({ serviceType })}`),
+        pagination: Pagination;
+        summary: { standardCount: number };
+      }>(`/v1/products${toQueryString({
+        serviceType: query?.serviceType,
+        category: query?.category,
+        search: query?.search,
+        limit: query?.limit,
+        offset: query?.offset,
+      })}`),
 
     create: (body: ProductInput) =>
       request<{ message: string; product: WorkPreset }>(`/v1/products`, {
@@ -1800,9 +1864,10 @@ export const api = {
 
   org: {
     users: {
-      list: () =>
+      list: (query?: { limit?: number; offset?: number; search?: string }) =>
         request<{
           members: OrganizationUser[];
+          pagination: Pagination;
           policy: {
             canManageUsers: boolean;
             teamMembersLimit: number | null;
@@ -1811,7 +1876,11 @@ export const api = {
             seatPlanCode: PlanCode;
             seatPlanName: string;
           };
-        }>(`/v1/org/users`),
+        }>(`/v1/org/users${toQueryString({
+          limit: query?.limit,
+          offset: query?.offset,
+          search: query?.search,
+        })}`),
 
       create: (body: {
         email: string;
@@ -1932,14 +2001,26 @@ export const api = {
       limit?: number;
       offset?: number;
       status?: QuoteStatus;
+      stage?: "DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED";
       customerId?: string;
       search?: string;
     }) =>
-      request<{ quotes: Quote[]; pagination: Pagination }>(
+      request<{
+        quotes: Quote[];
+        pagination: Pagination;
+        summary: {
+          stageCounts: Record<"DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED", number>;
+          readyToSendCount: number;
+          awaitingResponseCount: number;
+          awaitingResponseAmount: number;
+          acceptedAmount: number;
+        };
+      }>(
         `/v1/quotes${toQueryString({
           limit: query?.limit,
           offset: query?.offset,
           status: query?.status,
+          stage: query?.stage,
           customerId: query?.customerId,
           search: query?.search,
         })}`,

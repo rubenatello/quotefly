@@ -52,8 +52,8 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
-import { formatAiUsageAvailability, formatAiUsageNotice } from "../lib/ai-credits";
+import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
   isQuoteDraftTimestampFresh,
@@ -391,7 +391,7 @@ export function QuoteDeskView() {
   useEffect(() => {
     if (!canManageAssignments) return;
     let mounted = true;
-    api.org.users.list()
+    api.org.users.list({ limit: 100 })
       .then((result) => { if (mounted) setWorkspaceMembers(result.members); })
       .catch(() => { if (mounted) setWorkspaceMembers([]); });
     return () => { mounted = false; };
@@ -675,13 +675,11 @@ export function QuoteDeskView() {
       formatAiUsageAvailability({
         usedUsd: session?.usage?.monthlyAiSpendUsd,
         limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
-        estimatedPromptsRemaining: session?.usage?.monthlyAiEstimatedPromptsRemaining,
         renewsAtUtc: session?.usage?.periodEndUtc,
       }),
     [
       session?.entitlements?.limits.aiSpendUsdPerMonth,
       session?.usage?.monthlyAiSpendUsd,
-      session?.usage?.monthlyAiEstimatedPromptsRemaining,
       session?.usage?.periodEndUtc,
     ],
   );
@@ -1168,6 +1166,7 @@ export function QuoteDeskView() {
       void loadAiRuns(selectedQuote.id);
       setAiModalOpen(false);
       setMobilePane("editor");
+      publishAiUsageUpdate(usage);
       const usageSummary = formatAiUsageNotice(usage);
       const patchSummary = [
         patch.updated ? `updated ${patch.updated}` : null,
@@ -1180,6 +1179,10 @@ export function QuoteDeskView() {
         `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then save tracked edits.`,
       );
     } catch (err) {
+      if (err instanceof ApiError && err.details && typeof err.details === "object") {
+        const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
+        if (usage) publishAiUsageUpdate(usage);
+      }
       const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
       setAiErrorMessage(message);
       setError(message);

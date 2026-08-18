@@ -6,6 +6,7 @@ export type AppSession = {
   fullName: string;
   tenantId: string;
   tenantName: string;
+  timezone: string;
   role: string;
   primaryTrade?: ServiceType | null;
   onboardingCompletedAtUtc?: string | null;

@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
-import { assistantToolConsumesAiBudget, resolveAssistantTool, runAiAssistant } from "../lib/ai-assistant";
+import { runAiAssistant } from "../lib/ai-assistant";
 import { hashSourceReference } from "../lib/ai-data-governance";
 import {
   AssistantRequestSchema,
@@ -83,8 +83,6 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
     }
     const context = normalizeAssistantContext(payload.context);
     const conversation = normalizeAssistantConversation(payload.conversation);
-    const resolvedTool = resolveAssistantTool(payload.message, payload.tool, context, conversation);
-
     const entitlements = await measureRequestPerformance(request, "db", () => loadTenantEntitlements(app.prisma, claims.tenantId, {
       userEmail: claims.email,
     }));
@@ -97,7 +95,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       claims.tenantId,
       entitlements,
     ));
-    if (blocked && assistantToolConsumesAiBudget(resolvedTool)) {
+    if (blocked) {
       await recordSuperuserAuditEvent(app.prisma, {
         actorUserId: claims.userId,
         requestId: request.id,

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import {
   AirVent,
+  ArrowLeft,
   ArrowRight,
   Boxes,
   Check,
@@ -321,13 +322,14 @@ export function TradeSolutionsPage({ trade, onOpenAuth }: { trade: TradeSolution
   return (
     <div className="min-h-screen overflow-hidden bg-[#f7f4ee] text-slate-900">
       <section className="relative isolate overflow-hidden bg-slate-950 px-4 py-14 text-white sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-        <div aria-hidden="true" className={`pointer-events-none absolute -left-24 top-10 -z-10 h-80 w-80 rounded-full blur-3xl ${content.accent.glow}`} />
+        <div aria-hidden="true" className="qf-marketing-grid pointer-events-none absolute inset-0 -z-20 opacity-25" />
+        <div aria-hidden="true" className={`qf-marketing-orbit qf-marketing-orbit--blue pointer-events-none absolute -left-24 top-10 -z-10 h-80 w-80 rounded-full blur-3xl ${content.accent.glow}`} />
         <div className="mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:gap-14">
-          <div>
-            <Link to={`/solutions#${trade}`} className="inline-flex min-h-11 items-center text-sm font-semibold text-slate-300 transition hover:text-white">
-              ← All trade solutions
+          <div className="qf-page-enter">
+            <Link to={`/solutions#${trade}`} className="flex min-h-11 w-fit items-center gap-2 text-sm font-semibold text-slate-300 transition hover:text-white">
+              <ArrowLeft size={16} aria-hidden="true" /> All trade solutions
             </Link>
-            <p className={`mt-4 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold ${content.accent.badge} ${content.accent.badgeText}`}>
+            <p className={`mt-3 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold ${content.accent.badge} ${content.accent.badgeText}`}>
               <TradeIcon size={16} aria-hidden="true" /> {content.badge}
             </p>
             <h1 className="mt-6 text-4xl font-bold tracking-[-0.045em] text-white sm:text-5xl lg:text-[3.55rem] lg:leading-[1.03]">
@@ -335,14 +337,14 @@ export function TradeSolutionsPage({ trade, onOpenAuth }: { trade: TradeSolution
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl">{content.introduction}</p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <MarketingAction onClick={onOpenAuth} icon={<ArrowRight size={18} aria-hidden="true" />}>
+              <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
                 Start free trial
               </MarketingAction>
               <MarketingAction href="#pricing-methods" variant="dark-secondary">See {content.name.toLowerCase()} pricing methods</MarketingAction>
             </div>
           </div>
 
-          <figure className="relative min-h-[390px] overflow-hidden rounded-[30px] border border-white/15 bg-slate-900 shadow-[0_32px_90px_rgba(0,0,0,0.34)] sm:min-h-[520px]">
+          <figure className="qf-hero-product relative min-h-[390px] overflow-hidden rounded-[30px] border border-white/15 bg-slate-900 shadow-[0_32px_90px_rgba(0,0,0,0.34)] sm:min-h-[520px]">
             <img
               src={content.heroImage.src}
               alt={content.heroImage.alt}

@@ -25,7 +25,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       offer: `${PUBLIC_BASIC_PLAN.trialDays}-day free trial · first paid month $${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}`,
       features: [
         `Up to ${PUBLIC_BASIC_PLAN.quotesPerMonth} quotes/month`,
-        `Est. AI prompts: ~${PUBLIC_BASIC_PLAN.estimatedAiPromptsPerMonth}/month`,
+        "Monthly AI usage included",
         "Quick customer intake and lead pipeline",
         "PDF quote generation",
         "Customer and quote status tracking",
@@ -36,6 +36,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       highlighted: true,
       availableNow: true,
       note: "Available now",
+      badge: "Most popular",
     },
     {
       name: "Professional",
@@ -46,7 +47,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       offer: null,
       features: [
         "Everything in Basic, plus:",
-        "Est. AI prompts: ~6,800/month",
+        "Higher monthly AI allowance",
         "Advanced analytics and reporting",
         "Customer communication log",
         "Quote versioning and history",
@@ -56,7 +57,8 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       cta: "Coming Soon",
       highlighted: false,
       availableNow: false,
-      note: "V2 roadmap",
+      note: "Planned for V2",
+      badge: "Coming soon",
     },
     {
       name: "Enterprise",
@@ -67,7 +69,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       offer: null,
       features: [
         "Everything in Professional, plus:",
-        "Est. AI prompts: ~34,600/month",
+        "Expanded AI usage and automation",
         "Unlimited team members",
         "Advanced AI automation layer",
         "API access and audit logs",
@@ -76,7 +78,8 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
       cta: "Coming Soon",
       highlighted: false,
       availableNow: false,
-      note: "Later release",
+      note: "Planned for a later release",
+      badge: "Coming soon",
     },
   ];
 
@@ -107,7 +110,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "How does AI usage work?",
-      a: "AI is metered by usage, not by quotes sent. The app shows percentage used and estimated prompts remaining each month, while manual edits do not consume AI usage.",
+      a: "AI is metered by usage, not by quotes sent. The app shows a monthly progress bar and warns at 25%, 50%, 75%, 85%, 95%, and 100%. At 100%, Kody and AI tools pause until the monthly reset; manual edits remain available.",
     },
     {
       q: "Do you offer annual billing?",
@@ -129,8 +132,8 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         actions={
           <>
             <span className="text-sm font-medium text-slate-600">Billed monthly</span>
-            <span className="inline-flex items-center rounded-full border border-quotefly-blue/15 bg-quotefly-blue/[0.06] px-4 py-2 text-xs font-semibold text-quotefly-blue">
-              Basic is live now
+            <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-300 px-4 py-2 text-xs font-bold text-slate-950">
+              Basic · Most popular
             </span>
           </>
         }
@@ -138,23 +141,35 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
 
       <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
+          <div className="mx-auto mb-10 max-w-2xl text-center">
+            <p className="text-sm font-bold uppercase tracking-[0.16em] text-quotefly-blue">Compare plans</p>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">Start with the plan built for quoting today</h2>
+            <p className="mt-4 text-base leading-7 text-slate-600">
+              Basic is available now. Preview what is planned for growing teams while we finish Professional and Enterprise.
+            </p>
+          </div>
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             {plans.map((plan) => (
-              <div
+              <article
                 key={plan.name}
-                className={`overflow-hidden rounded-3xl border transition duration-200 ${
+                aria-disabled={!plan.availableNow || undefined}
+                className={`relative rounded-3xl border transition duration-200 ${
                   plan.highlighted
-                    ? "border-quotefly-blue bg-gradient-to-b from-blue-50 to-white shadow-[0_18px_46px_rgba(47,111,214,0.13)]"
-                    : "border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.05)] hover:-translate-y-1 hover:border-quotefly-blue/20 hover:shadow-[0_18px_42px_rgba(15,23,42,0.09)]"
+                    ? "border-quotefly-blue bg-gradient-to-b from-blue-50 to-white shadow-[0_18px_46px_rgba(47,111,214,0.16)] lg:-translate-y-2"
+                    : "border-slate-200 bg-slate-100/80 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
                 }`}
               >
-                {plan.highlighted && (
-                  <div className="border-b border-quotefly-blue/20 bg-quotefly-blue/10 px-6 py-2 text-center text-sm font-semibold text-quotefly-blue">
-                    Launch Plan
-                  </div>
-                )}
+                <span
+                  className={`absolute -right-2 -top-3 z-10 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm ${
+                    plan.availableNow
+                      ? "border-orange-400 bg-orange-300 text-slate-950"
+                      : "border-slate-300 bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {plan.badge}
+                </span>
 
-                <div className="p-6">
+                <div className={`p-6 ${plan.availableNow ? "" : "opacity-65"}`}>
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="text-xl font-bold text-slate-900">{plan.name}</h3>
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${plan.availableNow ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-500"}`}>
@@ -193,7 +208,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                   <div className="mt-8 space-y-3">
                     {plan.features.map((feature) => (
                       <div key={feature} className="flex items-start gap-3">
-                        <CheckIcon size={16} className="mt-0.5 text-quotefly-blue" />
+                        <CheckIcon size={16} className={`mt-0.5 ${plan.availableNow ? "text-quotefly-blue" : "text-slate-400"}`} />
                         <span
                           className={`text-sm ${
                             feature.includes("Everything") || feature.includes("plus:")
@@ -207,7 +222,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                     ))}
                   </div>
                 </div>
-              </div>
+              </article>
             ))}
           </div>
         </div>
