@@ -1,6 +1,24 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import React, { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
+import { Footer } from "../src/components/Footer";
+import { Navbar } from "../src/components/Navbar";
+import { AboutPage } from "../src/pages/AboutPage";
+import { CookiePolicyPage } from "../src/pages/CookiePolicyPage";
+import { DataPrivacyPage } from "../src/pages/DataPrivacyPage";
+import { LandingPage } from "../src/pages/LandingPage";
+import { LandscapingSolutionsPage } from "../src/pages/LandscapingSolutionsPage";
+import { PricingPage } from "../src/pages/PricingPage";
+import { PrivacyPage } from "../src/pages/PrivacyPage";
+import { ServicesPage } from "../src/pages/ServicesPage";
+import { SolutionsPage } from "../src/pages/SolutionsPage";
+import { SupportPage } from "../src/pages/SupportPage";
+import { TermsPage } from "../src/pages/TermsPage";
+import { TradeSolutionsPage, type TradeSolutionId } from "../src/pages/TradeSolutionsPage";
+import { LANDING_FAQS } from "../src/lib/landing-content";
 import {
   PUBLIC_BASIC_PLAN,
   PUBLIC_OG_IMAGE_URL,
@@ -14,6 +32,10 @@ import {
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(webRoot, "dist");
 const baseHtml = await readFile(join(distDir, "index.html"), "utf8");
+
+// tsx loads imported TSX files outside Vite's automatic JSX runtime. Expose
+// React for that server-only render without changing browser component imports.
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 function escapeHtml(value: string): string {
   return value
@@ -53,22 +75,78 @@ function routeSchema(path: PublicRoutePath) {
   const route = PUBLIC_ROUTE_SEO[path];
   const canonical = publicCanonicalUrl(path);
 
-  if (route.schemaType === "SoftwareApplication") {
+  const softwareApplication = {
+    "@type": "SoftwareApplication",
+    name: "QuoteFly",
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web",
+    description: route.description,
+    url: canonical,
+    offers: {
+      "@type": "Offer",
+      name: PUBLIC_BASIC_PLAN.name,
+      price: String(PUBLIC_BASIC_PLAN.monthlyPriceUsd),
+      priceCurrency: "USD",
+      url: publicCanonicalUrl("/pricing"),
+    },
+  };
+
+  if (path === "/") {
     return {
       "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      name: "QuoteFly",
-      applicationCategory: "BusinessApplication",
-      operatingSystem: "Web",
-      description: route.description,
-      url: canonical,
-      offers: {
-        "@type": "Offer",
-        name: PUBLIC_BASIC_PLAN.name,
-        price: String(PUBLIC_BASIC_PLAN.monthlyPriceUsd),
-        priceCurrency: "USD",
-        url: publicCanonicalUrl("/pricing"),
-      },
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": `${PUBLIC_SITE_URL}/#organization`,
+          name: "QuoteFly",
+          url: `${PUBLIC_SITE_URL}/`,
+          logo: `${PUBLIC_SITE_URL}/logo.png`,
+        },
+        {
+          "@type": "WebSite",
+          "@id": `${PUBLIC_SITE_URL}/#website`,
+          name: "QuoteFly",
+          url: `${PUBLIC_SITE_URL}/`,
+          publisher: { "@id": `${PUBLIC_SITE_URL}/#organization` },
+        },
+        { ...softwareApplication, "@id": `${PUBLIC_SITE_URL}/#software` },
+        {
+          "@type": "FAQPage",
+          "@id": `${PUBLIC_SITE_URL}/#faq`,
+          mainEntity: LANDING_FAQS.map((faq) => ({
+            "@type": "Question",
+            name: faq.q,
+            acceptedAnswer: { "@type": "Answer", text: faq.a },
+          })),
+        },
+      ],
+    };
+  }
+
+  if (route.schemaType === "SoftwareApplication") {
+    return { "@context": "https://schema.org", ...softwareApplication };
+  }
+
+  if (path.startsWith("/solutions/")) {
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebPage",
+          name: route.heading,
+          description: route.description,
+          url: canonical,
+          isPartOf: { "@type": "WebSite", name: "QuoteFly", url: `${PUBLIC_SITE_URL}/` },
+        },
+        {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "Home", item: `${PUBLIC_SITE_URL}/` },
+            { "@type": "ListItem", position: 2, name: "Trade solutions", item: publicCanonicalUrl("/solutions") },
+            { "@type": "ListItem", position: 3, name: route.heading, item: canonical },
+          ],
+        },
+      ],
     };
   }
 
@@ -94,16 +172,47 @@ function replaceStructuredData(html: string, schema: object | null): string {
   return withoutExisting.replace("</head>", `    <script type="application/ld+json">${serialized}</script>\n  </head>`);
 }
 
-function crawlerNavigation(): string {
-  return PUBLIC_ROUTE_PATHS.map((path) => {
-    const route = PUBLIC_ROUTE_SEO[path];
-    return `<a href="${path}">${escapeHtml(route.heading)}</a>`;
-  }).join(" ");
+function publicPage(path: PublicRoutePath): ReactElement {
+  const onOpenAuth = () => undefined;
+  const trade = path.startsWith("/solutions/") && path !== "/solutions/landscaping"
+    ? path.slice("/solutions/".length) as TradeSolutionId
+    : null;
+
+  if (path === "/") return createElement(LandingPage, { onOpenAuth });
+  if (path === "/pricing") return createElement(PricingPage, { onOpenAuth });
+  if (path === "/services") return createElement(ServicesPage, { onOpenAuth });
+  if (path === "/solutions") return createElement(SolutionsPage, { onOpenAuth });
+  if (path === "/solutions/landscaping") return createElement(LandscapingSolutionsPage, { onOpenAuth });
+  if (trade) return createElement(TradeSolutionsPage, { trade, onOpenAuth });
+  if (path === "/about") return createElement(AboutPage, { onOpenAuth });
+  if (path === "/support") return createElement(SupportPage, { onOpenAuth });
+  if (path === "/privacy") return createElement(PrivacyPage);
+  if (path === "/data-privacy") return createElement(DataPrivacyPage);
+  if (path === "/terms") return createElement(TermsPage);
+  return createElement(CookiePolicyPage);
 }
 
 function routeFallback(path: PublicRoutePath): string {
-  const route = PUBLIC_ROUTE_SEO[path];
-  return `<div id="root" data-prerendered-route="${path}"><main><p>QuoteFly contractor quoting software</p><h1>${escapeHtml(route.heading)}</h1><p>${escapeHtml(route.summary)}</p><nav aria-label="Public pages">${crawlerNavigation()}</nav></main></div>`;
+  const currentPage = path === "/" ? "landing" : path.slice(1);
+  const app = createElement(
+    MemoryRouter,
+    { initialEntries: [path] },
+    createElement(
+      "div",
+      { className: "min-h-screen flex flex-col bg-stone-50" },
+      createElement(Navbar, {
+        currentPage,
+        onNavigate: () => undefined,
+        isLoggedIn: false,
+        onOpenAuth: () => undefined,
+        onOpenSignIn: () => undefined,
+        onLogout: () => undefined,
+      }),
+      createElement("main", { id: "main-content", className: "flex-1" }, publicPage(path)),
+      createElement(Footer),
+    ),
+  );
+  return `<div id="root" data-prerendered-route="${path}">${renderToStaticMarkup(app)}</div>`;
 }
 
 function renderPublicRoute(path: PublicRoutePath): string {

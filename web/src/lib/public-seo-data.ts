@@ -40,13 +40,13 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-15",
-    title: "Easy Quoting Software for Contractors | QuoteFly",
+    lastModified: "2026-08-17",
+    title: "Contractor Quoting Software & Estimate App | QuoteFly",
     description:
-      "The easiest quoting software for on-the-go contractors and professionals. Manage customers, build estimates, create branded PDFs, and follow up from any device.",
-    heading: "The easiest quoting software for on-the-go contractors and professionals",
+      "Build contractor quotes from the field with customer tracking, reusable pricing, Kody AI assistance, branded PDFs, and practical follow-up in QuoteFly.",
+    heading: "Build the quote while the job is still fresh.",
     summary:
-      "Manage a customer, price the work, review the customer-facing quote, and share a branded PDF from one clean mobile workflow.",
+      "Keep the customer, scope, pricing, branded PDF, and follow-up in one practical workflow. Ask Kody for a useful first draft, then review every line before anything is created or sent.",
     schemaType: "SoftwareApplication",
   },
   "/pricing": {
@@ -73,7 +73,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
-    lastModified: "2026-08-15",
+    lastModified: "2026-08-17",
     title: "Quoting Solutions for Contractors by Trade | QuoteFly",
     description:
       "See how QuoteFly solves customer, estimating, pricing, PDF, and follow-up problems for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",

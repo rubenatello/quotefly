@@ -180,7 +180,8 @@ export function LandingPitchDeck({ onOpenAuth }: LandingPitchDeckProps) {
                 alt={slide.imageAlt}
                 width={1600}
                 height={1067}
-                loading={activeIndex === 0 ? "eager" : "lazy"}
+                loading="lazy"
+                decoding="async"
                 className="qf-demo-pane-enter absolute inset-0 h-full w-full object-cover"
               />
               <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-slate-950/10" />
@@ -269,7 +270,7 @@ export function LandingPitchDeck({ onOpenAuth }: LandingPitchDeckProps) {
           </div>
         </div>
 
-        <p className="mt-4 text-center text-xs text-slate-500">Use the controls, arrow keys, or swipe to explore. Slides do not auto-advance.</p>
+        <p className="mt-4 text-center text-xs text-slate-400">Use the controls, arrow keys, or swipe to explore. Slides do not auto-advance.</p>
       </div>
     </section>
   );

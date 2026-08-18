@@ -57,6 +57,10 @@ function parseJpegDimensions(buffer: Buffer): { width: number; height: number } 
   throw new Error("JPEG dimensions were not found.");
 }
 
+function decodeHtmlText(value: string): string {
+  return decodeHtmlAttribute(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
 test("publishes the current Basic price, trial, and introductory offer", () => {
   assert.equal(PUBLIC_BASIC_PLAN.monthlyPriceUsd, 29);
   assert.equal(PUBLIC_BASIC_PLAN.trialDays, 20);
@@ -80,28 +84,41 @@ test("every public route has unique raw crawlable HTML", async () => {
     const description = extract(html, /<meta\s+name="description"\s+content="([^"]+)"/i, `${path} description`);
     const canonical = extract(html, /<link\s+rel="canonical"\s+href="([^"]+)"/i, `${path} canonical`);
 
-    assert.equal(title, route.title);
+    assert.equal(decodeHtmlAttribute(title), route.title);
     assert.equal(decodeHtmlAttribute(description), route.description);
     assert.equal(canonical, publicCanonicalUrl(path));
     assert.match(html, /<meta\s+name="robots"\s+content="index,follow"/i);
-    assert.match(html, new RegExp(`<h1>${route.heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</h1>`));
-    assert.ok(decodeHtmlAttribute(html).includes(route.summary), `${path} must include its route summary in raw HTML`);
+    const h1 = extract(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i, `${path} h1`);
+    assert.equal(decodeHtmlText(h1), route.heading);
+    assert.ok(html.length > 10_000, `${path} must include its full public page in raw HTML`);
+    assert.match(html, /<footer[^>]*>/i, `${path} must include crawlable site navigation and footer content`);
     assert.ok(html.includes(`data-prerendered-route="${path}"`));
     assert.match(html, /<script\s+type="module"/i, `${path} must retain the React client entry`);
     assert.ok(html.includes(PUBLIC_OG_IMAGE_URL));
+    assert.doesNotMatch(html, /The easiest quoting software/i);
 
     const jsonLdText = extract(
       html,
       /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/i,
       `${path} JSON-LD`,
     );
-    const jsonLd = JSON.parse(jsonLdText) as { url?: string; offers?: { price?: string } };
-    assert.equal(jsonLd.url, canonical);
+    const jsonLd = JSON.parse(jsonLdText) as {
+      "@type"?: string;
+      url?: string;
+      offers?: { price?: string };
+      "@graph"?: Array<{ "@type"?: string; url?: string; offers?: { price?: string } }>;
+    };
+    const schemaNodes = jsonLd["@graph"] ?? [jsonLd];
+    assert.ok(schemaNodes.some((node) => node.url === canonical), `${path} schema must include its canonical URL`);
     if (path === "/" || path === "/pricing") {
-      assert.equal(jsonLd.offers?.price, String(PUBLIC_BASIC_PLAN.monthlyPriceUsd));
+      const application = schemaNodes.find((node) => node["@type"] === "SoftwareApplication");
+      assert.equal(application?.offers?.price, String(PUBLIC_BASIC_PLAN.monthlyPriceUsd));
+    }
+    if (path.startsWith("/solutions/")) {
+      assert.ok(schemaNodes.some((node) => node["@type"] === "BreadcrumbList"));
     }
 
-    titles.add(title);
+    titles.add(decodeHtmlAttribute(title));
     descriptions.add(description);
     canonicals.add(canonical);
   }
@@ -229,4 +246,25 @@ test("robots and sitemap use the canonical host and cover all public routes", as
   assert.doesNotMatch(sitemap, /https:\/\/quotefly\.us/);
   assert.doesNotMatch(sitemap, /<priority>|<changefreq>/);
   assert.doesNotMatch(sitemap, /\/app(?:\/|<)/);
+});
+
+test("homepage prerender contains the real product, Kody, trade, and offer content", async () => {
+  const html = decodeHtmlAttribute(await readFile(join(distDir, "index.html"), "utf8"));
+  for (const expected of [
+    "Build the quote while the job is still fresh.",
+    "Tell Kody what you are trying to get done.",
+    "Find Michael Scott.",
+    "HVAC quoting software",
+    "Start your 20-day free trial",
+    "First paid month $14.50",
+  ]) {
+    assert.ok(html.includes(expected), `homepage raw HTML must include: ${expected}`);
+  }
+  assert.ok(html.length > 30_000, "homepage prerender must contain the full public experience, not a thin crawler fallback");
+  assert.doesNotMatch(html, /The easiest quoting software/i);
+  assert.doesNotMatch(html, /"price":"19"/);
+  assert.doesNotMatch(html, /<link[^>]+rel="preload"[^>]+kody-ai-thumbnail/i);
+
+  const kodyThumbnail = join(distDir, "images", "kody", "kody-ai-thumbnail.webp");
+  assert.ok((await stat(kodyThumbnail)).size < 25_000, "the below-fold Kody thumbnail must stay below 25 KB");
 });

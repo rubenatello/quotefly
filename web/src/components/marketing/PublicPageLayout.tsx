@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Pause, Play } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 type MarketingActionVariant = "primary" | "orange" | "secondary" | "dark-secondary" | "light";
@@ -151,6 +151,7 @@ export function MarketingMomentumStrip({
   ariaLabel = "QuoteFly workflow highlights",
   tone = "navy",
 }: MarketingMomentumStripProps) {
+  const [paused, setPaused] = useState(false);
   const list = (
     <ul className="qf-momentum-list" role="list">
       {items.map((item) => (
@@ -165,16 +166,25 @@ export function MarketingMomentumStrip({
   return (
     <section
       aria-label={ariaLabel}
-      className={`overflow-hidden border-y py-4 text-white ${
+      className={`qf-momentum-shell relative overflow-hidden border-y py-4 pr-14 text-white sm:pr-16 ${
         tone === "blue"
           ? "border-blue-400/30 bg-quotefly-blue"
           : "border-white/10 bg-slate-950"
       }`}
     >
-      <div className="qf-momentum-track">
+      <div className={`qf-momentum-track ${paused ? "qf-momentum-track--paused" : ""}`}>
         {list}
         <div aria-hidden="true">{list}</div>
       </div>
+      <button
+        type="button"
+        aria-pressed={paused}
+        aria-label={paused ? "Resume workflow highlights" : "Pause workflow highlights"}
+        onClick={() => setPaused((current) => !current)}
+        className="absolute right-2 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl border border-white/25 bg-slate-950/80 text-white shadow-lg backdrop-blur transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/35 sm:right-3"
+      >
+        {paused ? <Play size={17} aria-hidden="true" /> : <Pause size={17} aria-hidden="true" />}
+      </button>
     </section>
   );
 }

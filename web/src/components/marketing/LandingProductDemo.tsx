@@ -221,7 +221,7 @@ export function LandingProductDemo({ priority = true }: { priority?: boolean }) 
                     type="button"
                     aria-pressed={pane === id}
                     onClick={() => setPane(id)}
-                    className={`min-h-9 rounded-full border px-3 text-[9px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue focus-visible:ring-offset-2 ${
+                    className={`min-h-11 rounded-full border px-3 text-[9px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue focus-visible:ring-offset-2 ${
                       pane === id
                         ? "border-quotefly-blue/20 bg-quotefly-blue/[0.09] text-quotefly-blue"
                         : "border-slate-200 bg-white text-slate-600"
@@ -245,11 +245,11 @@ export function LandingProductDemo({ priority = true }: { priority?: boolean }) 
                 <button
                   type="button"
                   onClick={() => setPane((current) => current === "editor" ? "preview" : "editor")}
-                  className="inline-flex min-h-8 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue"
+                  className="inline-flex min-h-11 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-quotefly-blue"
                 >
                   <Eye size={10} /> {pane === "editor" ? "Preview" : "Edit Quote"}
                 </button>
-                <span className="inline-flex min-h-8 items-center justify-center rounded-lg bg-quotefly-blue text-white shadow-sm">Create Quote</span>
+                <span className="inline-flex min-h-11 items-center justify-center rounded-lg bg-quotefly-blue text-white shadow-sm">Create Quote</span>
               </div>
             </div>
 

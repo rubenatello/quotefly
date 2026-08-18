@@ -1,0 +1,4 @@
+interface:
+  display_name: "QuoteFly Production Loop"
+  short_description: "Coordinate specialists and release evidence"
+  default_prompt: "Use the QuoteFly production loop to coordinate specialist review, implement the approved scope, run proportional gates, and obtain an independent final verdict without committing or deploying."

@@ -27,15 +27,10 @@ export function CookieConsentBanner() {
       <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-slate-900">Your privacy choices</p>
-          <p className="mt-0.5 text-xs leading-[1.4rem] text-slate-600 sm:text-sm sm:leading-5">
-            Essential storage keeps sign-in and preferences working. Optional analytics stay off unless you choose to enable them.
-            Read our{" "}
+          <p className="mt-0.5 text-xs leading-5 text-slate-600 sm:text-sm">
+            Essential storage keeps QuoteFly working. Optional analytics stay off unless you allow them. Learn more in our{" "}
             <Link to="/cookies" className="font-medium text-quotefly-blue hover:text-blue-700">
-              Cookie Policy
-            </Link>{" "}
-            and{" "}
-            <Link to="/privacy" className="font-medium text-quotefly-blue hover:text-blue-700">
-              Privacy Policy
+              privacy choices
             </Link>.
           </p>
         </div>

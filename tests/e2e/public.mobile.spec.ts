@@ -20,6 +20,16 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await demoView.getByRole("button", { name: "Edit quote", exact: true }).click();
   await expect(page.getByText("Editable quote sheet", { exact: true })).toBeVisible();
 
+  const momentumToggle = page.getByRole("button", { name: "Pause workflow highlights" });
+  const momentumTrack = page.locator(".qf-momentum-track");
+  await expect(momentumToggle).toHaveAttribute("aria-pressed", "false");
+  await momentumToggle.click();
+  await expect(page.getByRole("button", { name: "Resume workflow highlights" })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => momentumTrack.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe("paused");
+  await page.getByRole("button", { name: "Resume workflow highlights" }).click();
+  await expect(page.getByRole("button", { name: "Pause workflow highlights" })).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(() => momentumTrack.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe("running");
+
   const productStory = page.getByRole("region", { name: "QuoteFly product story" });
   await productStory.scrollIntoViewIfNeeded();
   await expect(productStory.getByRole("group", { name: /1 of 4: Capture/i })).toBeVisible();

@@ -440,6 +440,10 @@ textarea {
   will-change: transform;
 }
 
+.qf-momentum-track--paused {
+  animation-play-state: paused;
+}
+
 .qf-momentum-list {
   display: flex;
   flex-shrink: 0;

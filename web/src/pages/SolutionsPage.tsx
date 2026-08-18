@@ -264,7 +264,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
               Built for the work. <span className="text-blue-300">Not the paperwork.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
-              QuoteFly is the easiest quoting software for on-the-go contractors and professionals who need to turn job details into a clear, customer-ready quote before the day gets away from them.
+              QuoteFly is practical quoting software for contractors who need to turn job details into a clear, customer-ready quote before the day gets away from them.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">

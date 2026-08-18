@@ -1,39 +1,31 @@
 import { useEffect } from "react";
-import { ArrowRight, Check, Sparkles } from "lucide-react";
-import { setPublicSEOMetadata } from "../lib/seo";
-import { QuoteIcon, InvoiceIcon, CustomerIcon, SendIcon } from "../components/Icons";
-import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { ArrowRight, Check, FileCheck2, ShieldCheck, Smartphone, UsersRound } from "lucide-react";
+import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
 import { LandingPitchDeck } from "../components/marketing/LandingPitchDeck";
+import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { LandingTradeRail } from "../components/marketing/LandingTradeRail";
 import { MarketingAction, MarketingCta, MarketingMomentumStrip } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
+import { LANDING_FAQS } from "../lib/landing-content";
 import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
-
-const SEO_FAQS = [
-  {
-    q: "What is contractor quoting software?",
-    a: "Contractor quoting software helps service businesses create, price, send, and track quotes from one workflow.",
-  },
-  {
-    q: "Is QuoteFly also contractor estimating software?",
-    a: "Yes. QuoteFly supports estimating labor, materials, markup, and customer totals before you send the final quote.",
-  },
-  {
-    q: "Which trades can use QuoteFly?",
-    a: "HVAC, plumbing, roofing, flooring, construction, and landscaping teams can use the same core quote workflow.",
-  },
-  {
-    q: "Can I send branded quote PDFs from my phone?",
-    a: "Yes. QuoteFly is mobile-first and lets you generate and share branded quote PDFs from the field.",
-  },
-  {
-    q: "Does QuoteFly include customer tracking?",
-    a: "Yes. QuoteFly includes customer intake, follow-up status tracking, and quote pipeline visibility.",
-  },
-];
+import { setPublicSEOMetadata } from "../lib/seo";
 
 interface LandingPageProps {
   onOpenAuth: () => void;
 }
+
+const PROOF_POINTS = [
+  { icon: Smartphone, value: `${BASIC_PLAN.trialDays} days`, label: "Free on mobile and desktop" },
+  { icon: UsersRound, value: `${BASIC_PLAN.teamMembers} users`, label: "Included with Basic" },
+  { icon: FileCheck2, value: "Branded PDFs", label: "Preview before sharing" },
+  { icon: ShieldCheck, value: "You approve", label: "Before Kody creates or sends" },
+] as const;
+
+const WORKFLOW = [
+  ["01", "Capture the customer", "Add or find the customer while the conversation and job details are still fresh."],
+  ["02", "Price the work", "Use saved products or a Kody-assisted draft, then set quantities, price, and scope."],
+  ["03", "Review and share", "Check the branded PDF yourself, send it, and keep the next follow-up visible."],
+] as const;
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
   useMarketingReveal();
@@ -41,79 +33,6 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
   useEffect(() => {
     setPublicSEOMetadata("/");
   }, []);
-
-  useEffect(() => {
-    const scriptId = "qf-landing-faq-jsonld";
-    const existing = document.getElementById(scriptId);
-    if (existing) existing.remove();
-
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.type = "application/ld+json";
-    script.text = JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: SEO_FAQS.map((item) => ({
-        "@type": "Question",
-        name: item.q,
-        acceptedAnswer: {
-          "@type": "Answer",
-          text: item.a,
-        },
-      })),
-    });
-    document.head.appendChild(script);
-
-    return () => {
-      script.remove();
-    };
-  }, []);
-
-  const features = [
-    {
-      icon: <SendIcon size={32} className="text-quotefly-blue" />,
-      title: "Chat-to-Quote",
-      description: "Draft a usable quote from customer details and job scope without starting from a blank page.",
-    },
-    {
-      icon: <QuoteIcon size={32} className="text-quotefly-orange" />,
-      title: "Smart Pricing",
-      description: "Keep labor, materials, markup, and customer price visible in one fast editing flow.",
-    },
-    {
-      icon: <InvoiceIcon size={32} className="text-quotefly-gold" />,
-      title: "Branded PDFs",
-      description: "Send polished, contractor-ready quotes that match your logo, colors, and template style.",
-    },
-    {
-      icon: <CustomerIcon size={32} className="text-quotefly-blue" />,
-      title: "Lead Pipeline",
-      description: "Track new leads, quoted jobs, closed work, and follow-up without leaving the app.",
-    },
-  ];
-
-  const workflow = [
-    {
-      step: "1",
-      title: "Add the customer fast",
-      description: "Create a lead in seconds with name, phone, email, and notes from the field.",
-    },
-    {
-      step: "2",
-      title: "Draft the quote",
-      description: "Describe the work in chat or the builder, then shape line items, labor, materials, and totals.",
-    },
-    {
-      step: "3",
-      title: "Review before sending",
-      description: "Check scope, margin, and customer-facing price before the quote leaves your workspace.",
-    },
-    {
-      step: "4",
-      title: "Send and track",
-      description: "Open the email or text app, share the branded PDF, and move the lead through the pipeline.",
-    },
-  ];
 
   return (
     <div className="min-h-screen overflow-hidden bg-stone-50 text-slate-900">
@@ -124,46 +43,30 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         <div className="mx-auto grid max-w-7xl items-center gap-9 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)] lg:gap-12">
           <div className="text-center lg:text-left">
             <div className="qf-hero-badge mb-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-sm font-semibold text-blue-200 shadow-sm backdrop-blur">
-              <Sparkles size={15} aria-hidden="true" />
-              Free for {BASIC_PLAN.trialDays} days. No credit card required.
+              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-quotefly-orange shadow-[0_0_16px_rgba(255,137,18,0.8)]" />
+              Quoting software built for contractors
             </div>
 
             <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-[-0.05em] text-white sm:text-5xl lg:mx-0 lg:text-[3.8rem] lg:leading-[1.01]">
-              Win the work before the paperwork slows you down.
+              Build the quote while the job is still fresh.
             </h1>
 
-            <p className="mx-auto mt-5 max-w-2xl bg-gradient-to-r from-blue-300 via-cyan-300 to-orange-300 bg-clip-text text-xl font-bold leading-8 text-transparent sm:text-2xl lg:mx-0">
-              Quote faster. Follow up smarter. Stay in control.
-            </p>
-
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
-              Find the customer, price the work, preview the quote, and keep follow-up moving—without going back to the office.
+              Keep the customer, scope, pricing, branded PDF, and follow-up in one practical workflow. Ask Kody for a useful first draft, then review every line before anything is created or sent.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
-              <MarketingAction
-                onClick={onOpenAuth}
-                variant="orange"
-                icon={<ArrowRight size={18} aria-hidden="true" />}
-              >
-                Start Free Trial
+              <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
+                Start your {BASIC_PLAN.trialDays}-day free trial
               </MarketingAction>
-              <MarketingAction
-                href="#workflow"
-                variant="dark-secondary"
-              >
-                See how it works
+              <MarketingAction href="#product-story" variant="dark-secondary">
+                Watch the quote come together
               </MarketingAction>
             </div>
 
-            <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-300 lg:justify-start">
-              {["Customer-first workflow", "Mobile-ready", "Branded quote PDFs"].map((item) => (
-                <span key={item} className="inline-flex items-center gap-1.5">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-300/20"><Check size={12} aria-hidden="true" /></span>
-                  {item}
-                </span>
-              ))}
-            </div>
+            <p className="mt-5 text-sm font-medium text-slate-300">
+              No credit card · First paid month {basicFirstPaidMonthPriceLabel()} · Then ${BASIC_PLAN.monthlyPriceUsd}/month
+            </p>
           </div>
 
           <LandingProductDemo />
@@ -172,113 +75,111 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       <MarketingMomentumStrip
         tone="blue"
-        items={[
-          "Find the customer",
-          "Draft with Kody",
-          "Price the work",
-          "Review the margin",
-          "Preview the PDF",
-          "Send and follow up",
-        ]}
+        items={["Find the customer", "Draft with Kody", "Price the work", "Review the margin", "Preview the PDF", "Send and follow up"]}
       />
 
+      <section aria-label="QuoteFly plan and workflow highlights" className="border-b border-slate-200 bg-white px-4 py-5 sm:px-6 lg:px-8">
+        <div className="mx-auto grid max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {PROOF_POINTS.map(({ icon: Icon, value, label }) => (
+            <div key={value} className="flex min-h-16 items-center gap-3 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-quotefly-blue/[0.09] text-quotefly-blue">
+                <Icon size={19} aria-hidden="true" />
+              </span>
+              <span>
+                <strong className="block text-sm text-slate-950">{value}</strong>
+                <span className="block text-xs leading-5 text-slate-600">{label}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="workflow" className="scroll-mt-24 px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
+        <div className="mx-auto max-w-7xl">
+          <div data-marketing-reveal className="grid gap-6 lg:grid-cols-[0.72fr_1.28fr] lg:items-end">
+            <div>
+              <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">Less paperwork drift</p>
+              <h2 className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">The job is clear. The paperwork gets scattered.</h2>
+            </div>
+            <p className="max-w-3xl text-lg leading-8 text-slate-600">
+              QuoteFly keeps the practical steps connected, so a lead does not disappear between a phone call, a note, a spreadsheet, and an unfinished estimate.
+            </p>
+          </div>
+
+          <ol className="mt-10 grid gap-4 md:grid-cols-3">
+            {WORKFLOW.map(([step, title, description]) => (
+              <li key={step} data-marketing-reveal className="rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+                <span className="text-xs font-bold tracking-[0.2em] text-quotefly-orange">{step}</span>
+                <h3 className="mt-4 text-xl font-bold text-slate-950">{title}</h3>
+                <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <LandingKodyShowcase onOpenAuth={onOpenAuth} />
       <LandingPitchDeck onOpenAuth={onOpenAuth} />
+      <LandingTradeRail />
 
-      <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
-        <div className="mx-auto max-w-6xl">
-          <div data-marketing-reveal="scale" className="mx-auto mb-12 max-w-2xl text-center">
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">Built for the field</p>
-            <h2 className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">Everything needed to move a quote forward</h2>
-            <p className="mt-4 text-slate-600">Focused tools for the work between a new customer request and a confident yes.</p>
+      <section className="border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="basic-plan-heading">
+        <div className="mx-auto grid max-w-6xl gap-8 overflow-hidden rounded-[32px] border border-slate-200 bg-stone-50 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.07)] sm:p-10 lg:grid-cols-[1fr_0.9fr] lg:items-center">
+          <div data-marketing-reveal>
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">A simple place to start</p>
+            <h2 id="basic-plan-heading" className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">Basic has the full quoting workflow.</h2>
+            <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-600">
+              Test QuoteFly with your own customers and job scopes for {BASIC_PLAN.trialDays} days. Review the workflow before deciding whether it belongs in your business.
+            </p>
+            <ul className="mt-7 grid gap-3 sm:grid-cols-2">
+              {[`${BASIC_PLAN.teamMembers} included users`, `${BASIC_PLAN.quotesPerMonth} quotes each month`, "Kody AI with a monthly usage budget", "Branding, PDF preview, and follow-up"].map((item) => (
+                <li key={item} className="flex items-start gap-2 text-sm font-medium text-slate-700">
+                  <Check size={17} className="mt-0.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                  {item}
+                </li>
+              ))}
+            </ul>
           </div>
-
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-            {features.map((feature, index) => (
-              <div
-                key={feature.title}
-                data-marketing-reveal={index % 2 === 0 ? "left" : "right"}
-                style={{ transitionDelay: `${index * 55}ms` }}
-                className="qf-hover-lift rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/25 hover:shadow-[0_18px_38px_rgba(15,23,42,0.09)]"
-              >
-                <div className="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50">{feature.icon}</div>
-                <h3 className="mb-2 text-lg font-semibold text-slate-900">{feature.title}</h3>
-                <p className="text-sm leading-6 text-slate-600">{feature.description}</p>
-              </div>
-            ))}
+          <div data-marketing-reveal="scale" className="rounded-3xl bg-slate-950 p-7 text-white shadow-[0_24px_54px_rgba(15,23,42,0.18)] sm:p-9">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-lg font-bold">Basic</p>
+              <span className="rounded-full bg-quotefly-orange px-3 py-1 text-xs font-bold text-slate-950">Most popular</span>
+            </div>
+            <p className="mt-7 flex items-end gap-2"><span className="text-5xl font-bold tracking-tight">${BASIC_PLAN.monthlyPriceUsd}</span><span className="pb-1 text-slate-400">/month</span></p>
+            <p className="mt-3 text-sm leading-6 text-slate-300">Your first paid month is {basicFirstPaidMonthPriceLabel()} after the free trial. Then the standard monthly price applies.</p>
+            <MarketingAction onClick={onOpenAuth} variant="orange" fullWidth className="mt-7">
+              Start free for {BASIC_PLAN.trialDays} days
+            </MarketingAction>
+            <p className="mt-3 text-center text-xs text-slate-400">No credit card required to start.</p>
           </div>
         </div>
       </section>
 
-      <section id="workflow" className="scroll-mt-24 border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div data-marketing-reveal className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
-          <h2 className="text-3xl font-bold text-slate-900">One platform for quoting and estimating</h2>
-          <p className="mt-4 text-slate-600">
-            QuoteFly combines <strong>contractor quoting software</strong> and <strong>contractor estimating software</strong> so crews can move from lead details to priced scope and customer-ready PDF in one system.
-          </p>
-          <p className="mt-3 text-slate-600">
-            Common use cases include HVAC estimate software workflows, plumbing estimate workflows, roofing replacement quotes, and flooring project pricing.
-          </p>
-        </div>
-      </section>
-
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="how-it-works-heading">
+      <section className="px-4 py-16 sm:px-6 lg:px-8" aria-labelledby="landing-faq-heading">
         <div className="mx-auto max-w-4xl">
-          <div data-marketing-reveal className="mb-12 text-center">
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">A clean path from lead to quote</p>
-            <h2 id="how-it-works-heading" className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">How it works</h2>
+          <div className="text-center">
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">Straight answers</p>
+            <h2 id="landing-faq-heading" className="mt-3 text-3xl font-bold text-slate-950 sm:text-4xl">Questions contractors ask before trying QuoteFly</h2>
           </div>
-
-          <div className="relative grid gap-4 md:grid-cols-4">
-            <div aria-hidden="true" className="absolute left-[12.5%] right-[12.5%] top-6 hidden h-px bg-gradient-to-r from-quotefly-blue/20 via-quotefly-blue/60 to-quotefly-orange/40 md:block" />
-            {workflow.map((item, index) => (
-              <div
-                key={item.step}
-                data-marketing-reveal
-                style={{ transitionDelay: `${index * 55}ms` }}
-                className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-              >
-                <div className="relative z-10 flex h-12 w-12 items-center justify-center rounded-2xl bg-quotefly-blue shadow-[0_8px_20px_rgba(47,111,214,0.2)]">
-                  <span className="text-lg font-bold text-white">{item.step}</span>
-                </div>
-                <h3 className="mt-5 text-base font-semibold text-slate-900">{item.title}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{item.description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div data-marketing-reveal className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
-          <h2 className="text-3xl font-bold text-slate-900">Evaluate the complete workflow during your trial</h2>
-          <p className="mt-4 text-slate-600">
-            Add a sample customer, build a quote from your own job scope, review the PDF, and test the phone sharing flow before deciding whether QuoteFly fits your business.
-          </p>
-          <p className="mt-3 text-sm text-slate-500">
-            QuoteFly does not promise a specific close-rate or time-saving result. The trial is the clearest way to evaluate the current product with your process.
-          </p>
-        </div>
-      </section>
-
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl">
-          <h2 className="mb-10 text-center text-3xl font-bold text-slate-900">Contractor quoting software FAQ</h2>
-          <div className="space-y-4">
-            {SEO_FAQS.map((faq) => (
-              <article key={faq.q} data-marketing-reveal className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-lg font-semibold text-slate-900">{faq.q}</h3>
-                <p className="mt-2 text-slate-600">{faq.a}</p>
-              </article>
+          <div className="mt-9 divide-y divide-slate-200 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            {LANDING_FAQS.map((faq) => (
+              <details key={faq.q} className="group px-5 py-1 sm:px-7">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 py-4 text-left font-semibold text-slate-950 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-quotefly-blue/20 [&::-webkit-details-marker]:hidden">
+                  {faq.q}
+                  <span aria-hidden="true" className="text-xl font-normal text-quotefly-blue transition group-open:rotate-45">+</span>
+                </summary>
+                <p className="max-w-3xl pb-5 text-sm leading-7 text-slate-600">{faq.a}</p>
+              </details>
             ))}
           </div>
         </div>
       </section>
 
       <MarketingCta
-        title="Ready to stop losing time on quotes?"
-        description={`Start free for ${BASIC_PLAN.trialDays} days. If you continue with Basic, your first paid month is ${basicFirstPaidMonthPriceLabel()}, then $${BASIC_PLAN.monthlyPriceUsd}/month.`}
-        actionLabel="Start Free Trial Now"
+        title="Keep the work moving before you leave the job."
+        description={`Start free for ${BASIC_PLAN.trialDays} days. If QuoteFly fits, your first paid month is ${basicFirstPaidMonthPriceLabel()}, then $${BASIC_PLAN.monthlyPriceUsd}/month.`}
+        actionLabel={`Start your ${BASIC_PLAN.trialDays}-day free trial`}
         onAction={onOpenAuth}
+        supportingText="Kody helps with the first pass. You stay in control of the final quote."
       />
     </div>
   );
