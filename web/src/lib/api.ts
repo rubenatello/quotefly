@@ -620,8 +620,10 @@ export type AiAssistantRequestedTool =
   | "SEARCH_CUSTOMERS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
+  | "DRAFT_CUSTOMER"
   | "DRAFT_PRODUCT"
-  | "DRAFT_QUOTE";
+  | "DRAFT_QUOTE"
+  | "PREPARE_QUOTE_SEND";
 
 export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
 
@@ -652,7 +654,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;

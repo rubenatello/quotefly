@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { AiAssistantContext, AiAssistantRequestedTool } from "../../lib/api";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
-import { Button } from "../ui";
+import { IconButton } from "../ui";
 import { KodySparkIcon } from "./KodySparkIcon";
 import { openKody } from "./kody-events";
 
@@ -12,8 +12,7 @@ export function KodyButton({
   context,
   label = "Ask Kody",
   icon,
-  variant = "kody",
-  size = "sm",
+  size = "md",
   className,
   disabled,
 }: {
@@ -22,27 +21,26 @@ export function KodyButton({
   context?: AiAssistantContext;
   label?: string;
   icon?: ReactNode;
-  variant?: "primary" | "secondary" | "kody" | "outline" | "ghost";
   size?: "sm" | "md" | "lg";
   className?: string;
   disabled?: boolean;
 }) {
   const track = useTrack();
-  const iconSize = size === "lg" ? 24 : size === "md" ? 22 : 20;
+  const iconSize = size === "lg" ? 34 : size === "md" ? 30 : 24;
   return (
-    <Button
+    <IconButton
       type="button"
-      variant={variant}
+      variant="kodyTrigger"
       size={size}
-      className={cn("qf-kody-context-action", className)}
+      className={cn("qf-kody-context-action !rounded-full", className)}
+      label={label}
+      title={label}
       icon={icon ?? <KodySparkIcon size={iconSize} />}
       disabled={disabled}
       onClick={() => {
         track("kody_context_open", { tool, currentPage: context?.currentPage ?? "unknown" });
         openKody({ prompt, tool, context });
       }}
-    >
-      {label}
-    </Button>
+    />
   );
 }

@@ -72,7 +72,7 @@ test("dark mobile Kody panel is readable and accessible without page overflow", 
   await expectNoSeriousAccessibilityViolations(page, "dark mobile Kody panel");
 });
 
-test("dashboard Kody actions stay bright, legible, and visually prominent", async ({ context, page, request }) => {
+test("dashboard Kody triggers stay distinct, legible, and visually prominent", async ({ context, page, request }) => {
   const account = await signUpViaApi(request, "accessibility-kody-dashboard");
   await addSessionCookie(context, account);
   await page.goto("/app");
@@ -80,8 +80,8 @@ test("dashboard Kody actions stay bright, legible, and visually prominent", asyn
 
   const dashboardAction = page.getByRole("button", { name: "Plan with Kody", exact: true });
   await expect(dashboardAction).toBeVisible();
-  await expect(dashboardAction).toHaveCSS("background-color", "rgb(255, 138, 31)");
-  await expect(dashboardAction).toHaveCSS("color", "rgb(17, 17, 17)");
+  await expect(dashboardAction).toHaveCSS("background-color", "rgb(11, 18, 32)");
+  await expect(dashboardAction).toHaveCSS("color", "rgb(248, 250, 252)");
 
   const actionMascot = dashboardAction.locator('img[src="/images/kody/kody-ai.png"]');
   await expect(actionMascot).toBeVisible();
@@ -89,7 +89,7 @@ test("dashboard Kody actions stay bright, legible, and visually prominent", asyn
 
   const launcher = page.getByTestId("kody-launcher");
   await expect(launcher).toBeVisible();
-  await expect(launcher).toHaveCSS("background-color", "rgb(255, 138, 31)");
-  await expect(launcher).toHaveCSS("color", "rgb(17, 17, 17)");
+  await expect(launcher).toHaveCSS("background-color", "rgb(11, 18, 32)");
+  await expect(launcher).toHaveCSS("color", "rgb(248, 250, 252)");
   expect((await launcher.locator('img[src="/images/kody/kody-ai.png"]').boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(34);
 });

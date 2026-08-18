@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { useDashboard, money } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
+import { publishKodyOutcome } from "../components/ai/kody-events";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
@@ -1217,6 +1218,13 @@ export function QuoteBuilderView() {
     });
 
     if (createdQuote) {
+      if (kodyDraftHandoff) {
+        publishKodyOutcome({
+          type: "QUOTE_CREATED",
+          quoteTitle: createdQuote.title,
+          customerName: activeCustomer?.fullName,
+        });
+      }
       clearStoredBuilderDraft();
       setDraftLines([makeEditableQuoteLine()]);
       setAiInsight(null);
@@ -1241,7 +1249,6 @@ export function QuoteBuilderView() {
             ) : null}
             <KodyButton
               label="Draft with Kody"
-              variant="kody"
               prompt={[
                 activeCustomer ? `Draft a quote for ${activeCustomer.fullName}.` : "Draft a new quote.",
                 `Trade: ${quoteForm.serviceType}.`,

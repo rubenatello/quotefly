@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Clock3,
   FilePlus2,
+  PackagePlus,
   RotateCcw,
   Search,
   Send,
@@ -12,7 +13,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
-  UserRound,
+  UserPlus,
   X,
 } from "lucide-react";
 import {
@@ -37,7 +38,7 @@ import { cn } from "../../lib/utils";
 import { Alert, Button, ConfirmModal, IconButton, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KodySparkIcon } from "./KodySparkIcon";
-import { KODY_OPEN_EVENT, type KodyOpenDetail } from "./kody-events";
+import { KODY_OPEN_EVENT, KODY_OUTCOME_EVENT, type KodyOpenDetail, type KodyOutcomeDetail } from "./kody-events";
 import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
 
 type KodyMessage = {
@@ -60,11 +61,32 @@ type QuickPrompt = {
 
 const QUICK_PROMPTS: QuickPrompt[] = [
   {
+    tool: "DRAFT_CUSTOMER",
+    label: "Add customer",
+    description: "Prepare a contact for review.",
+    prompt: "Add a new customer named ",
+    icon: <UserPlus size={15} />,
+  },
+  {
     tool: "DRAFT_QUOTE",
     label: "Draft quote",
     description: "Start with customer, job, and rough scope.",
     prompt: "Draft a quote for ",
     icon: <FilePlus2 size={15} />,
+  },
+  {
+    tool: "PREPARE_QUOTE_SEND",
+    label: "Send quote",
+    description: "Find a saved quote and review the recipient.",
+    prompt: "Send the latest quote to ",
+    icon: <Send size={15} />,
+  },
+  {
+    tool: "DRAFT_PRODUCT",
+    label: "Add product",
+    description: "Prepare a priced catalog item for review.",
+    prompt: "Add a new product or service named ",
+    icon: <PackagePlus size={15} />,
   },
   {
     tool: "SEARCH_CUSTOMERS",
@@ -98,6 +120,62 @@ const QUICK_PROMPTS: QuickPrompt[] = [
     submitImmediately: true,
   },
 ];
+
+const QUICK_PROMPT_PRIORITY: Partial<Record<WorkspacePage, AiAssistantTool[]>> = {
+  home: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "FOLLOW_UP_QUEUE"],
+  customers: ["DRAFT_CUSTOMER", "SEARCH_CUSTOMERS", "DRAFT_QUOTE"],
+  quotes: ["DRAFT_QUOTE", "PREPARE_QUOTE_SEND", "SUMMARIZE_PIPELINE"],
+  "quote-desk": ["PREPARE_QUOTE_SEND", "DRAFT_QUOTE", "SUMMARIZE_PIPELINE"],
+  products: ["DRAFT_PRODUCT", "DRAFT_QUOTE", "SEARCH_CUSTOMERS"],
+  build: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "DRAFT_PRODUCT"],
+  "follow-up": ["FOLLOW_UP_QUEUE", "SEARCH_CUSTOMERS", "PREPARE_QUOTE_SEND"],
+  analytics: ["SUMMARIZE_PIPELINE", "RANK_PROFITABLE_JOBS", "FOLLOW_UP_QUEUE"],
+};
+
+function orderQuickPrompts(page: WorkspacePage, available: QuickPrompt[]) {
+  const priority = QUICK_PROMPT_PRIORITY[page] ?? ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "SEARCH_CUSTOMERS"];
+  const priorityIndex = new Map<AiAssistantTool | "AUTO", number>(
+    priority.map((tool, index) => [tool, index]),
+  );
+  return [...available].sort((left, right) => {
+    const leftIndex = priorityIndex.get(left.tool) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = priorityIndex.get(right.tool) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex;
+  });
+}
+
+function KodyQuickPromptButton({
+  quickPrompt,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  quickPrompt: QuickPrompt;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: (quickPrompt: QuickPrompt) => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={quickPrompt.description}
+      onClick={() => onSelect(quickPrompt)}
+      disabled={disabled}
+      data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
+      className={cn(
+        "flex min-h-11 min-w-0 items-center gap-2 rounded-xl border bg-[var(--qf-kody-assistant-surface)] px-2.5 py-2 text-left motion-safe:transition hover:border-[var(--qf-info-border)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60",
+        selected ? "border-[var(--qf-focus)] ring-2 ring-[var(--qf-focus-ring)]" : "border-[var(--qf-border)]",
+      )}
+    >
+      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]">
+        {quickPrompt.icon}
+      </span>
+      <span className="min-w-0 whitespace-normal text-xs font-semibold leading-4 text-[var(--qf-text)] sm:text-sm">
+        {quickPrompt.label}
+      </span>
+    </button>
+  );
+}
 
 function assistantContextFromPage(page: WorkspacePage): "quotes" | "customers" | "analytics" | "products" | "dashboard" {
   if (page === "customers") return "customers";
@@ -139,8 +217,10 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO") {
     if (tool === "FOLLOW_UP_QUEUE") return "Checking your follow-ups...";
     if (tool === "CUSTOMERS_WITHOUT_QUOTES") return "Checking who still needs a quote...";
     if (tool === "PIPELINE_SCENARIO") return "Crunching the numbers...";
+    if (tool === "DRAFT_CUSTOMER") return "Preparing customer details...";
     if (tool === "DRAFT_PRODUCT") return "Preparing your product details...";
     if (tool === "DRAFT_QUOTE") return "Gathering quote details...";
+    if (tool === "PREPARE_QUOTE_SEND") return "Checking the quote and recipient...";
     if (tool === "SUMMARIZE_PIPELINE") return "Gathering pipeline info...";
     if (tool === "RANK_PROFITABLE_JOBS") return "Comparing job performance...";
     if (tool === "ASSISTANT_HELP") return "Getting Kody ready...";
@@ -268,6 +348,17 @@ function formatVisibleAnswer(answer: string) {
 }
 
 function actionConfirmationCopy(action: AiAssistantAction) {
+  if (action.type === "OPEN_CUSTOMER_DRAFT") {
+    const fullName = getString(action.payload.fullName) ?? "this customer";
+    const phone = getString(action.payload.phone);
+    const email = getString(action.payload.email);
+    const contactSummary = [phone, email].filter(Boolean).join(" · ");
+    return {
+      title: `Review ${fullName}?`,
+      description: `${contactSummary ? `${contactSummary}. ` : ""}Kody will open the customer form with these details. Nothing is saved until you review the form and press Save customer.`,
+      confirmLabel: "Open customer review",
+    };
+  }
   if (action.type === "OPEN_PRODUCT_DRAFT") {
     return {
       title: "Review Kody's product draft?",
@@ -282,6 +373,18 @@ function actionConfirmationCopy(action: AiAssistantAction) {
       description:
         "Kody will open this in the quote builder. Nothing will be saved or sent until you review the customer, scope, pricing, and click Create Quote.",
       confirmLabel: "Open review draft",
+    };
+  }
+  if (action.type === "OPEN_QUOTE_SEND") {
+    const quoteTitle = getString(action.payload.quoteTitle) ?? "this quote";
+    const customerName = getString(action.payload.customerName) ?? "the customer";
+    const destination = getString(action.payload.destination);
+    const channel = getString(action.payload.channel);
+    const channelLabel = channel === "sms" ? "text" : channel === "copy" ? "copy" : "email";
+    return {
+      title: `Review ${channelLabel} for ${customerName}?`,
+      description: `${quoteTitle}${destination ? ` · ${destination}` : ""}. Kody will open the existing send composer for your review. It will not contact the customer or mark the quote sent automatically.`,
+      confirmLabel: "Open send review",
     };
   }
   if (action.type === "REQUEST_ADMIN_ACCESS") {
@@ -311,7 +414,7 @@ function KodyResultCard({
 }) {
   const entries = visibleResultEntries(result);
   return (
-    <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-[var(--qf-shadow-sm)] transition hover:border-[var(--qf-info-border)] hover:shadow-[var(--qf-shadow-md)]">
+    <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3 transition-colors hover:border-[var(--qf-info-border)]">
       <div className="flex items-start gap-2">
         <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--qf-info-surface)] text-[11px] font-bold text-[var(--qf-info-text)]">
           {index + 1}
@@ -381,8 +484,8 @@ function KodyResponse({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-3">
+    <div className="flex flex-col gap-3">
+      <div className="contents">
         {response.conversation.mode === "SHIFTED" && response.conversation.acknowledgement ? (
           <p
             className="mb-3 rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-2 text-sm leading-5 text-[var(--qf-text-soft)]"
@@ -391,7 +494,15 @@ function KodyResponse({
             {response.conversation.acknowledgement}
           </p>
         ) : null}
-        <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--qf-text)]">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--qf-kody-eyebrow)]">
+          {formatKey(response.diagnostics.resolvedTool)}
+        </p>
+        <p
+          className="whitespace-pre-wrap text-sm leading-6 text-[var(--qf-text)]"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {visibleAnswer || "Kody returned a response, but there was no answer text to show."}
         </p>
 
@@ -402,7 +513,7 @@ function KodyResponse({
                 key={`${action.type}-${index}`}
                 type="button"
                 size="sm"
-                variant={action.type === "REQUEST_ADMIN_ACCESS" ? "outline" : "primary"}
+                variant={action.type === "REQUEST_ADMIN_ACCESS" || index > 0 ? "outline" : "kody"}
                 onClick={() => onAction(action)}
                 className="w-full sm:w-auto"
               >
@@ -412,7 +523,7 @@ function KodyResponse({
           </div>
         ) : null}
 
-        <div className="flex min-h-11 flex-wrap items-center gap-2 border-t border-[var(--qf-border)] pt-3">
+        <div className="order-5 flex min-h-11 flex-wrap items-center gap-2 border-t border-[var(--qf-border)] pt-3">
           <span className="mr-1 text-xs font-medium text-[var(--qf-text-muted)]">Helpful?</span>
           <button
             type="button"
@@ -422,10 +533,10 @@ function KodyResponse({
             aria-pressed={feedback === "UP"}
             data-testid="kody-feedback-up"
             className={cn(
-              "inline-flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-50",
+              "inline-flex h-11 w-11 items-center justify-center rounded-xl border motion-safe:transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-50",
               feedback === "UP"
                 ? "border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] text-[var(--qf-success-text)]"
-                : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] hover:border-[var(--qf-success-border)] hover:bg-[var(--qf-success-surface)] hover:text-[var(--qf-success-text)]",
+                : "border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] text-[var(--qf-text-muted)] hover:border-[var(--qf-success-border)] hover:bg-[var(--qf-success-surface)] hover:text-[var(--qf-success-text)]",
             )}
           >
             <ThumbsUp size={16} aria-hidden="true" />
@@ -438,10 +549,10 @@ function KodyResponse({
             aria-pressed={feedback === "DOWN"}
             data-testid="kody-feedback-down"
             className={cn(
-              "inline-flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-50",
+              "inline-flex h-11 w-11 items-center justify-center rounded-xl border motion-safe:transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-50",
               feedback === "DOWN"
                 ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] text-[var(--qf-warning-text)]"
-                : "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] hover:border-[var(--qf-warning-border)] hover:bg-[var(--qf-warning-surface)] hover:text-[var(--qf-warning-text)]",
+                : "border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] text-[var(--qf-text-muted)] hover:border-[var(--qf-warning-border)] hover:bg-[var(--qf-warning-surface)] hover:text-[var(--qf-warning-text)]",
             )}
           >
             <ThumbsDown size={16} aria-hidden="true" />
@@ -476,7 +587,7 @@ function KodyResponse({
         </div>
         {feedback && showFeedbackNote ? (
           <div
-            className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3"
+            className="order-6 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3"
             data-testid="kody-feedback-note-panel"
           >
             <Textarea
@@ -517,14 +628,14 @@ function KodyResponse({
 
       {response.results.length ? (
         <details
-          className="group rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2 shadow-[var(--qf-shadow-sm)]"
+          className="group order-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2"
           data-testid="kody-results"
         >
-          <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[var(--qf-text)] marker:hidden">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
             <span>View {response.results.length} {response.results.length === 1 ? "result" : "results"}</span>
             <ChevronDown
               size={16}
-              className="text-[var(--qf-text-muted)] transition-transform group-open:rotate-180"
+              className="text-[var(--qf-text-muted)] motion-safe:transition-transform motion-safe:group-open:rotate-180"
               aria-hidden="true"
             />
           </summary>
@@ -542,10 +653,10 @@ function KodyResponse({
       ) : null}
 
       <details
-        className="group rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-xs text-[var(--qf-text-soft)] shadow-[var(--qf-shadow-sm)]"
+        className="group order-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2 text-xs text-[var(--qf-text-soft)]"
         data-testid="kody-data-guardrails"
       >
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[var(--qf-text-soft)] marker:hidden">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-[var(--qf-text-soft)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
           <span className="inline-flex min-w-0 items-center gap-2">
             <ShieldCheck size={14} className="shrink-0 text-[var(--qf-info-text)]" />
             <span className="font-semibold text-[var(--qf-text)]">Sources & safety</span>
@@ -611,15 +722,17 @@ export function KodyAssistant({
     ? `Kody and AI tools are paused until your monthly usage resets on ${aiUsageRenewalLabel}.`
     : "Kody and AI tools are paused until your monthly usage resets.";
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
-  const visibleQuickPrompts = canViewInternalCosts
+  const availableQuickPrompts = canViewInternalCosts
     ? QUICK_PROMPTS
     : QUICK_PROMPTS.filter((quickPrompt) => quickPrompt.tool !== "RANK_PROFITABLE_JOBS");
+  const orderedQuickPrompts = orderQuickPrompts(workspacePage, availableQuickPrompts);
+  const primaryQuickPrompts = orderedQuickPrompts.slice(0, 3);
+  const additionalQuickPrompts = orderedQuickPrompts.slice(3);
 
   const starterText = useMemo(() => {
     if (messages.length) return "Ask a follow-up in plain language. Kody will keep the recent conversation in mind.";
     return "Ask about customers, quotes, follow-ups, products, pipeline, or job profitability.";
   }, [messages.length]);
-
   const closeKody = useCallback((source: "button" | "keyboard") => {
     setOpen(false);
     track("kody_close", { source, page: currentContextPage });
@@ -648,6 +761,24 @@ export function KodyAssistant({
     window.addEventListener(KODY_OPEN_EVENT, handleOpenKody);
     return () => window.removeEventListener(KODY_OPEN_EVENT, handleOpenKody);
   }, [currentContextPage, track]);
+
+  useEffect(() => {
+    const handleKodyOutcome = (event: Event) => {
+      const detail = (event as CustomEvent<KodyOutcomeDetail>).detail;
+      if (!detail) return;
+      const text = detail.type === "CUSTOMER_CREATED"
+        ? `${detail.customerName} is now in your workspace. You can ask me to draft their quote next.`
+        : detail.type === "QUOTE_CREATED"
+          ? `${detail.quoteTitle} was created${detail.customerName ? ` for ${detail.customerName}` : ""}. Open it when you’re ready to review and send.`
+          : `${detail.quoteTitle} for ${detail.customerName} is now marked sent.`;
+      setMessages((current) => current.length
+        ? [...current, { id: makeMessageId(), role: "kody", text }]
+        : current);
+      track("kody_action_outcome", { type: detail.type });
+    };
+    window.addEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
+    return () => window.removeEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
+  }, [track]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -704,7 +835,9 @@ export function KodyAssistant({
     window.requestAnimationFrame(() => {
       conversation.scrollTo({
         top: conversation.scrollHeight,
-        behavior: messages.length > 2 ? "smooth" : "auto",
+        behavior: messages.length > 2 && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "smooth"
+          : "auto",
       });
     });
   }, [open, messages.length, loading]);
@@ -846,6 +979,17 @@ export function KodyAssistant({
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
+  function collapseForMobileHandoff(type: AiAssistantAction["type"]) {
+    if (!window.matchMedia("(max-width: 1023px)").matches) return;
+    setOpen(false);
+    track("kody_mobile_handoff_collapsed", { type });
+  }
+
+  function rejectInvalidAction(message: string, action: AiAssistantAction) {
+    setError(message);
+    track("kody_action_invalid", { type: action.type });
+  }
+
   function executeAction(action: AiAssistantAction, source: "direct" | "confirmed") {
     if (action.requiresConfirmation && source !== "confirmed") {
       setPendingAction(action);
@@ -855,22 +999,54 @@ export function KodyAssistant({
     track("kody_action", { type: action.type, source, requiresConfirmation: action.requiresConfirmation });
     if (action.type === "OPEN_CUSTOMER") {
       const customerId = getString(action.payload.customerId);
-      if (!customerId) return;
-      if (window.matchMedia("(max-width: 639px)").matches) {
-        setOpen(false);
-        track("kody_mobile_handoff_collapsed", { type: action.type });
-      }
+      if (!customerId) return rejectInvalidAction("Kody could not open that customer. Try the search again.", action);
+      collapseForMobileHandoff(action.type);
       navigate("/app/customers", { state: { kodyCustomerId: customerId } });
       return;
     }
 
+    if (action.type === "OPEN_CUSTOMER_DRAFT") {
+      const fullName = getString(action.payload.fullName);
+      const phone = getString(action.payload.phone);
+      if (!fullName || !phone) {
+        return rejectInvalidAction("Kody needs a customer name and 10-digit phone before opening the review form.", action);
+      }
+      collapseForMobileHandoff(action.type);
+      navigate("/app/customers", {
+        state: {
+          kodyCustomerDraft: {
+            fullName,
+            phone,
+            email: getString(action.payload.email) ?? "",
+            notes: getString(action.payload.notes) ?? "",
+          },
+        },
+      });
+      return;
+    }
+
     if (action.type === "OPEN_QUOTE_DRAFT") {
+      collapseForMobileHandoff(action.type);
       navigate("/app/build", { state: { kodyQuoteDraft: action.payload } });
       return;
     }
 
     if (action.type === "OPEN_PRODUCT_DRAFT") {
+      collapseForMobileHandoff(action.type);
       navigate("/app/products", { state: { kodyProductDraft: action.payload } });
+      return;
+    }
+
+    if (action.type === "OPEN_QUOTE_SEND") {
+      const quoteId = getString(action.payload.quoteId);
+      const channel = getString(action.payload.channel);
+      if (!quoteId || (channel !== "email" && channel !== "sms" && channel !== "copy")) {
+        return rejectInvalidAction("Kody could not open that send review. Ask Kody to find the quote again.", action);
+      }
+      collapseForMobileHandoff(action.type);
+      navigate(`/app/quotes/${encodeURIComponent(quoteId)}`, {
+        state: { kodyQuoteSend: { quoteId, channel } },
+      });
       return;
     }
 
@@ -922,7 +1098,7 @@ export function KodyAssistant({
             track("kody_open", { page: currentContextPage });
           }}
           className={cn(
-            "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-14 min-h-14 items-center gap-2.5 rounded-2xl border border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] px-2 text-sm font-semibold text-[var(--qf-kody-action-text)] shadow-[0_10px_26px_rgba(249,105,40,0.32)] transition hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_14px_30px_rgba(249,105,40,0.38)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-kody-action-active)] sm:px-3.5 lg:right-6",
+            "fixed right-[max(0.875rem,env(safe-area-inset-right))] z-[55] inline-flex h-[60px] min-h-[60px] w-[60px] items-center justify-center rounded-full border border-[var(--qf-kody-trigger-border)] bg-[var(--qf-kody-trigger)] text-[var(--qf-kody-trigger-text)] shadow-[0_12px_28px_rgba(3,7,18,0.3)] motion-safe:transition motion-safe:hover:-translate-y-0.5 hover:border-[var(--qf-kody-trigger-hover)] hover:bg-[var(--qf-kody-trigger-hover)] hover:shadow-[0_16px_34px_rgba(3,7,18,0.36)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-kody-trigger-active)] lg:right-6",
             hasMobileActionDock
               ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)] lg:bottom-[7rem] xl:bottom-6"
               : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)] lg:bottom-6",
@@ -931,10 +1107,7 @@ export function KodyAssistant({
           aria-expanded="false"
           data-testid="kody-launcher"
         >
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-black/10 bg-white/85 p-0.5 shadow-[0_6px_16px_rgba(47,111,214,0.24)]">
-            <KodySparkIcon size={34} />
-          </span>
-          <span className="hidden sm:inline">Ask Kody</span>
+          <KodySparkIcon size={46} />
         </button>
       ) : null}
 
@@ -946,19 +1119,24 @@ export function KodyAssistant({
           role="dialog"
           data-testid="kody-chat-panel"
           className={cn(
-            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[24px] border border-[var(--qf-border-strong)] bg-gradient-to-b from-[var(--qf-panel)] to-[var(--qf-panel-muted)] shadow-[var(--qf-shell-shadow)]",
+            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[22px] border border-[var(--qf-kody-header-border)] bg-[var(--qf-kody-shell)] shadow-[var(--qf-shell-shadow)]",
             hasMobileActionDock && "qf-kody-chat-panel--with-dock",
           )}
         >
-          <header className="flex items-start justify-between gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 backdrop-blur sm:px-5">
-            <div className="min-w-0">
-              <h2 className="flex items-center gap-2 text-base font-semibold text-[var(--qf-text)]">
-                <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-kody-avatar-surface)] p-1 shadow-[var(--qf-shadow-sm)]">
-                  <KodySparkIcon size={30} />
-                </span>
-                Kody
-              </h2>
-              <p className="mt-1 text-xs leading-5 text-[var(--qf-text-soft)]">QuoteFly assistant · workspace only</p>
+          <header
+            className="qf-kody-header flex min-h-[72px] items-center justify-between gap-4 px-4 py-3 sm:px-5"
+            data-testid="kody-header"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[var(--qf-kody-header-border)] bg-[var(--qf-kody-avatar-surface)] p-1">
+                <KodySparkIcon size={40} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-[var(--qf-kody-header-text)]">Kody</h2>
+                <p className="mt-0.5 truncate text-xs leading-5 text-[var(--qf-kody-header-muted)]">
+                  QuoteFly assistant · Workspace only
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-1">
               {messages.length ? (
@@ -970,62 +1148,74 @@ export function KodyAssistant({
                   label="Start a new Kody conversation"
                   disabled={loading}
                   onClick={startNewConversation}
-                  className="rounded-full"
+                  className="qf-kody-header-control !h-11 !min-h-11 !w-11 rounded-full"
                 />
               ) : null}
               <IconButton
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 icon={<X size={18} />}
                 label="Close Kody"
                 onClick={() => closeKody("button")}
-                className="rounded-full"
+                className="qf-kody-header-control !h-11 !min-h-11 !w-11 rounded-full"
               />
             </div>
           </header>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 bg-[var(--qf-panel-muted)] p-3 sm:p-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 bg-[var(--qf-kody-shell)] p-3 sm:p-4">
           {!aiUsageLimitReached ? <details
             ref={quickPromptsRef}
-            className="group shrink-0 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]"
+            className="group shrink-0 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)]"
             data-testid="kody-quick-prompts"
           >
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-[var(--qf-text)] marker:hidden">
-              <span>Try a prompt</span>
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+              <span>Suggested actions</span>
               <span className="inline-flex items-center gap-2 text-xs font-medium text-[var(--qf-text-muted)]">
-                {visibleQuickPrompts.length} ideas
-                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden="true" />
+                {primaryQuickPrompts.length} suggestions
+                <ChevronDown size={16} className="motion-safe:transition-transform motion-safe:group-open:rotate-180" aria-hidden="true" />
               </span>
             </summary>
-            <div className="grid grid-cols-2 gap-2 border-t border-[var(--qf-border)] p-2">
-              {visibleQuickPrompts.map((quickPrompt) => (
-                <button
-                  key={quickPrompt.label}
-                  type="button"
-                  onClick={() => handleQuickPrompt(quickPrompt)}
-                  disabled={loading || aiUsageLimitReached}
-                  data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
-                  className={cn(
-                    "flex min-h-11 items-center gap-2 rounded-xl border bg-[var(--qf-panel)] px-2.5 py-2 text-left transition hover:border-[var(--qf-info-border)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-12 sm:px-3",
-                    selectedTool === quickPrompt.tool ? "border-[var(--qf-focus)] ring-2 ring-[var(--qf-focus-ring)]" : "border-[var(--qf-border)]",
-                  )}
-                >
-                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--qf-info-surface)] text-[var(--qf-info-text)] sm:h-8 sm:w-8">
-                    {quickPrompt.icon}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-xs font-semibold text-[var(--qf-text)] sm:text-sm">{quickPrompt.label}</span>
-                    <span className="hidden truncate text-xs text-[var(--qf-text-muted)] sm:block">{quickPrompt.description}</span>
-                  </span>
-                </button>
-              ))}
+            <div className="border-t border-[var(--qf-border)] p-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {primaryQuickPrompts.map((quickPrompt) => (
+                  <KodyQuickPromptButton
+                    key={quickPrompt.label}
+                    quickPrompt={quickPrompt}
+                    selected={selectedTool === quickPrompt.tool}
+                    disabled={loading || aiUsageLimitReached}
+                    onSelect={handleQuickPrompt}
+                  />
+                ))}
+              </div>
+              {additionalQuickPrompts.length ? (
+                <details className="group/more mt-2 border-t border-[var(--qf-border)] pt-1">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between rounded-lg px-2 text-xs font-semibold text-[var(--qf-text-soft)] marker:hidden hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+                    <span>More prompts</span>
+                    <span className="inline-flex items-center gap-2 text-[var(--qf-text-muted)]">
+                      {additionalQuickPrompts.length}
+                      <ChevronDown size={15} className="motion-safe:transition-transform motion-safe:group-open/more:rotate-180" aria-hidden="true" />
+                    </span>
+                  </summary>
+                  <div className="grid grid-cols-1 gap-2 pb-1 pt-2 sm:grid-cols-3">
+                    {additionalQuickPrompts.map((quickPrompt) => (
+                      <KodyQuickPromptButton
+                        key={quickPrompt.label}
+                        quickPrompt={quickPrompt}
+                        selected={selectedTool === quickPrompt.tool}
+                        disabled={loading || aiUsageLimitReached}
+                        onSelect={handleQuickPrompt}
+                      />
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </div>
           </details> : (
             <Alert tone="warning">{aiUsageLimitMessage}</Alert>
           )}
 
-          <div ref={conversationRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-inner sm:p-4">
+          <div ref={conversationRef} className="qf-kody-thread min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-[var(--qf-border)] p-3 sm:p-4">
             {!messages.length ? (
               <div className="flex min-h-[160px] flex-col items-center justify-center px-4 text-center">
                 <p className="text-base font-semibold text-[var(--qf-text)]">What can I help you get done?</p>
@@ -1037,32 +1227,37 @@ export function KodyAssistant({
                 <div
                   key={message.id}
                   className={cn(
-                    "flex gap-2",
+                    "flex min-w-0 gap-2",
                     message.role === "user" ? "justify-end" : "justify-start",
                   )}
                 >
                   {message.role === "kody" ? (
-                    <span className="mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-avatar-surface)] p-1 shadow-[var(--qf-shadow-sm)]">
+                    <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-kody-header-border)] bg-[var(--qf-kody-avatar-surface)] p-0.5">
                       <KodySparkIcon size={27} thinking={message.pending} />
                     </span>
                   ) : null}
                   <div
                     className={cn(
-                      "max-w-[92%] rounded-3xl px-4 py-3 sm:max-w-[82%]",
+                      "min-w-0 [overflow-wrap:anywhere] rounded-[18px] px-4 py-3",
                       message.pending
-                        ? "w-full p-0 sm:max-w-[78%]"
+                        ? "w-[calc(100%-2.5rem)] p-0 sm:max-w-[78%]"
                         : message.role === "user"
-                          ? "bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)]"
-                          : "border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text)]",
+                          ? "max-w-[88%] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] sm:max-w-[82%]"
+                          : "qf-kody-assistant-bubble w-[calc(100%-2.5rem)] border border-[var(--qf-border)] text-[var(--qf-text)] sm:max-w-[82%]",
                     )}
                   >
                     {message.pending ? (
-                      <LoadingState
-                        title={message.text}
-                        description="Checking your workspace safely."
-                        variant="compact"
-                        className="border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
-                      />
+                      <>
+                        <div aria-hidden="true">
+                          <LoadingState
+                            title={message.text}
+                            description="Checking your workspace safely."
+                            variant="compact"
+                            className="border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
+                          />
+                        </div>
+                        <span className="sr-only" role="status" aria-live="polite">Kody is working.</span>
+                      </>
                     ) : message.response ? (
                       <KodyResponse
                         response={message.response}
@@ -1071,58 +1266,63 @@ export function KodyAssistant({
                         displayTimeZone={displayTimeZone}
                       />
                     ) : (
-                      <p className="text-sm leading-6">{message.text}</p>
+                      <p
+                        className="text-sm leading-6"
+                        role={message.role === "kody" ? "status" : undefined}
+                        aria-live={message.role === "kody" ? "polite" : undefined}
+                      >
+                        {message.text}
+                      </p>
                     )}
                   </div>
-                  {message.role === "user" ? (
-                    <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--qf-info-surface)] text-[var(--qf-info-text)]">
-                      <UserRound size={16} />
-                    </span>
-                  ) : null}
                 </div>
               ))
             )}
           </div>
-
-          {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
-
-          <form
-            className="flex shrink-0 items-end gap-2 rounded-2xl border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] p-2 shadow-[var(--qf-shadow-sm)] focus-within:border-[var(--qf-focus)] focus-within:ring-4 focus-within:ring-[var(--qf-focus-ring)]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitPrompt();
-            }}
-          >
-            <label htmlFor="kody-prompt-input" className="sr-only">Ask Kody</label>
-            <textarea
-              id="kody-prompt-input"
-              ref={inputRef}
-              data-testid="kody-prompt"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  void submitPrompt();
-                }
+          <div className="qf-kody-composer-footer -mx-3 -mb-3 mt-auto shrink-0 border-t border-[var(--qf-border)] p-3 sm:-mx-4 sm:-mb-4 sm:p-4">
+            {error ? <div className="mb-2"><Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert></div> : null}
+            <form
+              className="qf-kody-composer flex items-end gap-2 rounded-2xl border border-[var(--qf-border-strong)] p-2 focus-within:border-[var(--qf-focus)] focus-within:ring-4 focus-within:ring-[var(--qf-focus-ring)]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitPrompt();
               }}
-              rows={1}
-              maxLength={2_000}
-              aria-label="Ask Kody"
-              placeholder={aiUsageLimitReached ? "Monthly AI limit reached" : "Ask Kody about your workspace..."}
-              className="max-h-32 min-h-11 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
-              disabled={loading || aiUsageLimitReached}
-            />
-            <IconButton
-              type="submit"
-              variant="primary"
-              icon={<Send size={17} />}
-              label="Send"
-              loading={loading}
-              disabled={!prompt.trim() || aiUsageLimitReached}
-              className="rounded-xl"
-            />
-          </form>
+            >
+              <label htmlFor="kody-prompt-input" className="sr-only">Ask Kody</label>
+              <textarea
+                id="kody-prompt-input"
+                ref={inputRef}
+                data-testid="kody-prompt"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void submitPrompt();
+                  }
+                }}
+                rows={1}
+                maxLength={2_000}
+                aria-label="Ask Kody"
+                aria-describedby="kody-prompt-instructions"
+                placeholder={aiUsageLimitReached ? "Monthly AI limit reached" : "Ask Kody..."}
+                className="max-h-32 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
+                disabled={loading || aiUsageLimitReached}
+              />
+              <IconButton
+                type="submit"
+                variant="kody"
+                icon={<Send size={17} />}
+                label="Send"
+                loading={loading}
+                disabled={!prompt.trim() || aiUsageLimitReached}
+                className="rounded-xl"
+              />
+            </form>
+            <span id="kody-prompt-instructions" className="sr-only">
+              Press Enter to send. Press Shift and Enter for a new line.
+            </span>
+          </div>
           </div>
         </section>
       ) : null}
@@ -1138,7 +1338,7 @@ export function KodyAssistant({
         title={pendingActionCopy?.title ?? "Continue with Kody action?"}
         description={pendingActionCopy?.description}
         confirmLabel={pendingActionCopy?.confirmLabel ?? "Continue"}
-        confirmVariant="primary"
+        confirmVariant="kody"
       />
     </>
   );

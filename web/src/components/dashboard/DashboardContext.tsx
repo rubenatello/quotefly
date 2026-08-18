@@ -29,6 +29,7 @@ import {
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
 import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
 import { notify } from "../../lib/notifications";
+import { publishKodyOutcome } from "../ai/kody-events";
 
 /* ─────────────── Types ─────────────── */
 
@@ -74,12 +75,14 @@ export type SendComposerState = {
   confirmedChannel?: QuoteOutboundChannel;
   idempotencyKey: string;
   quoteId: string;
+  quoteTitle: string;
   customerName: string;
   customerEmail: string | null;
   customerPhone: string;
   subject: string;
   body: string;
   handoffComplete?: boolean;
+  origin?: "kody";
 };
 export type QuoteMathSummary = {
   internalSubtotal: number;
@@ -408,7 +411,7 @@ export interface DashboardContextValue {
   }) => Promise<void>;
   saveQuote: (event: FormEvent) => Promise<void>;
   sendDecision: (decision: "send" | "revise") => Promise<void>;
-  openSendComposer: (channel: SendChannel, quoteOverride?: Quote) => void;
+  openSendComposer: (channel: SendChannel, quoteOverride?: Quote, options?: { origin?: "kody" }) => void;
   confirmSendComposer: () => Promise<void>;
   downloadQuotePdf: (options?: { inline?: boolean; quoteOverride?: Quote }) => Promise<void>;
   exportQuotesAsInvoicesCsv: (quoteIds: string[], options?: { dueInDays?: number }) => Promise<void>;
@@ -968,9 +971,10 @@ export function DashboardProvider({
     } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating decision."); } finally { setSaving(false); }
   }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
 
-  const openSendComposer = useCallback((channel: SendChannel, quoteOverride?: Quote) => {
+  const openSendComposer = useCallback((channel: SendChannel, quoteOverride?: Quote, options?: { origin?: "kody" }) => {
     const quoteForSend = quoteOverride ?? selectedQuote;
     if (!quoteForSend) return;
+    setError(null);
     const customerRecord = quoteForSend.customer ?? customers.find((c) => c.id === quoteForSend.customerId);
     if (!customerRecord) { setError("Customer details are not loaded yet. Try selecting the quote again."); return; }
     if (channel === "email" && !customerRecord.email) { setError("Customer does not have an email address yet."); return; }
@@ -983,9 +987,11 @@ export function DashboardProvider({
     });
     setSendComposer({
       channel, quoteId: quoteForSend.id,
+      quoteTitle: quoteForSend.title,
       idempotencyKey: createSendIdempotencyKey(),
       customerName: customerRecord.fullName, customerEmail: customerRecord.email ?? null, customerPhone: customerRecord.phone,
       subject: draft.subject, body: draft.body,
+      origin: options?.origin,
     });
   }, [selectedQuote, customers, branding]);
 
@@ -1015,6 +1021,13 @@ export function DashboardProvider({
         ]);
         if (canViewQuoteHistory) void loadQuoteHistory();
         setNotice(canViewCommunicationLog ? "Quote marked sent and the communication was logged." : "Quote marked sent.");
+        if (sendComposer.origin === "kody") {
+          publishKodyOutcome({
+            type: "QUOTE_MARKED_SENT",
+            quoteTitle: sendComposer.quoteTitle,
+            customerName: sendComposer.customerName,
+          });
+        }
         setSendComposer(null);
         return;
       }

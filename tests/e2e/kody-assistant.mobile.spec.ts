@@ -3,14 +3,16 @@ import {
   addSessionCookie,
   apiBaseUrl,
   createCustomerViaApi,
+  createQuoteViaApi,
   escapeRegExp,
+  getQuoteViaApi,
   signUpViaApi,
 } from "./helpers";
 
 async function revealKodyQuickPrompts(panel: Locator) {
   const prompts = panel.getByTestId("kody-quick-prompts");
   const open = await prompts.evaluate((element) => (element as HTMLDetailsElement).open);
-  if (!open) await prompts.locator("summary").click();
+  if (!open) await prompts.locator(":scope > summary").click();
 }
 
 test("Kody navigates on mobile while keeping the conversation open", async ({ context, page, request }) => {
@@ -272,8 +274,161 @@ test("Kody turns a product request into a review-only mobile catalog draft", asy
   await expect(productDialog.getByLabel("Pricing unit")).toHaveValue("HOUR");
   await expect(productDialog.getByLabel("Internal unit cost")).toHaveValue("30");
   await expect(productDialog.getByLabel("Customer unit price")).toHaveValue("75");
-  await expect(kody).toBeVisible();
+  await expect(kody).toBeHidden();
   await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
+});
+
+test("Kody opens review-only customer and quote-send workflows on mobile", async ({ context, page, request }) => {
+  test.setTimeout(90_000);
+  const account = await signUpViaApi(request, "kody-actions-mobile");
+  const customer = await createCustomerViaApi(request, account, {
+    fullName: "Kody Action Customer",
+    phone: "555-018-2299",
+    email: "kody-actions@example.com",
+  });
+  const quote = await createQuoteViaApi(request, account, customer.id, {
+    title: "Kody Action Roof Repair",
+  });
+  const confirmedSendRequests: unknown[] = [];
+  let confirmSendAttempts = 0;
+
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    const requestBody = route.request().postDataJSON() as { message?: string; tool?: string };
+    const customerDraft = requestBody.message?.toLowerCase().includes("new customer");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assistant: customerDraft ? {
+          tool: "DRAFT_CUSTOMER",
+          answer: "I prepared Maria Kody for review. Nothing is saved yet.",
+          actions: [{
+            type: "OPEN_CUSTOMER_DRAFT",
+            label: "Review customer draft",
+            requiresConfirmation: true,
+            payload: {
+              fullName: "Maria Kody",
+              phone: "(555) 444-3333",
+              email: "maria-kody@example.com",
+              notes: "Requested through Kody.",
+            },
+          }],
+          diagnostics: { resolvedTool: "DRAFT_CUSTOMER" },
+        } : {
+          tool: "PREPARE_QUOTE_SEND",
+          answer: "I found Kody Action Roof Repair. Review the message before copying it.",
+          results: [{ quoteId: quote.id, quoteTitle: quote.title, customerName: customer.fullName }],
+          actions: [{
+            type: "OPEN_QUOTE_SEND",
+            label: `Review send · ${customer.fullName}`,
+            requiresConfirmation: true,
+            payload: {
+              quoteId: quote.id,
+              quoteTitle: quote.title,
+              quoteStatus: "DRAFT",
+              customerName: customer.fullName,
+              channel: "copy",
+              destination: null,
+            },
+          }],
+          diagnostics: { resolvedTool: "PREPARE_QUOTE_SEND" },
+        },
+        usage: {
+          consumedCredits: 0,
+          consumedSpendUsd: 0,
+          monthlyCreditsUsed: 0,
+          monthlyCreditsLimit: 770,
+          monthlyCreditsRemaining: 770,
+          monthlySpendUsedUsd: 0,
+          monthlySpendLimitUsd: 1.25,
+          monthlySpendRemainingUsd: 1.25,
+          monthlySpendUsagePercent: 0,
+          estimatedPromptCostUsd: 0.001615,
+          estimatedPromptsRemaining: 773,
+          renewsAtUtc: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    });
+  });
+  await page.route(`${apiBaseUrl}/v1/quotes/${quote.id}/confirm-send`, async (route) => {
+    confirmSendAttempts += 1;
+    confirmedSendRequests.push(route.request().postDataJSON());
+    if (confirmSendAttempts === 1) {
+      await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Unexpected send confirmation." }) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await addSessionCookie(context, account);
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.goto("/app/customers");
+  await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await page.getByTestId("kody-launcher").click();
+  let kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill("Add a new customer named Maria Kody, phone 555-444-3333");
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  await kody.getByRole("button", { name: "Review customer draft" }).click();
+  const customerConfirm = page.getByRole("dialog", { name: "Review Maria Kody?" });
+  await expect(customerConfirm).toContainText("Nothing is saved");
+  await customerConfirm.getByRole("button", { name: "Open customer review" }).click();
+
+  await expect(kody).toBeHidden();
+  const customerModal = page.getByRole("dialog", { name: "Add customer fast" });
+  await expect(customerModal).toBeVisible();
+  await expect(customerModal.getByLabel("Full name")).toHaveValue("Maria Kody");
+  await expect(customerModal.getByLabel("Phone")).toHaveValue("(555) 444-3333");
+  await expect(customerModal.getByLabel("Email")).toHaveValue("maria-kody@example.com");
+  await customerModal.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("dialog", { name: "Discard unsaved customer?" }).getByRole("button", { name: "Discard changes" }).click();
+
+  await page.getByTestId("kody-launcher").click();
+  kody = page.getByTestId("kody-chat-panel");
+  await expect(kody.getByText("I prepared Maria Kody for review.", { exact: false })).toBeVisible();
+  await kody.getByTestId("kody-prompt").fill(`Send ${quote.title} to ${customer.fullName}`);
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  const sendActionName = new RegExp(`^Review send.*${escapeRegExp(customer.fullName)}$`);
+  await kody.getByRole("button", { name: sendActionName }).click();
+  const sendConfirm = page.getByRole("dialog", { name: `Review copy for ${customer.fullName}?` });
+  await expect(sendConfirm).toContainText("will not contact the customer or mark the quote sent automatically");
+  await sendConfirm.getByRole("button", { name: "Open send review" }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${quote.id}$`));
+  await expect(kody).toBeHidden();
+  const sendComposer = page.getByRole("dialog", { name: "Send quote confirmation" });
+  await expect(sendComposer).toBeVisible();
+  await expect(sendComposer).toContainText(customer.fullName);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: new URL(page.url()).origin,
+  });
+  await sendComposer.getByRole("button", { name: "Copy Message" }).click();
+  await expect(sendComposer.getByText(/has not changed the quote status yet/i)).toBeVisible();
+  expect(confirmedSendRequests).toHaveLength(0);
+  expect((await getQuoteViaApi(request, account, quote.id)).status).not.toBe("SENT_TO_CUSTOMER");
+
+  await sendComposer.getByRole("button", { name: "Yes, Mark Sent" }).click();
+  await expect(sendComposer.getByText("Unexpected send confirmation.")).toBeVisible();
+  await expect(sendComposer).toBeVisible();
+  expect(confirmedSendRequests).toHaveLength(1);
+  expect((await getQuoteViaApi(request, account, quote.id)).status).not.toBe("SENT_TO_CUSTOMER");
+
+  await sendComposer.getByRole("button", { name: "Yes, Mark Sent" }).click();
+  await expect(sendComposer).toBeHidden();
+  expect(confirmedSendRequests).toHaveLength(2);
+  await expect.poll(async () => (await getQuoteViaApi(request, account, quote.id)).status).toBe("SENT_TO_CUSTOMER");
+
+  await page.getByTestId("kody-launcher").click();
+  kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill(`Send ${quote.title} to ${customer.fullName}`);
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  await kody.getByRole("button", { name: sendActionName }).last().click();
+  const repeatedSendConfirm = page.getByRole("dialog", { name: `Review copy for ${customer.fullName}?` });
+  await repeatedSendConfirm.getByRole("button", { name: "Open send review" }).click();
+  const reopenedSendComposer = page.getByRole("dialog", { name: "Send quote confirmation" });
+  await expect(reopenedSendComposer).toBeVisible();
+  await expect(kody).toBeHidden();
+  await reopenedSendComposer.getByRole("button", { name: "Cancel" }).click();
 });
 
 test("Kody mobile assistant shows data guardrails and hands off review-first actions", async ({
@@ -491,7 +646,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
   const customerKodyAction = customerDialog.getByRole("button", { name: "Ask Kody" });
   await expect(customerKodyAction).toBeVisible();
-  await expect(customerKodyAction).toHaveClass(/bg-\[var\(--qf-action-secondary\)\]/);
+  await expect(customerKodyAction).toHaveClass(/bg-\[var\(--qf-kody-trigger\)\]/);
   await customerDialog.getByRole("button", { name: "Close modal" }).click();
   await expect(kodyLauncher).toBeVisible();
   await expect(kodyLauncher).toHaveAttribute("aria-expanded", "false");
@@ -531,7 +686,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await confirmKodyDraft.getByRole("button", { name: "Open review draft" }).click();
 
   await expect(page).toHaveURL(/\/app\/build$/);
-  await expect(draftDialog).toBeVisible();
+  await expect(draftDialog).toBeHidden();
   await expect(page.getByLabel("Quote title")).toHaveValue("Existing mobile draft should stay");
   await expect(page.getByText("Kody prepared a quote prompt without changing your existing draft.")).toBeVisible();
   const kodyHandoff = page.getByTestId("kody-draft-handoff");
@@ -683,7 +838,7 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   const confirmKodyDraft = page.getByRole("dialog", { name: "Review Kody's quote draft?" });
   await expect(confirmKodyDraft).toContainText("Nothing will be saved or sent");
   await confirmKodyDraft.getByRole("button", { name: "Open review draft" }).click();
-  await kodyDialog.getByRole("button", { name: "Close Kody" }).click();
+  await expect(kodyDialog).toBeHidden();
 
   await expect(page).toHaveURL(/\/app\/build$/);
   await expect(page.getByText("Kody prepared a review draft in the builder.")).toBeVisible();

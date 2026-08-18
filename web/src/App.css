@@ -279,6 +279,59 @@
   left: max(0.75rem, env(safe-area-inset-left));
   height: min(74dvh, 42rem);
   max-height: calc(100dvh - var(--qf-kody-panel-bottom) - 0.5rem);
+  background: var(--qf-kody-shell);
+  animation: qf-kody-panel-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.qf-kody-header {
+  color: var(--qf-kody-header-text);
+  background: var(--qf-kody-header);
+  border-bottom: 1px solid var(--qf-kody-header-border);
+}
+
+.qf-kody-header .qf-kody-header-control {
+  color: var(--qf-kody-header-muted);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.qf-kody-header .qf-kody-header-control:hover {
+  color: var(--qf-kody-header-text);
+  background: var(--qf-kody-header-hover);
+  border-color: var(--qf-kody-header-border);
+}
+
+.qf-kody-header .qf-kody-header-control:focus-visible {
+  outline-color: var(--qf-kody-header-text);
+}
+
+.qf-kody-thread {
+  background: var(--qf-kody-thread);
+  overflow-wrap: anywhere;
+}
+
+.qf-kody-assistant-bubble {
+  background: var(--qf-kody-assistant-surface);
+}
+
+.qf-kody-composer-footer {
+  background: var(--qf-kody-shell);
+}
+
+.qf-kody-composer {
+  background: var(--qf-kody-composer);
+}
+
+@keyframes qf-kody-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .qf-kody-chat-panel--with-dock {
@@ -311,6 +364,12 @@
      generic launcher, so mobile only shows the contextual entry point. */
   html:has(.qf-kody-context-action) [data-testid="kody-launcher"] {
     display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qf-kody-chat-panel {
+    animation: none;
   }
 }
 

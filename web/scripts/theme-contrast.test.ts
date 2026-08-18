@@ -69,6 +69,12 @@ for (const [name, block] of [["light", light], ["dark", dark]] as const) {
     expectContrast(block, "text-muted-rgb", "panel-rgb", 4.5, `${name} muted text`);
     expectContrast(block, "text-rgb", "interactive-hover", 4.5, `${name} hover text`);
     expectContrast(block, "focus", "panel-rgb", 3, `${name} focus indicator`);
+    expectContrast(block, "kody-header-text", "kody-header", 4.5, `${name} Kody header title`);
+    expectContrast(block, "kody-header-muted", "kody-header", 4.5, `${name} Kody header subtitle`);
+    expectContrast(block, "text-rgb", "kody-assistant-surface", 4.5, `${name} Kody response text`);
+    expectContrast(block, "kody-trigger-text", "kody-trigger", 4.5, `${name} Kody trigger`);
+    expectContrast(block, "kody-trigger-text", "kody-trigger-hover", 4.5, `${name} Kody trigger hover`);
+    expectContrast(block, "kody-trigger-text", "kody-trigger-active", 4.5, `${name} Kody trigger active`);
   });
 }
 

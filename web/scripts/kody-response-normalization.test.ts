@@ -94,6 +94,34 @@ test("accepts a review-only product draft action", () => {
   assert.equal(response.actions[0].requiresConfirmation, true);
 });
 
+test("accepts only typed review handoffs for customer creation and quote sending", () => {
+  const customer = normalizeKodyAssistantResponse({
+    tool: "DRAFT_CUSTOMER",
+    answer: "I prepared Maria Lopez for review.",
+    actions: [{
+      type: "OPEN_CUSTOMER_DRAFT",
+      label: "Review customer",
+      requiresConfirmation: false,
+      payload: { fullName: "Maria Lopez", phone: "5554443333", email: "maria@example.com" },
+    }],
+  });
+  const send = normalizeKodyAssistantResponse({
+    tool: "PREPARE_QUOTE_SEND",
+    answer: "I found the saved quote. You can review the send message next.",
+    actions: [{
+      type: "OPEN_QUOTE_SEND",
+      label: "Review send",
+      requiresConfirmation: false,
+      payload: { quoteId: "quote-1", channel: "email" },
+    }],
+  });
+
+  assert.equal(customer.actions[0]?.type, "OPEN_CUSTOMER_DRAFT");
+  assert.equal(customer.actions[0]?.requiresConfirmation, true);
+  assert.equal(send.actions[0]?.type, "OPEN_QUOTE_SEND");
+  assert.equal(send.actions[0]?.requiresConfirmation, true);
+});
+
 test("normalizes only a typed server-authored context shift acknowledgement", () => {
   const response = normalizeKodyAssistantResponse({
     tool: "DRAFT_PRODUCT",

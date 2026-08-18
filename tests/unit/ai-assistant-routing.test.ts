@@ -26,7 +26,28 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("Open customer Ruben"), "SEARCH_CUSTOMERS");
   assert.equal(resolveAssistantTool("Open customers"), "NAVIGATE_WORKSPACE");
   assert.equal(resolveAssistantTool("Find customer Ruben"), "SEARCH_CUSTOMERS");
+  assert.equal(resolveAssistantTool("Add a new customer"), "DRAFT_CUSTOMER");
+  assert.equal(
+    resolveAssistantTool("Add Labor Hours at $30 internal cost and $75 customer price", "DRAFT_PRODUCT"),
+    "DRAFT_PRODUCT",
+  );
+  assert.equal(
+    resolveAssistantTool("Add a new customer named Maria Lopez, phone 555-444-3333, email maria@example.com"),
+    "DRAFT_CUSTOMER",
+  );
+  assert.equal(resolveAssistantTool("Draft a quote for customer Robert"), "DRAFT_QUOTE");
   assert.equal(resolveAssistantTool("Draft a roofing quote for Ruben"), "DRAFT_QUOTE");
+  assert.equal(resolveAssistantTool("Send quote to customer"), "PREPARE_QUOTE_SEND");
+  assert.equal(resolveAssistantTool("Email the latest quote to Maria Lopez"), "PREPARE_QUOTE_SEND");
+  assert.equal(resolveAssistantTool("Show sent quotes from last month"), "SUMMARIZE_PIPELINE");
+  assert.equal(
+    resolveAssistantTool(
+      "Send the latest quote to Maria Lopez",
+      "SEARCH_CUSTOMERS",
+      { currentPage: "customers", customerId: "stale-customer" },
+    ),
+    "PREPARE_QUOTE_SEND",
+  );
 });
 
 test("Kody rejects unrelated and prompt-injection requests before model or workspace routing", async () => {
@@ -55,7 +76,9 @@ test("deterministic operational tools do not consume the external AI budget", as
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
+    "DRAFT_CUSTOMER",
     "DRAFT_PRODUCT",
+    "PREPARE_QUOTE_SEND",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ] as const) {
@@ -79,6 +102,15 @@ test("bounded conversation hints route genuine follow-ups but never override exp
   assert.equal(
     resolveAssistantTool("Find customer Smith", "AUTO", { currentPage: "analytics" }, conversation),
     "SEARCH_CUSTOMERS",
+  );
+  assert.equal(
+    resolveAssistantTool(
+      "Her phone is 555-444-3333 and email is maria@example.com",
+      "AUTO",
+      { currentPage: "customers" },
+      [{ message: "Add a new customer named Maria Lopez", resolvedTool: "DRAFT_CUSTOMER" }],
+    ),
+    "DRAFT_CUSTOMER",
   );
   assert.deepEqual(resolveAssistantConversationState(conversation, "SUMMARIZE_PIPELINE"), {
     mode: "CONTINUING",

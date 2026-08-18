@@ -45,6 +45,36 @@ async function expectReadableControl(locator: Locator, minimum = 4.5) {
   ).toBeGreaterThanOrEqual(minimum);
 }
 
+async function expectKodyShell(page: Page, panel: Locator) {
+  const header = panel.getByTestId("kody-header");
+  await expect(header).toBeVisible();
+  await expectReadableControl(header);
+  await expect
+    .poll(() => panel.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+    .toBeLessThanOrEqual(1);
+  for (const button of await header.getByRole("button").all()) {
+    expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+}
+
+async function expectKodyPromptLabels(panel: Locator) {
+  const prompts = panel.getByTestId("kody-quick-prompts");
+  await prompts.locator(":scope > summary").click();
+  const morePrompts = prompts.locator("details");
+  await morePrompts.locator(":scope > summary").click();
+  const buttons = prompts.locator('button[data-testid^="kody-quick-"]');
+  await expect(buttons).toHaveCount(8);
+  for (const button of await buttons.all()) {
+    await expect(button).toBeVisible();
+    expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect(await button.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  }
+  await prompts.locator(":scope > summary").click();
+}
+
 async function expectQuoteFlyOrangePalette(page: Page) {
   const colors = await page.evaluate(() => {
     const rootStyles = getComputedStyle(document.documentElement);
@@ -85,6 +115,7 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   });
   await addSessionCookie(context, account);
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/app/customers");
   const customerPageHeading = page.getByRole("heading", { level: 1, name: "Customers", exact: true });
   await expect(customerPageHeading).toBeVisible({ timeout: 20_000 });
@@ -95,6 +126,23 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await expectReadableControl(addCustomer);
   await expectQuoteFlyOrangePalette(page);
   await captureThemeScreenshot(page, "light-mobile-customers");
+
+  const lightKodyLauncher = page.getByTestId("kody-launcher");
+  await lightKodyLauncher.click();
+  const lightKodyPanel = page.getByTestId("kody-chat-panel");
+  await expectKodyShell(page, lightKodyPanel);
+  await captureThemeScreenshot(page, "light-mobile-kody", false);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await expectKodyShell(page, lightKodyPanel);
+  await captureThemeScreenshot(page, "light-compact-kody", false);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expectKodyShell(page, lightKodyPanel);
+  await expectKodyPromptLabels(lightKodyPanel);
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expectKodyShell(page, lightKodyPanel);
+  await captureThemeScreenshot(page, "light-tablet-kody", false);
+  await lightKodyPanel.getByRole("button", { name: "Close Kody" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
 
   await page.evaluate(() => window.localStorage.setItem("qf_theme_preference", "dark"));
   await page.reload();
@@ -112,9 +160,10 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await kodyLauncher.click();
   const kodyPanel = page.getByTestId("kody-chat-panel");
   await expect(kodyPanel).toBeVisible();
+  await expectKodyShell(page, kodyPanel);
   await expect(kodyLauncher).toHaveCount(0);
   const quickPrompts = kodyPanel.getByTestId("kody-quick-prompts");
-  await quickPrompts.locator("summary").click();
+  await quickPrompts.locator(":scope > summary").click();
   const draftQuoteQuickAction = kodyPanel.getByTestId("kody-quick-draft_quote");
   await expect(draftQuoteQuickAction).toHaveCount(1);
   await expect(kodyPanel.getByText("Draft a quote from job notes", { exact: true })).toHaveCount(0);
@@ -124,8 +173,17 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await expectReadableControl(kodyPanel.getByTestId("kody-prompt"));
   await expectReadableControl(kodyPanel.getByRole("button", { name: "Send", exact: true }));
   await captureThemeScreenshot(page, "dark-mobile-kody", false);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await expectKodyShell(page, kodyPanel);
+  await captureThemeScreenshot(page, "dark-compact-kody", false);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expectKodyShell(page, kodyPanel);
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expectKodyShell(page, kodyPanel);
+  await captureThemeScreenshot(page, "dark-tablet-kody", false);
   await kodyPanel.getByRole("button", { name: "Close Kody" }).click();
   await expect(kodyLauncher).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
 
   await page.goto("/app/settings");
   await expect(page.getByRole("heading", { level: 1, name: "Settings", exact: true })).toHaveClass(/sr-only/);
@@ -171,10 +229,17 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
   await expectReadableControl(page.getByRole("button", { name: "Add customer", exact: true }).first());
   await captureThemeScreenshot(page, "dark-desktop-customers");
+  await page.getByTestId("kody-launcher").click();
+  await expectKodyShell(page, page.getByTestId("kody-chat-panel"));
+  await captureThemeScreenshot(page, "dark-desktop-kody", false);
+  await page.getByTestId("kody-chat-panel").getByRole("button", { name: "Close Kody" }).click();
 
   await page.evaluate(() => window.localStorage.setItem("qf_theme_preference", "light"));
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expectReadableControl(page.getByRole("button", { name: "Add customer", exact: true }).first());
   await captureThemeScreenshot(page, "light-desktop-customers");
+  await page.getByTestId("kody-launcher").click();
+  await expectKodyShell(page, page.getByTestId("kody-chat-panel"));
+  await captureThemeScreenshot(page, "light-desktop-kody", false);
 });

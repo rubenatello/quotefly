@@ -904,6 +904,189 @@ describe("AI assistant", () => {
     expect(audit.retrievalAuditEvent?.resultCount).toBeGreaterThan(0);
   });
 
+  test("customer draft assistant prepares the existing duplicate-safe form without creating a customer", async () => {
+    const owner = await signUp("assistant-customer-draft-owner");
+    const beforeCount = await prisma.customer.count({ where: { tenantId: owner.tenant.id } });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Add a new customer named Maria Lopez, phone 555-444-3333, email maria@example.com",
+        tool: "DRAFT_CUSTOMER",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        tool: string;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(body.assistant.tool).toBe("DRAFT_CUSTOMER");
+    expect(body.assistant.actions).toEqual([expect.objectContaining({
+      type: "OPEN_CUSTOMER_DRAFT",
+      requiresConfirmation: true,
+      payload: expect.objectContaining({
+        fullName: "Maria Lopez",
+        phone: "(555) 444-3333",
+        email: "maria@example.com",
+      }),
+    })]);
+    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(beforeCount);
+  });
+
+  test("quote send assistant opens only an active assigned tenant quote and never marks it sent", async () => {
+    const owner = await signUp("assistant-send-owner");
+    const otherTenant = await signUp("assistant-send-other");
+    const member = await addWorkspaceUser(owner, "member");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+    });
+    const assignedCustomer = await createCustomer({
+      session: owner,
+      name: "Maria Assigned",
+      phoneDigits: "5554141414",
+      assignedTenantUserId: membership.id,
+    });
+    await prisma.customer.update({
+      where: { id: assignedCustomer.id },
+      data: { email: "maria-assigned@example.com" },
+    });
+    const assignedQuote = await createQuote({
+      session: owner,
+      customerId: assignedCustomer.id,
+      title: "Maria garden cleanup",
+      serviceType: "PLUMBING",
+      status: "READY_FOR_REVIEW",
+      price: 1900,
+      cost: 800,
+      createdAt: new Date("2026-08-15T12:00:00.000Z"),
+      assignedTenantUserId: membership.id,
+    });
+    const unassignedCustomer = await createCustomer({
+      session: owner,
+      name: "Owner Only Customer",
+      phoneDigits: "5554343434",
+    });
+    const unassignedQuote = await createQuote({
+      session: owner,
+      customerId: unassignedCustomer.id,
+      title: "Owner only hidden quote",
+      serviceType: "HVAC",
+      status: "READY_FOR_REVIEW",
+      price: 3200,
+      cost: 1200,
+      createdAt: new Date("2026-08-16T10:00:00.000Z"),
+    });
+    const otherCustomer = await createCustomer({
+      session: otherTenant,
+      name: "Other Tenant Secret",
+      phoneDigits: "5554242424",
+    });
+    const otherQuote = await createQuote({
+      session: otherTenant,
+      customerId: otherCustomer.id,
+      title: "Other tenant hidden quote",
+      serviceType: "HVAC",
+      status: "READY_FOR_REVIEW",
+      price: 99000,
+      cost: 100,
+      createdAt: new Date("2026-08-16T12:00:00.000Z"),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Email the selected quote to Maria",
+        tool: "PREPARE_QUOTE_SEND",
+        context: { quoteId: assignedQuote.id },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        tool: string;
+        answer: string;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(body.assistant.tool).toBe("PREPARE_QUOTE_SEND");
+    expect(body.assistant.actions).toEqual([expect.objectContaining({
+      type: "OPEN_QUOTE_SEND",
+      requiresConfirmation: true,
+      payload: expect.objectContaining({ quoteId: assignedQuote.id, channel: "email" }),
+    })]);
+    expect(body.assistant.answer).toMatch(/will not mark it sent automatically/i);
+    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(response.body).not.toContain(otherQuote.id);
+    expect(response.body).not.toContain("Other tenant hidden quote");
+    expect(response.body).not.toContain(unassignedQuote.id);
+    expect(response.body).not.toContain("Owner only hidden quote");
+    await expect(prisma.quote.findUniqueOrThrow({ where: { id: assignedQuote.id } })).resolves.toMatchObject({
+      status: "READY_FOR_REVIEW",
+      sentAt: null,
+    });
+    await expect(prisma.quoteOutboundEvent.count({ where: { quoteId: assignedQuote.id } })).resolves.toBe(0);
+
+    const quickPromptResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Send the latest quote to Maria Assigned",
+        tool: "PREPARE_QUOTE_SEND",
+      },
+    });
+    expect(quickPromptResponse.statusCode).toBe(200);
+    expect((quickPromptResponse.json() as {
+      assistant: { actions: Array<{ type: string; payload: Record<string, unknown> }> };
+    }).assistant.actions).toEqual([expect.objectContaining({
+      type: "OPEN_QUOTE_SEND",
+      payload: expect.objectContaining({ quoteId: assignedQuote.id }),
+    })]);
+    expect(quickPromptResponse.body).not.toContain(unassignedQuote.id);
+    expect(quickPromptResponse.body).not.toContain(otherQuote.id);
+
+    const crossTenant = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Email this quote",
+        tool: "PREPARE_QUOTE_SEND",
+        context: { quoteId: otherQuote.id },
+      },
+    });
+    expect(crossTenant.statusCode).toBe(200);
+    expect(crossTenant.body).not.toContain(otherQuote.id);
+    expect(crossTenant.body).not.toContain("Other tenant hidden quote");
+    expect((crossTenant.json() as { assistant: { actions: unknown[] } }).assistant.actions).toEqual([]);
+
+    const sameTenantUnassigned = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Email this quote",
+        tool: "PREPARE_QUOTE_SEND",
+        context: { quoteId: unassignedQuote.id },
+      },
+    });
+    expect(sameTenantUnassigned.statusCode).toBe(200);
+    expect(sameTenantUnassigned.body).not.toContain(unassignedQuote.id);
+    expect(sameTenantUnassigned.body).not.toContain("Owner only hidden quote");
+    expect((sameTenantUnassigned.json() as { assistant: { actions: unknown[] } }).assistant.actions).toEqual([]);
+  });
+
   test("legacy chat-draft endpoint is review-only and does not create records", async () => {
     const owner = await signUp("assistant-chat-draft-owner");
     const beforeQuotes = await prisma.quote.count({

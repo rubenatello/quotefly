@@ -35,7 +35,7 @@ import {
 } from "./ai-business-insights";
 import { buildGovernedQuoteAiContext, type AiRetrievalResult } from "./ai-retrieval";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
-import { normalizePhoneSearchDigits } from "./phone";
+import { formatUsPhone, normalizePhoneSearchDigits, normalizeUsPhoneDigits } from "./phone";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope } from "./query-scope";
 import { withTenantRlsContext } from "./tenant-rls";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
@@ -58,8 +58,10 @@ export type AiAssistantContext = Readonly<{
 export type AiAssistantAction = Readonly<{
   type:
     | "OPEN_CUSTOMER"
+    | "OPEN_CUSTOMER_DRAFT"
     | "OPEN_PRODUCT_DRAFT"
     | "OPEN_QUOTE_DRAFT"
+    | "OPEN_QUOTE_SEND"
     | "OPEN_ANALYTICS"
     | "OPEN_WORKSPACE_PAGE"
     | "REQUEST_ADMIN_ACCESS";
@@ -168,6 +170,14 @@ const PIPELINE_SCENARIO_PATTERN =
   /(?:\b(?:close|closed|convert|converted|win|won|sell|sold|attain|attained|land|landed|realize|realized)\b.{0,64}\b(?:\d{1,3}(?:\.\d+)?\s*(?:%|percent)|open\s+(?:quotes?|pipeline))\b)|(?:\b\d{1,3}(?:\.\d+)?\s*(?:%|percent)\b.{0,64}\b(?:open\s+quotes?|pipeline|revenue)\b)/i;
 const PRODUCT_DRAFT_INTENT_PATTERN =
   /(?:\b(?:add|create|make|save|set\s+up)\b.{0,72}\b(?:product|service|catalog\s+item|line[-\s]*item)\b)|(?:\b(?:product|service|catalog\s+item|line[-\s]*item)\b.{0,72}\b(?:add|create|make|save|set\s+up)\b)/i;
+const CUSTOMER_DRAFT_INTENT_PATTERN =
+  /(?:\b(?:add|create|save|set\s+up|new)\b.{0,56}\b(?:customer(?!\s+(?:price|pricing|amount|rate))|client|contact)\b)|(?:\b(?:customer(?!\s+(?:price|pricing|amount|rate))|client|contact)\b.{0,56}\b(?:add|create|save|set\s+up)\b)/i;
+const QUOTE_SEND_INTENT_PATTERN =
+  /(?:\b(?:send|email|text|share)\b.{0,72}\b(?:quote|estimate|proposal)\b)|(?:\b(?:quote|estimate|proposal)\b.{0,72}\b(?:send|email|text|share)\b)/i;
+const CUSTOMER_DRAFT_DETAIL_PATTERN =
+  /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
+const QUOTE_SEND_FOLLOW_UP_PATTERN =
+  /^(?:send|email|text|share|use\s+(?:email|text)|the\s+(?:first|second|third|latest)|for\s+|to\s+)/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me)\b/i;
 const CONVERSATION_FOLLOW_UP_PATTERN =
   /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|them|those)\b)/i;
@@ -182,12 +192,13 @@ const OUTSIDE_KNOWLEDGE_PATTERN =
 const CONTEXTUAL_ENTITY_QUERY_PATTERN =
   /^(?!.*\b(?:what|why|how|when|where|who|tell|explain|write|give|could|would|should)\b)[\p{L}\p{N}][\p{L}\p{N}\s.'@()+&/-]{0,80}$/iu;
 
-type AssistantTopic = "CRM" | "QUOTING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION" | "HELP";
+type AssistantTopic = "CRM" | "QUOTING" | "SENDING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION" | "HELP";
 
 function assistantTopic(tool: AiAssistantTool): AssistantTopic {
   if (tool === "ASSISTANT_HELP" || tool === "OUT_OF_SCOPE") return "HELP";
-  if (["SEARCH_CUSTOMERS", "FOLLOW_UP_QUEUE", "CUSTOMERS_WITHOUT_QUOTES"].includes(tool)) return "CRM";
+  if (["SEARCH_CUSTOMERS", "FOLLOW_UP_QUEUE", "CUSTOMERS_WITHOUT_QUOTES", "DRAFT_CUSTOMER"].includes(tool)) return "CRM";
   if (tool === "DRAFT_QUOTE") return "QUOTING";
+  if (tool === "PREPARE_QUOTE_SEND") return "SENDING";
   if (tool === "DRAFT_PRODUCT") return "PRODUCTS";
   if (tool === "NAVIGATE_WORKSPACE") return "NAVIGATION";
   return "INSIGHTS";
@@ -196,6 +207,7 @@ function assistantTopic(tool: AiAssistantTool): AssistantTopic {
 function assistantTopicLabel(topic: AssistantTopic) {
   if (topic === "CRM") return "customer follow-up";
   if (topic === "QUOTING") return "building a quote";
+  if (topic === "SENDING") return "preparing a quote to send";
   if (topic === "PRODUCTS") return "setting up a product or service";
   if (topic === "INSIGHTS") return "business insights";
   if (topic === "HELP") return "QuoteFly help";
@@ -267,6 +279,88 @@ const SEARCH_STOP_WORDS = new Set([
   "you",
 ]);
 
+const CUSTOMER_DRAFT_PHONE_PATTERN = /(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/;
+const CUSTOMER_DRAFT_EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const CUSTOMER_DRAFT_GENERIC_NAME_PATTERN = /^(?:a\s+)?(?:new\s+)?(?:customer|client|contact)$/i;
+const QUOTE_SEND_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "by",
+  "customer",
+  "email",
+  "estimate",
+  "for",
+  "latest",
+  "my",
+  "please",
+  "prepare",
+  "proposal",
+  "quote",
+  "saved",
+  "selected",
+  "send",
+  "share",
+  "text",
+  "the",
+  "this",
+  "to",
+  "using",
+  "via",
+]);
+
+type CustomerDraftPreview = Readonly<{
+  fullName: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+}>;
+
+function extractCustomerDraftName(message: string) {
+  const commandMatch = message.match(
+    /\b(?:add|create|save|set\s+up)\s+(?:a\s+)?(?:new\s+)?(?:customer|client|contact)(?:\s+(?:named|called))?\s+([^,;\n]+)/i,
+  );
+  const withoutContactDetails = message
+    .replace(CUSTOMER_DRAFT_EMAIL_PATTERN, " ")
+    .replace(CUSTOMER_DRAFT_PHONE_PATTERN, " ")
+    .replace(/\b(?:phone|mobile|cell|email|e-mail|notes?)\s*[:=-]?/gi, " ")
+    .replace(/^\s*(?:add|create|save|set\s+up)?\s*(?:a\s+)?(?:new\s+)?(?:customer|client|contact)?(?:\s+(?:named|called))?\s*/i, "")
+    .split(/[,;\n]/, 1)[0]
+    ?.trim();
+  const candidate = (commandMatch?.[1] ?? withoutContactDetails ?? "")
+    .replace(/\b(?:phone|mobile|cell|email|e-mail|notes?)\b.*$/i, "")
+    .trim()
+    .replace(/[.!?]+$/, "")
+    .slice(0, 120);
+  if (
+    candidate.length < 2
+    || CUSTOMER_DRAFT_GENERIC_NAME_PATTERN.test(candidate)
+    || !/^[\p{L}][\p{L}\p{M}.'-]*(?:\s+[\p{L}][\p{L}\p{M}.'-]*){0,5}$/u.test(candidate)
+  ) return null;
+  return candidate;
+}
+
+function parseCustomerDraft(message: string): CustomerDraftPreview {
+  const phoneRaw = message.match(CUSTOMER_DRAFT_PHONE_PATTERN)?.[0] ?? null;
+  const phoneDigits = normalizeUsPhoneDigits(phoneRaw);
+  const email = message.match(CUSTOMER_DRAFT_EMAIL_PATTERN)?.[0]?.toLowerCase() ?? null;
+  const notesMatch = message.match(/\bnotes?\s*[:=-]\s*([^\n]{1,500})/i);
+  return {
+    fullName: extractCustomerDraftName(message),
+    phone: phoneDigits ? formatUsPhone(phoneDigits) : null,
+    email,
+    notes: notesMatch?.[1]?.trim().slice(0, 500) || null,
+  };
+}
+
+function quoteSendSearchTokens(message: string) {
+  return message
+    .normalize("NFKC")
+    .split(/[^\p{L}\p{N}@._+-]+/u)
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= 2 && !QUOTE_SEND_STOP_WORDS.has(token))
+    .slice(0, 5);
+}
+
 function clampLimit(value: number | undefined, max: number, fallback: number) {
   if (value === undefined || value === null) return fallback;
   return Math.min(Math.max(Math.trunc(value), 1), max);
@@ -331,6 +425,8 @@ export function resolveAssistantTool(
   // selection. This also protects older clients that opened Kody from a
   // customer-specific button and then replaced the suggested prompt.
   if (PRODUCT_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_PRODUCT";
+  if (CUSTOMER_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_CUSTOMER";
+  if (QUOTE_SEND_INTENT_PATTERN.test(routingMessage)) return "PREPARE_QUOTE_SEND";
   const lower = routingMessage.toLowerCase();
   if (requestedTool && requestedTool !== "AUTO") {
     if (ASSISTANT_HELP_PATTERN.test(routingMessage)) return "ASSISTANT_HELP";
@@ -341,7 +437,9 @@ export function resolveAssistantTool(
       || Boolean(navigationTarget(lower))
       || FINANCIAL_INTENT_PATTERN.test(lower)
       || PIPELINE_INTENT_PATTERN.test(lower)
+      || CUSTOMER_DRAFT_INTENT_PATTERN.test(lower)
       || CUSTOMER_INTENT_PATTERN.test(lower)
+      || QUOTE_SEND_INTENT_PATTERN.test(lower)
       || QUOTE_DRAFT_INTENT_PATTERN.test(lower)
       || CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage);
     return hasQuoteFlyIntent ? requestedTool : "OUT_OF_SCOPE";
@@ -353,10 +451,16 @@ export function resolveAssistantTool(
   if (navigationTarget(lower)) return "NAVIGATE_WORKSPACE";
   if (FINANCIAL_INTENT_PATTERN.test(lower)) return "RANK_PROFITABLE_JOBS";
   if (PIPELINE_INTENT_PATTERN.test(lower)) return "SUMMARIZE_PIPELINE";
-  if (CUSTOMER_INTENT_PATTERN.test(lower)) return "SEARCH_CUSTOMERS";
   if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
 
   const previousTool = previousOperationalTool(conversation);
+  if (previousTool === "DRAFT_CUSTOMER" && CUSTOMER_DRAFT_DETAIL_PATTERN.test(routingMessage)) {
+    return "DRAFT_CUSTOMER";
+  }
+  if (previousTool === "PREPARE_QUOTE_SEND" && QUOTE_SEND_FOLLOW_UP_PATTERN.test(lower.trim())) {
+    return "PREPARE_QUOTE_SEND";
+  }
+  if (CUSTOMER_INTENT_PATTERN.test(lower)) return "SEARCH_CUSTOMERS";
   if (previousTool && previousTool !== "NAVIGATE_WORKSPACE" && CONVERSATION_FOLLOW_UP_PATTERN.test(lower.trim())) {
     return previousTool;
   }
@@ -392,7 +496,9 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
+    "DRAFT_CUSTOMER",
     "DRAFT_PRODUCT",
+    "PREPARE_QUOTE_SEND",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ].includes(tool);
@@ -999,6 +1105,292 @@ async function runProductDraftPreview(
           serviceType,
           internalCostVisible: canViewInternalCosts,
           missingFields: missing.join(",") || null,
+        },
+      }),
+    },
+  };
+}
+
+async function runCustomerDraftPreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const combinedPrompt = [
+    ...(params.conversation ?? [])
+      .filter((turn) => turn.resolvedTool === "DRAFT_CUSTOMER")
+      .map((turn) => turn.message),
+    params.message,
+  ].slice(-3).join("\n");
+  const draft = parseCustomerDraft(combinedPrompt);
+  const missingFields = [
+    ...(!draft.fullName ? ["full name"] : []),
+    ...(!draft.phone ? ["10-digit phone"] : []),
+  ];
+  const ready = missingFields.length === 0;
+  const answer = ready
+    ? `I prepared a customer draft for ${draft.fullName}. Open it to review the contact details; nothing is saved until you press Save customer.`
+    : `I can add the customer. I still need ${missingFields.join(" and ")}. Reply with those details and I’ll prepare the review form.`;
+  const result = {
+    fullName: draft.fullName,
+    phone: draft.phone,
+    email: draft.email,
+    notes: draft.notes,
+    missingFields: missingFields.join(", ") || null,
+  };
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Customer"],
+    sourceLabels: ["Customer details supplied in this request"],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: ready ? "high" : "medium",
+    confidenceLabel: "Deterministic customer draft parser",
+    riskNote: "No customer row was created. The existing duplicate-safe customer form remains authoritative.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "DRAFT_CUSTOMER",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results: [result],
+      citations: [{
+        key: "A1",
+        label: "Customer details supplied in this request",
+        sourceType: "Customer",
+        classification: "C2_CUSTOMER_CONFIDENTIAL",
+      }],
+      actions: ready ? [{
+        type: "OPEN_CUSTOMER_DRAFT",
+        label: "Review customer draft",
+        requiresConfirmation: true,
+        payload: draft,
+      }] : [],
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "DRAFT_CUSTOMER",
+        resultCount: 1,
+        citationCount: 1,
+        emptyReason: ready ? null : `Missing required fields: ${missingFields.join(", ")}.`,
+        archivePolicy: "Customer drafting does not read or mutate customer rows.",
+        filters: {
+          currentPage: params.context?.currentPage,
+          readyForReview: ready,
+          missingFields: missingFields.join(", ") || null,
+        },
+      }),
+    },
+  };
+}
+
+async function runPrepareQuoteSend(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "viewTenantQuotes") || !hasCapability(params.access, "viewCustomerPii")) {
+    const answer = "Preparing a quote to send requires access to the assigned quote and customer contact details.";
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: "C2_CUSTOMER_CONFIDENTIAL",
+      sourceTypes: ["Quote", "Customer"],
+      sourceLabels: ["Quote send preparation denied"],
+      creditsConsumed: 0,
+      telemetry: ZERO_AI_TELEMETRY,
+      riskNote: "Denied before quote retrieval because the actor lacks quote or customer access.",
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "PREPARE_QUOTE_SEND",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+        answer,
+        results: [],
+        citations: [],
+        actions: [{
+          type: "REQUEST_ADMIN_ACCESS",
+          label: "Ask an admin for quote access",
+          requiresConfirmation: true,
+          payload: { capabilities: ["viewTenantQuotes", "viewCustomerPii"] },
+        }],
+        auditEventId: event.id,
+        fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "PREPARE_QUOTE_SEND",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "Quote send preparation denied before retrieval.",
+          archivePolicy: "No quote rows are retrieved when access is denied.",
+          filters: { currentPage: params.context?.currentPage },
+        }),
+      },
+    };
+  }
+
+  const combinedPrompt = [
+    ...(params.conversation ?? [])
+      .filter((turn) => turn.resolvedTool === "PREPARE_QUOTE_SEND")
+      .map((turn) => turn.message),
+    params.message,
+  ].slice(-2).join(" ");
+  const searchTokens = quoteSendSearchTokens(combinedPrompt);
+  const requestedChannel = /\b(?:text|sms|message)\b/i.test(params.message)
+    ? "sms"
+    : /\b(?:email|mail)\b/i.test(params.message)
+      ? "email"
+      : null;
+  const quoteWhere: Prisma.QuoteWhereInput = {
+    ...tenantActiveQuoteScope(params.access.tenantId),
+    ...assignedQuoteScope(params.access),
+    customer: {
+      is: {
+        ...tenantActiveCustomerScope(params.access.tenantId),
+        ...assignedCustomerScope(params.access),
+      },
+    },
+    status: { in: ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER"] },
+    ...(params.context?.quoteId
+      ? { id: params.context.quoteId }
+      : searchTokens.length
+        ? {
+            AND: searchTokens.map((token) => ({
+              OR: [
+                { title: { contains: token, mode: "insensitive" } },
+                { customer: { fullName: { contains: token, mode: "insensitive" } } },
+                { customer: { email: { contains: token, mode: "insensitive" } } },
+              ],
+            })),
+          }
+        : {}),
+  };
+  const candidates = await prisma.quote.findMany({
+    where: quoteWhere,
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: params.context?.quoteId ? 1 : 5,
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      totalAmount: true,
+      updatedAt: true,
+      customerId: true,
+      customer: { select: { fullName: true, email: true, phone: true } },
+    },
+  });
+  const selectedCandidates = /\blatest\b/i.test(params.message) && candidates.length ? candidates.slice(0, 1) : candidates;
+  const results = selectedCandidates.map((quote) => ({
+    quoteId: quote.id,
+    quoteTitle: quote.title,
+    quoteStatus: quote.status,
+    quoteAmount: Number(quote.totalAmount),
+    customerName: quote.customer.fullName,
+    recipient: requestedChannel === "sms"
+      ? formatUsPhone(quote.customer.phone)
+      : requestedChannel === "email"
+        ? quote.customer.email
+        : quote.customer.email ?? formatUsPhone(quote.customer.phone),
+    updatedAtUtc: quote.updatedAt.toISOString(),
+  }));
+  const actions: AiAssistantAction[] = selectedCandidates.flatMap((quote) => {
+    const channel = requestedChannel ?? (quote.customer.email ? "email" : normalizeUsPhoneDigits(quote.customer.phone) ? "sms" : "copy");
+    const destination = channel === "email"
+      ? quote.customer.email
+      : channel === "sms"
+        ? formatUsPhone(quote.customer.phone)
+        : null;
+    if ((channel === "email" || channel === "sms") && !destination) return [];
+    return [{
+      type: "OPEN_QUOTE_SEND",
+      label: `${quote.status === "SENT_TO_CUSTOMER" ? "Review resend" : "Review send"} · ${quote.customer.fullName}`,
+      requiresConfirmation: true,
+      payload: {
+        quoteId: quote.id,
+        quoteTitle: quote.title,
+        quoteStatus: quote.status,
+        customerName: quote.customer.fullName,
+        channel,
+        destination,
+        totalAmount: Number(quote.totalAmount),
+      },
+    }];
+  });
+  const answer = !candidates.length
+    ? params.context?.quoteId
+      ? "I couldn’t find that active assigned quote. It may have changed, been archived, or no longer be available to you."
+      : "I couldn’t match an active assigned quote. Tell me the customer or quote title, or open the quote and ask me again."
+    : actions.length === 0
+      ? `I found ${selectedCandidates.length} matching quote${selectedCandidates.length === 1 ? "" : "s"}, but the customer is missing the requested contact method. Update the customer first, then try again.`
+      : selectedCandidates.length === 1
+        ? `I found ${selectedCandidates[0].title} for ${selectedCandidates[0].customer.fullName}. Review the recipient and message before opening the ${actions[0]?.payload.channel === "sms" ? "text" : actions[0]?.payload.channel === "copy" ? "copy" : "email"} handoff. I will not mark it sent automatically.`
+        : `I found ${selectedCandidates.length} matching quotes. Choose the correct customer and quote to open the send review. Nothing will be marked sent automatically.`;
+  const citations: AiAssistantCitation[] = candidates.length ? [{
+    key: "A1",
+    label: "Active assigned tenant quotes and current customer contact details",
+    sourceType: "Quote + Customer",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }] : [];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Quote", "Customer"],
+    sourceLabels: citations.map((citation) => citation.label),
+    quoteId: selectedCandidates.length === 1 ? selectedCandidates[0]?.id ?? null : null,
+    customerId: selectedCandidates.length === 1 ? selectedCandidates[0]?.customerId ?? null : null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: selectedCandidates.length === 1 ? "high" : candidates.length ? "medium" : "low",
+    confidenceLabel: "Deterministic quote send preparation",
+    riskNote: "Kody only opens the existing two-phase send review. It does not contact the customer or mark the quote sent.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "PREPARE_QUOTE_SEND",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: defaultExcludedFields(false),
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "PREPARE_QUOTE_SEND",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: candidates.length ? null : "No active assigned quote matched the trusted context or bounded search terms.",
+        archivePolicy: "Only active, assigned tenant quotes in draft, ready, or sent status are eligible.",
+        filters: {
+          currentPage: params.context?.currentPage,
+          scopedQuote: Boolean(params.context?.quoteId),
+          searchTokenCount: searchTokens.length,
+          requestedChannel,
+          candidateCount: candidates.length,
         },
       }),
     },
@@ -1779,8 +2171,9 @@ async function runDraftQuotePreview(
         },
       })
     : null;
+  const draft = parseChatToQuotePrompt(params.message);
   const selectedCustomerId = params.context?.customerId ?? selectedQuote?.customerId ?? null;
-  const selectedCustomer = selectedQuote?.customer ?? (selectedCustomerId
+  const scopedCustomer = selectedQuote?.customer ?? (selectedCustomerId
     ? await prisma.customer.findFirst({
         where: {
           id: selectedCustomerId,
@@ -1790,8 +2183,25 @@ async function runDraftQuotePreview(
         select: { id: true, fullName: true, email: true, phone: true },
       })
     : null);
-
-  const draft = parseChatToQuotePrompt(params.message);
+  const parsedCustomerMatches = !selectedCustomerId && !scopedCustomer && (
+    draft.customerName || draft.customerEmail || draft.customerPhone
+  )
+    ? await prisma.customer.findMany({
+        where: {
+          ...tenantActiveCustomerScope(params.access.tenantId),
+          ...assignedCustomerScope(params.access),
+          OR: [
+            ...(draft.customerName ? [{ fullName: { equals: draft.customerName, mode: "insensitive" as const } }] : []),
+            ...(draft.customerEmail ? [{ email: { equals: draft.customerEmail, mode: "insensitive" as const } }] : []),
+            ...(draft.customerPhone ? [{ phone: formatUsPhone(draft.customerPhone) ?? draft.customerPhone }] : []),
+          ],
+        },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: 4,
+        select: { id: true, fullName: true, email: true, phone: true },
+      })
+    : [];
+  const selectedCustomer = scopedCustomer ?? (parsedCustomerMatches.length === 1 ? parsedCustomerMatches[0] : null);
   const serviceType = params.context?.serviceType ?? selectedQuote?.serviceType ?? draft.serviceType;
   const title = selectedQuote?.title || draft.title;
   const scopeText = selectedQuote?.scopeText || draft.scopeText;
@@ -1821,7 +2231,9 @@ async function runDraftQuotePreview(
   ) ?? "C0_PUBLIC";
   const maxClassification = highestClassification(promptClassification, retrievalClassification);
   const retrievedSourceCount = governedRetrieval?.citations.length ?? 0;
-  const answer = retrievedSourceCount
+  const answer = parsedCustomerMatches.length > 1
+    ? `I found ${parsedCustomerMatches.length} active assigned customers matching ${draft.customerName ?? "those contact details"}. Choose the correct customer before opening the review draft.`
+    : retrievedSourceCount
     ? `Prepared a ${serviceType.toLowerCase()} quote preview for ${title} and found ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Open the draft to generate the grounded version, then review scope and pricing before saving or sending.`
     : `Prepared a preview for a ${serviceType.toLowerCase()} quote: ${title}. I did not find useful saved workspace context, so review it carefully before creating or sending anything.`;
   const results = [{
@@ -1843,11 +2255,7 @@ async function runDraftQuotePreview(
       classification: citation.classification,
     })) ?? []),
   ];
-  const actions = [{
-    type: "OPEN_QUOTE_DRAFT" as const,
-    label: "Review quote draft",
-    requiresConfirmation: true,
-    payload: {
+  const baseActionPayload = {
       prompt: params.message,
       customerId: selectedCustomer?.id ?? null,
       customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
@@ -1874,8 +2282,26 @@ async function runDraftQuotePreview(
       retrievedSourceLabels: Array.from(
         new Set(governedRetrieval?.citations.map((citation) => citation.label) ?? []),
       ).slice(0, 6),
-    },
-  }];
+    };
+  const actions: AiAssistantAction[] = parsedCustomerMatches.length > 1
+    ? parsedCustomerMatches.slice(0, 3).map((customer) => ({
+        type: "OPEN_QUOTE_DRAFT",
+        label: `Draft for ${customer.fullName} · ${formatUsPhone(customer.phone) ?? customer.phone}`,
+        requiresConfirmation: true,
+        payload: {
+          ...baseActionPayload,
+          customerId: customer.id,
+          customerName: customer.fullName,
+          customerEmail: customer.email,
+          customerPhone: customer.phone,
+        },
+      }))
+    : [{
+        type: "OPEN_QUOTE_DRAFT",
+        label: "Review quote draft",
+        requiresConfirmation: true,
+        payload: baseActionPayload,
+      }];
   const fieldsExcluded = [
     ...defaultExcludedFields(includeInternalCost),
     ...(includeInternalCost ? [] : ["user-supplied internal cost estimate"]),
@@ -1994,8 +2420,12 @@ export async function runAiAssistant(
     result = await runNonDataAssistantResponse(prisma, params, generatedAtUtc, tool);
   } else if (tool === "NAVIGATE_WORKSPACE") {
     result = await runWorkspaceNavigation(prisma, params, generatedAtUtc);
+  } else if (tool === "DRAFT_CUSTOMER") {
+    result = await runCustomerDraftPreview(prisma, params, generatedAtUtc);
   } else if (tool === "DRAFT_PRODUCT") {
     result = await runProductDraftPreview(prisma, params, generatedAtUtc);
+  } else if (tool === "PREPARE_QUOTE_SEND") {
+    result = await runPrepareQuoteSend(prisma, params, generatedAtUtc);
   } else if (tool === "FOLLOW_UP_QUEUE") {
     result = await runFollowUpQueue(prisma, params, generatedAtUtc);
   } else if (tool === "CUSTOMERS_WITHOUT_QUOTES") {

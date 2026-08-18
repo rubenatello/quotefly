@@ -4,10 +4,11 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, PaginationControls, Select, Textarea, type PageSize } from "../components/ui";
 import { useDashboard, formatDateTime } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
+import { publishKodyOutcome } from "../components/ai/kody-events";
 import { usePageView } from "../lib/analytics";
 import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser } from "../lib/api";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
-import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
+import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { notify } from "../lib/notifications";
 
 type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
@@ -127,6 +128,23 @@ function openTextComposer(phone: string) {
 
 function isRouteStateRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readKodyCustomerDraft(value: unknown): QuickCustomerForm | null {
+  if (!isRouteStateRecord(value) || !isRouteStateRecord(value.kodyCustomerDraft)) return null;
+  const draft = value.kodyCustomerDraft;
+  if (
+    typeof draft.fullName !== "string" || draft.fullName.length > 120
+    || typeof draft.phone !== "string" || draft.phone.length > 40
+    || typeof draft.email !== "string" || draft.email.length > 320
+    || typeof draft.notes !== "string" || draft.notes.length > 5_000
+  ) return null;
+  return {
+    fullName: draft.fullName.trim(),
+    phone: formatUsPhoneInput(draft.phone),
+    email: draft.email.trim(),
+    notes: draft.notes.trim(),
+  };
 }
 
 function StageFilterButton({
@@ -455,6 +473,8 @@ export function CustomersPage() {
   const [lifecycleCounts, setLifecycleCounts] = useState({ active: 0, archived: 0, deleted: 0 });
   const [serverStageCounts, setServerStageCounts] = useState<Record<CustomerStage, number>>({ NEW: 0, CONTACTED: 0, READY: 0, SENT: 0, WON: 0, LOST: 0 });
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
+  const [quickCustomerDraft, setQuickCustomerDraft] = useState<QuickCustomerForm>({ fullName: "", phone: "", email: "", notes: "" });
+  const [quickCustomerFromKody, setQuickCustomerFromKody] = useState(false);
   const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<CustomerActivityEvent[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -495,6 +515,15 @@ export function CustomersPage() {
       setQuickCustomerOpen(true);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const draft = readKodyCustomerDraft(location.state);
+    if (!draft) return;
+    setQuickCustomerDraft(draft);
+    setQuickCustomerFromKody(true);
+    setQuickCustomerOpen(true);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     setActivityPage(1);
@@ -594,6 +623,7 @@ export function CustomersPage() {
 
   function closeQuickCustomerModal() {
     setQuickCustomerOpen(false);
+    setQuickCustomerFromKody(false);
     if (searchParams.get("compose") === "customer") {
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete("compose");
@@ -931,6 +961,8 @@ export function CustomersPage() {
       <QuickCustomerModal
         open={quickCustomerOpen}
         onClose={closeQuickCustomerModal}
+        draftValue={quickCustomerDraft}
+        onDraftChange={setQuickCustomerDraft}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
           void Promise.all([loadCustomerPage(), loadCustomers()]);
           const message = reusedExisting
@@ -943,6 +975,9 @@ export function CustomersPage() {
                   ? "Customer restored."
                   : "Customer created.";
           notify.success(message, { description: `${customer.fullName} is ready in your workspace.` });
+          if (quickCustomerFromKody) {
+            publishKodyOutcome({ type: "CUSTOMER_CREATED", customerName: customer.fullName });
+          }
           if (intent === "quote") {
             navigateToBuilder(customer.id);
           }
@@ -1245,7 +1280,7 @@ export function CustomersPage() {
                 </>
               )}
             </div> : <div />}
-            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               <KodyButton
                 label="Ask Kody"
                 prompt={`Summarize customer ${selectedActivityRow.customer.fullName}. Show quote status, next follow-up, and anything that helps me move this customer toward a sent or accepted quote.`}
@@ -1256,14 +1291,12 @@ export function CustomersPage() {
                   search: selectedActivityRow.customer.fullName,
                   limit: 1,
                 }}
-                variant="secondary"
-                className="w-full shadow-[0_8px_20px_rgba(255,113,22,0.2)] sm:w-auto"
               />
-              <Button className="w-full sm:w-auto" variant="outline" onClick={() => closeActivityModal()}>
+              <Button className="min-w-0 flex-1 sm:flex-none" variant="outline" onClick={() => closeActivityModal()}>
                 Close
               </Button>
               <Button
-                className="w-full sm:w-auto"
+                className="min-w-0 flex-1 sm:flex-none"
                 onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                 disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
                 title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? "Restore this customer before starting a quote" : undefined}

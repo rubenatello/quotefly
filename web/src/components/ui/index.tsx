@@ -6,7 +6,7 @@ import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
 
-type ButtonVariant = "primary" | "secondary" | "kody" | "outline" | "ghost" | "danger" | "success" | "warning";
+type ButtonVariant = "primary" | "secondary" | "kody" | "kodyTrigger" | "outline" | "ghost" | "danger" | "success" | "warning";
 type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -23,7 +23,9 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   secondary:
     "border-[var(--qf-action-secondary)] bg-[var(--qf-action-secondary)] text-[var(--qf-action-secondary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-secondary-hover)] hover:bg-[var(--qf-action-secondary-hover)] active:border-[var(--qf-action-secondary-active)] active:bg-[var(--qf-action-secondary-active)]",
   kody:
-    "border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] text-[var(--qf-kody-action-text)] shadow-[0_8px_20px_rgba(249,105,40,0.24)] hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_10px_24px_rgba(249,105,40,0.3)] active:border-[var(--qf-kody-action-active)] active:bg-[var(--qf-kody-action-active)]",
+    "border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] text-[var(--qf-kody-action-text)] shadow-[0_8px_20px_rgba(249,105,40,0.24)] motion-safe:hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_10px_24px_rgba(249,105,40,0.3)] active:border-[var(--qf-kody-action-active)] active:bg-[var(--qf-kody-action-active)]",
+  kodyTrigger:
+    "border-[var(--qf-kody-trigger-border)] bg-[var(--qf-kody-trigger)] text-[var(--qf-kody-trigger-text)] shadow-[0_9px_22px_rgba(3,7,18,0.24)] motion-safe:hover:-translate-y-0.5 hover:border-[var(--qf-kody-trigger-hover)] hover:bg-[var(--qf-kody-trigger-hover)] hover:shadow-[0_12px_26px_rgba(3,7,18,0.3)] active:border-[var(--qf-kody-trigger-active)] active:bg-[var(--qf-kody-trigger-active)]",
   outline:
     "border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
   ghost: "border-transparent bg-transparent text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] active:bg-[var(--qf-interactive-active)]",
@@ -45,7 +47,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cn(
-        "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:translate-y-px disabled:cursor-not-allowed disabled:border-[var(--qf-border)] disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] disabled:shadow-none disabled:opacity-70 disabled:active:translate-y-0",
+        "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] motion-safe:active:translate-y-px disabled:cursor-not-allowed disabled:border-[var(--qf-border)] disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] disabled:shadow-none disabled:opacity-70 motion-safe:disabled:active:translate-y-0",
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         fullWidth && "w-full",

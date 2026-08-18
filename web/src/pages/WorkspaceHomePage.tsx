@@ -220,9 +220,8 @@ export function WorkspaceHomePage() {
             <Button icon={<FilePlus2 size={16} />} onClick={() => navigate("/app/build")}>New quote</Button>
             <Button variant="outline" icon={<UserPlus2 size={16} />} onClick={() => navigate("/app/customers?compose=customer")}>Add customer</Button>
             <KodyButton
-              className="col-span-2 sm:col-span-1"
+              className="justify-self-end sm:col-span-1"
               size="md"
-              variant="kody"
               label="Plan with Kody"
               prompt="Review my workspace and tell me the three highest-priority actions I should take today. Focus on new leads, unfinished quotes, sent quotes awaiting follow-up, and after-sale check-ins."
               tool="FOLLOW_UP_QUEUE"

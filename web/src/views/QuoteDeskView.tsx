@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Archive,
   ChevronDown,
@@ -17,7 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
+import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
 import {
   FeatureLockedCard,
@@ -136,6 +136,7 @@ function buildDeskAiPromptStarters(
 type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
 type PendingOutboundAction = "send-tab" | "email" | "sms" | "copy" | "pdf" | "pdf-preview";
+type KodyQuoteSendHandoff = { quoteId: string; channel: SendChannel };
 type StoredDeskDraft = {
   version: 1;
   savedAtUtc: string;
@@ -167,6 +168,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isBoundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength;
+}
+
+function parseKodyQuoteSendHandoff(value: unknown): KodyQuoteSendHandoff | null {
+  if (!isRecord(value) || !isRecord(value.kodyQuoteSend)) return null;
+  const handoff = value.kodyQuoteSend;
+  if (
+    !isBoundedString(handoff.quoteId, 200) ||
+    !handoff.quoteId.trim() ||
+    (handoff.channel !== "email" && handoff.channel !== "sms" && handoff.channel !== "copy")
+  ) return null;
+  return { quoteId: handoff.quoteId, channel: handoff.channel };
 }
 
 function parseStoredDeskLine(value: unknown): EditableQuoteLine | null {
@@ -284,9 +296,11 @@ export function QuoteDeskView() {
   usePageView("quote_desk");
   const track = useTrack();
   const navigate = useNavigate();
+  const location = useLocation();
   const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DeskTab>("quote");
   const [pendingOutboundAction, setPendingOutboundAction] = useState<PendingOutboundAction | null>(null);
+  const [pendingOutboundOrigin, setPendingOutboundOrigin] = useState<"kody" | null>(null);
   const [outboundPreparationSaving, setOutboundPreparationSaving] = useState(false);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
@@ -302,6 +316,7 @@ export function QuoteDeskView() {
   const [deskDraftRecoveryMessage, setDeskDraftRecoveryMessage] = useState<string | null>(null);
   const [conflictingDeskDraft, setConflictingDeskDraft] = useState<StoredDeskDraft | null>(null);
   const latestDeskDraftRef = useRef<{ draft: StoredDeskDraft; hasChanges: boolean } | null>(null);
+  const handledKodySendRef = useRef<string | null>(null);
   const preventDeskDraftPersistenceRef = useRef(false);
   const editableQuoteIdRef = useRef<string | null>(null);
   const savedLineBaselineRef = useRef<Map<string, EditableQuoteLine>>(new Map());
@@ -718,6 +733,30 @@ export function QuoteDeskView() {
     [newLine],
   );
   const hasUnsavedQuoteSheetChanges = metadataDirty || dirtyLineIds.length > 0 || hasDraftNewLine;
+
+  useEffect(() => {
+    const handoff = parseKodyQuoteSendHandoff(location.state);
+    if (!handoff) {
+      handledKodySendRef.current = null;
+      return;
+    }
+    if (!selectedQuote || selectedQuote.id !== handoff.quoteId) return;
+    const handoffKey = `${handoff.quoteId}:${handoff.channel}`;
+    if (handledKodySendRef.current === handoffKey) return;
+    handledKodySendRef.current = handoffKey;
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+
+    if (hasUnsavedQuoteSheetChanges) {
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setPendingOutboundOrigin("kody");
+      setPendingOutboundAction(handoff.channel);
+      return;
+    }
+
+    setActiveTab("send");
+    openSendComposer(handoff.channel, selectedQuote, { origin: "kody" });
+  }, [hasUnsavedQuoteSheetChanges, location.pathname, location.search, location.state, navigate, openSendComposer, selectedQuote]);
   const currentDeskDraft = useMemo<StoredDeskDraft | null>(
     () => selectedQuote ? {
       version: 1,
@@ -1006,7 +1045,11 @@ export function QuoteDeskView() {
     return savedQuote;
   }
 
-  async function runOutboundAction(action: PendingOutboundAction, quoteOverride = selectedQuote) {
+  async function runOutboundAction(
+    action: PendingOutboundAction,
+    quoteOverride = selectedQuote,
+    origin?: "kody",
+  ) {
     if (action === "pdf-preview") {
       await downloadQuotePdf({ inline: true, quoteOverride: quoteOverride ?? undefined });
       return;
@@ -1017,13 +1060,14 @@ export function QuoteDeskView() {
       await downloadQuotePdf({ quoteOverride: quoteOverride ?? undefined });
       return;
     }
-    openSendComposer(action, quoteOverride ?? undefined);
+    openSendComposer(action, quoteOverride ?? undefined, { origin });
   }
 
   function requestOutboundAction(action: PendingOutboundAction) {
     if (hasUnsavedQuoteSheetChanges) {
       setActiveTab("quote");
       setMobilePane("editor");
+      setPendingOutboundOrigin(null);
       setPendingOutboundAction(action);
       return;
     }
@@ -1033,6 +1077,7 @@ export function QuoteDeskView() {
   function cancelOutboundPreparation() {
     if (outboundPreparationSaving) return;
     setPendingOutboundAction(null);
+    setPendingOutboundOrigin(null);
     setActiveTab("quote");
     setMobilePane("editor");
   }
@@ -1040,9 +1085,11 @@ export function QuoteDeskView() {
   function discardEditsAndContinueOutbound() {
     if (!pendingOutboundAction || outboundPreparationSaving) return;
     const action = pendingOutboundAction;
+    const origin = pendingOutboundOrigin ?? undefined;
     revertQuoteSheetToLastSaved();
     setPendingOutboundAction(null);
-    void runOutboundAction(action, selectedQuote);
+    setPendingOutboundOrigin(null);
+    void runOutboundAction(action, selectedQuote, origin);
   }
 
   function requestLifecycleUpdate(status: Quote["status"]) {
@@ -1079,10 +1126,12 @@ export function QuoteDeskView() {
   async function saveAndContinueOutbound() {
     if (!pendingOutboundAction || !selectedQuote || outboundPreparationSaving) return;
     const action = pendingOutboundAction;
+    const origin = pendingOutboundOrigin ?? undefined;
     setOutboundPreparationSaving(true);
     const persistedQuote = await handleSaveQuoteSheet({ offerPreset: false });
     if (!persistedQuote) {
       setPendingOutboundAction(null);
+      setPendingOutboundOrigin(null);
       setActiveTab("quote");
       setMobilePane("editor");
       setOutboundPreparationSaving(false);
@@ -1091,9 +1140,11 @@ export function QuoteDeskView() {
 
     try {
       setPendingOutboundAction(null);
-      await runOutboundAction(action, persistedQuote);
+      setPendingOutboundOrigin(null);
+      await runOutboundAction(action, persistedQuote, origin);
     } catch (err) {
       setPendingOutboundAction(null);
+      setPendingOutboundOrigin(null);
       setActiveTab("quote");
       setMobilePane("editor");
       setError(err instanceof Error ? err.message : "The saved quote could not be reloaded. Try sending again.");
@@ -2585,7 +2636,7 @@ export function QuoteDeskView() {
       </Modal>
 
       {sendComposer ? (
-        <Modal open={true} onClose={() => setSendComposer(null)} size="lg" ariaLabel="Send quote confirmation">
+        <Modal open={true} onClose={() => { setError(null); setSendComposer(null); }} size="lg" ariaLabel="Send quote confirmation">
           <ModalHeader
             title={
               sendComposer.channel === "email"
@@ -2595,9 +2646,10 @@ export function QuoteDeskView() {
                   : "Copy Quote Message"
             }
             description={`Customer: ${sendComposer.customerName}${sendComposer.channel === "sms" ? ` • ${formatUsPhoneDisplay(sendComposer.customerPhone)}` : ""}`}
-            onClose={() => setSendComposer(null)}
+            onClose={() => { setError(null); setSendComposer(null); }}
           />
           <ModalBody className="space-y-4">
+            {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
             {sendComposer.channel === "email" ? (
               <Input
                 label="Subject"
@@ -2628,11 +2680,14 @@ export function QuoteDeskView() {
           <ModalFooter>
             <Button
               variant="outline"
-              onClick={() =>
-                sendComposer.handoffComplete
-                  ? setSendComposer((prev) => (prev ? { ...prev, handoffComplete: false } : prev))
-                  : setSendComposer(null)
-              }
+              onClick={() => {
+                setError(null);
+                if (sendComposer.handoffComplete) {
+                  setSendComposer((prev) => (prev ? { ...prev, handoffComplete: false } : prev));
+                } else {
+                  setSendComposer(null);
+                }
+              }}
               disabled={saving}
             >
               {sendComposer.handoffComplete ? "Share Again" : "Cancel"}

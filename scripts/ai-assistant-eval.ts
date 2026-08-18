@@ -20,8 +20,11 @@ void import("../src/lib/ai-assistant").then(({
 const intentCases = [
   ["customer search", "Find customer Ruben", "SEARCH_CUSTOMERS"],
   ["customer detail", "Open customer Ruben", "SEARCH_CUSTOMERS"],
+  ["customer draft", "Add a new customer named Maria Lopez, phone 555-444-3333", "DRAFT_CUSTOMER"],
   ["customer list navigation", "Open customers", "NAVIGATE_WORKSPACE"],
   ["quote draft", "Draft a roofing quote for Ruben", "DRAFT_QUOTE"],
+  ["quote draft with customer noun", "Draft a quote for customer Robert", "DRAFT_QUOTE"],
+  ["quote send review", "Send the latest quote to Maria Lopez", "PREPARE_QUOTE_SEND"],
   ["product draft", "Add a labor service that costs $30 and sells for $75", "DRAFT_PRODUCT"],
   ["product navigation", "Take me to products", "NAVIGATE_WORKSPACE"],
   ["follow-up queue", "Which customers need follow up today?", "FOLLOW_UP_QUEUE"],
@@ -80,7 +83,9 @@ for (const tool of [
   "FOLLOW_UP_QUEUE",
   "CUSTOMERS_WITHOUT_QUOTES",
   "PIPELINE_SCENARIO",
+  "DRAFT_CUSTOMER",
   "DRAFT_PRODUCT",
+  "PREPARE_QUOTE_SEND",
   "ASSISTANT_HELP",
   "OUT_OF_SCOPE",
 ] as const) {

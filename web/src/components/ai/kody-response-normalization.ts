@@ -29,8 +29,10 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "SEARCH_CUSTOMERS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
+  "DRAFT_CUSTOMER",
   "DRAFT_PRODUCT",
   "DRAFT_QUOTE",
+  "PREPARE_QUOTE_SEND",
 ];
 
 const REQUESTED_TOOLS: AiAssistantRequestedTool[] = ["AUTO", ...ASSISTANT_TOOLS];
@@ -70,8 +72,10 @@ function isRequestedTool(value: unknown): value is AiAssistantRequestedTool {
 function isAssistantActionType(value: unknown): value is AiAssistantAction["type"] {
   return (
     value === "OPEN_CUSTOMER" ||
+    value === "OPEN_CUSTOMER_DRAFT" ||
     value === "OPEN_PRODUCT_DRAFT" ||
     value === "OPEN_QUOTE_DRAFT" ||
+    value === "OPEN_QUOTE_SEND" ||
     value === "OPEN_ANALYTICS" ||
     value === "OPEN_WORKSPACE_PAGE" ||
     value === "REQUEST_ADMIN_ACCESS"
@@ -80,12 +84,21 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
 
 function actionLabelForType(type: AiAssistantAction["type"]) {
   if (type === "OPEN_CUSTOMER") return "Open customer";
+  if (type === "OPEN_CUSTOMER_DRAFT") return "Review customer draft";
   if (type === "OPEN_PRODUCT_DRAFT") return "Review product draft";
   if (type === "OPEN_QUOTE_DRAFT") return "Review quote draft";
+  if (type === "OPEN_QUOTE_SEND") return "Review quote send";
   if (type === "OPEN_ANALYTICS") return "Open analytics";
   if (type === "OPEN_WORKSPACE_PAGE") return "Open page";
   return "Request access";
 }
+
+const REVIEW_ACTION_TYPES = new Set<AiAssistantAction["type"]>([
+  "OPEN_CUSTOMER_DRAFT",
+  "OPEN_PRODUCT_DRAFT",
+  "OPEN_QUOTE_DRAFT",
+  "OPEN_QUOTE_SEND",
+]);
 
 function sanitizePrimitiveRecord(value: unknown): AssistantResult | null {
   if (!isRecord(value)) return null;
@@ -130,8 +143,11 @@ function normalizeAction(value: unknown): AiAssistantAction | null {
   return {
     type: value.type,
     label: getString(value.label) ?? actionLabelForType(value.type),
-    requiresConfirmation:
-      typeof value.requiresConfirmation === "boolean" ? value.requiresConfirmation : true,
+    requiresConfirmation: REVIEW_ACTION_TYPES.has(value.type)
+      ? true
+      : typeof value.requiresConfirmation === "boolean"
+        ? value.requiresConfirmation
+        : true,
     payload: isRecord(value.payload) ? value.payload : {},
   };
 }
