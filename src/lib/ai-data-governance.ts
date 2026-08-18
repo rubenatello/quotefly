@@ -8,10 +8,11 @@ export const MAX_REDACTED_PROMPT_LENGTH = 2_000;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const PHONE_PATTERN = /(?<!\d)(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)/g;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const PROVIDER_SECRET_PATTERN = /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b|\bwhsec_[A-Za-z0-9_-]{8,}\b/gi;
-const LABELED_SECRET_PATTERN = /\b(password|passcode|secret|api[_ -]?key|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*([^\s,;]+)/gi;
+const PROVIDER_SECRET_PATTERN = /\b(?:sk|rk|pk)[_-](?:live|test|proj)[_-][A-Za-z0-9_-]{8,}\b|\b(?:whsec|ghp|github_pat|xox[a-z]?)[_-][A-Za-z0-9_-]{8,}\b/gi;
+const LABELED_SECRET_PATTERN = /\b(password|passcode|secret|authorization|token|api[_ -]?key|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*([^\s,;]+)/gi;
 const LONG_TOKEN_PATTERN = /\b(?:[a-f0-9]{40,}|[A-Za-z0-9_-]{48,})\b/gi;
 const URL_SECRET_PATTERN = /([?&](?:token|key|secret|signature|code)=)[^&#\s]+/gi;
+const SCHEME_URI_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/giu;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -38,6 +39,10 @@ export function redactAiPrompt(
   options?: { knownSensitiveValues?: readonly string[] },
 ): string {
   let redacted = prompt.normalize("NFKC");
+
+  // Remove complete URIs before email or labeled-secret rules can split
+  // credential-bearing userinfo and leave host, port, or path fragments.
+  redacted = redacted.replace(SCHEME_URI_PATTERN, "[REDACTED_URI]");
 
   for (const knownValue of options?.knownSensitiveValues ?? []) {
     const value = knownValue.trim();

@@ -35,7 +35,7 @@ export function CrmMobileHeader({
     <header
       aria-hidden={backgroundInert || undefined}
       inert={backgroundInert || undefined}
-      className="sticky top-0 z-40 border-b border-qf-border/80 bg-qf-surface/95 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden"
+      className="qf-mobile-header sticky top-0 z-40 border-b border-qf-border/80 bg-qf-surface/95 px-[max(1rem,env(safe-area-inset-left))] py-2.5 pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-xl lg:hidden"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">

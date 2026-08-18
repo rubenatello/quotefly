@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { BadgeInfo, Clock3, FilePlus2, LayoutDashboard, Lightbulb, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UserRoundPlus, UsersRound } from "lucide-react";
+import { BadgeInfo, FilePlus2, LayoutDashboard, Lightbulb, ListTodo, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UserRoundPlus, UsersRound } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
 import { cn } from "../lib/utils";
@@ -48,7 +48,7 @@ function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"
   if (icon === "team") return <UsersRound size={16} />;
   if (icon === "quotes") return <QuoteIcon size={15} />;
   if (icon === "products") return <PackageSearch size={15} />;
-  if (icon === "follow-up") return <Clock3 size={15} />;
+  if (icon === "follow-up") return <ListTodo size={15} />;
   if (icon === "analytics") return <AnalyticsIcon size={15} />;
   if (icon === "branding") return <Palette size={16} />;
   if (icon === "about") return <BadgeInfo size={16} />;

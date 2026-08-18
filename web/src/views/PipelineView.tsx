@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Search } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, QuoteIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, EmptyState, Input, LoadingState, PageHeader, PaginationControls, Select, type PageSize } from "../components/ui";
 import { FollowUpPill, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { api, type AfterSaleFollowUpStatus, type LeadFollowUpStatus, type QuoteJobStatus, type WorkspaceFollowUpItem } from "../lib/api";
 import { usePageView } from "../lib/analytics";
+import { resolveActivityTiming } from "../lib/display-format";
 
 type PipelineLead = WorkspaceFollowUpItem;
 type QueueTab = "new" | "quoted" | "closed" | "afterSale" | "recent";
@@ -104,7 +105,7 @@ function MetricTile({
   currency = false,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   tone: "blue" | "orange" | "emerald" | "slate";
   currency?: boolean;
 }) {
@@ -120,7 +121,7 @@ function MetricTile({
   return (
     <div data-testid="follow-up-metric" className={`min-w-0 rounded-xl px-3 py-3 sm:px-4 ${toneClass}`}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em]">{label}</p>
-      <p className="mt-2 truncate text-xl font-bold tracking-tight sm:text-2xl">{currency ? money(value) : value}</p>
+      <p className="mt-2 truncate text-xl font-bold tracking-tight sm:text-2xl">{currency && typeof value === "number" ? money(value) : value}</p>
     </div>
   );
 }
@@ -182,6 +183,7 @@ function QueueActions({
   onNavigateToBuilder,
   onUpdateFollowUp,
   onUpdateQuoteLifecycle,
+  includePrimary = true,
 }: {
   lead: PipelineLead;
   actionKind: QueueActionKind;
@@ -194,19 +196,22 @@ function QueueActions({
     quoteId: string,
     patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
   ) => void;
+  includePrimary?: boolean;
 }) {
   const selectClassName = mobile ? "min-w-0 w-full" : "w-full min-w-[150px] sm:w-auto";
 
   return (
     <div className={mobile ? "grid grid-cols-1 gap-2 min-[420px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
-      <Button
-        size="sm"
-        variant={lead.quoteId ? "outline" : "primary"}
-        className="w-full sm:w-auto"
-        onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
-      >
-        {lead.quoteId ? "Open quote" : "Draft quote"}
-      </Button>
+      {includePrimary ? (
+        <Button
+          size="sm"
+          variant={lead.quoteId ? "outline" : "primary"}
+          className="w-full sm:w-auto"
+          onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
+        >
+          {lead.quoteId ? "Open quote" : "Draft quote"}
+        </Button>
+      ) : null}
 
       {actionKind === "follow_up" ? (
         <Select
@@ -268,7 +273,10 @@ function QueueRow({
     patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
   ) => void;
 }) {
-  const touchLabel = lead.afterSaleFollowUpDueAtUtc ? formatDateTime(lead.afterSaleFollowUpDueAtUtc) : formatDateTime(lead.createdAt);
+  const { kind: activityKind, atUtc: activityAtUtc } = resolveActivityTiming(lead);
+  const timingLabel = lead.afterSaleFollowUpDueAtUtc
+    ? `Due ${compactDateTime(lead.afterSaleFollowUpDueAtUtc)}`
+    : `${activityKind === "ADDED" ? "Added" : "Updated"} ${compactDateTime(activityAtUtc)}`;
   const renderStatusPills = () => (
     <>
       <FollowUpPill status={lead.followUpStatus} compact />
@@ -284,9 +292,9 @@ function QueueRow({
 
   return (
     <article data-testid="follow-up-queue-row" className={`transition hover:bg-[var(--qf-interactive-hover)] ${lead.quoteId && lead.quoteId === activeQuoteId ? "bg-[var(--qf-selected)]" : ""}`}>
-      <div className="p-4 xl:hidden">
+      <div className="p-3.5 2xl:hidden">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
+          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
             {customerInitials(lead.customerName)}
           </span>
           <div className="min-w-0 flex-1">
@@ -294,51 +302,67 @@ function QueueRow({
               <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</p>
               <span className="shrink-0 rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold text-[var(--qf-text-muted)]">#{index + 1}</span>
             </div>
-            <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">Added {compactDateTime(lead.createdAt)}</p>
+            <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">
+              {lead.quoteTitle ?? nextActionLabel(lead, actionKind)}
+            </p>
+            <p className="mt-1 text-[11px] font-medium text-[var(--qf-text-soft)] sm:hidden">{timingLabel}</p>
           </div>
+          <span className="hidden shrink-0 text-right text-xs font-medium text-[var(--qf-text-soft)] sm:block">{timingLabel}</span>
         </div>
 
-        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-          <a href={`tel:${lead.phone}`} className="inline-flex min-h-10 min-w-0 items-center gap-2 rounded-xl bg-[var(--qf-panel-muted)] px-3 text-[var(--qf-text-soft)] hover:text-[var(--qf-link)]">
-            <CallIcon size={13} />
-            <span className="truncate">{lead.phone}</span>
+        <div className="mt-3 flex items-center gap-2">
+          <a
+            href={`tel:${lead.phone}`}
+            aria-label={`Call ${lead.customerName}`}
+            title={`Call ${lead.phone}`}
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+          >
+            <CallIcon size={15} />
           </a>
           {lead.email ? (
-            <a href={`mailto:${lead.email}`} className="inline-flex min-h-10 min-w-0 items-center gap-2 rounded-xl bg-[var(--qf-panel-muted)] px-3 text-[var(--qf-text-soft)] hover:text-[var(--qf-link)]">
-              <EmailIcon size={13} />
-              <span className="truncate">{lead.email}</span>
+            <a
+              href={`mailto:${lead.email}`}
+              aria-label={`Email ${lead.customerName}`}
+              title={`Email ${lead.email}`}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+            >
+              <EmailIcon size={15} />
             </a>
           ) : null}
+          <Button
+            size="sm"
+            variant={lead.quoteId ? "outline" : "primary"}
+            className="min-w-0 flex-1"
+            aria-label={lead.quoteId ? "Open quote" : "Draft first quote"}
+            onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
+          >
+            {lead.quoteId ? `Open quote${lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}` : "Draft first quote"}
+          </Button>
         </div>
 
-        <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-[var(--qf-text)]">{lead.quoteTitle ?? "No quote drafted yet"}</p>
-            <p className="mt-0.5 text-xs text-[var(--qf-text-muted)]">{nextActionLabel(lead, actionKind)}</p>
+        <details className="group mt-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 text-xs font-semibold text-[var(--qf-text-soft)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+            <span>Details and status</span>
+            <ChevronDown size={16} className="motion-safe:transition-transform motion-safe:group-open:rotate-180" aria-hidden="true" />
+          </summary>
+          <div className="border-t border-[var(--qf-border)] p-3">
+            <div className="mb-3 flex flex-wrap items-center gap-2">{renderStatusPills()}</div>
+            <QueueActions
+              lead={lead}
+              actionKind={actionKind}
+              saving={saving}
+              mobile
+              includePrimary={false}
+              onNavigateToQuote={onNavigateToQuote}
+              onNavigateToBuilder={onNavigateToBuilder}
+              onUpdateFollowUp={onUpdateFollowUp}
+              onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
+            />
           </div>
-          <span className="shrink-0 text-sm font-semibold text-[var(--qf-text)]">{lead.totalAmount !== undefined ? money(lead.totalAmount) : "—"}</span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">{renderStatusPills()}</div>
-
-        <div className="my-3 flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)]">
-          <span>Last activity</span>
-          <span className="truncate text-right font-medium text-[var(--qf-text-soft)]">{compactDateTime(lead.afterSaleFollowUpDueAtUtc ?? lead.createdAt)}</span>
-        </div>
-
-        <QueueActions
-          lead={lead}
-          actionKind={actionKind}
-          saving={saving}
-          mobile
-          onNavigateToQuote={onNavigateToQuote}
-          onNavigateToBuilder={onNavigateToBuilder}
-          onUpdateFollowUp={onUpdateFollowUp}
-          onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
-        />
+        </details>
       </div>
 
-      <div className="hidden gap-3 px-4 py-3 xl:grid xl:grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] xl:items-center 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
+      <div className="hidden gap-3 px-4 py-3 2xl:grid 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] 2xl:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{index + 1}</span>
@@ -370,7 +394,7 @@ function QueueRow({
         <div className="flex flex-wrap items-center gap-2">{renderStatusPills()}</div>
 
         <div className="space-y-1 text-xs text-[var(--qf-text-muted)]">
-          <p>{touchLabel}</p>
+          <p>{timingLabel}</p>
           <p className="font-medium text-[var(--qf-text-soft)]">{nextActionLabel(lead, actionKind)}</p>
         </div>
 
@@ -448,7 +472,7 @@ export function PipelineView() {
       setRecentLeads(recentResult?.items ?? (activeTab === "recent" ? result.items.slice(0, 4) : []));
     } catch (err) {
       if (requestId !== queueRequestIdRef.current) return;
-      setQueueLoadError(err instanceof Error ? err.message : "Follow-up queue could not be loaded.");
+      setQueueLoadError(err instanceof Error ? err.message : "Activity queue could not be loaded.");
     } finally {
       if (requestId === queueRequestIdRef.current) setQueueLoading(false);
     }
@@ -546,8 +570,8 @@ export function PipelineView() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Follow-up"
-        subtitle="Keep leads and jobs moving: new customers first, quoted work next, then completed-job check-ins."
+        title="Activity center"
+        subtitle="Work assigned leads, quotes, active jobs, and customer check-ins in priority order."
         mode="actions-only"
         actions={selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : undefined}
       />
@@ -555,25 +579,25 @@ export function PipelineView() {
       {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
 
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.45fr)_320px]">
+      <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_320px]">
         <div className="space-y-4">
           <div data-testid="follow-up-metrics" className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
-            <MetricTile label="Needs attention" value={nextAttentionCount} tone="orange" />
-            <MetricTile label="New leads" value={queueTotals.newLeads} tone="blue" />
-            <MetricTile label="Active work" value={queueTotals.closedLeads} tone="emerald" />
-            <MetricTile label="Revenue" value={queueMetrics.acceptedRevenue} tone="slate" currency />
+            <MetricTile label="Needs attention" value={queueLoading ? "—" : nextAttentionCount} tone="orange" />
+            <MetricTile label="New leads" value={queueLoading ? "—" : queueTotals.newLeads} tone="blue" />
+            <MetricTile label="Active work" value={queueLoading ? "—" : queueTotals.closedLeads} tone="emerald" />
+            <MetricTile label="Revenue" value={queueLoading ? "—" : queueMetrics.acceptedRevenue} tone="slate" currency />
           </div>
 
           <Card variant="default" padding="md" className="overflow-hidden p-0 sm:p-5">
             <div className="flex flex-col gap-3 border-b border-[var(--qf-border)] p-4 sm:mb-4 sm:p-0 sm:pb-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Lead queue</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Activity queue</p>
                 <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{activeQueue.title}</h2>
                 <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeQueue.subtitle}</p>
               </div>
               <div className="min-w-0 max-w-full space-y-3 lg:w-auto">
                 <Input
-                  aria-label="Search follow-up queue"
+                  aria-label="Search activity queue"
                   icon={<Search size={16} aria-hidden="true" />}
                   value={queueSearch}
                   onChange={(event) => setQueueSearch(event.target.value)}
@@ -594,31 +618,34 @@ export function PipelineView() {
               {queueLoading ? (
                 <div className="p-4">
                   <LoadingState
-                    title="Loading follow-up queue"
+                    title="Loading activity queue"
                     description="Finding the next tenant-scoped customers and jobs that need attention."
-                    variant="table"
+                    variant="cards"
                     rows={5}
                   />
                 </div>
               ) : queueLoadError ? (
                 <div className="p-4">
                   <EmptyState
-                    title="Follow-up is temporarily unavailable"
+                    title="Activity is temporarily unavailable"
                     description={`${queueLoadError} No customer or quote records were changed.`}
                     action={<Button variant="outline" onClick={() => void loadQueuePage()}>Try again</Button>}
                   />
                 </div>
               ) : queueItems.length === 0 ? (
                 <div className="p-4">
-                  <EmptyState title={activeQueue.emptyTitle} description={activeQueue.emptyDescription} />
+                  <EmptyState
+                    title={debouncedQueueSearch ? "No matching activity" : activeQueue.emptyTitle}
+                    description={debouncedQueueSearch ? `No activity matches “${debouncedQueueSearch}”. Try a broader search or another queue.` : activeQueue.emptyDescription}
+                  />
                 </div>
               ) : (
                 <>
-                  <div className="hidden grid-cols-[minmax(0,1.95fr)_minmax(0,1fr)_180px_132px_154px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid 2xl:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px]">
+                  <div className="hidden grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] 2xl:grid">
                     <span>Lead</span>
                     <span>Quote</span>
                     <span>Status</span>
-                    <span>Touch</span>
+                    <span>Due / updated</span>
                     <span>Action</span>
                   </div>
                   <div className="divide-y divide-[var(--qf-border)]">
@@ -646,7 +673,7 @@ export function PipelineView() {
                 offset={(queuePage - 1) * queuePageSize}
                 total={queueTotal}
                 loading={queueLoading}
-                itemLabel="follow-up records"
+                itemLabel="activity records"
                 onLimitChange={(nextLimit) => {
                   setQueuePageSize(nextLimit);
                   setQueuePage(1);
@@ -657,7 +684,7 @@ export function PipelineView() {
           </Card>
         </div>
 
-        <div className="hidden space-y-4 xl:block">
+        <div className="hidden space-y-4 2xl:block">
           <Card variant="default" padding="md">
             <div className="flex items-center justify-between gap-3">
               <div>

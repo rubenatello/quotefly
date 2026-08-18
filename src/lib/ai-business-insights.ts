@@ -267,7 +267,18 @@ function buildAnswer(params: {
   return `Low-margin review for accepted quotes created ${dateScope}, ${archiveScope}: found ${rowCount} quote${rowCount === 1 ? "" : "s"} below ${LOW_MARGIN_THRESHOLD_PERCENT}% gross margin. ${lowestMarginText}`;
 }
 
-async function loadQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
+async function loadRevenueQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
+  return prisma.quote.findMany({
+    where: quoteWhere(params, range),
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      status: true,
+      customerPriceSubtotal: true,
+    },
+  });
+}
+
+async function loadProfitabilityQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
   return prisma.quote.findMany({
     where: quoteWhere(params, range),
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -276,17 +287,15 @@ async function loadQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, 
       title: true,
       serviceType: true,
       status: true,
-      createdAt: true,
       closedAtUtc: true,
       customerPriceSubtotal: true,
       internalCostSubtotal: true,
-      totalAmount: true,
     },
   });
 }
 
 async function buildSalesPipeline(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
-  const quotes = await loadQuotes(prisma, params, range);
+  const quotes = await loadRevenueQuotes(prisma, params, range);
   const counts = emptyStatusCounts();
   for (const quote of quotes) {
     const revenue = Number(quote.customerPriceSubtotal);
@@ -316,7 +325,7 @@ async function buildSalesPipeline(prisma: PrismaClient, params: AiBusinessInsigh
 }
 
 async function buildServiceProfitability(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
-  const quotes = (await loadQuotes(prisma, params, range)).filter((quote) => quote.status === "ACCEPTED");
+  const quotes = (await loadProfitabilityQuotes(prisma, params, range)).filter((quote) => quote.status === "ACCEPTED");
   const byService = new Map<ServiceCategory, { quoteCount: number; revenue: number; cost: number }>();
   for (const quote of quotes) {
     const current = byService.get(quote.serviceType) ?? { quoteCount: 0, revenue: 0, cost: 0 };
@@ -452,7 +461,7 @@ async function buildItemProfitability(prisma: PrismaClient, params: AiBusinessIn
 }
 
 async function buildLowMarginQuotes(prisma: PrismaClient, params: AiBusinessInsightInput, range: { from: Date; to: Date }) {
-  const quotes = (await loadQuotes(prisma, params, range))
+  const quotes = (await loadProfitabilityQuotes(prisma, params, range))
     .filter((quote) => quote.status === "ACCEPTED")
     .map((quote) => {
       const revenue = Number(quote.customerPriceSubtotal);

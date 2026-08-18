@@ -111,13 +111,13 @@ function OverviewMetric({
     <button
       type="button"
       onClick={onClick}
-      className="group min-h-[132px] rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 text-left shadow-[var(--qf-shadow-sm)] transition hover:-translate-y-0.5 hover:border-[var(--qf-border-strong)] hover:shadow-[var(--qf-shadow-md)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+      className="group min-h-[96px] rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3.5 text-left shadow-[var(--qf-shadow-sm)] transition hover:-translate-y-0.5 hover:border-[var(--qf-border-strong)] hover:shadow-[var(--qf-shadow-md)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[104px]"
     >
       <div className="flex items-start justify-between gap-3">
-        <span className={cn("inline-flex h-10 w-10 items-center justify-center rounded-xl", toneClass)}>{icon}</span>
+        <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-xl", toneClass)}>{icon}</span>
         <ArrowRight size={16} className="text-[var(--qf-text-muted)] transition group-hover:translate-x-0.5 group-hover:text-[var(--qf-link)]" />
       </div>
-      <p className="mt-4 text-2xl font-semibold tracking-tight text-[var(--qf-text)]">{value}</p>
+      <p className="mt-2.5 text-xl font-semibold tracking-tight text-[var(--qf-text)] sm:text-2xl">{value}</p>
       <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--qf-text-soft)]">{label}</p>
       <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{hint}</p>
     </button>
@@ -204,30 +204,27 @@ export function WorkspaceHomePage() {
 
   return (
     <div className="space-y-5 sm:space-y-6" data-testid="workspace-home">
-      <section className="relative overflow-hidden rounded-[24px] border border-[var(--qf-info-border)] bg-[linear-gradient(135deg,var(--qf-info-surface),var(--qf-panel)_62%)] px-5 py-5 shadow-[var(--qf-shadow-sm)] sm:px-6 sm:py-6">
+      <section className="relative overflow-hidden rounded-[22px] border border-[var(--qf-info-border)] bg-[linear-gradient(135deg,var(--qf-info-surface),var(--qf-panel)_62%)] px-5 py-4 shadow-[var(--qf-shadow-sm)] sm:px-6 sm:py-5">
         <div className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-[var(--qf-selected-strong)] opacity-60 blur-3xl" aria-hidden="true" />
-        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="max-w-2xl">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-link)]">Today at QuoteFly</p>
-            <h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.035em] text-[var(--qf-text)] sm:text-3xl">
+            <h2 className="mt-1.5 font-display text-2xl font-semibold tracking-[-0.035em] text-[var(--qf-text)] sm:text-[28px]">
               {greetingForNow()}, {firstName(session?.fullName)}.
             </h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--qf-text-soft)]">
               See what needs attention, keep quotes moving, and get the next customer handled quickly{session?.tenantName ? ` for ${session.tenantName}` : ""}.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:justify-end">
-            <Button icon={<FilePlus2 size={16} />} onClick={() => navigate("/app/build")}>New quote</Button>
-            <Button variant="outline" icon={<UserPlus2 size={16} />} onClick={() => navigate("/app/customers?compose=customer")}>Add customer</Button>
-            <KodyButton
-              className="justify-self-end sm:col-span-1"
-              size="md"
-              label="Plan with Kody"
-              prompt="Review my workspace and tell me the three highest-priority actions I should take today. Focus on new leads, unfinished quotes, sent quotes awaiting follow-up, and after-sale check-ins."
-              tool="FOLLOW_UP_QUEUE"
-              context={{ currentPage: "dashboard", limit: 6 }}
-            />
-          </div>
+          <KodyButton
+            className="qf-kody-home-action w-full justify-center sm:w-auto"
+            size="md"
+            label="Prioritize my day"
+            showLabel
+            prompt="Review my workspace and tell me the three highest-priority actions I should take today. Focus on new leads, unfinished quotes, sent quotes awaiting follow-up, and after-sale check-ins."
+            tool="FOLLOW_UP_QUEUE"
+            context={{ currentPage: "dashboard", limit: 6 }}
+          />
         </div>
       </section>
 
@@ -249,7 +246,7 @@ export function WorkspaceHomePage() {
         />
       ) : overview ? (
         <>
-          <section aria-label="Workspace summary" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <section aria-label="Workspace summary" className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <OverviewMetric
               label="Unquoted leads"
               value={String(overview.metrics.unquotedLeads)}

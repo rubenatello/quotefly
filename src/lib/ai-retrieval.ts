@@ -27,6 +27,7 @@ import {
   rerankAiRetrievalCandidates,
   resolveAiRetrievalQuery,
 } from "./ai-retrieval-ranking";
+import { prepareAiEmbeddingQuery } from "./ai-retrieval-query-safety";
 import {
   AI_DATA_POLICY_VERSION,
   AI_RETRIEVABLE_FIELD_POLICY,
@@ -1162,11 +1163,14 @@ export async function retrieveAiContextFromIndex(
     query: params.query,
     priorUserQueries: params.priorUserQueries,
   });
-  const query = resolvedQuery.effectiveQuery;
+  const preparedQuery = prepareAiEmbeddingQuery(resolvedQuery.effectiveQuery);
+  const query = preparedQuery.lexicalQuery;
   if (!resolvedQuery.originalQuery) throw new Error("AI retrieval query is required.");
   const allowedClassifications = allowedClassificationsForAccess(params.access);
   const embeddingStartedAtMs = Date.now();
-  const queryEmbedding = await (params.embedText ?? createAiRetrievalEmbedding)(query);
+  const queryEmbedding = preparedQuery.embeddingQuery
+    ? await (params.embedText ?? createAiRetrievalEmbedding)(preparedQuery.embeddingQuery)
+    : null;
   const embeddingDurationMs = Date.now() - embeddingStartedAtMs;
   const queryHash = sha256Text(`${params.access.tenantId}:${resolvedQuery.originalQuery}`);
   const effectiveQueryHash = sha256Text(`${params.access.tenantId}:${query}`);
@@ -1195,8 +1199,12 @@ export async function retrieveAiContextFromIndex(
           tenantId: params.access.tenantId,
           deletedAtUtc: null,
           policyVersion: AI_DATA_POLICY_VERSION,
-          embeddingDimensions: queryEmbedding.embedding.length,
-          embeddingModel: queryEmbedding.model,
+          ...(queryEmbedding
+            ? {
+                embeddingDimensions: queryEmbedding.embedding.length,
+                embeddingModel: queryEmbedding.model,
+              }
+            : {}),
           classification: { in: allowedClassifications },
           sourceField: { in: allowedFields },
           ...retrievalFilterWhere(params.filters),
@@ -1278,13 +1286,15 @@ export async function retrieveAiContextFromIndex(
       .get(`${candidate.sourceType}:${candidate.sourceId}:${candidate.sourceField}`)
       ?.has(candidate.contentHash) === true);
   const rankingStartedAtMs = Date.now();
-  const semanticRanking = eligibleCandidates
-    .map((candidate) => ({
-      candidate,
-      semanticScore: cosineSimilarity(queryEmbedding.embedding, candidate.embedding),
-    }))
-    .sort((left, right) =>
-      right.semanticScore - left.semanticScore || left.candidate.id.localeCompare(right.candidate.id));
+  const semanticRanking = queryEmbedding
+    ? eligibleCandidates
+      .map((candidate) => ({
+        candidate,
+        semanticScore: cosineSimilarity(queryEmbedding.embedding, candidate.embedding),
+      }))
+      .sort((left, right) =>
+        right.semanticScore - left.semanticScore || left.candidate.id.localeCompare(right.candidate.id))
+    : [];
   const semanticRankById = new Map(semanticRanking.map((entry, index) => [entry.candidate.id, index + 1]));
   const semanticScoreById = new Map(semanticRanking.map((entry) => [entry.candidate.id, entry.semanticScore]));
   const keywordRankById = new Map(keywordRows.map((entry, index) => [entry.id, index + 1]));
@@ -1342,6 +1352,11 @@ export async function retrieveAiContextFromIndex(
     rewriteMode: resolvedQuery.mode,
     rewriteContextTurnCount: resolvedQuery.contextTurnCount,
     effectiveQueryHash,
+    embeddingQueryHash: preparedQuery.embeddingQuery
+      ? sha256Text(`${params.access.tenantId}:${preparedQuery.embeddingQuery}`)
+      : null,
+    embeddingQueryRedactionCount: preparedQuery.redactionCount,
+    embeddingQueryMode: preparedQuery.embeddingQuery ? "redacted_minimized_v1" : "lexical_only_sensitive_query_v1",
     top: ranked.map((entry) => ({
       refHash: sha256Text(`${params.access.tenantId}:${entry.candidate.id}`),
       fusedScore: Number(entry.fusedScore.toFixed(8)),
@@ -1362,12 +1377,12 @@ export async function retrieveAiContextFromIndex(
       actorUserId: params.access.userId,
       requestId: params.requestId.slice(0, 128),
       purpose: params.purpose,
-      model: params.model ?? queryEmbedding.model,
+      model: params.model ?? queryEmbedding?.model ?? null,
       maxClassification: maxAllowedClassification,
       sourceTypes: Array.from(new Set(chunks.map((chunk) => chunk.sourceType))).slice(0, 16),
       sourceRefs: sourceRefs.length ? sourceRefs : Prisma.JsonNull,
       resultCount: chunks.length,
-      inputTokenCount: queryEmbedding.telemetry?.promptTokens ?? null,
+      inputTokenCount: queryEmbedding?.telemetry?.promptTokens ?? null,
       queryHash,
       policyVersion: AI_DATA_POLICY_VERSION,
       status: AiRetrievalAuditStatus.SUCCEEDED,
@@ -1399,7 +1414,7 @@ export async function retrieveAiContextFromIndex(
       classification: chunk.classification,
     })),
     auditEventId: auditEvent.id,
-    telemetry: queryEmbedding.telemetry ?? null,
+    telemetry: queryEmbedding?.telemetry ?? null,
   };
 }
 

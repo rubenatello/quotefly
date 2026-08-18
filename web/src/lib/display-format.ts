@@ -73,3 +73,15 @@ export function toUtcIsoString(value: string | Date) {
   const date = validDate(value);
   return date?.toISOString() ?? null;
 }
+
+export function resolveActivityTiming(value: {
+  createdAt: string;
+  quoteId?: string | null;
+  activityAtUtc?: string;
+  activityKind?: "ADDED" | "UPDATED";
+}) {
+  return {
+    atUtc: value.activityAtUtc || value.createdAt,
+    kind: value.activityKind ?? (value.quoteId ? "UPDATED" : "ADDED"),
+  } as const;
+}

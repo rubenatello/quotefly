@@ -160,7 +160,10 @@ describe("bounded collection pagination", () => {
     const followUpPage = await app.inject({ method: "GET", url: "/v1/workspace/follow-up?queue=new", headers: { cookie: alpha.cookie } });
     expect(followUpPage.statusCode).toBe(200);
     expect(followUpPage.json()).toMatchObject({ pagination: { limit: 25, offset: 0, total: 30 }, totals: { newLeads: 30 } });
-    expect((followUpPage.json() as { items: unknown[] }).items).toHaveLength(25);
+    const followUpItems = (followUpPage.json() as { items: Array<{ activityAtUtc: string; activityKind: string }> }).items;
+    expect(followUpItems).toHaveLength(25);
+    expect(followUpItems.every((item) => typeof item.activityAtUtc === "string")).toBe(true);
+    expect(followUpItems.some((item) => item.activityKind === "ADDED")).toBe(true);
     expect(followUpPage.body).not.toContain("Cross Tenant Pagination Secret");
   });
 
@@ -220,7 +223,14 @@ describe("bounded collection pagination", () => {
     expect(afterSale.statusCode).toBe(200);
     expect(afterSale.json()).toMatchObject({
       pagination: { total: 1 },
-      items: [{ customerId: customer.id, quoteId: latestQuote.id, status: "ACCEPTED", afterSaleFollowUpStatus: "DUE" }],
+      items: [{
+        customerId: customer.id,
+        quoteId: latestQuote.id,
+        status: "ACCEPTED",
+        afterSaleFollowUpStatus: "DUE",
+        activityAtUtc: newer.toISOString(),
+        activityKind: "UPDATED",
+      }],
     });
 
     const quoted = await app.inject({

@@ -8,7 +8,7 @@ import {
   signUpViaApi,
 } from "./helpers";
 
-test("follow-up queue stays readable and actionable at phone width", async ({ context, page, request }) => {
+test("activity queue stays readable and actionable at phone width", async ({ context, page, request }) => {
   const account = await signUpViaApi(request, "follow-up-mobile");
   const unquotedCustomer = await createCustomerViaApi(request, account, {
     fullName: "Mobile Garden Lead",
@@ -26,7 +26,7 @@ test("follow-up queue stays readable and actionable at phone width", async ({ co
   await addSessionCookie(context, account);
 
   await page.goto("/app/follow-up");
-  await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible({ timeout: 20_000 });
 
   const metrics = page.getByTestId("follow-up-metric");
   await expect(metrics).toHaveCount(4);
@@ -48,9 +48,10 @@ test("follow-up queue stays readable and actionable at phone width", async ({ co
   const queue = page.getByTestId("follow-up-queue");
   await expect(queue.getByText(unquotedCustomer.fullName, { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(queue.getByText(quotedCustomer.fullName, { exact: true }).filter({ visible: true })).toBeVisible();
-  await expect(queue.getByRole("link", { name: unquotedCustomer.phone })).toBeVisible();
-  await expect(queue.getByRole("button", { name: "Draft quote", exact: true })).toBeVisible();
+  await expect(queue.getByRole("link", { name: `Call ${unquotedCustomer.fullName}` })).toBeVisible();
+  await expect(queue.getByRole("button", { name: "Draft first quote", exact: true })).toBeVisible();
   await expect(queue.getByRole("button", { name: "Open quote", exact: true })).toBeVisible();
+  await queue.getByTestId("follow-up-queue-row").filter({ hasText: unquotedCustomer.fullName }).getByText("Details and status", { exact: true }).click();
   await expect(queue.getByLabel(`Update follow-up for ${unquotedCustomer.fullName}`).filter({ visible: true })).toBeVisible();
   await expect.poll(() => queue.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
   await expect

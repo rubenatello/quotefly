@@ -83,6 +83,15 @@ test("prompt governance removes PII and secret-shaped values while preserving us
   assert.doesNotMatch(redacted, /secret-value/);
 });
 
+test("prompt governance removes complete credential-bearing service URIs", () => {
+  const redacted = redactAiPrompt(
+    "Use mysql://root:s3cret@db.example.com:3306/app and postgresql://owner:password@db.example.com/quotefly for this quote.",
+  );
+
+  assert.equal(redacted, "Use [REDACTED_URI] and [REDACTED_URI] for this quote.");
+  assert.doesNotMatch(redacted, /root|s3cret|owner|password|example\.com|3306|\/app|quotefly/i);
+});
+
 test("governed prompts are hashed deterministically and expire after 90 days", () => {
   const now = new Date("2026-08-11T12:00:00.000Z");
   const first = governAiPrompt("Roof replacement for 20 squares", { now });

@@ -323,6 +323,12 @@
   background: var(--qf-kody-composer);
 }
 
+/* Home has a labelled planning action, so a second floating launcher would
+   compete with the same workflow and obscure the dashboard on smaller screens. */
+html:has([data-testid="workspace-home"] .qf-kody-home-action) [data-testid="kody-launcher"] {
+  display: none;
+}
+
 @keyframes qf-kody-panel-enter {
   from {
     opacity: 0;

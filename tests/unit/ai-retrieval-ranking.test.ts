@@ -6,6 +6,8 @@ import {
   resolveAiRetrievalQuery,
   type AiHybridRankCandidate,
 } from "../../src/lib/ai-retrieval-ranking";
+import { capabilitiesForRole } from "../../src/lib/access-policy";
+import { prepareAiEmbeddingQuery } from "../../src/lib/ai-retrieval-query-safety";
 
 type Candidate = Readonly<{ id: string }>;
 
@@ -67,6 +69,98 @@ test("retrieval query rewriting refuses unsafe prior context and stays bounded",
     "job",
     "123",
   ]);
+});
+
+test("embedding queries redact contact details and credentials while lexical ranking keeps the bounded original", () => {
+  const original = "Find jane.doe@example.com at (619) 555-0123; authorization: Bearer sk_live_secretValue123; quote roofing";
+  const prepared = prepareAiEmbeddingQuery(original);
+
+  assert.equal(prepared.lexicalQuery, original);
+  assert.ok(prepared.redactionCount >= 3);
+  assert.match(prepared.embeddingQuery ?? "", /Find at.*quote roofing/i);
+  assert.doesNotMatch(prepared.embeddingQuery ?? "", /jane\.doe|619|sk_live|secretvalue/i);
+});
+
+test("embedding query preparation is bounded and falls back to lexical-only retrieval for sensitive-only input", () => {
+  const bounded = prepareAiEmbeddingQuery(`roof repair ${"scope ".repeat(500)}`);
+  assert.ok(bounded.lexicalQuery.length <= 2_000);
+  assert.ok((bounded.embeddingQuery?.length ?? 0) <= 800);
+
+  const sensitiveOnly = prepareAiEmbeddingQuery("token=supersecretvalue12345");
+  assert.equal(sensitiveOnly.embeddingQuery, null);
+  assert.equal(sensitiveOnly.lexicalQuery, "token=supersecretvalue12345");
+});
+
+test("embedding query preparation covers common provider, webhook, URL, and opaque credential formats", () => {
+  const prepared = prepareAiEmbeddingQuery([
+    "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
+    "whsec_abcdefghijklmnopqrstuvwxyz123456",
+    "https://example.com/callback?token=temporary-value-123456789",
+    "github_pat_abcdefghijklmnopqrstuvwxyz1234567890",
+  ].join(" "));
+
+  assert.equal(prepared.embeddingQuery, null);
+  assert.ok(prepared.redactionCount >= 4);
+});
+
+test("retrieval invokes the embedding provider with the sanitized query only", async () => {
+  process.env.DATABASE_URL ??= "postgresql://quotefly_runtime:placeholder@127.0.0.1:5432/quotefly_test";
+  process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";
+  const { retrieveAiContextFromIndex } = await import("../../src/lib/ai-retrieval");
+  let providerInput = "";
+  await assert.rejects(
+    retrieveAiContextFromIndex({} as never, {
+      access: {
+        tenantId: "tenant-alpha",
+        tenantUserId: "membership-alpha",
+        userId: "user-alpha",
+        role: "owner",
+        capabilities: capabilitiesForRole("owner"),
+        requestId: "retrieval-provider-spy",
+      },
+      query: "Roof quote for jane.doe@example.com using sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
+      purpose: "QUOTE_DRAFT",
+      requestId: "retrieval-provider-spy",
+      embedText: async (text) => {
+        providerInput = text;
+        throw new Error("provider-spy-stop");
+      },
+    }),
+    /provider-spy-stop/,
+  );
+
+  assert.match(providerInput, /roof quote for using/i);
+  assert.doesNotMatch(providerInput, /jane\.doe|sk-proj|abcdef/i);
+});
+
+test("retrieval never sends credential-bearing service URIs to the embedding provider", async () => {
+  process.env.DATABASE_URL ??= "postgresql://quotefly_runtime:placeholder@127.0.0.1:5432/quotefly_test";
+  process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";
+  const { retrieveAiContextFromIndex } = await import("../../src/lib/ai-retrieval");
+  let providerInput = "";
+  await assert.rejects(
+    retrieveAiContextFromIndex({} as never, {
+      access: {
+        tenantId: "tenant-alpha",
+        tenantUserId: "membership-alpha",
+        userId: "user-alpha",
+        role: "owner",
+        capabilities: capabilitiesForRole("owner"),
+        requestId: "retrieval-service-uri-spy",
+      },
+      query: "Check this connection postgresql://owner:super-secret@db.example.com/quotefly and redis://cache:password@cache.example.com:6379/0 for a roof quote",
+      purpose: "QUOTE_DRAFT",
+      requestId: "retrieval-service-uri-spy",
+      embedText: async (text) => {
+        providerInput = text;
+        throw new Error("provider-spy-stop");
+      },
+    }),
+    /provider-spy-stop/,
+  );
+
+  assert.equal(providerInput, "Check this connection and for a roof quote");
+  assert.doesNotMatch(providerInput, /postgres|redis|owner|super-secret|password|example\.com|quotefly|6379|\/0/i);
 });
 
 test("bounded reranking promotes exact lexical evidence over a weak semantic lead", () => {

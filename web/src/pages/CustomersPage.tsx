@@ -990,7 +990,7 @@ export function CustomersPage() {
         size="lg"
         modal={false}
         closeOnBackdrop={false}
-        panelClassName="z-[60]"
+        panelClassName="qf-kody-underlay z-[60]"
         ariaLabel="Customer details and activity"
       >
         <ModalHeader

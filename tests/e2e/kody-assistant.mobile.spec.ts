@@ -605,14 +605,30 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   const kodyDialog = page.getByTestId("kody-chat-panel");
   await expect(kodyDialog).toBeVisible();
   await expect(kodyDialog).toHaveAttribute("role", "dialog");
-  await expect(kodyDialog).toHaveAttribute("aria-modal", "false");
-  await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
+  await expect(kodyDialog).toHaveAttribute("aria-modal", "true");
+  await expect(page.getByTestId("kody-modal-backdrop")).toBeVisible();
+  await expect(page.locator(".qf-mobile-header")).toHaveAttribute("inert", "");
+  await expect(page.locator("#main-content")).toHaveAttribute("inert", "");
+  await expect(mobileNav).toHaveAttribute("inert", "");
   await expect(kodyLauncher).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(kodyDialog).toBeHidden();
+  await expect(mobileNav).not.toHaveAttribute("inert", "");
+  await expect(kodyLauncher).toBeFocused();
+  for (const viewport of [{ width: 768, height: 1024 }, { width: 1023, height: 800 }]) {
+    await page.setViewportSize(viewport);
+    await kodyLauncher.click();
+    await expect(kodyDialog).toHaveAttribute("aria-modal", "true");
+    await expect(page.locator(".qf-mobile-header")).toHaveAttribute("inert", "");
+    await page.keyboard.press("Escape");
+    await expect(kodyLauncher).toBeFocused();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await mobileNav.getByRole("button", { name: "Quotes" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
-  await expect(kodyDialog).toBeVisible();
   await mobileNav.getByRole("button", { name: "Customers" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
+  await page.getByTestId("kody-launcher").click();
   await expect(kodyDialog).toBeVisible();
   await expect(kodyDialog.getByText("Workspace-only · You approve every change")).toBeVisible();
   await revealKodyQuickPrompts(kodyDialog);
@@ -647,6 +663,13 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   const customerKodyAction = customerDialog.getByRole("button", { name: "Ask Kody" });
   await expect(customerKodyAction).toBeVisible();
   await expect(customerKodyAction).toHaveClass(/bg-\[var\(--qf-kody-trigger\)\]/);
+  await customerKodyAction.click();
+  await expect(kodyDialog).toBeVisible();
+  await expect(customerDialog).toHaveAttribute("inert", "");
+  await page.keyboard.press("Escape");
+  await expect(kodyDialog).toBeHidden();
+  await expect(customerDialog).not.toHaveAttribute("inert", "");
+  await expect(customerKodyAction).toBeFocused();
   await customerDialog.getByRole("button", { name: "Close modal" }).click();
   await expect(kodyLauncher).toBeVisible();
   await expect(kodyLauncher).toHaveAttribute("aria-expanded", "false");

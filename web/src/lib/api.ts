@@ -1436,6 +1436,9 @@ export type WorkspaceFollowUpItem = {
   afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;
   createdAt: string;
+  /** Additive API fields; optional during a rolling API/web deployment. */
+  activityAtUtc?: string;
+  activityKind?: "ADDED" | "UPDATED";
 };
 
 export type WorkspaceFollowUpResponse = {

@@ -80,6 +80,45 @@ test("assistant composition payload excludes raw ids and redacts prompt PII", as
   assert.match(serialized, /quoteCount/);
 });
 
+test("assistant composition provider never receives credential-bearing service URIs", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  let capturedInput = "";
+  setAssistantCompositionProviderForTest(async (request) => {
+    capturedInput = request.inputJson;
+    return {
+      outputText: JSON.stringify({ answer: "I can help with the quote workflow.", sourceKeys: ["A1"], safetyNotes: [] }),
+      model: "test-uri-redaction",
+      telemetry: null,
+    };
+  });
+  try {
+    await composeAssistantAnswer({
+      userMessage: "Draft a quote and inspect mysql://root:s3cret@db.example.com:3306/app",
+      tool: "DRAFT_QUOTE",
+      deterministicAnswer: "I prepared a quote draft for review.",
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      results: [],
+      citations: [{ key: "A1", label: "Current request", sourceType: "UserRequest", classification: "C1_BUSINESS_INTERNAL" }],
+      actions: [],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "DRAFT_QUOTE",
+        resolvedTool: "DRAFT_QUOTE",
+        resultCount: 0,
+        citationCount: 1,
+        emptyReason: null,
+        archivePolicy: "No rows read.",
+        filters: {},
+      },
+    });
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+  }
+
+  assert.match(capturedInput, /REDACTED_URI/);
+  assert.doesNotMatch(capturedInput, /mysql|root|s3cret|example\.com|3306|\/app/i);
+});
+
 test("assistant composition payload trims oversized result context", async () => {
   const { buildAssistantCompositionPayload } = await loadComposer();
   const rows = Array.from({ length: 50 }, (_, index) => ({

@@ -5,6 +5,7 @@ import {
   formatLocalDateTime,
   formatShortLocalDate,
   isDateResultKey,
+  resolveActivityTiming,
   toUtcIsoString,
 } from "../src/lib/display-format";
 
@@ -31,4 +32,22 @@ test("date field detection covers Kody and future scheduling fields", () => {
   assert.equal(isDateResultKey("scheduledAtUtc"), true);
   assert.equal(isDateResultKey("appointmentDate"), true);
   assert.equal(isDateResultKey("quoteStatus"), false);
+});
+
+test("Activity timing remains readable during an API-first or web-first rolling deployment", () => {
+  assert.deepEqual(resolveActivityTiming({
+    createdAt: "2026-08-18T16:30:00.000Z",
+    quoteId: "quote-1",
+  }), {
+    atUtc: "2026-08-18T16:30:00.000Z",
+    kind: "UPDATED",
+  });
+  assert.deepEqual(resolveActivityTiming({
+    createdAt: "2026-08-18T16:30:00.000Z",
+    activityAtUtc: "2026-08-18T17:45:00.000Z",
+    activityKind: "ADDED",
+  }), {
+    atUtc: "2026-08-18T17:45:00.000Z",
+    kind: "ADDED",
+  });
 });

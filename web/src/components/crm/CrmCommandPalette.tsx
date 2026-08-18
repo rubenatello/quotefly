@@ -11,7 +11,7 @@ import {
   Settings,
   UserPlus2,
   UserRoundCog,
-  Clock3,
+  ListTodo,
   BadgeInfo,
   Palette,
 } from "lucide-react";
@@ -75,10 +75,10 @@ const COMMAND_ITEMS: CommandItem[] = [
     group: "Workflow",
   },
   {
-    label: "Follow-up",
+    label: "Activity",
     description: "Work leads, active jobs, and after-sale check-ins in priority order.",
     page: "follow-up",
-    icon: <Clock3 size={16} />,
+    icon: <ListTodo size={16} />,
     group: "Workflow",
   },
   {

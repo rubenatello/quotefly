@@ -191,9 +191,9 @@ test.describe("controlled beta core workflow", () => {
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
 
     await page.goto("/app/follow-up");
-    await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole("button", { name: "Follow-up", exact: true })).toHaveAttribute("aria-current", "page");
-    await expect(page).toHaveTitle("Follow-up | QuoteFly");
+    await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Activity", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page).toHaveTitle("Activity | QuoteFly");
 
     await page.goto("/app/setup");
     await expect(page).toHaveTitle("Setup | QuoteFly");

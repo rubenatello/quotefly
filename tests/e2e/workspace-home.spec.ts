@@ -93,6 +93,12 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect(page.getByText("Home Quoted Customer", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Home Roof Repair Quote", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Awaiting response", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Prioritize my day", exact: true })).toBeVisible();
+  await expect(page.getByTestId("kody-launcher")).toBeHidden();
+  await expect(page.getByRole("button", { name: "New quote", exact: true })).toHaveCount(1);
+  const metricCards = page.getByRole("region", { name: "Workspace summary" }).getByRole("button");
+  await expect(metricCards).toHaveCount(4);
+  expect((await metricCards.first().boundingBox())?.height ?? 0).toBeLessThanOrEqual(120);
 
   expect(workspaceRequests.filter((url) => url.includes("/v1/workspace/overview"))).toHaveLength(1);
   expect(workspaceRequests.filter((url) => /\/v1\/(customers|quotes)(\?|$)/.test(url))).toHaveLength(0);
@@ -101,6 +107,8 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);
+  await expect(page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Home", exact: true }))
+    .toHaveAttribute("aria-current", "page");
 
   await page.getByRole("button", { name: "My info", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/about$/);

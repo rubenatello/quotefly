@@ -1,11 +1,8 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode } from "react";
-import { Clock3, FilePlus2, FileText } from "lucide-react";
+import { FilePlus2, FileText, LayoutDashboard, ListTodo } from "lucide-react";
 import { cn } from "../../lib/utils";
-import {
-  AnalyticsIcon,
-  CustomerIcon,
-} from "../Icons";
+import { CustomerIcon } from "../Icons";
 import {
   WORKSPACE_PAGE_META,
   workspacePageFromPath,
@@ -20,13 +17,13 @@ interface TabItem {
 }
 
 const PRIMARY_TABS: TabItem[] = [
+  { id: "home", path: "/app", label: "Home", icon: <LayoutDashboard size={22} /> },
   { id: "customers", path: "/app/customers", label: "Customers", icon: <CustomerIcon size={22} /> },
-  { id: "quotes", path: "/app/quotes", label: "Quotes", icon: <FileText size={22} /> },
 ];
 
 const SECONDARY_TABS: TabItem[] = [
-  { id: "follow-up", path: "/app/follow-up", label: "Follow-up", icon: <Clock3 size={22} /> },
-  { id: "analytics", path: "/app/analytics", label: "Analytics", icon: <AnalyticsIcon size={22} /> },
+  { id: "quotes", path: "/app/quotes", label: "Quotes", icon: <FileText size={22} /> },
+  { id: "follow-up", path: "/app/follow-up", label: "Activity", icon: <ListTodo size={22} /> },
 ];
 
 function MobileTabButton({

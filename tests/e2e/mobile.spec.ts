@@ -141,7 +141,7 @@ test.describe("mobile launch smoke", () => {
     await expect(quickQuote).toBeVisible();
     await expect(quickQuote).toHaveAttribute("aria-label", "New quote");
     await expectScreenReaderOnlyText(quickQuote.getByText("New quote", { exact: true }));
-    for (const label of ["Customers", "Quotes", "Follow-up", "Analytics"]) {
+    for (const label of ["Home", "Customers", "Quotes", "Activity"]) {
       const tab = mobileWorkspace.getByRole("button", { name: label, exact: true });
       await expect(tab).toHaveAttribute("title", label);
       await expectScreenReaderOnlyText(tab.getByText(label, { exact: true }));
@@ -217,8 +217,8 @@ test.describe("mobile launch smoke", () => {
     await expect(sendDialog).toBeHidden();
     await expect.poll(async () => (await getQuoteViaApi(request, account, quote.id)).status).toBe("SENT_TO_CUSTOMER");
 
-    await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Follow-up", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Follow-up", exact: true })).toBeVisible();
+    await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Activity", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible();
     await expect(page.locator("main").getByRole("button", { name: "New quote", exact: true, includeHidden: true })).toBeHidden();
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
@@ -230,6 +230,7 @@ test.describe("mobile launch smoke", () => {
       .toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: /Quoted/ }).click();
     const quotedLeadRow = page.getByTestId("follow-up-queue-row").filter({ hasText: "Mobile Beta Customer" });
+    await quotedLeadRow.getByText("Details and status", { exact: true }).click();
     const followUpSelect = quotedLeadRow.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true });
     const openFollowUpQuote = quotedLeadRow.getByRole("button", { name: "Open quote", exact: true }).filter({ visible: true });
     await expect(openFollowUpQuote).toBeVisible();
@@ -238,6 +239,7 @@ test.describe("mobile launch smoke", () => {
     await expect(page.getByText("Follow-up status updated to Followed Up.", { exact: true })).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: /Quoted/ }).click();
+    await quotedLeadRow.getByText("Details and status", { exact: true }).click();
     await expect(page.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true })).toHaveValue("FOLLOWED_UP");
 
     await page.goto("/app/settings");

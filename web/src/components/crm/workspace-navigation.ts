@@ -50,7 +50,7 @@ export const WORKSPACE_OPERATIONS_LINKS: readonly WorkspaceNavigationItem[] = [
   { id: "customers", label: "Customers", path: "/app/customers", icon: "customers" },
   { id: "quotes", label: "Quotes", path: "/app/quotes", icon: "quotes" },
   { id: "products", label: "Products", path: "/app/products", icon: "products" },
-  { id: "follow-up", label: "Follow-up", path: "/app/follow-up", icon: "follow-up" },
+  { id: "follow-up", label: "Activity", path: "/app/follow-up", icon: "follow-up" },
   { id: "analytics", label: "Analytics", path: "/app/analytics", icon: "analytics" },
 ] as const;
 
@@ -107,8 +107,8 @@ export const WORKSPACE_PAGE_META: Record<
     headingPlacement: "content",
   },
   "follow-up": {
-    label: "Follow-up",
-    hint: "Work leads, active jobs, and after-sale check-ins in priority order.",
+    label: "Activity",
+    hint: "Work assigned leads, active jobs, and customer check-ins in priority order.",
     activeNavigation: "follow-up",
     headingPlacement: "shell",
   },

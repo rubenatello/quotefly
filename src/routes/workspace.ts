@@ -262,6 +262,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         afterSaleFollowUpDueAtUtc: row.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
         followUpStatus: row.followUpStatus,
         createdAt: row.createdAt.toISOString(),
+        activityAtUtc: row.createdAt.toISOString(),
+        activityKind: query.queue === "recent" || !row.quoteId ? "ADDED" : "UPDATED",
       })),
       pagination: {
         limit: query.limit,

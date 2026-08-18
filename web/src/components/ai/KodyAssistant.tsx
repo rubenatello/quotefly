@@ -709,7 +709,11 @@ export function KodyAssistant({
   const [loadingTool, setLoadingTool] = useState<AiAssistantTool | "AUTO">("AUTO");
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<AiAssistantAction | null>(null);
+  const [isModalViewport, setIsModalViewport] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches,
+  );
   const launcherRef = useRef<HTMLButtonElement>(null);
+  const originFocusRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -736,13 +740,27 @@ export function KodyAssistant({
   const closeKody = useCallback((source: "button" | "keyboard") => {
     setOpen(false);
     track("kody_close", { source, page: currentContextPage });
-    window.setTimeout(() => launcherRef.current?.focus(), 0);
+    window.setTimeout(() => {
+      const origin = originFocusRef.current;
+      if (origin?.isConnected) origin.focus();
+      else launcherRef.current?.focus();
+      originFocusRef.current = null;
+    }, 0);
   }, [currentContextPage, track]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 1023px)");
+    const updateViewportMode = () => setIsModalViewport(mediaQuery.matches);
+    updateViewportMode();
+    mediaQuery.addEventListener("change", updateViewportMode);
+    return () => mediaQuery.removeEventListener("change", updateViewportMode);
+  }, []);
 
   useEffect(() => {
     const handleOpenKody = (event: Event) => {
       const detail = (event as CustomEvent<KodyOpenDetail>).detail;
       if (!detail || typeof detail.prompt !== "string") return;
+      originFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setOpen(true);
       setError(null);
       setPrompt(detail.prompt);
@@ -783,22 +801,56 @@ export function KodyAssistant({
   useEffect(() => {
     if (!open) return undefined;
 
+    const backgroundTargets = isModalViewport
+      ? Array.from(new Set(document.querySelectorAll<HTMLElement>(
+          ".qf-mobile-header, #main-content, .qf-mobile-bottom-nav, .qf-kody-underlay",
+        )))
+      : [];
+    const backgroundStates = backgroundTargets.map((target) => ({ target, inert: target.inert }));
+    const previousBodyOverflow = document.body.style.overflow;
+    for (const target of backgroundTargets) target.inert = true;
+    if (isModalViewport) document.body.style.overflow = "hidden";
+
     const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 0);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const activeElement = document.activeElement;
-      if (activeElement && panelRef.current && !panelRef.current.contains(activeElement)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      closeKody("keyboard");
+      if (event.key === "Tab" && isModalViewport && panelRef.current) {
+        const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), summary, textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )).filter((element) => !element.hasAttribute("hidden") && element.getClientRects().length > 0);
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (first && last) {
+          if (!panelRef.current.contains(document.activeElement)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first).focus();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+
+      if (event.key === "Escape") {
+        const activeElement = document.activeElement;
+        if (!isModalViewport && activeElement && panelRef.current && !panelRef.current.contains(activeElement)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeKody("keyboard");
+      }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
       window.clearTimeout(focusTimer);
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      for (const { target, inert } of backgroundStates) target.inert = inert;
+      if (isModalViewport) document.body.style.overflow = previousBodyOverflow;
     };
-  }, [closeKody, open]);
+  }, [closeKody, isModalViewport, open]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1094,6 +1146,7 @@ export function KodyAssistant({
           ref={launcherRef}
           type="button"
           onClick={() => {
+            originFocusRef.current = launcherRef.current;
             setOpen(true);
             track("kody_open", { page: currentContextPage });
           }}
@@ -1112,17 +1165,28 @@ export function KodyAssistant({
       ) : null}
 
       {open ? (
-        <section
-          ref={panelRef}
-          aria-label="Kody assistant"
-          aria-modal="false"
-          role="dialog"
-          data-testid="kody-chat-panel"
-          className={cn(
-            "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[22px] border border-[var(--qf-kody-header-border)] bg-[var(--qf-kody-shell)] shadow-[var(--qf-shell-shadow)]",
-            hasMobileActionDock && "qf-kody-chat-panel--with-dock",
-          )}
-        >
+        <>
+          {isModalViewport ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-hidden="true"
+              onClick={() => closeKody("button")}
+              className="fixed inset-0 z-[65] cursor-default bg-[var(--qf-overlay)]"
+              data-testid="kody-modal-backdrop"
+            />
+          ) : null}
+          <section
+            ref={panelRef}
+            aria-label="Kody assistant"
+            aria-modal={isModalViewport ? "true" : "false"}
+            role="dialog"
+            data-testid="kody-chat-panel"
+            className={cn(
+              "qf-kody-chat-panel fixed z-[70] flex flex-col overflow-hidden rounded-[22px] border border-[var(--qf-kody-header-border)] bg-[var(--qf-kody-shell)] shadow-[var(--qf-shell-shadow)]",
+              hasMobileActionDock && "qf-kody-chat-panel--with-dock",
+            )}
+          >
           <header
             className="qf-kody-header flex min-h-[72px] items-center justify-between gap-4 px-4 py-3 sm:px-5"
             data-testid="kody-header"
@@ -1324,7 +1388,8 @@ export function KodyAssistant({
             </span>
           </div>
           </div>
-        </section>
+          </section>
+        </>
       ) : null}
 
       <ConfirmModal
