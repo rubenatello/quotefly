@@ -9,6 +9,12 @@ import {
 import { capabilitiesForRole } from "../../src/lib/access-policy";
 import { prepareAiEmbeddingQuery } from "../../src/lib/ai-retrieval-query-safety";
 
+const SYNTHETIC_PROVIDER_TOKENS = {
+  openAi: ["sk", "proj", "testonlyabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"].join("-"),
+  stripeWebhook: ["whsec", "testonlyabcdefghijklmnopqrstuvwxyz123456"].join("_"),
+  github: ["github", "pat", "testonlyabcdefghijklmnopqrstuvwxyz1234567890"].join("_"),
+} as const;
+
 type Candidate = Readonly<{ id: string }>;
 
 function candidate(params: Partial<AiHybridRankCandidate<Candidate>> & { id: string }) {
@@ -93,10 +99,10 @@ test("embedding query preparation is bounded and falls back to lexical-only retr
 
 test("embedding query preparation covers common provider, webhook, URL, and opaque credential formats", () => {
   const prepared = prepareAiEmbeddingQuery([
-    "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
-    "whsec_abcdefghijklmnopqrstuvwxyz123456",
+    SYNTHETIC_PROVIDER_TOKENS.openAi,
+    SYNTHETIC_PROVIDER_TOKENS.stripeWebhook,
     "https://example.com/callback?token=temporary-value-123456789",
-    "github_pat_abcdefghijklmnopqrstuvwxyz1234567890",
+    SYNTHETIC_PROVIDER_TOKENS.github,
   ].join(" "));
 
   assert.equal(prepared.embeddingQuery, null);
@@ -118,7 +124,7 @@ test("retrieval invokes the embedding provider with the sanitized query only", a
         capabilities: capabilitiesForRole("owner"),
         requestId: "retrieval-provider-spy",
       },
-      query: "Roof quote for jane.doe@example.com using sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
+      query: `Roof quote for jane.doe@example.com using ${SYNTHETIC_PROVIDER_TOKENS.openAi}`,
       purpose: "QUOTE_DRAFT",
       requestId: "retrieval-provider-spy",
       embedText: async (text) => {

@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { ArrowRight, Check, FileCheck2, ShieldCheck, Smartphone, UsersRound } from "lucide-react";
 import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
-import { LandingPitchDeck } from "../components/marketing/LandingPitchDeck";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { LandingProductShowcase } from "../components/marketing/LandingProductShowcase";
 import { LandingTradeRail } from "../components/marketing/LandingTradeRail";
 import { MarketingAction, MarketingCta, MarketingMomentumStrip } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
@@ -118,8 +118,8 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         </div>
       </section>
 
+      <LandingProductShowcase onOpenAuth={onOpenAuth} />
       <LandingKodyShowcase onOpenAuth={onOpenAuth} />
-      <LandingPitchDeck onOpenAuth={onOpenAuth} />
       <LandingTradeRail />
 
       <section className="border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="basic-plan-heading">

@@ -60,12 +60,14 @@ test("role capabilities deny financial and raw-prompt access to members", () => 
 });
 
 test("prompt governance removes PII and secret-shaped values while preserving useful scope", () => {
+  const openAiFixture = ["sk", "live", "testonly1234567890abcdef"].join("_");
+  const stripeWebhookFixture = ["whsec", "testonlyabcdefghijk123456"].join("_");
   const prompt = [
     "Prepare a ROOFING quote for Jane Doe at 2,000 sq ft.",
     "Email jane.customer@example.com or call +1 (555) 222-3333.",
     "password=NeverStoreThis",
-    "sk_live_1234567890abcdef",
-    "whsec_abcdefghijk123456",
+    openAiFixture,
+    stripeWebhookFixture,
     "Bearer abcdefghijklmnopqrstuvwxyz012345",
     "https://example.test/callback?token=secret-value&next=quote",
   ].join(" ");

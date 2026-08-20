@@ -57,6 +57,30 @@ function parseJpegDimensions(buffer: Buffer): { width: number; height: number } 
   throw new Error("JPEG dimensions were not found.");
 }
 
+function parseWebpDimensions(buffer: Buffer): { width: number; height: number } {
+  assert.equal(buffer.toString("ascii", 0, 4), "RIFF", "WebP must use a RIFF container");
+  assert.equal(buffer.toString("ascii", 8, 12), "WEBP", "WebP container signature is required");
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkLength = buffer.readUInt32LE(offset + 4);
+    const payload = offset + 8;
+    if (chunkType === "VP8L") {
+      assert.equal(buffer[payload], 0x2f, "VP8L signature is required");
+      const b1 = buffer[payload + 1];
+      const b2 = buffer[payload + 2];
+      const b3 = buffer[payload + 3];
+      const b4 = buffer[payload + 4];
+      return {
+        width: 1 + b1 + ((b2 & 0x3f) << 8),
+        height: 1 + ((b2 & 0xc0) >> 6) + (b3 << 2) + ((b4 & 0x0f) << 10),
+      };
+    }
+    offset = payload + chunkLength + (chunkLength % 2);
+  }
+  throw new Error("Supported WebP dimensions were not found.");
+}
+
 function decodeHtmlText(value: string): string {
   return decodeHtmlAttribute(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 }
@@ -253,6 +277,8 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
   for (const expected of [
     "Build the quote while the job is still fresh.",
     "Tell Kody what you are trying to get done.",
+    "See what needs attention. Move the next job.",
+    "Actual QuoteFly interface · Sanitized demo data",
     "Find Michael Scott.",
     "HVAC quoting software",
     "Start your 20-day free trial",
@@ -267,4 +293,28 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
 
   const kodyThumbnail = join(distDir, "images", "kody", "kody-ai-thumbnail.webp");
   assert.ok((await stat(kodyThumbnail)).size < 25_000, "the below-fold Kody thumbnail must stay below 25 KB");
+
+  const productScreens = [
+    ["quotefly-mobile-dashboard-v1.webp", 373, 817, 70_000],
+    ["kody-follow-up-mobile-v1.webp", 374, 809, 70_000],
+    ["quotefly-activity-center-desktop-v1-960.webp", 960, 461, 180_000],
+    ["quotefly-activity-center-desktop-v1-1440.webp", 1440, 692, 180_000],
+    ["quotefly-activity-center-desktop-v1-1890.webp", 1890, 908, 180_000],
+  ] as const;
+  for (const [filename, width, height, maxBytes] of productScreens) {
+    const assetPath = join(distDir, "images", "product", filename);
+    const buffer = await readFile(assetPath);
+    assert.deepEqual(parseWebpDimensions(buffer), { width, height }, `${filename} dimensions must remain stable`);
+    assert.ok(buffer.length < maxBytes, `${filename} must remain below ${maxBytes} bytes`);
+    assert.ok(html.includes(`/images/product/${filename}`), `${filename} must be present in raw homepage HTML`);
+  }
+  for (const altText of [
+    "QuoteFly desktop activity center showing prioritized leads, quote status, and follow-up actions.",
+    "QuoteFly mobile dashboard showing lead, follow-up, pipeline, and activity summaries.",
+    "Kody assistant showing a workspace-scoped customer follow-up queue on mobile.",
+  ]) {
+    assert.ok(html.includes(altText), `homepage raw HTML must contain screenshot alt text: ${altText}`);
+  }
+  assert.doesNotMatch(html, /<link[^>]+rel="preload"[^>]+images\/product/i);
+  assert.equal((html.match(/loading="lazy"/g) ?? []).length >= 3, true, "all below-fold product images must be lazy");
 });

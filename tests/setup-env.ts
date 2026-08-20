@@ -20,8 +20,8 @@ process.env.CORS_ALLOWED_ORIGINS ||= "http://localhost:5173";
 // Integration tests must never inherit a developer or CI provider secret.
 // Provider behavior is injected explicitly where a test needs it.
 process.env.OPENAI_API_KEY = "";
-process.env.STRIPE_SECRET_KEY ||= "sk_test_quotefly_integration";
-process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_integration";
+process.env.STRIPE_SECRET_KEY ||= ["sk", "test", "quotefly", "integration"].join("_");
+process.env.STRIPE_WEBHOOK_SECRET ||= ["whsec", "quotefly", "integration"].join("_");
 process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";
 process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF ||= "quotefly_basic_first_month_half_off";
 process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";

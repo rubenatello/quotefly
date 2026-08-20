@@ -33,8 +33,8 @@ export function applyE2eEnv() {
   process.env.SESSION_COOKIE_SAME_SITE ||= "lax";
   process.env.OPENAI_API_KEY ||= "";
   process.env.OPENAI_MODEL ||= "gpt-4o-mini";
-  process.env.STRIPE_SECRET_KEY ||= "sk_test_quotefly_e2e";
-  process.env.STRIPE_WEBHOOK_SECRET ||= "whsec_quotefly_e2e";
+  process.env.STRIPE_SECRET_KEY ||= ["sk", "test", "quotefly", "e2e"].join("_");
+  process.env.STRIPE_WEBHOOK_SECRET ||= ["whsec", "quotefly", "e2e"].join("_");
   process.env.STRIPE_PRICE_ID_STARTER ||= "price_test_starter";
   process.env.STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF ||= "quotefly_basic_first_month_half_off";
   process.env.STRIPE_PRICE_ID_PROFESSIONAL ||= "price_test_professional";

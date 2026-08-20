@@ -30,17 +30,21 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await expect(page.getByRole("button", { name: "Pause workflow highlights" })).toHaveAttribute("aria-pressed", "false");
   await expect.poll(() => momentumTrack.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe("running");
 
-  const productStory = page.getByRole("region", { name: "QuoteFly product story" });
+  const productStory = page.getByRole("region", { name: "See what needs attention. Move the next job." });
   await productStory.scrollIntoViewIfNeeded();
-  await expect(productStory.getByRole("group", { name: /1 of 4: Capture/i })).toBeVisible();
-  const nextStorySlide = productStory.getByRole("button", { name: "Next story slide" });
-  expect((await nextStorySlide.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  await nextStorySlide.click();
-  await expect(productStory.getByRole("group", { name: /2 of 4: Draft with Kody/i })).toBeVisible();
-  await productStory.focus();
-  await page.keyboard.press("End");
-  await expect(productStory.getByRole("group", { name: /4 of 4: Follow through/i })).toBeVisible();
-  await expect(page.getByText(/slides do not auto-advance/i)).toBeVisible();
+  const desktopProduct = productStory.getByRole("img", { name: /desktop activity center showing prioritized leads/i });
+  const mobileDashboard = productStory.getByRole("img", { name: /mobile dashboard showing lead, follow-up/i });
+  const mobileKody = productStory.getByRole("img", { name: /Kody assistant showing a workspace-scoped/i });
+  for (const image of [desktopProduct, mobileDashboard, mobileKody]) {
+    await image.scrollIntoViewIfNeeded();
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute("loading", "lazy");
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
+  }
+  expect((await mobileDashboard.boundingBox())?.width).toBeGreaterThanOrEqual(300);
+  expect((await mobileKody.boundingBox())?.width).toBeGreaterThanOrEqual(300);
+  const productCta = productStory.getByRole("button", { name: "Try the real workflow free" });
+  expect((await productCta.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
   const landingOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(landingOverflow).toBeLessThanOrEqual(1);

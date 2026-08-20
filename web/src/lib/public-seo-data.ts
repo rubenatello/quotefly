@@ -40,7 +40,7 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-17",
+    lastModified: "2026-08-18",
     title: "Contractor Quoting Software & Estimate App | QuoteFly",
     description:
       "Build contractor quotes from the field with customer tracking, reusable pricing, Kody AI assistance, branded PDFs, and practical follow-up in QuoteFly.",

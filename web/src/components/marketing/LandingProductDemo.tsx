@@ -1,14 +1,14 @@
 import { useState, type ReactNode } from "react";
 import {
-  BarChart3,
   Check,
   ChevronDown,
   Eye,
   FilePlus2,
+  House,
+  ListChecks,
   MoreHorizontal,
   Phone,
   Search,
-  Settings2,
   UsersRound,
 } from "lucide-react";
 import { QuoteIcon } from "../Icons";
@@ -254,11 +254,11 @@ export function LandingProductDemo({ priority = true }: { priority?: boolean }) 
             </div>
 
             <div aria-label="Mobile workspace preview" className="absolute inset-x-2 bottom-1.5 z-10 grid h-[47px] grid-cols-5 items-center rounded-2xl border border-slate-200 bg-white/97 px-1 shadow-[0_10px_26px_rgba(15,23,42,0.12)]">
+              <DemoNavItem icon={<House size={12} />} label="Home" />
               <DemoNavItem icon={<UsersRound size={12} />} label="Customers" />
-              <DemoNavItem icon={<QuoteIcon size={12} />} label="Quotes" active />
               <DemoNavItem icon={<FilePlus2 size={13} />} label="New quote" active />
-              <DemoNavItem icon={<BarChart3 size={12} />} label="Analytics" />
-              <DemoNavItem icon={<Settings2 size={12} />} label="Settings" />
+              <DemoNavItem icon={<QuoteIcon size={12} />} label="Quotes" />
+              <DemoNavItem icon={<ListChecks size={12} />} label="Activity" />
             </div>
           </div>
         </div>
