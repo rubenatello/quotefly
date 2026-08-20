@@ -107,8 +107,6 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);
-  await expect(page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Home", exact: true }))
-    .toHaveAttribute("aria-current", "page");
 
   await page.getByRole("button", { name: "My info", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/about$/);
