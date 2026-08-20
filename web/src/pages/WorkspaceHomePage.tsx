@@ -111,15 +111,15 @@ function OverviewMetric({
     <button
       type="button"
       onClick={onClick}
-      className="group min-h-[96px] rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3.5 text-left shadow-[var(--qf-shadow-sm)] transition hover:-translate-y-0.5 hover:border-[var(--qf-border-strong)] hover:shadow-[var(--qf-shadow-md)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[104px]"
+      className="group min-h-[96px] rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 text-left shadow-[var(--qf-shadow-sm)] transition hover:-translate-y-0.5 hover:border-[var(--qf-border-strong)] hover:shadow-[var(--qf-shadow-md)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[104px]"
     >
       <div className="flex items-start justify-between gap-3">
-        <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-xl", toneClass)}>{icon}</span>
+        <span className={cn("inline-flex h-8 w-8 items-center justify-center rounded-lg", toneClass)}>{icon}</span>
         <ArrowRight size={16} className="text-[var(--qf-text-muted)] transition group-hover:translate-x-0.5 group-hover:text-[var(--qf-link)]" />
       </div>
-      <p className="mt-2.5 text-xl font-semibold tracking-tight text-[var(--qf-text)] sm:text-2xl">{value}</p>
-      <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--qf-text-soft)]">{label}</p>
-      <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{hint}</p>
+      <p className="mt-1 text-lg font-semibold leading-6 tracking-tight text-[var(--qf-text)] sm:text-xl">{value}</p>
+      <p className="text-[11px] font-semibold leading-4 uppercase tracking-[0.14em] text-[var(--qf-text-soft)]">{label}</p>
+      <p className="text-[11px] leading-4 text-[var(--qf-text-muted)]">{hint}</p>
     </button>
   );
 }

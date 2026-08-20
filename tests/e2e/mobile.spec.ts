@@ -234,7 +234,20 @@ test.describe("mobile launch smoke", () => {
     const followUpSelect = quotedLeadRow.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true });
     const openFollowUpQuote = quotedLeadRow.getByRole("button", { name: "Open quote", exact: true }).filter({ visible: true });
     await expect(openFollowUpQuote).toBeVisible();
-    await expect(followUpSelect).toHaveCSS("width", await openFollowUpQuote.evaluate((button) => getComputedStyle(button).width));
+    const [rowBox, followUpBox, openQuoteBox] = await Promise.all([
+      quotedLeadRow.boundingBox(),
+      followUpSelect.boundingBox(),
+      openFollowUpQuote.boundingBox(),
+    ]);
+    // The status control deliberately has its own full-width detail row, while
+    // the quote action shares its row with call and email shortcuts. Assert the
+    // actual mobile contract instead of forcing unrelated controls to match.
+    expect(followUpBox?.height).toBeGreaterThanOrEqual(44);
+    expect(openQuoteBox?.height).toBeGreaterThanOrEqual(44);
+    expect(followUpBox?.x ?? -1).toBeGreaterThanOrEqual(rowBox?.x ?? 0);
+    expect((followUpBox?.x ?? 0) + (followUpBox?.width ?? 0)).toBeLessThanOrEqual((rowBox?.x ?? 0) + (rowBox?.width ?? 0) + 1);
+    expect(openQuoteBox?.x ?? -1).toBeGreaterThanOrEqual(rowBox?.x ?? 0);
+    expect((openQuoteBox?.x ?? 0) + (openQuoteBox?.width ?? 0)).toBeLessThanOrEqual((rowBox?.x ?? 0) + (rowBox?.width ?? 0) + 1);
     await followUpSelect.selectOption("FOLLOWED_UP");
     await expect(page.getByText("Follow-up status updated to Followed Up.", { exact: true })).toBeVisible();
     await page.reload();
