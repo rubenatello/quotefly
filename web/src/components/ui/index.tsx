@@ -42,24 +42,31 @@ const BUTTON_SIZES: Record<ButtonSize, string> = {
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = "primary", size = "md", icon, loading, fullWidth, className = "", children, disabled, ...rest }, ref) => (
-    <button
-      ref={ref}
-      disabled={disabled || loading}
-      aria-busy={loading || undefined}
-      className={cn(
-        "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] motion-safe:active:translate-y-px disabled:cursor-not-allowed disabled:!border-[var(--qf-border)] disabled:!bg-[var(--qf-panel-muted)] disabled:!text-[var(--qf-text-muted)] disabled:!shadow-none disabled:!opacity-100 disabled:transition-none motion-safe:disabled:active:translate-y-0",
-        BUTTON_VARIANTS[variant],
-        BUTTON_SIZES[size],
-        fullWidth && "w-full",
-        className,
-      )}
-      {...rest}
-    >
-      {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon ? <span className="inline-flex shrink-0" aria-hidden="true">{icon}</span> : null}
-      {children}
-    </button>
-  ),
+  ({ variant = "primary", size = "md", icon, loading, fullWidth, className = "", children, disabled, ...rest }, ref) => {
+    const isDisabled = Boolean(disabled || loading);
+
+    return (
+      <button
+        ref={ref}
+        disabled={isDisabled}
+        aria-busy={loading || undefined}
+        className={cn(
+          "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]",
+          !isDisabled && "transition-all duration-150 motion-safe:active:translate-y-px",
+          !isDisabled && BUTTON_VARIANTS[variant],
+          BUTTON_SIZES[size],
+          fullWidth && "w-full",
+          className,
+          isDisabled &&
+            "cursor-not-allowed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-muted)] shadow-none opacity-100 transition-none",
+        )}
+        {...rest}
+      >
+        {loading ? <Spinner size={size === "sm" ? 14 : 16} /> : icon ? <span className="inline-flex shrink-0" aria-hidden="true">{icon}</span> : null}
+        {children}
+      </button>
+    );
+  },
 );
 Button.displayName = "Button";
 
