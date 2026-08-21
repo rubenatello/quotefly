@@ -1,9 +1,10 @@
-import type { PlanCode, ServiceType, TenantEntitlements, TenantUsageSnapshot } from "./api";
+import type { PlanCode, ServiceType, SupportedLocale, TenantEntitlements, TenantUsageSnapshot } from "./api";
 
 export type AppSession = {
   userId: string;
   email: string;
   fullName: string;
+  preferredLocale: SupportedLocale;
   tenantId: string;
   tenantName: string;
   timezone: string;

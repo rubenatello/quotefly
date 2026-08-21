@@ -136,6 +136,13 @@ describe("workspace team permissions", () => {
       headers: { cookie: member.cookie },
     });
     expect(recommendedPricing.statusCode).toBe(403);
+    const forbiddenStarterImport = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: { cookie: member.cookie },
+      payload: { serviceType: "CONSTRUCTION", catalogKeys: ["general_labor"] },
+    });
+    expect(forbiddenStarterImport.statusCode).toBe(403);
 
     const forbiddenProduct = await app.inject({
       method: "POST",

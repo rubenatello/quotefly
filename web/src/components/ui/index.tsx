@@ -2,6 +2,7 @@ import { forwardRef, useId } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes, ReactNode, HTMLAttributes } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { AlertTriangle, CheckCircle2, HelpCircle, Info, ShieldAlert, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
 /* ─────────────────────────── BUTTON ─────────────────────────── */
@@ -327,7 +328,7 @@ export function SkeletonCard() {
 /* ─────────────────────────── ALERT ─────────────────────────── */
 
 export function LoadingState({
-  title = "Loading",
+  title,
   description,
   rows = 4,
   variant = "list",
@@ -339,6 +340,8 @@ export function LoadingState({
   variant?: "list" | "cards" | "table" | "compact";
   className?: string;
 }) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t("common.loading");
   const safeRows = Math.max(1, Math.min(rows, 8));
   const rowItems = Array.from({ length: safeRows }, (_, index) => index);
 
@@ -350,7 +353,7 @@ export function LoadingState({
             <Spinner size={15} />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-[var(--qf-text)]">{title}</p>
+            <p className="text-sm font-semibold text-[var(--qf-text)]">{resolvedTitle}</p>
             {description ? <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{description}</p> : null}
           </div>
         </div>
@@ -362,7 +365,7 @@ export function LoadingState({
     <div role="status" aria-live="polite" className={cn("rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4", className)}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-[var(--qf-text)]">{title}</p>
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{resolvedTitle}</p>
           {description ? <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{description}</p> : null}
         </div>
         <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel)] text-[var(--qf-link)] shadow-[var(--qf-shadow-sm)]">
@@ -410,7 +413,7 @@ export function LoadingState({
           ))}
         </div>
       )}
-      <span className="sr-only">{title}</span>
+      <span className="sr-only">{resolvedTitle}</span>
     </div>
   );
 }
@@ -431,6 +434,8 @@ const ALERT_TONES: Record<AlertTone, string> = {
 };
 
 export function Alert({ tone, children, onDismiss }: AlertProps) {
+  const { t } = useTranslation();
+
   return (
     <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
       <span>{children}</span>
@@ -439,7 +444,7 @@ export function Alert({ tone, children, onDismiss }: AlertProps) {
           type="button"
           onClick={onDismiss}
           className="inline-flex h-11 w-11 items-center justify-center text-current text-lg leading-none opacity-60 hover:opacity-100 sm:h-9 sm:w-9"
-          aria-label="Dismiss alert"
+          aria-label={t("common.dismissAlert")}
         >
           &times;
         </button>
@@ -478,6 +483,8 @@ export function Modal({
   panelClassName = "",
   ariaLabel,
 }: ModalProps) {
+  const { t } = useTranslation();
+
   return (
     <DialogPrimitive.Root
       open={open}
@@ -501,7 +508,7 @@ export function Modal({
             panelClassName,
           )}
         >
-          <DialogPrimitive.Title className="sr-only">{ariaLabel ?? "QuoteFly dialog"}</DialogPrimitive.Title>
+          <DialogPrimitive.Title className="sr-only">{ariaLabel ?? t("common.dialog")}</DialogPrimitive.Title>
           <span aria-hidden="true" className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--qf-border-strong)] sm:hidden" />
           {children}
         </DialogPrimitive.Content>
@@ -521,6 +528,8 @@ export function ModalHeader({
   onClose?: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className={`flex items-start justify-between gap-4 border-b border-[var(--qf-border)] px-5 py-4 sm:px-6 ${className}`}>
       <div className="min-w-0">
@@ -538,7 +547,7 @@ export function ModalHeader({
           variant="outline"
           size="sm"
           icon={<X size={18} />}
-          label="Close modal"
+          label={t("common.closeModal")}
           className="rounded-full"
         />
       ) : null}
@@ -597,13 +606,16 @@ export function ConfirmModal({
   onConfirm,
   title,
   description,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmLabel,
+  cancelLabel,
   loading = false,
   confirmVariant = "danger",
   children,
   size = "sm",
 }: ConfirmModalProps) {
+  const { t } = useTranslation();
+  const resolvedConfirmLabel = confirmLabel ?? t("common.confirm");
+  const resolvedCancelLabel = cancelLabel ?? t("common.cancel");
   const closeIfIdle = () => {
     if (!loading) onClose();
   };
@@ -653,10 +665,10 @@ export function ConfirmModal({
       </ModalBody>
       <ModalFooter className="grid grid-cols-1 gap-3 sm:flex sm:flex-row sm:gap-2">
         <Button type="button" variant="outline" onClick={onClose} disabled={loading} fullWidth className="order-2 sm:order-1 sm:w-auto">
-          {cancelLabel}
+          {resolvedCancelLabel}
         </Button>
         <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading} fullWidth className="order-1 sm:order-2 sm:w-auto">
-          {confirmLabel}
+          {resolvedConfirmLabel}
         </Button>
       </ModalFooter>
     </Modal>
@@ -697,6 +709,7 @@ export function ProgressBar({
   tone?: "default" | "warning" | "danger";
   className?: string;
 }) {
+  const { t } = useTranslation();
   const clampedValue = Math.max(0, Math.min(100, value));
   const barTone =
     tone === "danger"
@@ -715,7 +728,7 @@ export function ProgressBar({
       )}
       <div
         role="progressbar"
-        aria-label={label ?? "Progress"}
+        aria-label={label ?? t("common.progress")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Number(clampedValue.toFixed(2))}
@@ -741,12 +754,14 @@ export function PageHeader({
   actions?: ReactNode;
   mode?: "full" | "actions-only";
 }) {
+  const { t } = useTranslation();
+
   if (mode === "actions-only") {
     if (!actions) return null;
 
     return (
       <div
-        aria-label={`${title} actions`}
+        aria-label={t("common.actionsLabel", { title })}
         className="flex w-full flex-wrap items-center justify-end gap-2 [&>*]:w-full sm:[&>*]:w-auto"
       >
         {actions}
@@ -776,7 +791,7 @@ export function PaginationControls({
   offset,
   total,
   loading = false,
-  itemLabel = "records",
+  itemLabel,
   onLimitChange,
   onOffsetChange,
 }: {
@@ -788,6 +803,8 @@ export function PaginationControls({
   onLimitChange: (limit: PageSize) => void;
   onOffsetChange: (offset: number) => void;
 }) {
+  const { t } = useTranslation();
+  const resolvedItemLabel = itemLabel ?? t("common.records");
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.min(totalPages, Math.floor(offset / limit) + 1);
   const rangeStart = total === 0 ? 0 : offset + 1;
@@ -795,13 +812,13 @@ export function PaginationControls({
 
   return (
     <nav
-      aria-label={`${itemLabel} pagination`}
+      aria-label={t("common.pagination.label", { item: resolvedItemLabel })}
       className="flex flex-col gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 shadow-[var(--qf-shadow-sm)] sm:flex-row sm:items-end sm:justify-between sm:px-4"
     >
       <div className="flex items-end justify-between gap-3 sm:justify-start">
         <Select
-          label="Rows per page"
-          aria-label={`Rows per page for ${itemLabel}`}
+          label={t("common.pagination.rowsPerPage")}
+          aria-label={t("common.pagination.rowsPerPageFor", { item: resolvedItemLabel })}
           className="min-w-[92px]"
           value={String(limit)}
           disabled={loading}
@@ -813,7 +830,7 @@ export function PaginationControls({
           onChange={(event) => onLimitChange(Number(event.target.value) as PageSize)}
         />
         <p className="pb-2 text-sm text-[var(--qf-text-soft)]" aria-live="polite">
-          {rangeStart}-{rangeEnd} of {total}
+          {t("common.pagination.rangeOf", { start: rangeStart, end: rangeEnd, total })}
         </p>
       </div>
 
@@ -823,21 +840,21 @@ export function PaginationControls({
           variant="outline"
           disabled={loading || currentPage <= 1}
           onClick={() => onOffsetChange(Math.max(0, offset - limit))}
-          aria-label={`Previous page of ${itemLabel}`}
+          aria-label={t("common.pagination.previousPageOf", { item: resolvedItemLabel })}
         >
-          Previous
+          {t("common.previous")}
         </Button>
         <span className="min-w-[92px] text-center text-xs font-semibold text-[var(--qf-text-soft)]">
-          Page {currentPage} of {totalPages}
+          {t("common.pageOf", { page: currentPage, total: totalPages })}
         </span>
         <Button
           size="sm"
           variant="outline"
           disabled={loading || currentPage >= totalPages}
           onClick={() => onOffsetChange(offset + limit)}
-          aria-label={`Next page of ${itemLabel}`}
+          aria-label={t("common.pagination.nextPageOf", { item: resolvedItemLabel })}
         >
-          Next
+          {t("common.next")}
         </Button>
       </div>
     </nav>

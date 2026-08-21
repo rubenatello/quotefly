@@ -80,3 +80,36 @@ export const AI_RETRIEVABLE_FIELD_POLICY = {
   "AiUsageEvent.promptRedacted": { classification: "C2_CUSTOMER_CONFIDENTIAL", allowedPurposes: QUOTE_PURPOSES, vectorEligible: false },
   "AiUsageEvent.estimatedCostUsd": { classification: "C3_FINANCIAL_CONFIDENTIAL", allowedPurposes: ["BUSINESS_INSIGHT"], vectorEligible: false },
 } as const satisfies Record<AiRetrievableField, AiFieldPolicy>;
+
+/**
+ * Authoritative map of the canonical records that have a runtime indexing
+ * adapter today. Keeping source coverage next to the field policy prevents the
+ * governance UI from advertising fields that the indexer cannot actually load.
+ */
+export const AI_RAG_SOURCE_FIELD_MANIFEST = {
+  Customer: ["Customer.notes"],
+  Quote: ["Quote.title", "Quote.scopeText"],
+  QuoteLineItem: ["QuoteLineItem.description"],
+  CustomerActivityEvent: ["CustomerActivityEvent.title", "CustomerActivityEvent.detail"],
+  WorkPreset: ["WorkPreset.name", "WorkPreset.description"],
+} as const satisfies Record<string, readonly AiRetrievableField[]>;
+
+export type AiRagSourceType = keyof typeof AI_RAG_SOURCE_FIELD_MANIFEST;
+
+export const AI_RAG_ELIGIBLE_FIELDS = Object.freeze(
+  Object.values(AI_RAG_SOURCE_FIELD_MANIFEST).flat(),
+) as readonly AiRetrievableField[];
+
+export function validateAiRagSourceFieldManifest() {
+  const manifestFields = new Set<AiRetrievableField>(AI_RAG_ELIGIBLE_FIELDS);
+  const vectorEligibleFields = Object.entries(AI_RETRIEVABLE_FIELD_POLICY)
+    .filter(([, policy]) => policy.vectorEligible)
+    .map(([field]) => field as AiRetrievableField);
+
+  return {
+    missingSourceAdapters: vectorEligibleFields.filter((field) => !manifestFields.has(field)),
+    nonVectorManifestFields: [...manifestFields].filter(
+      (field) => !AI_RETRIEVABLE_FIELD_POLICY[field].vectorEligible,
+    ),
+  } as const;
+}

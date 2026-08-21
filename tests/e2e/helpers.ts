@@ -28,6 +28,7 @@ type Customer = {
   fullName: string;
   phone: string;
   email?: string | null;
+  assignedTenantUserId?: string | null;
 };
 
 type Quote = {
@@ -174,12 +175,43 @@ export async function createCustomerViaApi(
       phone: overrides.phone ?? `555-010-${Math.floor(1000 + Math.random() * 9000)}`,
       email: overrides.email ?? `${label}@example.com`,
       notes: "Seeded by Playwright launch smoke.",
+      assignedTenantUserId: overrides.assignedTenantUserId,
     },
   });
 
   await expectStatus(response, 201);
   const payload = (await response.json()) as { customer: Customer };
   return payload.customer;
+}
+
+export async function addWorkspaceMemberViaApi(
+  request: APIRequestContext,
+  owner: E2eAccount,
+  label = "Field Member",
+) {
+  const unique = uniqueRunLabel("member");
+  const email = `${unique}@example.com`;
+  const password = "WorkspacePassword123!";
+  const created = await request.post(`${apiBaseUrl}/v1/org/users`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { email, password, fullName: label, role: "member" },
+  });
+  await expectStatus(created, 201);
+  const member = (await created.json()) as { member: { id: string } };
+
+  const signedIn = await request.post(`${apiBaseUrl}/v1/auth/signin`, {
+    data: { email, password },
+  });
+  await expectStatus(signedIn, 200);
+  const payload = (await signedIn.json()) as Pick<E2eAccount, "user" | "tenant">;
+  const cookie = extractSessionCookie(signedIn);
+  return {
+    email,
+    password,
+    ...cookie,
+    ...payload,
+    membershipId: member.member.id,
+  };
 }
 
 export async function createQuoteViaApi(

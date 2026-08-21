@@ -5,6 +5,7 @@ import { env } from "../config/env";
 import { redactAiPrompt } from "./ai-data-governance";
 import type { AiUsageTelemetry } from "./ai-usage";
 import type { AiAssistantConversationTurn } from "./ai-assistant-contract";
+import type { SupportedLocale } from "./supported-locale";
 
 export type AiAssistantAnswerMode = "DETERMINISTIC" | "LLM_COMPOSED";
 
@@ -57,6 +58,7 @@ export type AiAssistantCompositionInput = Readonly<{
     classification: DataClassification;
     content: string;
   }[];
+  preferredLocale?: SupportedLocale;
 }>;
 
 type AssistantPayloadSource = Readonly<{
@@ -73,6 +75,7 @@ type AssistantPayloadSource = Readonly<{
 export type AssistantCompositionPayload = Readonly<{
   assistantName: "Kody";
   product: "QuoteFly";
+  responseLocale: SupportedLocale;
   userPromptRedacted: string;
   recentConversation: Array<{
     userPromptRedacted: string;
@@ -130,8 +133,17 @@ const FALLBACK_MODEL = "gpt-4o-mini";
 const OMIT_FIELD_PATTERN =
   /(?:^|_)(?:id|tenant|email|phone|prompt|token|secret|password|hash|ref|url|provider)(?:$|_)/i;
 const DISALLOWED_ANSWER_PATTERN =
-  /\b(?:all tenants|other tenants|cross[-\s]*tenant|tenant id|tenantid|raw prompt|api key|secret|provider identifier|bypass tenant|ignore tenant)\b/i;
-const FINANCIAL_ANSWER_PATTERN = /\b(?:internal cost|unit cost|gross profit|gross margin|margin|cost subtotal)\b/i;
+  /\b(?:all tenants|other tenants|cross[-\s]*tenant|tenant id|tenantid|raw prompt|api key|secret|provider identifier|bypass tenant|ignore tenant|todos\s+los\s+(?:tenants|inquilinos|espacios\s+de\s+trabajo)|otros?\s+(?:tenants|inquilinos|espacios\s+de\s+trabajo)|id\s+del\s+(?:tenant|inquilino)|prompt\s+sin\s+censura|clave\s+(?:de\s+)?api|secreto|identificador\s+del\s+proveedor|evita(?:r)?\s+(?:el\s+)?(?:tenant|inquilino)|ignora(?:r)?\s+(?:el\s+)?(?:tenant|inquilino))\b/i;
+const FINANCIAL_ANSWER_PATTERN = /\b(?:internal cost|unit cost|gross profit|gross margin|margin|cost subtotal|costo\s+interno|costo\s+por\s+unidad|ganancia\s+bruta|margen\s+bruto|margen|subtotal\s+de\s+costos?)\b/i;
+const CITATION_MARKER_PATTERN = /\[([A-Za-z][A-Za-z0-9_-]{0,15})\]/g;
+const NUMBER_TOKEN_PATTERN = /(?<![\p{L}\p{N}_])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\p{L}\p{N}_])/gu;
+const CURRENCY_TOKEN_PATTERN = /[$€£]\s*([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g;
+const PERCENTAGE_TOKEN_PATTERN = /([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:%|percent(?:age)?\b|por\s+ciento\b)/gi;
+const ISO_DATE_PATTERN = /\b(\d{4})-(\d{2})-(\d{2})(?:[Tt][^\s,.;!?]*)?\b/g;
+const SLASH_DATE_PATTERN = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g;
+const WRITTEN_DATE_PATTERN = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+|\s+de\s+)\d{1,2},?(?:\s+de)?\s+\d{4}\b/gi;
+const CURRENCY_FIELD_PATTERN = /(?:usd|revenue|price|amount|cost|total|profit)/i;
+const PERCENTAGE_FIELD_PATTERN = /(?:percent|percentage|margin|rate)/i;
 
 const SYSTEM_PROMPT = [
   "You are Kody, QuoteFly's field-ready quoting assistant for contractors.",
@@ -149,6 +161,12 @@ const SYSTEM_PROMPT = [
   "Keep the answer practical for a contractor using a phone: 2-4 short sentences, concrete numbers when provided, and one useful next step.",
   "Use provided citation keys like [A1] when you rely on retrieved data.",
 ].join("\n");
+
+function systemPromptForLocale(locale: SupportedLocale) {
+  return locale === "es-US"
+    ? `${SYSTEM_PROMPT}\nRespond in clear, neutral U.S. Spanish (es-US). Keep product names and user-authored customer, quote, product, and scope text unchanged. Do not translate canonical action or tool identifiers.`
+    : `${SYSTEM_PROMPT}\nRespond in U.S. English (en-US).`;
+}
 
 const COMPOSER_RESPONSE_FORMAT = {
   type: "json_schema" as const,
@@ -340,6 +358,7 @@ function buildPayload(params: {
   sensitiveValues?: readonly (string | null | undefined)[];
   conversation?: readonly AiAssistantConversationTurn[];
   retrievalExcerpts?: AiAssistantCompositionInput["retrievalExcerpts"];
+  preferredLocale?: SupportedLocale;
 }): AssistantCompositionPayload {
   const knownSensitiveValues = params.sensitiveValues?.filter((value): value is string => Boolean(value?.trim()));
   const redactedPrompt = redactAiPrompt(params.message, {
@@ -351,6 +370,7 @@ function buildPayload(params: {
   const payload: AssistantCompositionPayload = {
     assistantName: "Kody",
     product: "QuoteFly",
+    responseLocale: params.preferredLocale === "es-US" ? "es-US" : "en-US",
     userPromptRedacted: safeValue(redactedPrompt) as string,
     recentConversation: (params.conversation ?? []).slice(-4).map((turn) => ({
       userPromptRedacted: safeValue(redactAiPrompt(turn.message, { knownSensitiveValues })) as string,
@@ -390,6 +410,7 @@ export function buildAssistantCompositionPayload(params: {
   sensitiveValues?: readonly (string | null | undefined)[];
   conversation?: readonly AiAssistantConversationTurn[];
   retrievalExcerpts?: AiAssistantCompositionInput["retrievalExcerpts"];
+  preferredLocale?: SupportedLocale;
 }) {
   return buildPayload(params);
 }
@@ -428,19 +449,159 @@ function answerUsesForbiddenExactValue(answer: string, params: AiAssistantCompos
   return forbiddenExactValues(params).some((value) => normalizedAnswer.includes(value));
 }
 
+function normalizeNumericValue(value: string) {
+  const normalized = value.replace(/,/g, "").trim();
+  const numeric = Number(normalized);
+  if (!Number.isFinite(numeric)) return normalized;
+  return String(numeric);
+}
+
+function numericValues(text: string, pattern: RegExp) {
+  const values = new Set<string>();
+  for (const match of text.matchAll(pattern)) {
+    const numericValue = match[1] ?? match[0];
+    values.add(normalizeNumericValue(numericValue));
+  }
+  return values;
+}
+
+function normalizedDate(year: number, monthIndex: number, day: number) {
+  const date = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== monthIndex
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizedDates(text: string) {
+  const dates = new Set<string>();
+  for (const match of text.matchAll(ISO_DATE_PATTERN)) {
+    const normalized = normalizedDate(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (normalized) dates.add(normalized);
+  }
+  for (const match of text.matchAll(SLASH_DATE_PATTERN)) {
+    const normalized = normalizedDate(Number(match[3]), Number(match[1]) - 1, Number(match[2]));
+    if (normalized) dates.add(normalized);
+  }
+  for (const match of text.matchAll(WRITTEN_DATE_PATTERN)) {
+    const parsed = new Date(match[0]);
+    if (!Number.isNaN(parsed.getTime())) {
+      dates.add(parsed.toISOString().slice(0, 10));
+    }
+  }
+  return dates;
+}
+
+type NumericEvidence = {
+  numbers: Set<string>;
+  currencies: Set<string>;
+  percentages: Set<string>;
+  dates: Set<string>;
+};
+
+function createNumericEvidence(): NumericEvidence {
+  return {
+    numbers: new Set<string>(),
+    currencies: new Set<string>(),
+    percentages: new Set<string>(),
+    dates: new Set<string>(),
+  };
+}
+
+function addTextNumericEvidence(evidence: NumericEvidence, text: string) {
+  for (const value of numericValues(text, NUMBER_TOKEN_PATTERN)) evidence.numbers.add(value);
+  for (const value of numericValues(text, CURRENCY_TOKEN_PATTERN)) evidence.currencies.add(value);
+  for (const value of numericValues(text, PERCENTAGE_TOKEN_PATTERN)) evidence.percentages.add(value);
+  for (const value of normalizedDates(text)) evidence.dates.add(value);
+}
+
+function addAuthorizedValueEvidence(
+  evidence: NumericEvidence,
+  value: unknown,
+  path: string[] = [],
+) {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => addAuthorizedValueEvidence(evidence, entry, [...path, String(index)]));
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (OMIT_FIELD_PATTERN.test(normalizeKey(key))) continue;
+      addAuthorizedValueEvidence(evidence, entry, [...path, key]);
+    }
+    return;
+  }
+
+  const text = String(value);
+  addTextNumericEvidence(evidence, text);
+  const key = path[path.length - 1] ?? "";
+  if (typeof value === "number") {
+    const normalized = normalizeNumericValue(text);
+    if (CURRENCY_FIELD_PATTERN.test(key)) evidence.currencies.add(normalized);
+    if (PERCENTAGE_FIELD_PATTERN.test(key)) evidence.percentages.add(normalized);
+  }
+}
+
+function numericEvidenceFromAuthorizedInput(params: AiAssistantCompositionInput) {
+  const evidence = createNumericEvidence();
+  addTextNumericEvidence(evidence, params.deterministicAnswer);
+  addAuthorizedValueEvidence(evidence, params.results);
+  addAuthorizedValueEvidence(evidence, params.citations.map((citation) => citation.label));
+  addAuthorizedValueEvidence(evidence, params.actions.map((action) => ({
+    label: action.label,
+    payload: action.payload,
+  })));
+  addAuthorizedValueEvidence(evidence, params.diagnostics.filters);
+  for (const excerpt of params.retrievalExcerpts ?? []) {
+    addTextNumericEvidence(evidence, excerpt.label);
+    addTextNumericEvidence(evidence, excerpt.content);
+  }
+  return evidence;
+}
+
+function unsupportedNumericClaimReason(answer: string, params: AiAssistantCompositionInput) {
+  const evidence = numericEvidenceFromAuthorizedInput(params);
+  for (const value of numericValues(answer, CURRENCY_TOKEN_PATTERN)) {
+    if (!evidence.currencies.has(value)) return "LLM answer introduced an unsupported currency amount.";
+  }
+  for (const value of numericValues(answer, PERCENTAGE_TOKEN_PATTERN)) {
+    if (!evidence.percentages.has(value)) return "LLM answer introduced an unsupported percentage.";
+  }
+  for (const date of normalizedDates(answer)) {
+    if (!evidence.dates.has(date)) return "LLM answer introduced an unsupported date.";
+  }
+  for (const value of numericValues(answer, NUMBER_TOKEN_PATTERN)) {
+    if (!evidence.numbers.has(value)) return "LLM answer introduced an unsupported numeric value.";
+  }
+  return null;
+}
+
+function citationMarkerKeys(answer: string) {
+  return Array.from(answer.matchAll(CITATION_MARKER_PATTERN), (match) => match[1]);
+}
+
+function answerRequiresGroundedCitation(params: AiAssistantCompositionInput) {
+  return params.results.length > 0 || (params.retrievalExcerpts?.length ?? 0) > 0;
+}
+
 function financialFieldsWereExcluded(params: AiAssistantCompositionInput) {
   return params.fieldsExcluded.some((field) => /internal cost|gross profit|margin|unit cost/i.test(field));
 }
 
 function answerMatchesToolScope(answer: string, tool: string) {
-  if (tool === "SEARCH_CUSTOMERS") return /\b(?:customer|client|contact|found|match)\b/i.test(answer);
-  if (tool === "DRAFT_QUOTE") return /\b(?:quote|estimate|proposal|draft|pricing|scope|customer|job|review)\b/i.test(answer);
-  if (tool === "DRAFT_PRODUCT") return /\b(?:product|service|catalog|item|price|cost|draft|review)\b/i.test(answer);
+  if (tool === "SEARCH_CUSTOMERS") return /\b(?:customer|client|contact|found|match|cliente|contacto|encontre|coincide)\b/i.test(answer);
+  if (tool === "DRAFT_QUOTE") return /\b(?:quote|estimate|proposal|draft|pricing|scope|customer|job|review|cotizacion|presupuesto|propuesta|borrador|precio|alcance|cliente|trabajo|revisar)\b/i.test(answer);
+  if (tool === "DRAFT_PRODUCT") return /\b(?:product|service|catalog|item|price|cost|draft|review|producto|servicio|catalogo|articulo|precio|costo|borrador|revisar)\b/i.test(answer);
   if (tool === "FOLLOW_UP_QUEUE" || tool === "CUSTOMERS_WITHOUT_QUOTES") {
-    return /\b(?:customer|client|quote|estimate|follow[-\s]*up|lead|job)\b/i.test(answer);
+    return /\b(?:customer|client|quote|estimate|follow[-\s]*up|lead|job|cliente|cotizacion|presupuesto|seguimiento|prospecto|trabajo)\b/i.test(answer);
   }
   if (tool === "SUMMARIZE_PIPELINE" || tool === "PIPELINE_SCENARIO" || tool === "RANK_PROFITABLE_JOBS") {
-    return /\b(?:quote|pipeline|revenue|profit|margin|job|sale|accepted|open|cost)\b/i.test(answer);
+    return /\b(?:quote|pipeline|revenue|profit|margin|job|sale|accepted|open|cost|cotizacion|ingresos|ganancia|margen|trabajo|venta|aceptada|abierta|costo)\b/i.test(answer);
   }
   return true;
 }
@@ -461,17 +622,33 @@ function invalidAnswerReason(
   }
 
   const allowedKeys = new Set(params.citations.map((citation) => citation.key));
+  const uniqueSourceKeys = new Set(parsed.sourceKeys);
+  if (uniqueSourceKeys.size !== parsed.sourceKeys.length) {
+    return "LLM answer repeated a citation key.";
+  }
   const invalidSourceKey = parsed.sourceKeys.find((key) => !allowedKeys.has(key));
   if (invalidSourceKey) return "LLM answer referenced an unknown citation.";
+  const markerKeys = citationMarkerKeys(parsed.answer);
+  const invalidMarkerKey = markerKeys.find((key) => !allowedKeys.has(key));
+  if (invalidMarkerKey) return "LLM answer visibly referenced an unknown citation.";
+  const listedKeyWithoutMarker = parsed.sourceKeys.find((key) => !markerKeys.includes(key));
+  if (listedKeyWithoutMarker) return "LLM answer listed a citation without visibly referencing it.";
+  const markerWithoutListedKey = markerKeys.find((key) => !uniqueSourceKeys.has(key));
+  if (markerWithoutListedKey) return "LLM answer visibly referenced a citation it did not return.";
+  if (answerRequiresGroundedCitation(params) && allowedKeys.size === 0) {
+    return "LLM answer had data to summarize but no authorized citation was available.";
+  }
+  if (answerRequiresGroundedCitation(params) && parsed.sourceKeys.length === 0) {
+    return "LLM answer had data to summarize but omitted a required citation.";
+  }
+
+  const numericReason = unsupportedNumericClaimReason(parsed.answer, params);
+  if (numericReason) return numericReason;
   return null;
 }
 
-function withCitation(answer: string, sourceKeys: readonly string[], citations: AiAssistantCompositionInput["citations"]) {
-  const allowedKeys = new Set(citations.map((citation) => citation.key));
-  const sourceKey = sourceKeys.find((key) => allowedKeys.has(key)) ?? citations[0]?.key ?? null;
-  const normalized = answer.normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, MAX_ANSWER_CHARS);
-  if (!sourceKey || normalized.includes(`[${sourceKey}]`)) return normalized;
-  return `${normalized} [${sourceKey}]`;
+function normalizedAnswer(answer: string) {
+  return answer.normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, MAX_ANSWER_CHARS);
 }
 
 async function defaultCompositionProvider(
@@ -524,13 +701,14 @@ export async function composeAssistantAnswer(
     sensitiveValues: params.sensitiveValues,
     conversation: params.conversation,
     retrievalExcerpts: params.retrievalExcerpts,
+    preferredLocale: params.preferredLocale,
   });
   const model = composerModel();
   let result: AiAssistantCompositionProviderResult;
   try {
     result = await (providerForTest ?? defaultCompositionProvider)({
       model,
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: systemPromptForLocale(params.preferredLocale === "es-US" ? "es-US" : "en-US"),
       inputJson: JSON.stringify(payload),
       responseFormat: COMPOSER_RESPONSE_FORMAT,
     });
@@ -561,7 +739,7 @@ export async function composeAssistantAnswer(
   }
 
   return {
-    answer: withCitation(parsed.answer, parsed.sourceKeys, params.citations),
+    answer: normalizedAnswer(parsed.answer),
     answerMode: "LLM_COMPOSED",
     model: result.model ?? model,
     telemetry: result.telemetry,

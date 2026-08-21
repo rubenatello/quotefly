@@ -1,4 +1,5 @@
 import { Layers3, Sparkles } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Input } from "../ui";
 
 export function QuoteLineSectionField({
@@ -7,7 +8,7 @@ export function QuoteLineSectionField({
   onSectionTypeChange,
   onSectionLabelChange,
   disabled,
-  optionNameLabel = "Option name",
+  optionNameLabel,
   compact = false,
 }: {
   sectionType: "INCLUDED" | "ALTERNATE";
@@ -18,6 +19,7 @@ export function QuoteLineSectionField({
   optionNameLabel?: string;
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
   const isAlternate = sectionType === "ALTERNATE";
 
   return (
@@ -35,8 +37,8 @@ export function QuoteLineSectionField({
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
           <Layers3 size={12} />
-          {compact ? <span className="2xl:hidden">Incl</span> : null}
-          <span className={compact ? "hidden 2xl:inline" : ""}>Included</span>
+          {compact ? <span className="2xl:hidden">{t("quoteComponents.line.includedShort")}</span> : null}
+          <span className={compact ? "hidden 2xl:inline" : ""}>{t("quoteComponents.line.included")}</span>
         </button>
         <button
           type="button"
@@ -50,22 +52,22 @@ export function QuoteLineSectionField({
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
           <Sparkles size={12} />
-          {compact ? <span className="2xl:hidden">Alt</span> : null}
-          <span className={compact ? "hidden 2xl:inline" : ""}>Alternate</span>
+          {compact ? <span className="2xl:hidden">{t("quoteComponents.line.alternateShort")}</span> : null}
+          <span className={compact ? "hidden 2xl:inline" : ""}>{t("quoteComponents.line.alternate")}</span>
         </button>
       </div>
 
       {isAlternate ? (
         <div className="space-y-1">
           <Input
-            label={optionNameLabel}
-            placeholder="Option A • Replacement"
+            label={optionNameLabel ?? t("quoteComponents.line.optionName")}
+            placeholder={t("quoteComponents.line.optionPlaceholder")}
             value={sectionLabel}
             onChange={(event) => onSectionLabelChange(event.target.value)}
             disabled={disabled}
           />
           <p className="text-[11px] leading-5 text-[var(--qf-text-muted)]">
-            Give alternate lines the same option name to group them together in the customer quote.
+            {t("quoteComponents.line.optionHelp")}
           </p>
         </div>
       ) : null}

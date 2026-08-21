@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { CheckCircle2, CircleDashed, LoaderCircle, Sparkles, UserRound } from "lucide-react";
 import type { AiProgressEvent, ServiceType } from "../../lib/api";
 import { Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
@@ -8,43 +9,46 @@ const AI_PROGRESS_STAGES = [
   {
     step: "analyzing_prompt" as const,
     value: 18,
-    label: "Reading prompt",
-    detail: "Parsing scope, job type, and customer details from the request.",
+    key: "reading",
   },
   {
     step: "loading_customer_context" as const,
     value: 36,
-    label: "Loading customer context",
-    detail: "Pulling customer notes, recent activity, and quote context when available.",
+    key: "customer",
   },
   {
     step: "retrieving_workspace_context" as const,
     value: 58,
-    label: "Matching saved jobs + similar quotes",
-    detail: "Comparing saved jobs and past tenant quotes to anchor names, scope, and pricing.",
+    key: "retrieval",
   },
   {
     step: "drafting_quote_patch" as const,
     value: 78,
-    label: "Preparing line changes",
-    detail: "Drafting adds, updates, and removals for the editable quote sheet.",
+    key: "drafting",
   },
   {
     step: "reviewing_line_changes" as const,
     value: 88,
-    label: "Reviewing patch impact",
-    detail: "Checking how many lines will be added, updated, or removed before applying the suggestion.",
+    key: "reviewing",
   },
   {
     step: "finalizing_suggestion" as const,
     value: 92,
-    label: "Applying the quote patch",
-    detail: "Finalizing the suggestion so it can be reviewed line by line before save.",
+    key: "finalizing",
   },
 ];
 
-function buildPromptPlaceholder(serviceType: ServiceType, customerName?: string | null) {
+function buildPromptPlaceholder(serviceType: ServiceType, customerName?: string | null, spanish = false) {
   const lead = customerName?.trim() || "Alan Johnson";
+
+  if (spanish) {
+    if (serviceType === "HVAC") return `Ejemplo: Cotización para ${lead}. Agrega diagnóstico, reparación e instalación como líneas separadas con sus precios.`;
+    if (serviceType === "ROOFING") return `Ejemplo: Cotización para ${lead}. Reemplaza 1,250 pies cuadrados de techo e incluye retiro, desecho, base e instalación como líneas separadas.`;
+    if (serviceType === "PLUMBING") return `Ejemplo: Cotización para ${lead}. Agrega una línea para reparar la tubería y otra para resanar el acceso.`;
+    if (serviceType === "FLOORING") return `Ejemplo: Cotización para ${lead}. Instala piso en dos baños y el pasillo con una línea separada por área.`;
+    if (serviceType === "GARDENING") return `Ejemplo: Cotización para ${lead}. Agrega reemplazo de césped, aireación y configuración de riego como líneas separadas.`;
+    return `Ejemplo: Nueva cotización para ${lead}. Divide el trabajo en líneas facturables separadas con precio por línea.`;
+  }
 
   if (serviceType === "HVAC") {
     return [
@@ -112,9 +116,9 @@ export function QuoteAiPromptModal({
   loading,
   disabled,
   onSubmit,
-  title = "Draft quote with AI",
-  description = "Generate the first version of the quote, then clean it up line by line in the editable sheet.",
-  submitLabel = "Apply AI Suggestion",
+  title,
+  description,
+  submitLabel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -138,24 +142,28 @@ export function QuoteAiPromptModal({
   description?: string;
   submitLabel?: string;
 }) {
+  const { t, i18n } = useTranslation();
+  const resolvedTitle = title ?? t("quoteComponents.aiModal.title");
+  const resolvedDescription = description ?? t("quoteComponents.aiModal.description");
+  const resolvedSubmitLabel = submitLabel ?? t("quoteComponents.aiModal.apply");
   const [progress, setProgress] = useState(0);
   const [progressIndex, setProgressIndex] = useState(0);
-  const [progressLabel, setProgressLabel] = useState("Waiting to start");
-  const [progressDetail, setProgressDetail] = useState("AI will prepare a tracked suggestion for the quote sheet.");
+  const [progressLabel, setProgressLabel] = useState(t("quoteComponents.aiModal.waiting"));
+  const [progressDetail, setProgressDetail] = useState(t("quoteComponents.aiModal.waitingDetail"));
 
   useEffect(() => {
     if (!open || !loading) {
       setProgress(0);
       setProgressIndex(0);
-      setProgressLabel("Waiting to start");
-      setProgressDetail("AI will prepare a tracked suggestion for the quote sheet.");
+      setProgressLabel(t("quoteComponents.aiModal.waiting"));
+      setProgressDetail(t("quoteComponents.aiModal.waitingDetail"));
       return;
     }
 
     setProgressIndex(0);
     setProgress(AI_PROGRESS_STAGES[0].value);
-    setProgressLabel(AI_PROGRESS_STAGES[0].label);
-    setProgressDetail(AI_PROGRESS_STAGES[0].detail);
+    setProgressLabel(t(`quoteComponents.aiModal.stages.${AI_PROGRESS_STAGES[0].key}.label`));
+    setProgressDetail(t(`quoteComponents.aiModal.stages.${AI_PROGRESS_STAGES[0].key}.detail`));
 
     let index = 0;
     const interval = window.setInterval(() => {
@@ -166,12 +174,12 @@ export function QuoteAiPromptModal({
       }
       setProgressIndex(index);
       setProgress(AI_PROGRESS_STAGES[index].value);
-      setProgressLabel(AI_PROGRESS_STAGES[index].label);
-      setProgressDetail(AI_PROGRESS_STAGES[index].detail);
+      setProgressLabel(t(`quoteComponents.aiModal.stages.${AI_PROGRESS_STAGES[index].key}.label`));
+      setProgressDetail(t(`quoteComponents.aiModal.stages.${AI_PROGRESS_STAGES[index].key}.detail`));
     }, 650);
 
     return () => window.clearInterval(interval);
-  }, [open, loading]);
+  }, [open, loading, t]);
 
   const canUseStarterPrompts = useMemo(
     () => Boolean(starterPrompts?.length && onUseStarterPrompt),
@@ -179,8 +187,8 @@ export function QuoteAiPromptModal({
   );
   const hasAssignedCustomer = Boolean(customerContextName?.trim());
   const promptPlaceholder = useMemo(
-    () => buildPromptPlaceholder(serviceType, customerContextName),
-    [customerContextName, serviceType],
+    () => buildPromptPlaceholder(serviceType, customerContextName, i18n.resolvedLanguage === "es-US"),
+    [customerContextName, i18n.resolvedLanguage, serviceType],
   );
   const activeProgress = progressEvent
     ? {
@@ -204,8 +212,8 @@ export function QuoteAiPromptModal({
       };
 
   return (
-    <Modal open={open} onClose={loading ? () => {} : onClose} size="lg" ariaLabel={title}>
-      <ModalHeader title={title} description={description} onClose={loading ? undefined : onClose} />
+    <Modal open={open} onClose={loading ? () => {} : onClose} size="lg" ariaLabel={resolvedTitle}>
+      <ModalHeader title={resolvedTitle} description={resolvedDescription} onClose={loading ? undefined : onClose} />
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
         <ModalBody className="space-y-5 bg-[var(--qf-panel-muted)] pb-4">
           <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-4 py-3 shadow-[var(--qf-shadow-sm)]">
@@ -215,14 +223,14 @@ export function QuoteAiPromptModal({
                   <Sparkles size={18} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">AI drafting workspace</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteComponents.aiModal.workspace")}</p>
                   <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-                    Use tenant context, saved jobs, customer activity, and similar quotes to prepare a faster first pass.
+                    {t("quoteComponents.aiModal.workspaceDescription")}
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 sm:justify-end">
-                <Badge tone="orange">Token-based AI meter</Badge>
+                <Badge tone="orange">{t("quoteComponents.aiModal.meter")}</Badge>
                 {usageHint ? <Badge tone="blue">{usageHint}</Badge> : null}
               </div>
             </div>
@@ -231,7 +239,7 @@ export function QuoteAiPromptModal({
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_200px]">
             <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel-subtle)] px-4 py-3.5 shadow-[var(--qf-shadow-sm)]">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-quotefly-blue">Customer context</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-quotefly-blue">{t("quoteComponents.aiModal.customerContext")}</p>
                 {customerContextBadge ? <Badge tone="blue">{customerContextBadge}</Badge> : null}
               </div>
               <div className="mt-2.5 flex items-start gap-3">
@@ -240,7 +248,7 @@ export function QuoteAiPromptModal({
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-[var(--qf-text)]">
-                    {hasAssignedCustomer ? customerContextName : "No customer assigned yet"}
+                    {hasAssignedCustomer ? customerContextName : t("quoteComponents.aiModal.noCustomer")}
                   </p>
                   <p className="mt-1 text-sm leading-6 text-[var(--qf-text-soft)]">
                     {hasAssignedCustomer ? customerContextDetails ?? customerContextText : customerContextText}
@@ -251,7 +259,7 @@ export function QuoteAiPromptModal({
 
             <div className="rounded-2xl border border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)] px-4 py-3.5 shadow-[0_10px_24px_rgba(249,105,40,0.08)]">
               <Select
-                label="Trade"
+                label={t("quoteBuilder.trade")}
                 value={serviceType}
                 onChange={(event) => onServiceTypeChange(event.target.value as ServiceType)}
                 options={[
@@ -271,11 +279,11 @@ export function QuoteAiPromptModal({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Prompt</p>
-                  <Badge tone="slate">Review before saving</Badge>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteComponents.aiModal.prompt")}</p>
+                  <Badge tone="slate">{t("quoteComponents.aiModal.review")}</Badge>
                 </div>
                 <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-                  AI uses the selected customer, customer notes, recent activity, current quote sheet, saved jobs, and similar past quotes for the chosen trade when available.
+                  {t("quoteComponents.aiModal.contextDescription")}
                 </p>
               </div>
               {canUseStarterPrompts ? (
@@ -288,7 +296,7 @@ export function QuoteAiPromptModal({
                       disabled={loading}
                       className="min-h-[44px] rounded-xl border border-quotefly-blue/15 bg-quotefly-blue/[0.08] px-3 py-2 text-left text-xs font-semibold text-quotefly-blue transition hover:border-quotefly-blue/30 hover:bg-quotefly-blue/[0.14] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[36px]"
                     >
-                      {index === 0 ? "Starter prompt" : `Alt ${index}`}
+                      {index === 0 ? t("quoteComponents.aiModal.starter") : t("quoteComponents.aiModal.alternate", { number: index })}
                     </button>
                   ))}
                 </div>
@@ -297,7 +305,7 @@ export function QuoteAiPromptModal({
 
             <Textarea
               data-testid="quote-ai-prompt"
-              aria-label="Describe the quote for Kody"
+              aria-label={t("quoteComponents.aiModal.promptAria")}
               className="mt-4 min-h-[220px] border-[var(--qf-info-border)] bg-[var(--qf-panel)] text-[15px] leading-7 text-[var(--qf-text)] shadow-inner selection:bg-[var(--qf-selected)]"
               rows={9}
               placeholder={promptPlaceholder}
@@ -312,14 +320,14 @@ export function QuoteAiPromptModal({
               <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="blue">AI working</Badge>
-                    <Badge tone="orange">Tracked suggestion</Badge>
+                    <Badge tone="blue">{t("quoteComponents.aiModal.working")}</Badge>
+                    <Badge tone="orange">{t("quoteComponents.aiModal.tracked")}</Badge>
                   </div>
                   <div>
                     <p className="text-base font-semibold text-[var(--qf-text)]">{activeProgress.label}</p>
                     <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeProgress.detail}</p>
                   </div>
-                  <ProgressBar value={activeProgress.value} label="AI progress" hint={`${activeProgress.value}%`} />
+                  <ProgressBar value={activeProgress.value} label={t("quoteComponents.aiModal.progress")} hint={`${activeProgress.value}%`} />
                   {activeProgress.sourceHints.length ? (
                     <div className="flex flex-wrap gap-2">
                       {activeProgress.sourceHints.map((hint) => (
@@ -331,18 +339,18 @@ export function QuoteAiPromptModal({
                   ) : null}
                   {activeProgress.patchCounts ? (
                     <div className="flex flex-wrap gap-2">
-                      <Badge tone="orange">{activeProgress.patchCounts.updated} updated</Badge>
-                      <Badge tone="blue">{activeProgress.patchCounts.added} added</Badge>
-                      <Badge tone="slate">{activeProgress.patchCounts.removed} removed</Badge>
+                      <Badge tone="orange">{t("quoteComponents.aiModal.updated", { count: activeProgress.patchCounts.updated })}</Badge>
+                      <Badge tone="blue">{t("quoteComponents.aiModal.added", { count: activeProgress.patchCounts.added })}</Badge>
+                      <Badge tone="slate">{t("quoteComponents.aiModal.removed", { count: activeProgress.patchCounts.removed })}</Badge>
                     </div>
                   ) : null}
                   <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">
-                    AI is building line-level changes for the quote sheet, not sending anything to the customer.
+                    {t("quoteComponents.aiModal.notSending")}
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 shadow-[var(--qf-shadow-sm)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">AI run log</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteComponents.aiModal.runLog")}</p>
                   <div className="mt-3 space-y-0">
                     {AI_PROGRESS_STAGES.map((stage, index) => {
                       const isComplete = index < activeProgress.index;
@@ -350,7 +358,7 @@ export function QuoteAiPromptModal({
                       const isLast = index === AI_PROGRESS_STAGES.length - 1;
 
                       return (
-                        <div key={stage.label} className="relative flex gap-3 pb-4 last:pb-0">
+                        <div key={stage.key} className="relative flex gap-3 pb-4 last:pb-0">
                           <div className="relative flex w-6 flex-col items-center">
                             <div
                               className={
@@ -381,9 +389,9 @@ export function QuoteAiPromptModal({
                           </div>
                           <div className="min-w-0 pt-0.5">
                             <p className={isCurrent ? "text-sm font-semibold text-[var(--qf-text)]" : "text-sm font-medium text-[var(--qf-text-soft)]"}>
-                              {stage.label}
+                              {t(`quoteComponents.aiModal.stages.${stage.key}.label`)}
                             </p>
-                            <p className="mt-0.5 text-xs leading-5 text-[var(--qf-text-muted)]">{stage.detail}</p>
+                            <p className="mt-0.5 text-xs leading-5 text-[var(--qf-text-muted)]">{t(`quoteComponents.aiModal.stages.${stage.key}.detail`)}</p>
                           </div>
                         </div>
                       );
@@ -404,21 +412,21 @@ export function QuoteAiPromptModal({
         <ModalFooter className="justify-between gap-3 bg-[var(--qf-panel)]">
           <div className="max-w-[34rem] space-y-1">
             <p className="text-sm text-[var(--qf-text-muted)]">
-              AI builds the first draft only. You still review every line title, description, cost, and price before saving.
+              {t("quoteComponents.aiModal.footerReview")}
             </p>
             <p className="text-xs text-[var(--qf-text-muted)]">
-              AI usage is metered by token usage. Prompt usage varies based on context size and response length.
+              {t("quoteComponents.aiModal.footerMeter")}
             </p>
             <p className="text-xs font-medium text-[var(--qf-warning-text)]">
-              AI can make mistakes. Please revise the quote before sending.
+              {t("quoteComponents.aiModal.footerWarning")}
             </p>
           </div>
           <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
             <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" variant="secondary" loading={loading} icon={<Sparkles size={14} />} disabled={disabled}>
-              {submitLabel}
+              {resolvedSubmitLabel}
             </Button>
           </div>
         </ModalFooter>

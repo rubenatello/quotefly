@@ -58,7 +58,7 @@ test.describe("stale outbound protection", () => {
     const saveGate = page.getByRole("dialog", { name: "Save changes before sending" });
     await expect(saveGate).toBeVisible();
     await expect(saveGate.getByText(/completed new line will be added/i)).toBeVisible();
-    await saveGate.getByRole("button", { name: "Save and Continue" }).click();
+    await saveGate.getByRole("button", { name: "Save and continue", exact: true }).click();
 
     await expect(saveGate).toBeHidden();
     await expect(page.getByRole("button", { name: "Copy Message" })).toBeVisible();
@@ -145,10 +145,10 @@ test.describe("stale outbound protection", () => {
 
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const saveGate = page.getByRole("dialog", { name: "Save changes before sending" });
-    await saveGate.getByRole("button", { name: "Save and Continue" }).click();
+    await saveGate.getByRole("button", { name: "Save and continue", exact: true }).click();
 
     await expect(saveGate).toBeHidden();
-    await expect(page.getByText("Quote save failed during a later write. Every draft is still in the editor.")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("QuoteFly could not complete this action right now. Try again in a moment.");
     await expect(page.getByLabel("Quote title")).toHaveValue("Outbound failure draft title");
     await expect(page.getByLabel("Quote overview")).toHaveValue("Outbound failure draft scope");
     await expect(visibleField(firstRow, "Existing line 1 description")).toHaveValue("Unsaved existing row retained");

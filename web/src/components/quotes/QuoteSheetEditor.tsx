@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, FileText, UserRound } from "lucide-react";
-import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
+import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId, SupportedLocale } from "../../lib/api";
 import { isSupportedBrandLogoDataUrl } from "../../lib/brand-logo";
+import { quoteDocumentCopy } from "../../lib/quote-document-copy";
 import { Badge } from "../ui";
 import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
@@ -29,6 +31,7 @@ export function QuoteSheetEditor({
   componentColors,
   footerText,
   showQuoteFlyAttribution,
+  documentLocale = "en-US",
   readOnly = false,
   children,
 }: {
@@ -54,9 +57,12 @@ export function QuoteSheetEditor({
   componentColors?: BrandingComponentColors | null;
   footerText?: string;
   showQuoteFlyAttribution?: boolean;
+  documentLocale?: SupportedLocale;
   readOnly?: boolean;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
+  const copy = quoteDocumentCopy(documentLocale);
   const logo = isSupportedBrandLogoDataUrl(logoUrl) ? <BrandLogo logoUrl={logoUrl} /> : null;
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const template = getQuoteTemplateOption(templateId);
@@ -98,15 +104,15 @@ export function QuoteSheetEditor({
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accentColor }} />
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                      <span className="sm:hidden">Quote details</span>
-                      <span className="hidden sm:inline">Editable quote sheet</span>
+                      <span className="sm:hidden">{t("quoteComponents.sheet.details")}</span>
+                      <span className="hidden sm:inline">{t("quoteComponents.sheet.editable")}</span>
                     </p>
                   </div>
                   <input
-                    aria-label="Quote title"
+                    aria-label={t("quoteComponents.sheet.titleLabel")}
                     value={title}
                     onChange={(event) => onTitleChange(event.target.value)}
-                    placeholder={titlePlaceholder ?? "Untitled quote"}
+                    placeholder={titlePlaceholder ?? copy.untitledQuote}
                     readOnly={readOnly}
                     className={`mt-2 w-full border-0 px-0 text-[1.4rem] font-semibold tracking-tight text-slate-950 placeholder:text-slate-400 sm:text-[1.9rem] ${
                       readOnly
@@ -120,7 +126,7 @@ export function QuoteSheetEditor({
             <div className="flex shrink-0 items-center gap-1.5 self-start">
               {logoPosition === "right" ? logo : null}
               <Badge tone="blue" icon={<FileText size={12} />} className="hidden border-transparent bg-[var(--qf-brand-blue-soft)] text-[var(--qf-link)] sm:inline-flex">
-                Customer view
+                {t("quoteComponents.sheet.customerView")}
               </Badge>
               {actions}
             </div>
@@ -133,7 +139,7 @@ export function QuoteSheetEditor({
             <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>Customer</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>{copy.customer}</p>
                   <p className="mt-1 text-sm font-semibold text-slate-900">{customerName}</p>
                   {customerHint ? <p className="mt-1 text-xs leading-5 text-slate-500">{customerHint}</p> : null}
                 </div>
@@ -143,7 +149,7 @@ export function QuoteSheetEditor({
                   className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 rounded-lg border border-[var(--qf-border)] bg-white px-3 text-xs font-medium text-slate-700 sm:min-h-[36px]"
                 >
                   {mobileDetailsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  {mobileDetailsOpen ? "Hide details" : "Show details"}
+                  {mobileDetailsOpen ? t("quoteComponents.sheet.hideDetails") : t("quoteComponents.sheet.showDetails")}
                 </button>
               </div>
               {customerTools ? <div className="mt-3">{customerTools}</div> : null}
@@ -152,9 +158,9 @@ export function QuoteSheetEditor({
 
           <div className={`space-y-5 ${mobileDetailsOpen ? "" : "hidden"} sm:block`}>
             <div className="hidden gap-5 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <SheetParty label="Business" value={businessName} hint={businessHint} labelColor={sectionLabelColor} />
+              <SheetParty label={copy.business} value={businessName} hint={businessHint} labelColor={sectionLabelColor} />
               <SheetParty
-                label="Customer"
+                label={copy.customer}
                 value={customerName}
                 hint={customerHint}
                 icon={<UserRound size={14} />}
@@ -164,24 +170,24 @@ export function QuoteSheetEditor({
             </div>
 
             <div className="hidden gap-4 border-y border-[var(--qf-border)] py-4 sm:grid sm:grid-cols-2">
-              <SheetMeta label="Prepared" value={preparedDateLabel} labelColor={sectionLabelColor} />
-              <SheetMeta label="Sent" value={sentDateLabel} labelColor={sectionLabelColor} />
+              <SheetMeta label={copy.prepared} value={preparedDateLabel} labelColor={sectionLabelColor} />
+              <SheetMeta label={copy.sent} value={sentDateLabel} labelColor={sectionLabelColor} />
             </div>
 
             <div className="sm:hidden rounded-xl border border-[var(--qf-border)] bg-white px-3 py-3">
-              <SheetParty label="Business" value={businessName} hint={businessHint} labelColor={sectionLabelColor} />
+              <SheetParty label={copy.business} value={businessName} hint={businessHint} labelColor={sectionLabelColor} />
             </div>
 
             <div>
               <label className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>
-                Overview
+                {copy.overview}
               </label>
               <textarea
-                aria-label="Quote overview"
+                aria-label={t("quoteComponents.sheet.overviewLabel")}
                 rows={3}
                 value={overview}
                 onChange={(event) => onOverviewChange(event.target.value)}
-                placeholder={overviewPlaceholder ?? "Optional overview shown near the top of the quote."}
+                placeholder={overviewPlaceholder ?? t("quoteComponents.sheet.overviewPlaceholder")}
                 readOnly={readOnly}
                 className={`mt-2 min-h-[104px] w-full rounded-xl border border-[var(--qf-border)] px-4 py-3 text-sm leading-6 text-slate-800 placeholder:text-slate-400 ${
                   readOnly
@@ -195,7 +201,7 @@ export function QuoteSheetEditor({
           {children}
         </div>
         <div className="hidden sm:block">
-          <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} />
+          <QuoteAttributionFooter footerText={footerText} showQuoteFlyAttribution={showQuoteFlyAttribution} documentLocale={documentLocale} />
         </div>
       </div>
     </div>
@@ -205,7 +211,7 @@ export function QuoteSheetEditor({
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
     <div className="flex h-14 max-w-[220px] items-center">
-      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
+      <img src={logoUrl} alt="" aria-hidden="true" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -29,7 +30,6 @@ import {
   type PageSize,
 } from "../components/ui";
 import {
-  ApiError,
   api,
   type ProductInput,
   type ServiceType,
@@ -40,37 +40,13 @@ import {
 import { KodyButton } from "../components/ai/KodyButton";
 import { setSEOMetadata } from "../lib/seo";
 import { notify } from "../lib/notifications";
+import { productCatalogSource } from "../lib/product-catalog-display";
+import { useLocale } from "../i18n";
+import { localizedApiError } from "../lib/localized-api-error";
 
-const TRADE_LABELS: Record<ServiceType, string> = {
-  HVAC: "HVAC",
-  PLUMBING: "Plumbing",
-  FLOORING: "Flooring",
-  ROOFING: "Roofing",
-  GARDENING: "Gardening",
-  CONSTRUCTION: "Construction",
-};
-
-const CATEGORY_LABELS: Record<WorkPresetCategory, string> = {
-  SERVICE: "Service",
-  LABOR: "Labor",
-  MATERIAL: "Material",
-  FEE: "Fee",
-};
-
-const UNIT_LABELS: Record<WorkPresetUnitType, string> = {
-  FLAT: "Flat rate",
-  SQ_FT: "Square foot",
-  HOUR: "Hour",
-  EACH: "Each",
-};
-
-const CATEGORY_OPTIONS = (Object.entries(CATEGORY_LABELS) as Array<[WorkPresetCategory, string]>).map(
-  ([value, label]) => ({ value, label }),
-);
-
-const UNIT_OPTIONS = (Object.entries(UNIT_LABELS) as Array<[WorkPresetUnitType, string]>).map(
-  ([value, label]) => ({ value, label }),
-);
+const TRADE_VALUES: ServiceType[] = ["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"];
+const CATEGORY_VALUES: WorkPresetCategory[] = ["SERVICE", "LABOR", "MATERIAL", "FEE"];
+const UNIT_VALUES: WorkPresetUnitType[] = ["FLAT", "SQ_FT", "HOUR", "EACH"];
 
 type ProductForm = {
   serviceType: ServiceType;
@@ -93,13 +69,13 @@ function kodyProductDraftFromState(value: unknown): KodyProductDraft | null {
   if (!isRecord(value)) return null;
   const state = value.kodyProductDraft;
   if (!isRecord(state)) return null;
-  const serviceType = typeof state.serviceType === "string" && state.serviceType in TRADE_LABELS
+  const serviceType = typeof state.serviceType === "string" && TRADE_VALUES.includes(state.serviceType as ServiceType)
     ? state.serviceType as ServiceType
     : undefined;
-  const category = typeof state.category === "string" && state.category in CATEGORY_LABELS
+  const category = typeof state.category === "string" && CATEGORY_VALUES.includes(state.category as WorkPresetCategory)
     ? state.category as WorkPresetCategory
     : undefined;
-  const unitType = typeof state.unitType === "string" && state.unitType in UNIT_LABELS
+  const unitType = typeof state.unitType === "string" && UNIT_VALUES.includes(state.unitType as WorkPresetUnitType)
     ? state.unitType as WorkPresetUnitType
     : undefined;
   const boundedNumber = (candidate: unknown) =>
@@ -144,8 +120,8 @@ function productToForm(product: WorkPreset): ProductForm {
   };
 }
 
-function money(value: number | string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value) || 0);
+function money(value: number | string, locale: string): string {
+  return new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(Number(value) || 0);
 }
 
 function marginPercent(unitCost: number | string, unitPrice: number | string): number | null {
@@ -185,6 +161,7 @@ function ProductEditorModal({
   onDismissSaveError: () => void;
   onSave: (form: ProductForm) => Promise<void> | void;
 }) {
+  const { t } = useTranslation();
   const initialForm = useMemo(
     () => product ? productToForm(product) : { ...emptyProductForm(defaultTrade), ...(draft ?? {}) },
     [defaultTrade, draft, product],
@@ -198,7 +175,10 @@ function ProductEditorModal({
   );
 
   const margin = marginPercent(form.unitCost, form.unitPrice);
-  const marginLabel = margin === null ? "Set a price to calculate margin" : `${margin.toFixed(1)}% gross margin`;
+  const marginLabel = margin === null ? t("products.editor.marginUnset") : t("products.editor.margin", { percent: margin.toFixed(1) });
+  const tradeOptions = supportedTrades.map((trade) => ({ value: trade, label: t(`domain.trade.${trade}`) }));
+  const categoryOptions = CATEGORY_VALUES.map((value) => ({ value, label: t(`domain.category.${value}`) }));
+  const unitOptions = UNIT_VALUES.map((value) => ({ value, label: t(`domain.unit.${value}`) }));
 
   function updateField<Key extends keyof ProductForm>(field: Key, value: ProductForm[Key]) {
     setError(null);
@@ -227,7 +207,7 @@ function ProductEditorModal({
 
   function submit() {
     if (form.name.trim().length < 2) {
-      setError("Enter a product or service name with at least 2 characters.");
+      setError(t("products.editor.validationName"));
       return;
     }
 
@@ -235,11 +215,11 @@ function ProductEditorModal({
     const cost = Number(form.unitCost);
     const price = Number(form.unitPrice);
     if (!Number.isFinite(quantity) || quantity <= 0) {
-      setError("Default quantity must be greater than zero.");
+      setError(t("products.editor.validationQuantity"));
       return;
     }
     if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(price) || price < 0) {
-      setError("Unit cost and customer price must be zero or greater.");
+      setError(t("products.editor.validationMoney"));
       return;
     }
 
@@ -253,53 +233,47 @@ function ProductEditorModal({
       open={open}
       onClose={requestClose}
       size="lg"
-      modal={false}
       closeOnBackdrop={false}
-      panelClassName="z-[60]"
-      ariaLabel={product ? "Edit product" : "Add product"}
+      ariaLabel={product ? t("products.editor.editTitle") : t("products.editor.addTitle")}
     >
       <ModalHeader
-        title={product ? "Edit product" : "Add product or service"}
-        description={
-          isStandard
-            ? "Standard catalog structure stays consistent; customize the description and pricing for your business."
-            : "Save reusable labor, material, fee, or service pricing for faster quotes."
-        }
+        title={product ? t("products.editor.editTitle") : t("products.editor.addTitle")}
+        description={product ? t("products.editor.editDescription") : t("products.editor.addDescription")}
         onClose={requestClose}
       />
       <ModalBody className="space-y-5">
         {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
         {saveError ? <Alert tone="error" onDismiss={onDismissSaveError}>{saveError}</Alert> : null}
         {isStandard ? (
-          <Alert tone="info">Standard catalog names, trades, categories, and units are locked to keep quote matching reliable.</Alert>
+          <Alert tone="info">{t("products.editor.starterLocked")}</Alert>
         ) : null}
         {draft ? (
-          <Alert tone="info">Kody prepared this draft from your request. Review every field—especially the pricing unit, internal cost, and customer price—before adding it.</Alert>
+          <Alert tone="info">{t("products.editor.kodyDraft")}</Alert>
         ) : null}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Input
-            label="Product or service name"
+            label={t("products.editor.name")}
             value={form.name}
             onChange={(event) => updateField("name", event.target.value)}
-            placeholder="Roof inspection"
+            placeholder={t("products.editor.namePlaceholder")}
             maxLength={120}
             disabled={saving || isStandard}
           />
           <Select
-            label="Trade"
+            label={t("products.trade")}
             value={form.serviceType}
             onChange={(event) => updateField("serviceType", event.target.value as ServiceType)}
-            options={supportedTrades.map((trade) => ({ value: trade, label: TRADE_LABELS[trade] }))}
+            options={tradeOptions}
             disabled={saving || isStandard}
           />
         </div>
 
         <Textarea
-          label="Customer-facing description"
+          label={t("products.editor.description")}
           value={form.description}
           onChange={(event) => updateField("description", event.target.value)}
-          placeholder="Describe the included work, materials, and useful scope details."
+          placeholder={t("products.editor.descriptionPlaceholder")}
           rows={4}
           maxLength={500}
           disabled={saving}
@@ -307,24 +281,24 @@ function ProductEditorModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Select
-            label="Category"
+            label={t("products.editor.category")}
             value={form.category}
             onChange={(event) => updateField("category", event.target.value as WorkPresetCategory)}
-            options={CATEGORY_OPTIONS}
+            options={categoryOptions}
             disabled={saving || isStandard}
           />
           <Select
-            label="Pricing unit"
+            label={t("products.editor.unit")}
             value={form.unitType}
             onChange={(event) => updateField("unitType", event.target.value as WorkPresetUnitType)}
-            options={UNIT_OPTIONS}
+            options={unitOptions}
             disabled={saving || isStandard}
           />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
           <Input
-            label="Default quantity"
+            label={t("products.editor.quantity")}
             type="number"
             min="0.01"
             step="0.01"
@@ -333,7 +307,7 @@ function ProductEditorModal({
             disabled={saving}
           />
           <Input
-            label="Internal unit cost"
+            label={t("products.editor.cost")}
             type="number"
             min="0"
             step="0.01"
@@ -342,7 +316,7 @@ function ProductEditorModal({
             disabled={saving}
           />
           <Input
-            label="Customer unit price"
+            label={t("products.editor.price")}
             type="number"
             min="0"
             step="0.01"
@@ -359,13 +333,13 @@ function ProductEditorModal({
         }`}>
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium">{marginLabel}</span>
-            <span className="text-xs">Internal cost never appears on customer PDFs.</span>
+            <span className="text-xs">{t("products.editor.costPrivacy")}</span>
           </div>
         </div>
       </ModalBody>
       <ModalFooter>
-        <Button variant="outline" onClick={requestClose} disabled={saving}>Cancel</Button>
-        <Button onClick={submit} loading={saving}>{product ? "Save changes" : "Add product"}</Button>
+        <Button variant="outline" onClick={requestClose} disabled={saving}>{t("common.cancel")}</Button>
+        <Button onClick={submit} loading={saving}>{product ? t("common.save") : t("products.add")}</Button>
       </ModalFooter>
     </Modal>
     <ConfirmModal
@@ -375,68 +349,81 @@ function ProductEditorModal({
         setDiscardConfirmOpen(false);
         onClose();
       }}
-      title="Discard unsaved product changes?"
-      description="Pricing, description, and product details changed in this window will be lost."
-      confirmLabel="Discard changes"
+      title={t("products.editor.discardTitle")}
+      description={t("products.editor.discardDescription")}
+      confirmLabel={t("products.editor.discard")}
       confirmVariant="warning"
     />
     </>
   );
 }
 
-function ProductMobileCard({ product, onEdit, onArchive }: {
+function ProductMobileCard({ product, canViewInternalCosts, canManageCatalog, onEdit, onArchive }: {
   product: WorkPreset;
+  canViewInternalCosts: boolean;
+  canManageCatalog: boolean;
   onEdit: () => void;
   onArchive: () => void;
 }) {
-  const margin = marginPercent(product.unitCost ?? 0, product.unitPrice);
+  const { t } = useTranslation();
+  const { locale } = useLocale();
+  const margin = canViewInternalCosts ? marginPercent(product.unitCost ?? 0, product.unitPrice) : null;
+  const source = productCatalogSource(product);
   return (
     <Card padding="md" className="space-y-4 md:hidden">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-semibold text-slate-900">{product.name}</h2>
-            <Badge tone={product.catalogKey ? "blue" : "slate"}>{product.catalogKey ? "Standard" : "Custom"}</Badge>
+            <Badge tone={source.tone}>{product.catalogKey ? (product.catalogCustomizedAtUtc ? t("products.sourceCustomized") : t("products.sourceStandard")) : t("products.sourceTenant")}</Badge>
           </div>
           <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
-            {product.description || "No customer-facing description yet."}
+            {product.description || t("products.noDescription")}
           </p>
         </div>
-        <Button variant="outline" size="sm" icon={<Pencil size={14} />} onClick={onEdit} aria-label={`Edit ${product.name}`}>
-          Edit
-        </Button>
+        {canManageCatalog ? (
+          <Button variant="outline" size="sm" icon={<Pencil size={14} />} onClick={onEdit} aria-label={t("products.editName", { name: product.name })}>
+            {t("products.edit")}
+          </Button>
+        ) : null}
       </div>
-      <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-sm">
+      <div className={`grid gap-3 rounded-xl bg-slate-50 p-3 text-sm ${canViewInternalCosts ? "grid-cols-2" : "grid-cols-1"}`}>
         <div>
-          <p className="text-xs text-slate-500">Customer price</p>
-          <p className="mt-1 font-semibold text-slate-900">{money(product.unitPrice)}</p>
+          <p className="text-xs text-slate-500">{t("products.columns.price")}</p>
+          <p className="mt-1 font-semibold text-slate-900">{money(product.unitPrice, locale)}</p>
         </div>
+        {canViewInternalCosts ? (
+          <div>
+            <p className="text-xs text-slate-500">{t("products.columns.cost")}</p>
+            <p className="mt-1 font-semibold text-slate-900">{money(product.unitCost ?? 0, locale)}</p>
+          </div>
+        ) : null}
         <div>
-          <p className="text-xs text-slate-500">Internal cost</p>
-          <p className="mt-1 font-semibold text-slate-900">{money(product.unitCost ?? 0)}</p>
+          <p className="text-xs text-slate-500">{t("products.columns.unit")}</p>
+          <p className="mt-1 font-medium text-slate-700">{t(`domain.unit.${product.unitType}`)}</p>
         </div>
-        <div>
-          <p className="text-xs text-slate-500">Unit</p>
-          <p className="mt-1 font-medium text-slate-700">{UNIT_LABELS[product.unitType]}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Margin</p>
-          <div className="mt-1"><Badge tone={marginTone(margin)}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</Badge></div>
-        </div>
+        {canViewInternalCosts ? (
+          <div>
+            <p className="text-xs text-slate-500">{t("products.columns.margin")}</p>
+            <div className="mt-1"><Badge tone={marginTone(margin)}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</Badge></div>
+          </div>
+        ) : null}
       </div>
       <div className="flex items-center justify-between gap-3">
-        <Badge tone="slate">{CATEGORY_LABELS[product.category]}</Badge>
+        <Badge tone="slate">{t(`domain.category.${product.category}`)}</Badge>
         {product.catalogKey ? (
-          <span className="text-xs font-medium text-slate-500">Always available</span>
-        ) : (
-          <Button variant="ghost" size="sm" icon={<Archive size={14} />} onClick={onArchive}>Archive</Button>
-        )}
+          <span className="text-xs font-medium text-slate-500">{t("products.sourceDetail")}</span>
+        ) : canManageCatalog ? (
+          <Button variant="ghost" size="sm" icon={<Archive size={14} />} onClick={onArchive}>{t("products.archive")}</Button>
+        ) : null}
       </div>
     </Card>
   );
 }
 
 export function ProductsPage() {
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   const location = useLocation();
   const navigate = useNavigate();
   const [products, setProducts] = useState<WorkPreset[]>([]);
@@ -449,11 +436,16 @@ export function ProductsPage() {
   const [productPageSize, setProductPageSize] = useState<PageSize>(25);
   const [productTotal, setProductTotal] = useState(0);
   const [standardProductCount, setStandardProductCount] = useState(0);
+  const [catalogPolicy, setCatalogPolicy] = useState<{
+    canManageCatalog: boolean;
+    canViewInternalCosts: boolean;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [syncingStarters, setSyncingStarters] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -462,16 +454,20 @@ export function ProductsPage() {
   const [kodyProductDraft, setKodyProductDraft] = useState<KodyProductDraft | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<WorkPreset | null>(null);
   const productRequestIdRef = useRef(0);
+  const canManageCatalog = catalogPolicy?.canManageCatalog ?? false;
+  const canViewInternalCosts = catalogPolicy?.canViewInternalCosts ?? false;
+  const catalogPolicyLoaded = catalogPolicy !== null;
 
   useEffect(() => {
     setSEOMetadata({
-      title: "Products & Services",
-      description: "Manage reusable products, services, costs, and customer pricing for QuoteFly quotes.",
+      title: t("products.title"),
+      description: t("products.subtitle"),
     });
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (loading) return;
+    if (!catalogPolicyLoaded || !canManageCatalog) return;
     const draft = kodyProductDraftFromState(location.state);
     if (!draft) return;
     setEditorError(null);
@@ -480,7 +476,7 @@ export function ProductsPage() {
     if (draft.serviceType) setSelectedTrade(draft.serviceType);
     setEditorOpen(true);
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
-  }, [loading, location.pathname, location.search, location.state, navigate]);
+  }, [canManageCatalog, catalogPolicyLoaded, loading, location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -508,6 +504,7 @@ export function ProductsPage() {
       setProducts(result.products);
       setProductTotal(result.pagination.total);
       setStandardProductCount(result.summary.standardCount);
+      setCatalogPolicy(result.policy);
       setSupportedTrades(result.supportedTrades);
       if (!supportedTrades.length && selectedTrade === "ROOFING" && primaryTrade !== "ROOFING") {
         setSelectedTrade(primaryTrade);
@@ -516,11 +513,11 @@ export function ProductsPage() {
       setLoadError(null);
     } catch (err) {
       if (requestId !== productRequestIdRef.current) return;
-      setLoadError(err instanceof ApiError ? err.message : "Products could not be loaded.");
+      setLoadError(localizedApiError(err, t, { fallbackKey: "products.loadError" }));
     } finally {
       if (requestId === productRequestIdRef.current) setLoading(false);
     }
-  }, [categoryFilter, debouncedSearchQuery, productPage, productPageSize, reloadKey, selectedTrade, supportedTrades.length]);
+  }, [categoryFilter, debouncedSearchQuery, productPage, productPageSize, reloadKey, selectedTrade, supportedTrades.length, t]);
 
   useEffect(() => {
     void loadProductPage();
@@ -537,8 +534,9 @@ export function ProductsPage() {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
   }, [tradeProducts]);
 
-  const tradeOptions = (supportedTrades.length ? supportedTrades : Object.keys(TRADE_LABELS) as ServiceType[])
-    .map((trade) => ({ value: trade, label: TRADE_LABELS[trade] }));
+  const tradeOptions = (supportedTrades.length ? supportedTrades : TRADE_VALUES)
+    .map((trade) => ({ value: trade, label: t(`domain.trade.${trade}`) }));
+  const categoryOptions = CATEGORY_VALUES.map((category) => ({ value: category, label: t(`domain.category.${category}`) }));
   const totalProductPages = Math.max(1, Math.ceil(productTotal / productPageSize));
 
   useEffect(() => {
@@ -546,6 +544,7 @@ export function ProductsPage() {
   }, [productPage, totalProductPages]);
 
   function openCreateProduct() {
+    if (!canManageCatalog) return;
     setEditorError(null);
     setEditingProduct(null);
     setKodyProductDraft(null);
@@ -553,6 +552,7 @@ export function ProductsPage() {
   }
 
   function openEditProduct(product: WorkPreset) {
+    if (!canManageCatalog) return;
     setEditorError(null);
     setEditingProduct(product);
     setKodyProductDraft(null);
@@ -592,12 +592,12 @@ export function ProductsPage() {
       setSelectedTrade(result.product.serviceType);
       setProductPage(1);
       setReloadKey((value) => value + 1);
-      setNotice(editingProduct ? `${result.product.name} updated.` : `${result.product.name} added to your catalog.`);
+      setNotice(editingProduct ? t("products.updatedName", { name: result.product.name }) : t("products.addedName", { name: result.product.name }));
       setEditorOpen(false);
       setEditingProduct(null);
       setKodyProductDraft(null);
     } catch (err) {
-      setEditorError(err instanceof ApiError ? err.message : "Product could not be saved.");
+      setEditorError(localizedApiError(err, t, { fallbackKey: "products.saveError" }));
     } finally {
       setSaving(false);
     }
@@ -607,8 +607,8 @@ export function ProductsPage() {
     if (!archiveTarget) return;
     if (archiveTarget.catalogKey) {
       setArchiveTarget(null);
-      notify.warning("Standard product stays available", {
-        description: "Edit its pricing or description instead of archiving it.",
+      notify.warning(t("products.standardAvailable"), {
+        description: t("products.standardAvailableDescription"),
       });
       return;
     }
@@ -617,30 +617,56 @@ export function ProductsPage() {
     try {
       await api.products.archive(archiveTarget.id);
       setReloadKey((value) => value + 1);
-      notify.success("Product archived", {
-        description: `${archiveTarget.name} was removed from new quote lists. Existing quotes are unchanged.`,
+      notify.success(t("products.archivedNotice"), {
+        description: t("products.archivedName", { name: archiveTarget.name }),
       });
       setArchiveTarget(null);
     } catch (err) {
-      notify.error("Product could not be archived", {
-        description: err instanceof ApiError ? err.message : "Please try again. The product was not changed.",
+      notify.error(t("products.archiveError"), {
+        description: localizedApiError(err, t, { fallbackKey: "products.unchanged" }),
       });
     } finally {
       setArchiving(false);
     }
   }
 
+  async function addMissingStarterItems() {
+    if (!canManageCatalog) return;
+    setSyncingStarters(true);
+    setError(null);
+    try {
+      const result = await api.products.syncStarterCatalog({ serviceType: selectedTrade });
+      if (result.createdCount > 0) {
+        const message = t("products.startersAdded", { count: result.createdCount, trade: t(`domain.trade.${selectedTrade}`) });
+        setNotice(message);
+        notify.success(t("products.startersAddedTitle"), { description: message });
+        setProductPage(1);
+        setReloadKey((value) => value + 1);
+      } else {
+        const message = t("products.startersCurrent", { trade: t(`domain.trade.${selectedTrade}`) });
+        setNotice(message);
+        notify.info(t("products.startersCurrentTitle"), { description: message });
+      }
+    } catch (err) {
+      const message = localizedApiError(err, t, { fallbackKey: "products.startersError" });
+      setError(message);
+      notify.error(t("products.startersUnchanged"), { description: message });
+    } finally {
+      setSyncingStarters(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Products & services"
-        subtitle="Keep reusable work, pricing, and scope details ready for fast, consistent quotes."
+        title={t("products.title")}
+        subtitle={t("products.subtitle")}
         mode="actions-only"
         actions={
           <>
             <KodyButton
-              label="Find profitable services"
-              prompt={`Rank profitable jobs and products for ${TRADE_LABELS[selectedTrade]}. Use safe tenant-scoped analytics to suggest which services are worth quoting more often.`}
+              label={t("products.findProfitable")}
+              prompt={t("products.findProfitablePrompt", { trade: t(`domain.trade.${selectedTrade}`) })}
               tool="RANK_PROFITABLE_JOBS"
               context={{
                 currentPage: "products",
@@ -648,7 +674,20 @@ export function ProductsPage() {
                 limit: 8,
               }}
             />
-            <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct} disabled={Boolean(loadError)}>Add product</Button>
+            {catalogPolicyLoaded && canManageCatalog ? (
+              <Button
+                variant="outline"
+                icon={<Boxes size={16} />}
+                onClick={() => void addMissingStarterItems()}
+                loading={syncingStarters}
+                disabled={Boolean(loadError)}
+              >
+                {t("products.starterItems")}
+              </Button>
+            ) : null}
+            {catalogPolicyLoaded && canManageCatalog ? (
+              <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct} disabled={Boolean(loadError)}>{t("products.add")}</Button>
+            ) : null}
           </>
         }
       />
@@ -656,54 +695,64 @@ export function ProductsPage() {
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
 
+      {catalogPolicyLoaded ? (
+        <Alert tone="info">
+        {canManageCatalog
+          ? t("products.manageHelp")
+          : t("products.readOnlyHelp")}
+        </Alert>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-quotefly-blue"><Boxes size={18} /></span>
-            <div><p className="text-xs text-slate-500">Active catalog</p><p className="text-xl font-semibold text-slate-900">{productTotal}</p></div>
+            <div><p className="text-xs text-slate-500">{t("products.activeCatalog")}</p><p className="text-xl font-semibold text-slate-900">{productTotal}</p></div>
           </div>
         </Card>
-        <Card padding="sm">
+        {catalogPolicyLoaded && canViewInternalCosts ? (
+          <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><TrendingUp size={18} /></span>
-            <div><p className="text-xs text-slate-500">Page average margin</p><p className="text-xl font-semibold text-slate-900">{averageMargin === null ? "—" : `${averageMargin.toFixed(1)}%`}</p></div>
+            <div><p className="text-xs text-slate-500">{t("products.averageMargin")}</p><p className="text-xl font-semibold text-slate-900">{averageMargin === null ? "—" : `${averageMargin.toFixed(1)}%`}</p></div>
           </div>
-        </Card>
+          </Card>
+        ) : null}
         <Card padding="sm">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><ShieldCheck size={18} /></span>
-            <div><p className="text-xs text-slate-500">Standard items</p><p className="text-xl font-semibold text-slate-900">{standardProductCount}</p></div>
+            <div><p className="text-xs text-slate-500">{t("products.standard")}</p><p className="text-xl font-semibold text-slate-900">{standardProductCount}</p></div>
           </div>
         </Card>
         <Card padding="sm">
-          <p className="text-xs text-slate-500">Catalog trade</p>
-          <Select className="mt-1" aria-label="Catalog trade" value={selectedTrade} onChange={(event) => { setSelectedTrade(event.target.value as ServiceType); setProductPage(1); }} options={tradeOptions} />
+          <p className="text-xs text-slate-500">{t("products.trade")}</p>
+          <Select className="mt-1" aria-label={t("products.trade")} value={selectedTrade} onChange={(event) => { setSelectedTrade(event.target.value as ServiceType); setProductPage(1); }} options={tradeOptions} />
         </Card>
       </div>
 
       <Card padding="md">
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-end">
           <Input
-            label="Search catalog"
+            label={t("products.searchLabel")}
             icon={<Search size={16} />}
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search by name, description, or type"
+            placeholder={t("products.searchPlaceholder")}
           />
           <Select
-            label="Category"
+            label={t("products.editor.category")}
             value={categoryFilter}
             onChange={(event) => { setCategoryFilter(event.target.value as "ALL" | WorkPresetCategory); setProductPage(1); }}
-            options={[{ value: "ALL", label: "All categories" }, ...CATEGORY_OPTIONS]}
+            options={[{ value: "ALL", label: t("products.allCategories") }, ...categoryOptions]}
           />
-          <p className="pb-2 text-sm text-slate-500 md:text-right">{productTotal} matched</p>
+          <p className="pb-2 text-sm text-slate-500 md:text-right">{t("products.matched", { count: productTotal })}</p>
         </div>
       </Card>
 
       {loading ? (
         <LoadingState
-          title="Loading products"
-          description="Fetching reusable work, pricing, and margin defaults for this trade."
+          title={t("products.loading")}
+          description={t("products.loadingDescription")}
           variant="table"
           rows={3}
         />
@@ -711,71 +760,79 @@ export function ProductsPage() {
         <Card>
           <EmptyState
             icon={<Boxes size={24} />}
-            title="Products are temporarily unavailable"
-            description={`${loadError} Your catalog was not changed.`}
-            action={<Button variant="outline" onClick={() => setReloadKey((value) => value + 1)}>Try again</Button>}
+            title={t("products.loadError")}
+            description={`${loadError} ${t("products.unchanged")}`}
+            action={<Button variant="outline" onClick={() => setReloadKey((value) => value + 1)}>{t("products.retry")}</Button>}
           />
         </Card>
       ) : visibleProducts.length === 0 ? (
         <Card>
           <EmptyState
             icon={<Boxes size={24} />}
-            title={debouncedSearchQuery || categoryFilter !== "ALL" ? "No products match these filters" : `No ${TRADE_LABELS[selectedTrade]} products yet`}
-            description={debouncedSearchQuery || categoryFilter !== "ALL" ? "Clear the search or choose another category." : "Add the work and pricing your team reuses most often."}
+            title={debouncedSearchQuery || categoryFilter !== "ALL" ? t("products.noMatches") : t("products.emptyTrade", { trade: t(`domain.trade.${selectedTrade}`) })}
+            description={debouncedSearchQuery || categoryFilter !== "ALL" ? t("products.noMatchesDescription") : t("products.emptyDescription")}
             action={debouncedSearchQuery || categoryFilter !== "ALL"
-              ? <Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("ALL"); setProductPage(1); }}>Clear filters</Button>
-              : <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>Add first product</Button>}
+              ? <Button variant="outline" onClick={() => { setSearchQuery(""); setCategoryFilter("ALL"); setProductPage(1); }}>{t("products.clearFilters")}</Button>
+              : catalogPolicyLoaded && canManageCatalog ? <Button icon={<PackagePlus size={16} />} onClick={openCreateProduct}>{t("products.add")}</Button> : undefined}
           />
         </Card>
       ) : (
         <>
           <div className="space-y-3 md:hidden">
             {visibleProducts.map((product) => (
-              <ProductMobileCard key={product.id} product={product} onEdit={() => openEditProduct(product)} onArchive={() => setArchiveTarget(product)} />
+              <ProductMobileCard
+                key={product.id}
+                product={product}
+                canViewInternalCosts={canViewInternalCosts}
+                canManageCatalog={canManageCatalog}
+                onEdit={() => openEditProduct(product)}
+                onArchive={() => setArchiveTarget(product)}
+              />
             ))}
           </div>
 
           <Card padding="sm" className="hidden overflow-hidden md:block">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-left text-sm">
+              <table className={`w-full text-left text-sm ${canViewInternalCosts || canManageCatalog ? "min-w-[900px]" : "min-w-[640px]"}`}>
                 <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-3 font-semibold">Product</th>
-                    <th className="px-3 py-3 font-semibold">Type</th>
-                    <th className="px-3 py-3 font-semibold">Default qty</th>
-                    <th className="px-3 py-3 font-semibold">Internal cost</th>
-                    <th className="px-3 py-3 font-semibold">Customer price</th>
-                    <th className="px-3 py-3 font-semibold">Margin</th>
-                    <th className="px-3 py-3 text-right font-semibold">Actions</th>
+                    <th className="px-3 py-3 font-semibold">{t("products.columns.item")}</th>
+                    <th className="px-3 py-3 font-semibold">{t("products.columns.category")}</th>
+                    <th className="px-3 py-3 font-semibold">{t("products.editor.quantity")}</th>
+                    {canViewInternalCosts ? <th className="px-3 py-3 font-semibold">{t("products.columns.cost")}</th> : null}
+                    <th className="px-3 py-3 font-semibold">{t("products.columns.price")}</th>
+                    {canViewInternalCosts ? <th className="px-3 py-3 font-semibold">{t("products.columns.margin")}</th> : null}
+                    {canManageCatalog ? <th className="px-3 py-3 text-right font-semibold">{t("products.columns.actions")}</th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {visibleProducts.map((product) => {
-                    const margin = marginPercent(product.unitCost ?? 0, product.unitPrice);
+                    const margin = canViewInternalCosts ? marginPercent(product.unitCost ?? 0, product.unitPrice) : null;
+                    const source = productCatalogSource(product);
                     return (
                       <tr key={product.id} className="align-top hover:bg-slate-50/70">
                         <td className="max-w-[340px] px-3 py-4">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold text-slate-900">{product.name}</p>
-                            <Badge tone={product.catalogKey ? "blue" : "slate"}>{product.catalogKey ? "Standard" : "Custom"}</Badge>
+                            <Badge tone={source.tone}>{product.catalogKey ? (product.catalogCustomizedAtUtc ? t("products.sourceCustomized") : t("products.sourceStandard")) : t("products.sourceTenant")}</Badge>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{product.description || "No customer-facing description yet."}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{product.description || t("products.noDescription")}</p>
                         </td>
-                        <td className="px-3 py-4"><Badge tone="slate">{CATEGORY_LABELS[product.category]}</Badge><p className="mt-2 text-xs text-slate-500">{UNIT_LABELS[product.unitType]}</p></td>
+                        <td className="px-3 py-4"><Badge tone="slate">{t(`domain.category.${product.category}`)}</Badge><p className="mt-2 text-xs text-slate-500">{t(`domain.unit.${product.unitType}`)}</p></td>
                         <td className="px-3 py-4 font-medium text-slate-700">{Number(product.defaultQuantity)}</td>
-                        <td className="px-3 py-4 font-medium text-slate-700">{money(product.unitCost ?? 0)}</td>
-                        <td className="px-3 py-4 font-semibold text-slate-900">{money(product.unitPrice)}</td>
-                        <td className="px-3 py-4"><Badge tone={marginTone(margin)}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</Badge></td>
-                        <td className="px-3 py-4">
+                        {canViewInternalCosts ? <td className="px-3 py-4 font-medium text-slate-700">{money(product.unitCost ?? 0, locale)}</td> : null}
+                        <td className="px-3 py-4 font-semibold text-slate-900">{money(product.unitPrice, locale)}</td>
+                        {canViewInternalCosts ? <td className="px-3 py-4"><Badge tone={marginTone(margin)}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</Badge></td> : null}
+                        {canManageCatalog ? <td className="px-3 py-4">
                           <div className="flex justify-end gap-2">
-                            <Button variant="outline" size="sm" icon={<Pencil size={14} />} onClick={() => openEditProduct(product)}>Edit</Button>
+                            <Button variant="outline" size="sm" icon={<Pencil size={14} />} onClick={() => openEditProduct(product)}>{t("products.edit")}</Button>
                             {product.catalogKey ? (
-                              <span className="self-center text-xs font-medium text-slate-500">Always available</span>
+                              <span className="self-center text-xs font-medium text-slate-500">{t("products.sourceDetail")}</span>
                             ) : (
-                              <Button variant="ghost" size="sm" icon={<Archive size={14} />} onClick={() => setArchiveTarget(product)} aria-label={`Archive ${product.name}`}>Archive</Button>
+                              <Button variant="ghost" size="sm" icon={<Archive size={14} />} onClick={() => setArchiveTarget(product)} aria-label={t("products.archiveName", { name: product.name })}>{t("products.archive")}</Button>
                             )}
                           </div>
-                        </td>
+                        </td> : null}
                       </tr>
                     );
                   })}
@@ -791,7 +848,7 @@ export function ProductsPage() {
         offset={(productPage - 1) * productPageSize}
         total={productTotal}
         loading={loading}
-        itemLabel="products"
+        itemLabel={t("navigation.products").toLocaleLowerCase(locale)}
         onLimitChange={(nextLimit) => {
           setProductPageSize(nextLimit);
           setProductPage(1);
@@ -806,7 +863,7 @@ export function ProductsPage() {
           product={editingProduct}
           draft={kodyProductDraft}
           defaultTrade={selectedTrade}
-          supportedTrades={supportedTrades.length ? supportedTrades : Object.keys(TRADE_LABELS) as ServiceType[]}
+          supportedTrades={supportedTrades.length ? supportedTrades : TRADE_VALUES}
           saving={saving}
           saveError={editorError}
           onDismissSaveError={() => setEditorError(null)}
@@ -819,9 +876,9 @@ export function ProductsPage() {
         open={Boolean(archiveTarget)}
         onClose={() => { if (!archiving) setArchiveTarget(null); }}
         onConfirm={() => void archiveProduct()}
-        title="Archive product?"
-        description={archiveTarget ? `${archiveTarget.name} will stop appearing in new quote product lists. Existing quotes stay unchanged.` : undefined}
-        confirmLabel="Archive product"
+        title={t("products.archiveTitle")}
+        description={archiveTarget ? t("products.archiveDescriptionName", { name: archiveTarget.name }) : undefined}
+        confirmLabel={t("products.archiveConfirm")}
         loading={archiving}
         confirmVariant="warning"
       />

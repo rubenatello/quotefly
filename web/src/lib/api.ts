@@ -220,17 +220,24 @@ async function requestBlob(path: string, options: RequestInit = {}): Promise<Blo
 export class ApiError extends Error {
   readonly status: number;
   readonly details: unknown;
+  readonly code: string | null;
 
   constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.details = details;
+    this.code =
+      details && typeof details === "object" && "code" in details && typeof details.code === "string"
+        ? details.code
+        : null;
   }
 }
 
+export type SupportedLocale = "en-US" | "es-US";
+
 export type AuthPayload = {
-  user: { id: string; email: string; fullName: string };
+  user: { id: string; email: string; fullName: string; preferredLocale: SupportedLocale };
   tenant: { id: string; name: string; slug: string };
 };
 
@@ -300,6 +307,7 @@ export type AuthSessionPayload = {
     id: string;
     email: string;
     fullName: string;
+    preferredLocale: SupportedLocale;
     createdAt: string;
   };
   tenant: {
@@ -618,6 +626,7 @@ export type AiAssistantRequestedTool =
   | "CUSTOMERS_WITHOUT_QUOTES"
   | "PIPELINE_SCENARIO"
   | "SEARCH_CUSTOMERS"
+  | "SEARCH_PRODUCTS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
   | "DRAFT_CUSTOMER"
@@ -835,6 +844,7 @@ export type Customer = {
   email?: string | null;
   phone: string;
   notes?: string | null;
+  preferredLocale?: SupportedLocale | null;
   followUpStatus: LeadFollowUpStatus;
   followUpUpdatedAtUtc?: string | null;
   archivedAtUtc?: string | null;
@@ -893,6 +903,7 @@ export type SaveQuoteSheetInput = {
     title: string;
     scopeText: string;
     taxAmount: number;
+    documentLocale?: SupportedLocale;
   };
   lineItems: Array<QuoteSheetLineInput & { id: string }>;
   newLineItems: QuoteSheetLineInput[];
@@ -908,6 +919,7 @@ export type Quote = {
   afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
+  documentLocale: SupportedLocale;
   internalCostSubtotal?: DecimalLike;
   customerPriceSubtotal: DecimalLike;
   taxAmount: DecimalLike;
@@ -1176,6 +1188,8 @@ export type WorkPreset = {
   tenantId: string;
   serviceType: ServiceType;
   catalogKey?: string | null;
+  catalogVersion?: number | null;
+  catalogCustomizedAtUtc?: string | null;
   category: WorkPresetCategory;
   unitType: WorkPresetUnitType;
   name: string;
@@ -1219,6 +1233,59 @@ export type OrganizationUser = {
     createdAt: string;
   };
 };
+
+export type ActivityTaskType = "FOLLOW_UP" | "PREPARE_QUOTE" | "SEND_QUOTE" | "CHECK_IN" | "CUSTOM";
+export type ActivityTaskStatus = "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
+export type ActivityTaskPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
+export type ActivityTaskDueFilter = "active" | "overdue" | "today" | "upcoming" | "completed";
+
+export type ActivityTask = {
+  id: string;
+  customerId: string;
+  quoteId: string | null;
+  assignedTenantUserId: string;
+  createdByTenantUserId: string;
+  completedByTenantUserId: string | null;
+  type: ActivityTaskType;
+  status: ActivityTaskStatus;
+  priority: ActivityTaskPriority;
+  title: string;
+  notes: string | null;
+  dueAtUtc: string;
+  completedAtUtc: string | null;
+  canceledAtUtc: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  customer: {
+    id: string;
+    fullName: string;
+    phone: string;
+    email: string | null;
+  };
+  quote: {
+    id: string;
+    title: string;
+    status: QuoteStatus;
+    totalAmount: number;
+  } | null;
+  assignedTenantUser: WorkspaceAssignee;
+};
+
+export type ActivityTaskInput = {
+  customerId: string;
+  quoteId?: string | null;
+  assignedTenantUserId?: string;
+  type: ActivityTaskType;
+  priority?: ActivityTaskPriority;
+  title: string;
+  notes?: string | null;
+  dueAtUtc: string;
+};
+
+function activityCommandHeaders(idempotencyKey?: string): HeadersInit {
+  return { "Idempotency-Key": idempotencyKey ?? `qf-ui-${crypto.randomUUID()}` };
+}
 
 export type WorkspaceAssignee = {
   id: string;
@@ -1509,6 +1576,7 @@ export const api = {
       fullName: string;
       companyName: string;
       primaryTrade: ServiceType;
+      preferredLocale?: SupportedLocale;
       logoUrl?: string;
       acceptedLegalTerms: true;
       termsVersion: string;
@@ -1533,6 +1601,12 @@ export const api = {
     logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
 
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
+
+    updatePreferences: (body: { preferredLocale: SupportedLocale }) =>
+      request<{ preferences: { preferredLocale: SupportedLocale } }>("/v1/auth/me/preferences", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
   },
 
   ai: {
@@ -1705,10 +1779,12 @@ export const api = {
         tenant: {
           name: string;
           timezone: string;
+          defaultCustomerLocale: SupportedLocale;
         };
         branding: TenantBranding | null;
         permissions: {
           canEditBusinessName: boolean;
+          canManageBranding: boolean;
         };
       }>(
         `/v1/tenants/${tenantId}/branding`,
@@ -1724,6 +1800,7 @@ export const api = {
         primaryColor: string;
         templateId: BrandingTemplateId;
         timezone: string;
+        defaultCustomerLocale?: SupportedLocale;
         businessProfile: BrandingBusinessProfile;
         componentColors?: BrandingComponentColors | null;
       },
@@ -1732,6 +1809,7 @@ export const api = {
         tenant: {
           name: string;
           timezone: string;
+          defaultCustomerLocale: SupportedLocale;
         };
         branding: TenantBranding;
       }>(
@@ -1826,6 +1904,98 @@ export const api = {
       ),
   },
 
+  activities: {
+    list: (query?: {
+      mine?: boolean;
+      assignedTenantUserId?: string;
+      status?: ActivityTaskStatus;
+      type?: ActivityTaskType;
+      due?: ActivityTaskDueFilter;
+      customerId?: string;
+      quoteId?: string;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
+      request<{
+        items: ActivityTask[];
+        pagination: Pagination;
+        scope: { mine: boolean };
+      }>(`/v1/activities${toQueryString({
+        mine: query?.mine,
+        assignedTenantUserId: query?.assignedTenantUserId,
+        status: query?.status,
+        type: query?.type,
+        due: query?.due,
+        customerId: query?.customerId,
+        quoteId: query?.quoteId,
+        search: query?.search,
+        limit: query?.limit,
+        offset: query?.offset,
+      })}`),
+
+    summary: (query?: { mine?: boolean }) =>
+      request<{
+        generatedAtUtc: string;
+        timezone: string;
+        windows: {
+          todayStartUtc: string;
+          tomorrowStartUtc: string;
+          upcomingEndUtc: string;
+          completedStartUtc: string;
+        };
+        counts: { overdue: number; today: number; upcoming: number; completed: number };
+        top: ActivityTask[];
+      }>(`/v1/activities/summary${toQueryString({ mine: query?.mine })}`),
+
+    create: (body: ActivityTaskInput, idempotencyKey?: string) =>
+      request<{ task: ActivityTask; duplicate: boolean }>("/v1/activities", {
+        method: "POST",
+        headers: activityCommandHeaders(idempotencyKey),
+        body: JSON.stringify(body),
+      }),
+
+    update: (
+      activityTaskId: string,
+      body: {
+        version: number;
+        assignedTenantUserId?: string;
+        type?: ActivityTaskType;
+        priority?: ActivityTaskPriority;
+        status?: "OPEN" | "IN_PROGRESS" | "CANCELED";
+        title?: string;
+        notes?: string | null;
+        dueAtUtc?: string;
+      },
+      idempotencyKey?: string,
+    ) => request<{ task: ActivityTask; duplicate: boolean }>(`/v1/activities/${activityTaskId}`, {
+      method: "PATCH",
+      headers: activityCommandHeaders(idempotencyKey),
+      body: JSON.stringify(body),
+    }),
+
+    complete: (activityTaskId: string, version: number) =>
+      request<{ task: ActivityTask; duplicate: boolean }>(`/v1/activities/${activityTaskId}/complete`, {
+        method: "POST",
+        headers: activityCommandHeaders(),
+        body: JSON.stringify({ version }),
+      }),
+
+    reopen: (activityTaskId: string, version: number) =>
+      request<{ task: ActivityTask; duplicate: boolean }>(`/v1/activities/${activityTaskId}/reopen`, {
+        method: "POST",
+        headers: activityCommandHeaders(),
+        body: JSON.stringify({ version }),
+      }),
+
+    remove: (activityTaskId: string, version: number) =>
+      request<void>(`/v1/activities/${activityTaskId}`, {
+        method: "DELETE",
+        headers: activityCommandHeaders(),
+        body: JSON.stringify({ version }),
+      }),
+  },
+
   products: {
     list: (query?: {
       serviceType?: ServiceType;
@@ -1864,6 +2034,18 @@ export const api = {
     archive: (productId: string) =>
       request<{ message: string }>(`/v1/products/${productId}`, {
         method: "DELETE",
+      }),
+
+    syncStarterCatalog: (body: { serviceType: ServiceType }) =>
+      request<{
+        message: string;
+        serviceType: ServiceType;
+        requestedCount: number;
+        createdCount: number;
+        skippedCount: number;
+      }>(`/v1/products/starter-catalog/add-missing`, {
+        method: "POST",
+        body: JSON.stringify(body),
       }),
   },
 
@@ -1945,6 +2127,7 @@ export const api = {
       phone: string;
       email?: string | null;
       notes?: string | null;
+      preferredLocale?: SupportedLocale | null;
       assignedTenantUserId?: string | null;
       followUpStatus?: LeadFollowUpStatus;
       duplicateAction?: "merge" | "create_new" | "use_existing";
@@ -1968,6 +2151,7 @@ export const api = {
         phone?: string;
         email?: string | null;
         notes?: string | null;
+        preferredLocale?: SupportedLocale | null;
         followUpStatus?: LeadFollowUpStatus;
         assignedTenantUserId?: string | null;
       },
@@ -2079,6 +2263,7 @@ export const api = {
       taxAmount: number;
       aiUsageEventId?: string;
       assignedTenantUserId?: string | null;
+      documentLocale?: SupportedLocale;
       lineItems?: Array<{
         description: string;
         sectionType?: "INCLUDED" | "ALTERNATE";
@@ -2208,6 +2393,7 @@ export const api = {
         assignedTenantUserId?: string | null;
         customerPriceSubtotal?: number;
         taxAmount?: number;
+        documentLocale?: SupportedLocale;
       },
     ) =>
       request<{ quote: Quote }>(`/v1/quotes/${quoteId}`, {

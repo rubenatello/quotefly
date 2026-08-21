@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { api, ApiError, type AuthPayload, type ServiceType } from "../lib/api";
+import { api, type AuthPayload, type ServiceType } from "../lib/api";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
-import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
+import { localizedApiError } from "../lib/localized-api-error";
+import { BASIC_PLAN } from "../lib/plans";
+import { useLocale } from "../i18n";
 import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from "./ui";
+import { LanguageSelector } from "./settings/LanguageSelector";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -16,19 +20,33 @@ interface AuthModalProps {
 export type AuthEntryMode = "signin" | "signup";
 type AuthMode = AuthEntryMode | "forgot";
 
-const TRADE_OPTIONS: { value: ServiceType; label: string }[] = [
-  { value: "HVAC", label: "HVAC" },
-  { value: "ROOFING", label: "Roofing" },
-  { value: "FLOORING", label: "Flooring" },
-  { value: "GARDENING", label: "Gardening" },
-  { value: "PLUMBING", label: "Plumbing" },
-  { value: "CONSTRUCTION", label: "Construction" },
-];
+const TRADE_VALUES: ServiceType[] = ["HVAC", "ROOFING", "FLOORING", "GARDENING", "PLUMBING", "CONSTRUCTION"];
+
+const TRADE_LABEL_KEYS: Record<ServiceType, string> = {
+  HVAC: "auth.trades.hvac",
+  ROOFING: "auth.trades.roofing",
+  FLOORING: "auth.trades.flooring",
+  GARDENING: "auth.trades.gardening",
+  PLUMBING: "auth.trades.plumbing",
+  CONSTRUCTION: "auth.trades.construction",
+};
+
+function formatUsd(locale: string, amount: number): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition focus:border-quotefly-blue focus:outline-none focus:ring-2 focus:ring-quotefly-blue/20";
 
 export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }: AuthModalProps) {
+  const { locale } = useLocale();
+  const { t } = useTranslation();
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -57,8 +75,8 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
     try {
       if (mode === "forgot") {
-        const response = await api.auth.forgotPassword({ email });
-        setSuccess(response.message);
+        await api.auth.forgotPassword({ email });
+        setSuccess(t("auth.resetEmailSentDescription"));
         return;
       }
 
@@ -70,6 +88,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
           fullName,
           companyName: businessName,
           primaryTrade,
+          preferredLocale: locale,
           acceptedLegalTerms: true,
           termsVersion: CURRENT_TERMS_VERSION,
           privacyPolicyVersion: CURRENT_PRIVACY_POLICY_VERSION,
@@ -89,7 +108,15 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
       setAcceptedLegalTerms(false);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setError(localizedApiError(err, t, {
+        fallbackKey: mode === "forgot" ? "apiErrors.passwordResetFailed" : "auth.genericError",
+        statusKeys:
+          mode === "signin"
+            ? { 400: "apiErrors.invalidRequest", 401: "apiErrors.invalidCredentials" }
+            : mode === "signup"
+              ? { 400: "apiErrors.invalidRequest", 409: "apiErrors.accountExists" }
+              : { 400: "apiErrors.invalidRequest" },
+      }));
     } finally {
       setIsLoading(false);
     }
@@ -110,22 +137,23 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
       open={isOpen}
       onClose={onClose}
       size="md"
-      ariaLabel={mode === "signin" ? "Sign in" : mode === "forgot" ? "Reset password" : "Start free trial"}
+      ariaLabel={mode === "signin" ? t("auth.signInAria") : mode === "forgot" ? t("auth.resetPasswordAria") : t("auth.startTrialAria")}
     >
       <ModalHeader
-        title={mode === "signin" ? "Welcome Back" : mode === "forgot" ? "Reset Your Password" : "Start Your Free Trial"}
+        title={mode === "signin" ? t("auth.welcomeBack") : mode === "forgot" ? t("auth.resetPasswordTitle") : t("auth.startTrialTitle")}
         description={
           mode === "signin"
-            ? "Sign in to your QuoteFly workspace."
+            ? t("auth.signInDescription")
             : mode === "forgot"
-              ? "Enter your account email and we’ll send you a secure reset link."
-              : "Set up your account in under a minute."
+              ? t("auth.resetDescription")
+              : t("auth.signupDescription")
         }
         onClose={onClose}
       />
 
       <ModalBody>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <LanguageSelector compact />
           {error && (
             <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <svg className="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 16 16" fill="currentColor">
@@ -137,7 +165,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
           {success && (
             <div role="status" className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
-              {success} Check your spam folder if it does not arrive within a few minutes.
+              {success} {t("auth.resetEmailHelp")}
             </div>
           )}
 
@@ -146,14 +174,14 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label htmlFor="fullName" className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Your Name
+                    {t("auth.yourName")}
                   </label>
                   <input
                     id="fullName"
                     type="text"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Jane Smith"
+                    placeholder={t("auth.fullNamePlaceholder")}
                     autoComplete="name"
                     className={inputClass}
                     required
@@ -161,14 +189,14 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                 </div>
                 <div>
                   <label htmlFor="business" className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Business Name
+                    {t("auth.businessName")}
                   </label>
                   <input
                     id="business"
                     type="text"
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="Your Contracting Co."
+                    placeholder={t("auth.businessPlaceholder")}
                     autoComplete="organization"
                     className={inputClass}
                     required
@@ -178,7 +206,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
               <div>
                 <label htmlFor="primaryTrade" className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Primary Trade
+                  {t("auth.primaryTrade")}
                 </label>
                 <select
                   id="primaryTrade"
@@ -186,18 +214,18 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                   onChange={(event) => setPrimaryTrade(event.target.value as ServiceType)}
                   className={inputClass}
                 >
-                  {TRADE_OPTIONS.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
+                  {TRADE_VALUES.map((trade) => (
+                    <option key={trade} value={trade}>
+                      {t(TRADE_LABEL_KEYS[trade])}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div className="border-t border-slate-100 pt-4">
-                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">Account Credentials</p>
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">{t("auth.accountCredentials")}</p>
                 <p className="-mt-1 text-xs leading-5 text-slate-500">
-                  Add your logo, quote preset, and brand color after account creation in Branding.
+                  {t("auth.brandingAfterSignup")}
                 </p>
               </div>
             </>
@@ -205,14 +233,14 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
           <div>
             <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-slate-700">
-              Email Address
+              {t("auth.emailAddress")}
             </label>
             <input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
+              placeholder={t("auth.emailPlaceholder")}
               autoComplete={mode === "signup" ? "username" : "email"}
               className={inputClass}
               required
@@ -223,9 +251,9 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
             <div>
               <div className="mb-1.5 flex items-center justify-between gap-3">
                 <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-                  Password{" "}
+                  {t("auth.password")}{" "}
                   {mode === "signup" && (
-                    <span className="font-normal text-slate-400">(min 8 characters)</span>
+                    <span className="font-normal text-slate-400">{t("auth.passwordMinimum")}</span>
                   )}
                 </label>
                 {mode === "signin" ? (
@@ -234,7 +262,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                     onClick={() => switchMode("forgot")}
                     className="min-h-11 text-sm font-semibold text-quotefly-blue transition-colors hover:text-blue-700 sm:min-h-0"
                   >
-                    Forgot password?
+                    {t("auth.forgotPassword")}
                   </button>
                 ) : null}
               </div>
@@ -244,7 +272,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                   type={passwordVisible ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={mode === "signin" ? "Enter your password" : "Choose a password"}
+                  placeholder={mode === "signin" ? t("auth.enterPassword") : t("auth.choosePasswordPlaceholder")}
                   autoComplete={mode === "signin" ? "current-password" : "new-password"}
                   minLength={mode === "signup" ? 8 : 1}
                   className={`${inputClass} pr-12`}
@@ -254,7 +282,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                   type="button"
                   onClick={() => setPasswordVisible((current) => !current)}
                   className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center rounded-r-lg text-slate-500 transition hover:text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-quotefly-blue"
-                  aria-label={passwordVisible ? "Hide entered characters" : "Show entered characters"}
+                  aria-label={passwordVisible ? t("auth.hidePassword") : t("auth.showPassword")}
                   aria-pressed={passwordVisible}
                 >
                   {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -273,23 +301,23 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
                 required
               />
               <span>
-                I agree to the{" "}
+                {t("auth.legalAgree")}{" "}
                 <Link
                   to="/terms"
                   target="_blank"
                   rel="noreferrer"
                   className="font-semibold text-quotefly-blue hover:text-blue-700"
                 >
-                  Terms of Service
+                  {t("auth.termsOfService")}
                 </Link>{" "}
-                and acknowledge the{" "}
+                {t("auth.legalAcknowledge")}{" "}
                 <Link
                   to="/privacy"
                   target="_blank"
                   rel="noreferrer"
                   className="font-semibold text-quotefly-blue hover:text-blue-700"
                 >
-                  Privacy Policy
+                  {t("auth.privacyPolicy")}
                 </Link>
                 .
               </span>
@@ -298,54 +326,54 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
           <Button
             type="submit"
-          disabled={isLoading || Boolean(success) || (mode === "signup" && !acceptedLegalTerms)}
+            disabled={isLoading || Boolean(success) || (mode === "signup" && !acceptedLegalTerms)}
             loading={isLoading}
             fullWidth
             size="lg"
           >
             {isLoading
-              ? "Please wait..."
+              ? t("auth.pleaseWait")
               : mode === "signin"
-                ? "Sign In"
+                ? t("auth.signIn")
                 : mode === "forgot"
                   ? success
-                    ? "Reset Link Sent"
-                    : "Send Reset Link"
-                  : "Create Account"}
+                    ? t("auth.resetLinkSent")
+                    : t("auth.sendResetLink")
+                  : t("auth.createAccount")}
           </Button>
 
           <p className="text-center text-sm text-slate-500">
             {mode === "forgot" ? (
               <>
-                Remember your password?{" "}
+                {t("auth.rememberPassword")}{" "}
                 <button
                   type="button"
                   onClick={() => switchMode("signin")}
                   className="min-h-11 font-medium text-quotefly-blue transition-colors hover:text-blue-700 sm:min-h-0"
                 >
-                  Back to sign in
+                  {t("auth.backToSignIn")}
                 </button>
               </>
             ) : mode === "signin" ? (
               <>
-                Don&apos;t have an account?{" "}
+                {t("auth.noAccount")}{" "}
                 <button
                   type="button"
                   onClick={() => switchMode("signup")}
-                  className="font-medium text-quotefly-blue transition-colors hover:text-blue-700"
+                  className="inline-flex min-h-11 items-center font-medium text-quotefly-blue transition-colors hover:text-blue-700"
                 >
-                  Start free trial
+                  {t("auth.startFreeTrial")}
                 </button>
               </>
             ) : (
               <>
-                Already have an account?{" "}
+                {t("auth.haveAccount")}{" "}
                 <button
                   type="button"
                   onClick={() => switchMode("signin")}
-                  className="font-medium text-quotefly-blue transition-colors hover:text-blue-700"
+                  className="inline-flex min-h-11 items-center font-medium text-quotefly-blue transition-colors hover:text-blue-700"
                 >
-                  Sign in
+                  {t("auth.signIn")}
                 </button>
               </>
             )}
@@ -355,13 +383,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = "signup" }
 
       <ModalFooter className="justify-center bg-slate-50 text-center text-xs text-slate-400">
         <p>
-          {BASIC_PLAN.trialDays}-day free trial &middot; If you continue, first paid month {basicFirstPaidMonthPriceLabel()} &middot;{" "}
+          {t("auth.trialLength", { days: BASIC_PLAN.trialDays })} &middot; {t("auth.firstPaidMonth", { price: formatUsd(locale, BASIC_PLAN.firstPaidMonthPriceUsd) })} &middot;{" "}
           <Link to="/terms" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
-            Terms
+            {t("auth.terms")}
           </Link>{" "}
           &amp;{" "}
           <Link to="/privacy" onClick={onClose} className="text-quotefly-blue hover:text-blue-700">
-            Privacy
+            {t("auth.privacy")}
           </Link>
         </p>
       </ModalFooter>

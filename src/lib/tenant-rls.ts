@@ -10,16 +10,23 @@ export type TenantRlsTransactionOptions = Readonly<{
   isolationLevel?: Prisma.TransactionIsolationLevel;
 }>;
 
-export const AI_RETRIEVAL_RLS_TABLES = [
+export const FORCED_TENANT_RLS_TABLES = [
   "AiRetrievalDocument",
   "AiRetrievalChunk",
   "AiRetrievalAuditEvent",
   "AiIndexJob",
   "QuoteDraftRecovery",
+  "ActivityTask",
+  "ActivityTaskEvent",
 ] as const;
 
+// Backward-compatible export for existing AI worker/readiness imports. The
+// registry now covers every table whose tenant boundary is enforced by forced
+// PostgreSQL RLS, not only retrieval storage.
+export const AI_RETRIEVAL_RLS_TABLES = FORCED_TENANT_RLS_TABLES;
+
 export type AiRetrievalRlsStatus = Readonly<{
-  tableName: (typeof AI_RETRIEVAL_RLS_TABLES)[number];
+  tableName: (typeof FORCED_TENANT_RLS_TABLES)[number];
   enabled: boolean;
   forced: boolean;
 }>;
@@ -102,7 +109,7 @@ export async function inspectAiRetrievalRls(client: PrismaClient): Promise<AiRet
     FROM pg_class c
     INNER JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = current_schema()
-      AND c.relname IN (${Prisma.join(AI_RETRIEVAL_RLS_TABLES)})
+      AND c.relname IN (${Prisma.join(FORCED_TENANT_RLS_TABLES)})
     ORDER BY c.relname
   `);
 }
@@ -122,7 +129,7 @@ export async function inspectAiRetrievalRuntimeRole(
         INNER JOIN pg_namespace owned_namespace ON owned_namespace.oid = owned_table.relnamespace
         WHERE owned_table.relowner = role.oid
           AND owned_namespace.nspname = current_schema()
-          AND owned_table.relname IN (${Prisma.join(AI_RETRIEVAL_RLS_TABLES)})
+          AND owned_table.relname IN (${Prisma.join(FORCED_TENANT_RLS_TABLES)})
       ) AS "protectedTableOwner",
       EXISTS (
         SELECT 1
@@ -141,10 +148,10 @@ export async function assertAiRetrievalRlsReady(
 ) {
   const rows = await inspectAiRetrievalRls(client);
   const statusByTable = new Map(rows.map((row) => [row.tableName, row]));
-  for (const tableName of AI_RETRIEVAL_RLS_TABLES) {
+  for (const tableName of FORCED_TENANT_RLS_TABLES) {
     const status = statusByTable.get(tableName);
     if (!status?.enabled || !status.forced) {
-      throw new Error(`AI_RETRIEVAL_RLS_NOT_FORCED:${tableName}`);
+      throw new Error(`TENANT_RLS_NOT_FORCED:${tableName}`);
     }
   }
 

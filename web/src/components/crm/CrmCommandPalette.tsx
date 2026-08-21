@@ -1,4 +1,6 @@
 import { useEffect, type ReactNode } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import {
@@ -38,85 +40,87 @@ type CommandItem = {
   group: "Actions" | "Workflow" | "Workspace";
 };
 
-const COMMAND_ITEMS: CommandItem[] = [
+function buildCommandItems(t: TFunction): CommandItem[] {
+  return [
   {
-    label: "New Customer",
-    description: "Open the fast add-customer flow from anywhere in the workspace.",
+    label: t("commands.items.newCustomer.label"),
+    description: t("commands.items.newCustomer.description"),
     action: "new-customer",
     icon: <UserPlus2 size={16} />,
     group: "Actions",
   },
   {
-    label: "New Quote",
-    description: "Jump straight into the quote builder with the current workflow shell.",
+    label: t("commands.items.newQuote.label"),
+    description: t("commands.items.newQuote.description"),
     action: "new-quote",
     icon: <FilePlus2 size={16} />,
     group: "Actions",
   },
   {
-    label: "Workspace Home",
-    description: "See new leads, quote momentum, follow-ups, and recent work at a glance.",
+    label: t("commands.items.home.label"),
+    description: t("commands.items.home.description"),
     page: "home",
     icon: <LayoutDashboard size={16} />,
     group: "Workflow",
   },
   {
-    label: "Customers",
-    description: "See customers in the sales pipeline from new to sold.",
+    label: t("commands.items.customers.label"),
+    description: t("commands.items.customers.description"),
     page: "customers",
     icon: <LayoutDashboard size={16} />,
     group: "Workflow",
   },
   {
-    label: "Quotes",
-    description: "See quote KPIs and open the quote desk when a quote needs work.",
+    label: t("commands.items.quotes.label"),
+    description: t("commands.items.quotes.description"),
     page: "quotes",
     icon: <FileText size={16} />,
     group: "Workflow",
   },
   {
-    label: "Activity",
-    description: "Work leads, active jobs, and after-sale check-ins in priority order.",
+    label: t("commands.items.activity.label"),
+    description: t("commands.items.activity.description"),
     page: "follow-up",
     icon: <ListTodo size={16} />,
     group: "Workflow",
   },
   {
-    label: "Analytics",
-    description: "Track quote performance, revenue, and recent outcomes.",
+    label: t("commands.items.analytics.label"),
+    description: t("commands.items.analytics.description"),
     page: "analytics",
     icon: <LineChart size={16} />,
     group: "Workflow",
   },
   {
-    label: "Branding",
-    description: "Manage company details, templates, and PDF styling.",
+    label: t("commands.items.branding.label"),
+    description: t("commands.items.branding.description"),
     page: "branding",
     icon: <Palette size={16} />,
     group: "Workspace",
   },
   {
-    label: "About Workspace",
-    description: "Copy your workspace ID and account context for QuoteFly support.",
+    label: t("commands.items.about.label"),
+    description: t("commands.items.about.description"),
     page: "about",
     icon: <BadgeInfo size={16} />,
     group: "Workspace",
   },
   {
-    label: "Organization Settings",
-    description: "Manage billing, launch-plan access, and workspace configuration.",
+    label: t("commands.items.settings.label"),
+    description: t("commands.items.settings.description"),
     page: "settings",
     icon: <Settings size={16} />,
     group: "Workspace",
   },
   {
-    label: "User Settings",
-    description: "Manage team members, roles, and seat usage.",
+    label: t("commands.items.users.label"),
+    description: t("commands.items.users.description"),
     page: "settings-users",
     icon: <UserRoundCog size={16} />,
     group: "Workspace",
   },
-];
+  ];
+}
 
 function CommandGroup({
   heading,
@@ -167,9 +171,11 @@ export function CrmCommandPalette({
   onQuickAction,
   allowedPages,
 }: CrmCommandPaletteProps) {
+  const { t } = useTranslation();
+  const commandItems = buildCommandItems(t);
   const visibleCommandItems = allowedPages
-    ? COMMAND_ITEMS.filter((item) => !item.page || allowedPages.includes(item.page))
-    : COMMAND_ITEMS;
+    ? commandItems.filter((item) => !item.page || allowedPages.includes(item.page))
+    : commandItems;
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -187,14 +193,14 @@ export function CrmCommandPalette({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-[140] bg-slate-950/45 backdrop-blur-sm" />
         <DialogPrimitive.Content className="qf-theme-scope fixed left-1/2 top-[10vh] z-[150] w-[min(680px,calc(100vw-24px))] -translate-x-1/2 overflow-hidden rounded-[28px] border border-qf-border bg-qf-surface text-qf-text shadow-[0_28px_90px_rgba(15,23,42,0.28)] outline-none">
-          <CommandPrimitive loop className="overflow-hidden" label="QuoteFly workspace search">
+          <CommandPrimitive loop className="overflow-hidden" label={t("commands.searchLabel")}>
             <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
               <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-quotefly-blue/[0.08] text-quotefly-blue">
                 <Search size={18} />
               </span>
               <CommandPrimitive.Input
                 autoFocus
-                placeholder="Jump to customers, quotes, analytics, branding..."
+                placeholder={t("commands.placeholder")}
                 className="w-full border-0 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
               />
               <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline-flex">
@@ -204,11 +210,11 @@ export function CrmCommandPalette({
 
             <CommandPrimitive.List className="max-h-[420px] overflow-y-auto p-3">
               <CommandPrimitive.Empty className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">
-                No workspace result matched this search.
+                {t("commands.noResults")}
               </CommandPrimitive.Empty>
 
               <CommandGroup
-                heading="Actions"
+                heading={t("commands.groups.actions")}
                 items={visibleCommandItems.filter((item) => item.group === "Actions")}
                 onSelect={(item) => {
                   if (item.action) onQuickAction(item.action);
@@ -217,7 +223,7 @@ export function CrmCommandPalette({
               />
 
               <CommandGroup
-                heading="Workflow"
+                heading={t("commands.groups.workflow")}
                 items={visibleCommandItems.filter((item) => item.group === "Workflow")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);
@@ -226,7 +232,7 @@ export function CrmCommandPalette({
               />
 
               <CommandGroup
-                heading="Workspace"
+                heading={t("commands.groups.workspace")}
                 items={visibleCommandItems.filter((item) => item.group === "Workspace")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);

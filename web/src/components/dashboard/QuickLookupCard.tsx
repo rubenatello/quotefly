@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import { money } from "./DashboardContext";
 import { QuoteStatusPill } from "./DashboardUi";
 import { CustomerIcon, EmailIcon, MessageIcon, QuoteIcon } from "../Icons";
 import { Button, Card, CardHeader, EmptyState, Input, Skeleton } from "../ui";
-import { api, ApiError, type Customer, type Quote } from "../../lib/api";
+import { api, type Customer, type Quote } from "../../lib/api";
+import { localizedApiError } from "../../lib/localized-api-error";
 import { formatUsPhoneDisplay } from "../../lib/phone";
 
 type ActionVariant = "primary" | "secondary" | "outline" | "ghost";
@@ -23,8 +25,8 @@ interface QuickLookupCardProps {
 }
 
 export function QuickLookupCard({
-  title = "Find Customer or Quote",
-  subtitle = "Search by customer name, phone, email, or quote title before creating anything new.",
+  title,
+  subtitle,
   customerActionLabel,
   customerActionVariant = "outline",
   onCustomerAction,
@@ -33,6 +35,8 @@ export function QuickLookupCard({
   activeQuoteId,
   className = "",
 }: QuickLookupCardProps) {
+  const { t, i18n } = useTranslation();
+  const formatMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +70,7 @@ export function QuickLookupCard({
         if (cancelled) return;
         setCustomers([]);
         setQuotes([]);
-        setError(lookupError instanceof ApiError ? lookupError.message : "Lookup failed.");
+        setError(localizedApiError(lookupError, t, { fallbackKey: "quoteComponents.quickLookup.error" }));
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -78,21 +82,24 @@ export function QuickLookupCard({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, t]);
 
   const hasQuery = query.trim().length >= 2;
   const hasResults = customers.length > 0 || quotes.length > 0;
 
   return (
     <Card variant="default" padding="md" className={className}>
-      <CardHeader title={title} subtitle={subtitle} />
+      <CardHeader
+        title={title ?? t("quoteComponents.quickLookup.title")}
+        subtitle={subtitle ?? t("quoteComponents.quickLookup.subtitle")}
+      />
 
       <div className="space-y-3">
         <Input
-          aria-label="Search customers and quotes"
+          aria-label={t("quoteComponents.quickLookup.searchLabel")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search customer name, phone, email, or quote title"
+          placeholder={t("quoteComponents.quickLookup.searchPlaceholder")}
           icon={<Search size={16} />}
         />
 
@@ -101,23 +108,23 @@ export function QuickLookupCard({
         {!hasQuery && !loading ? (
           <EmptyState
             icon={<Search size={18} />}
-            title="Start typing to search"
-            description="Type at least two characters to look up customers and quotes."
+            title={t("quoteComponents.quickLookup.start")}
+            description={t("quoteComponents.quickLookup.startDescription")}
           />
         ) : null}
 
         {loading ? (
           <div className="grid gap-4 lg:grid-cols-2">
-            <LookupSkeletonSection title="Customers" />
-            <LookupSkeletonSection title="Quotes" />
+            <LookupSkeletonSection title={t("quoteComponents.quickLookup.customers")} />
+            <LookupSkeletonSection title={t("quoteComponents.quickLookup.quotes")} />
           </div>
         ) : null}
 
         {hasQuery && !loading ? (
           <div className="grid gap-4 lg:grid-cols-2">
             <LookupSection
-              title="Customers"
-              emptyLabel="No customers matched this search."
+              title={t("quoteComponents.quickLookup.customers")}
+              emptyLabel={t("quoteComponents.quickLookup.noCustomers")}
               results={customers.map((customer) => (
                 <LookupResultCard
                   key={customer.id}
@@ -128,7 +135,7 @@ export function QuickLookupCard({
                     { icon: <MessageIcon size={12} />, label: formatUsPhoneDisplay(customer.phone) },
                     ...(customer.email ? [{ icon: <EmailIcon size={12} />, label: customer.email }] : []),
                   ]}
-                  actionLabel={customer.id === activeCustomerId ? "Selected" : customerActionLabel}
+                  actionLabel={customer.id === activeCustomerId ? t("quoteComponents.quickLookup.selected") : customerActionLabel}
                   actionVariant={customer.id === activeCustomerId ? "ghost" : customerActionVariant}
                   actionDisabled={customer.id === activeCustomerId}
                   onAction={() => onCustomerAction(customer)}
@@ -137,8 +144,8 @@ export function QuickLookupCard({
             />
 
             <LookupSection
-              title="Quotes"
-              emptyLabel="No quotes matched this search."
+              title={t("quoteComponents.quickLookup.quotes")}
+              emptyLabel={t("quoteComponents.quickLookup.noQuotes")}
               results={quotes.map((quote) => (
                 <LookupResultCard
                   key={quote.id}
@@ -146,11 +153,11 @@ export function QuickLookupCard({
                   active={quote.id === activeQuoteId}
                   title={quote.title}
                   meta={[
-                    { label: quote.customer?.fullName ?? "Customer unavailable" },
-                    { label: money(quote.totalAmount) },
+                    { label: quote.customer?.fullName ?? t("quoteComponents.quickLookup.customerUnavailable") },
+                    { label: formatMoney(quote.totalAmount) },
                   ]}
                   aside={<QuoteStatusPill status={quote.status} compact />}
-                  actionLabel={quote.id === activeQuoteId ? "Open Now" : "Open Quote"}
+                  actionLabel={quote.id === activeQuoteId ? t("quoteComponents.quickLookup.openNow") : t("quoteComponents.quickLookup.openQuote")}
                   actionVariant={quote.id === activeQuoteId ? "ghost" : "outline"}
                   actionDisabled={quote.id === activeQuoteId}
                   onAction={() => onQuoteAction(quote)}
@@ -162,7 +169,7 @@ export function QuickLookupCard({
 
         {hasQuery && !loading && !hasResults ? (
           <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Nothing matched. Try a customer phone number, customer email, or part of the quote title.
+            {t("quoteComponents.quickLookup.none")}
           </div>
         ) : null}
       </div>

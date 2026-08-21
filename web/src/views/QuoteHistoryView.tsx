@@ -1,12 +1,14 @@
 import { useDashboard, money, formatDateTime } from "../components/dashboard/DashboardContext";
+import { useTranslation } from "react-i18next";
 import { FeatureLockedCard, QuoteStatusPill, HistoryEventPill, OutboundChannelPill } from "../components/dashboard/DashboardUi";
 import { Card, CardHeader, Button, EmptyState, Alert, LoadingState } from "../components/ui";
 import { usePageView } from "../lib/analytics";
 
 export function QuoteHistoryView() {
   usePageView("quote_history");
+  const { t, i18n } = useTranslation();
   const {
-    error, notice, setError, setNotice,
+    session, error, notice, setError, setNotice,
     canViewQuoteHistory, canViewCommunicationLog,
     currentPlanLabel, canAutoUpgradeMessage,
     quoteHistory, historyLoading, historyMode, setHistoryMode,
@@ -15,6 +17,9 @@ export function QuoteHistoryView() {
     selectedQuote, outboundEvents, outboundEventsLoading,
     loadOutboundEvents,
   } = useDashboard();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const formatMoney = (value: string | number) => money(value, locale);
+  const formatLocalDate = (value: string) => formatDateTime(value, locale, session?.timezone);
 
   return (
     <div className="space-y-5">
@@ -24,9 +29,9 @@ export function QuoteHistoryView() {
       {canViewQuoteHistory ? (
         <Card>
           <CardHeader
-            title="Quote Revision History"
-            subtitle="Track all quote changes, organized by quote, customer, or across all records."
-            actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh</Button>}
+            title={t("quoteComponents.history.title")}
+            subtitle={t("quoteComponents.history.subtitle")}
+            actions={<Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>{t("quoteComponents.history.refresh")}</Button>}
           />
           <div className="mb-3 flex flex-wrap items-center gap-2">
             {(["quote", "customer", "all"] as const).map((mode) => (
@@ -40,17 +45,17 @@ export function QuoteHistoryView() {
                     : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 }`}
               >
-                {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
+                {t(`quoteComponents.history.mode.${mode}`)}
               </button>
             ))}
             {historyMode === "customer" && (
               <select
-                aria-label="Filter quote history by customer"
+                aria-label={t("quoteComponents.history.customerFilter")}
                 value={historyCustomerId}
                 onChange={(e) => setHistoryCustomerId(e.target.value)}
                 className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
               >
-                <option value="ALL">Select customer...</option>
+                <option value="ALL">{t("quoteComponents.history.selectCustomer")}</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>{c.fullName}</option>
                 ))}
@@ -60,13 +65,13 @@ export function QuoteHistoryView() {
 
           {historyLoading ? (
             <LoadingState
-              title="Loading revision history"
-              description="Retrieving quote versions, changed fields, and user activity."
+              title={t("quoteComponents.history.loading")}
+              description={t("quoteComponents.history.loadingDescription")}
               variant="list"
               rows={4}
             />
           ) : quoteHistory.length === 0 ? (
-            <EmptyState title="No history" description="No history entries for this filter yet." />
+            <EmptyState title={t("quoteComponents.history.empty")} description={t("quoteComponents.history.emptyDescription")} />
           ) : (
             <div className="max-h-[500px] space-y-2 overflow-auto">
               {quoteHistory.map((revision) => (
@@ -76,22 +81,22 @@ export function QuoteHistoryView() {
                       <HistoryEventPill eventType={revision.eventType} />
                       <p className="truncate text-sm font-medium text-slate-900">{revision.title}</p>
                     </div>
-                    <p className="shrink-0 text-xs text-slate-600">{formatDateTime(revision.createdAt)}</p>
+                    <p className="shrink-0 text-xs text-slate-600">{formatLocalDate(revision.createdAt)}</p>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                     <p className="text-slate-600">
-                      v{revision.version} - Customer: {revision.customer.fullName} - By {revision.actorName || revision.actorEmail || "Unknown"}
+                      {t("quoteComponents.history.revisionMeta", { version: revision.version, customer: revision.customer.fullName, actor: revision.actorName || revision.actorEmail || t("quoteComponents.unknown") })}
                     </p>
                     <div className="flex items-center gap-2">
                       <QuoteStatusPill status={revision.status} compact />
                       <p className="text-slate-700">
-                        Subtotal {money(revision.customerPriceSubtotal)} - Total {money(revision.totalAmount)}
+                        {t("quoteComponents.history.totals", { subtotal: formatMoney(revision.customerPriceSubtotal), total: formatMoney(revision.totalAmount) })}
                       </p>
                     </div>
                   </div>
                   {revision.changedFields.length > 0 && (
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Fields: {revision.changedFields.join(", ")}
+                      {t("quoteComponents.history.fields", { fields: revision.changedFields.join(", ") })}
                     </p>
                   )}
                 </div>
@@ -101,8 +106,8 @@ export function QuoteHistoryView() {
         </Card>
       ) : (
         <FeatureLockedCard
-          title="Quote Revision History"
-          description="Revision history, customer-level history, and long-term quote timelines unlock on Professional."
+          title={t("quoteComponents.history.title")}
+          description={t("quoteComponents.history.locked")}
           currentPlanLabel={currentPlanLabel}
           requiredPlanLabel="Professional"
           showUpgradeHint={canAutoUpgradeMessage}
@@ -112,35 +117,35 @@ export function QuoteHistoryView() {
       {canViewCommunicationLog ? (
         <Card>
           <CardHeader
-            title="Communication Log"
-            subtitle={selectedQuote ? `Send activity for: ${selectedQuote.title}` : "Select a quote to view send activity."}
-            actions={selectedQuote ? <Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button> : undefined}
+            title={t("quoteComponents.sendLog.title")}
+            subtitle={selectedQuote ? t("quoteComponents.sendLog.forQuote", { title: selectedQuote.title }) : t("quoteComponents.sendLog.select")}
+            actions={selectedQuote ? <Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>{t("quoteComponents.history.refresh")}</Button> : undefined}
           />
 
           {!selectedQuote ? (
-            <EmptyState title="No quote selected" description="Select a quote from the Builder or Quote Desk to see communication logs." />
+            <EmptyState title={t("quoteComponents.sendLog.noQuote")} description={t("quoteComponents.sendLog.noQuoteDescription")} />
           ) : outboundEventsLoading ? (
             <LoadingState
-              title="Loading send activity"
-              description="Checking email, SMS, copy, and download events for this quote."
+              title={t("quoteComponents.sendLog.loading")}
+              description={t("quoteComponents.sendLog.loadingDescription")}
               variant="list"
               rows={3}
             />
           ) : outboundEvents.length === 0 ? (
-            <EmptyState title="No activity" description="No send actions logged yet for this quote." />
+            <EmptyState title={t("quoteComponents.sendLog.empty")} description={t("quoteComponents.sendLog.emptyDescription")} />
           ) : (
             <div className="max-h-[400px] space-y-2 overflow-auto">
               {outboundEvents.map((event) => (
                 <div key={event.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <OutboundChannelPill channel={event.channel} />
-                    <p className="text-xs text-slate-600">{formatDateTime(event.createdAt)}</p>
+                    <p className="text-xs text-slate-600">{formatLocalDate(event.createdAt)}</p>
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    {event.destination ? `To: ${event.destination}` : "Destination not captured"}
+                    {event.destination ? t("quoteComponents.sendLog.to", { destination: event.destination }) : t("quoteComponents.sendLog.noDestination")}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">By {event.actorName || event.actorEmail || "Unknown"}</p>
-                  {event.subject && <p className="mt-1 text-xs text-slate-600">Subject: {event.subject}</p>}
+                  <p className="mt-1 text-xs text-slate-500">{t("quoteComponents.sendLog.by", { actor: event.actorName || event.actorEmail || t("quoteComponents.unknown") })}</p>
+                  {event.subject && <p className="mt-1 text-xs text-slate-600">{t("quoteComponents.sendLog.subject", { subject: event.subject })}</p>}
                 </div>
               ))}
             </div>
@@ -148,8 +153,8 @@ export function QuoteHistoryView() {
         </Card>
       ) : (
         <FeatureLockedCard
-          title="Communication Log"
-          description="Email/text/copy activity tracking unlocks on Professional."
+          title={t("quoteComponents.sendLog.title")}
+          description={t("quoteComponents.sendLog.locked")}
           currentPlanLabel={currentPlanLabel}
           requiredPlanLabel="Professional"
           showUpgradeHint={canAutoUpgradeMessage}

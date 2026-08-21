@@ -51,6 +51,13 @@ test("retrieval query rewriting expands only vague follow-ups from prior user tu
   });
   assert.equal(standalone.mode, "none");
   assert.equal(standalone.effectiveQuery, standalone.originalQuery);
+
+  const spanish = resolveAiRetrievalQuery({
+    query: "¿Y qué tal la mano de obra?",
+    priorUserQueries: ["Prepara una cotización para reparar el techo de María"],
+  });
+  assert.equal(spanish.mode, "same_task_context_v1");
+  assert.match(spanish.effectiveQuery, /reparar el techo de María/i);
 });
 
 test("retrieval query rewriting refuses unsafe prior context and stays bounded", () => {
@@ -75,6 +82,22 @@ test("retrieval query rewriting refuses unsafe prior context and stays bounded",
     "job",
     "123",
   ]);
+  assert.deepEqual(aiRetrievalLexicalTokens("¿Qué reparación necesita el baño de José?"), [
+    "reparación",
+    "necesita",
+    "baño",
+    "josé",
+  ]);
+});
+
+test("embedding queries redact Spanish credential labels before provider use", () => {
+  const prepared = prepareAiEmbeddingQuery(
+    "Cotización de techo; contraseña: NuncaGuardar123; clave de API=valor-secreto-456",
+  );
+
+  assert.match(prepared.embeddingQuery ?? "", /Cotización de techo/i);
+  assert.doesNotMatch(prepared.embeddingQuery ?? "", /NuncaGuardar|valor-secreto|contraseña|clave de API/i);
+  assert.ok(prepared.redactionCount >= 2);
 });
 
 test("embedding queries redact contact details and credentials while lexical ranking keeps the bounded original", () => {
@@ -110,7 +133,7 @@ test("embedding query preparation covers common provider, webhook, URL, and opaq
 });
 
 test("retrieval invokes the embedding provider with the sanitized query only", async () => {
-  process.env.DATABASE_URL ??= "postgresql://quotefly_runtime:placeholder@127.0.0.1:5432/quotefly_test";
+  process.env.DATABASE_URL ??= "postgresql://127.0.0.1:5432/quotefly_test";
   process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";
   const { retrieveAiContextFromIndex } = await import("../../src/lib/ai-retrieval");
   let providerInput = "";
@@ -140,7 +163,7 @@ test("retrieval invokes the embedding provider with the sanitized query only", a
 });
 
 test("retrieval never sends credential-bearing service URIs to the embedding provider", async () => {
-  process.env.DATABASE_URL ??= "postgresql://quotefly_runtime:placeholder@127.0.0.1:5432/quotefly_test";
+  process.env.DATABASE_URL ??= "postgresql://127.0.0.1:5432/quotefly_test";
   process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";
   const { retrieveAiContextFromIndex } = await import("../../src/lib/ai-retrieval");
   let providerInput = "";
@@ -154,7 +177,12 @@ test("retrieval never sends credential-bearing service URIs to the embedding pro
         capabilities: capabilitiesForRole("owner"),
         requestId: "retrieval-service-uri-spy",
       },
-      query: "Check this connection postgresql://owner:super-secret@db.example.com/quotefly and redis://cache:password@cache.example.com:6379/0 for a roof quote",
+      query:
+        "Check this connection " +
+        "postgresql://owner:" +
+        "super-secret@db.example.com/quotefly and " +
+        "redis://cache:" +
+        "password@cache.example.com:6379/0 for a roof quote",
       purpose: "QUOTE_DRAFT",
       requestId: "retrieval-service-uri-spy",
       embedText: async (text) => {

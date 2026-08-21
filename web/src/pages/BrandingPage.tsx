@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import type { LucideIcon } from "lucide-react";
 import {
   AlignCenter,
@@ -16,14 +18,15 @@ import {
   Upload,
 } from "lucide-react";
 import { setSEOMetadata } from "../lib/seo";
+import i18n from "../i18n/i18n";
 import { QUOTE_MESSAGE_TEMPLATE_TOKENS } from "../lib/quote-message-template";
 import {
   api,
-  ApiError,
   type BrandingBusinessProfile,
   type BrandingComponentColors,
   type BrandingLogoPosition,
   type PlanCode,
+  type SupportedLocale,
 } from "../lib/api";
 import { isSupportedBrandLogoDataUrl, resizeBrandLogoFile } from "../lib/brand-logo";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
@@ -84,68 +87,92 @@ const FALLBACK_TIMEZONES = [
   "UTC",
 ];
 
-const COLOR_COMPONENTS: Array<{ key: keyof BrandingComponentColors; label: string; description: string }> = [
-  { key: "headerBgColor", label: "Header Background", description: "Top header block color in the PDF quote." },
-  { key: "sectionTitleColor", label: "Section Titles", description: "Color for section labels like Scope and Customer." },
-  { key: "tableHeaderBgColor", label: "Table Header", description: "Line-item table header background color." },
-  { key: "tableHeaderTextColor", label: "Table Header Text", description: "Text color used inside the line-item table header." },
-  { key: "totalsColor", label: "Totals", description: "Subtotal, tax, and total emphasis color." },
-  { key: "footerTextColor", label: "Footer Text", description: "Footer and metadata text color." },
-];
+function colorComponents(t: TFunction): Array<{ key: keyof BrandingComponentColors; label: string; description: string }> {
+  return [
+    { key: "headerBgColor", label: t("branding.colors.components.headerBg.label"), description: t("branding.colors.components.headerBg.description") },
+    { key: "sectionTitleColor", label: t("branding.colors.components.sectionTitle.label"), description: t("branding.colors.components.sectionTitle.description") },
+    { key: "tableHeaderBgColor", label: t("branding.colors.components.tableHeader.label"), description: t("branding.colors.components.tableHeader.description") },
+    { key: "tableHeaderTextColor", label: t("branding.colors.components.tableText.label"), description: t("branding.colors.components.tableText.description") },
+    { key: "totalsColor", label: t("branding.colors.components.totals.label"), description: t("branding.colors.components.totals.description") },
+    { key: "footerTextColor", label: t("branding.colors.components.footerText.label"), description: t("branding.colors.components.footerText.description") },
+  ];
+}
 
-const LOGO_POSITION_OPTIONS: LogoPositionOption[] = [
+function logoPositionOptions(t: TFunction): LogoPositionOption[] {
+  return [
   {
     value: "left",
-    label: "Top Left",
-    description: "Good for compact contractor marks.",
+    label: t("branding.logoSection.positions.left.label"),
+    description: t("branding.logoSection.positions.left.description"),
     icon: AlignLeft,
   },
   {
     value: "center",
-    label: "Top Center",
-    description: "Best for badge or stacked logos.",
+    label: t("branding.logoSection.positions.center.label"),
+    description: t("branding.logoSection.positions.center.description"),
     icon: AlignCenter,
   },
   {
     value: "right",
-    label: "Top Right",
-    description: "Good for cleaner corporate headers.",
+    label: t("branding.logoSection.positions.right.label"),
+    description: t("branding.logoSection.positions.right.description"),
     icon: AlignRight,
   },
-];
+  ];
+}
 
-const BRANDING_SECTIONS: BrandingSectionConfig[] = [
+function brandingSections(t: TFunction): BrandingSectionConfig[] {
+  return [
   {
     id: "business",
-    title: "Business Info",
-    description: "Sender details and timezone",
+    title: t("branding.sections.business.title"),
+    description: t("branding.sections.business.description"),
     icon: Building2,
   },
   {
     id: "logo",
-    title: "Logo",
-    description: "Upload or remove your mark",
+    title: t("branding.sections.logo.title"),
+    description: t("branding.sections.logo.description"),
     icon: ImageIcon,
   },
   {
     id: "colors",
-    title: "Colors",
-    description: "Primary and component styling",
+    title: t("branding.sections.colors.title"),
+    description: t("branding.sections.colors.description"),
     icon: Palette,
   },
   {
     id: "templates",
-    title: "Templates",
-    description: "Switch quote layout style",
+    title: t("branding.sections.templates.title"),
+    description: t("branding.sections.templates.description"),
     icon: SwatchBook,
   },
   {
     id: "preview",
-    title: "Preview",
-    description: "See the customer-facing output",
+    title: t("branding.sections.preview.title"),
+    description: t("branding.sections.preview.description"),
     icon: Eye,
   },
-];
+  ];
+}
+
+function localizedTemplateOptions(t: TFunction): QuoteTemplateOption[] {
+  return QUOTE_TEMPLATE_OPTIONS.map((template) => ({
+    ...template,
+    name: t(`branding.templates.${template.id}.name`),
+    bestFor: t(`branding.templates.${template.id}.bestFor`),
+    description: t(`branding.templates.${template.id}.description`),
+  }));
+}
+
+function formatPreviewDate(locale: SupportedLocale, timeZone: string) {
+  const date = new Date("2026-04-10T12:00:00.000Z");
+  try {
+    return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric", timeZone }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric" }).format(date);
+  }
+}
 
 function getBrowserTimezone(): string {
   try {
@@ -238,6 +265,7 @@ function buildBrandingSnapshot(input: {
   hideQuoteFlyAttribution: boolean;
   brandColor: string;
   timezone: string;
+  defaultCustomerLocale: SupportedLocale;
   businessProfile: BrandingBusinessProfile;
   selectedTemplate: StandardQuoteTemplateId;
   componentColors: BrandingComponentColors;
@@ -277,6 +305,7 @@ function TemplateMiniPreview({
   active: boolean;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -327,7 +356,7 @@ function TemplateMiniPreview({
           <p className="text-sm font-semibold text-[var(--qf-text)]">{template.name}</p>
           {active ? (
             <span className="rounded-full bg-quotefly-blue/[0.08] px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-quotefly-blue">
-              Selected
+              {t("branding.completion.selected")}
             </span>
           ) : null}
         </div>
@@ -339,18 +368,22 @@ function TemplateMiniPreview({
 }
 
 export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: BrandingPageProps) {
+  const { t } = useTranslation();
   useEffect(() => {
     setSEOMetadata({
-      title: "Quote Branding - Customize Your Quotes | QuoteFly",
-      description:
-        "Upload your logo, choose colors, set business sender info, and customize quote templates to match your brand.",
-      keywords: "quote branding, custom quote templates, contractor branding, sender business info",
+      title: t("branding.seoTitle"),
+      description: t("branding.seoDescription"),
+      keywords: t("branding.seoKeywords"),
     });
-  }, []);
+  }, [t]);
 
   const effectiveTenantId = tenantId ?? localStorage.getItem("qf_tenant_id") ?? undefined;
   const browserTimezone = useMemo(() => getBrowserTimezone(), []);
   const timezoneOptions = useMemo(() => getSupportedTimezones(), []);
+  const sections = useMemo(() => brandingSections(t), [t]);
+  const componentOptions = useMemo(() => colorComponents(t), [t]);
+  const logoPositions = useMemo(() => logoPositionOptions(t), [t]);
+  const templates = useMemo(() => localizedTemplateOptions(t), [t]);
 
   const [companyName, setCompanyName] = useState("QuoteFly Services");
   const [canEditBusinessName, setCanEditBusinessName] = useState(false);
@@ -359,6 +392,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   const [hideQuoteFlyAttribution, setHideQuoteFlyAttribution] = useState(false);
   const [brandColor, setBrandColor] = useState("#5B85AA");
   const [timezone, setTimezone] = useState(browserTimezone);
+  const [defaultCustomerLocale, setDefaultCustomerLocale] = useState<SupportedLocale>("en-US");
   const [businessProfile, setBusinessProfile] = useState<BrandingBusinessProfile>(EMPTY_BUSINESS_PROFILE);
   const [selectedTemplate, setSelectedTemplate] = useState<StandardQuoteTemplateId>("modern");
   const [componentColors, setComponentColors] = useState<BrandingComponentColors>({});
@@ -413,6 +447,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
         setCompanyName(tenant.name);
         setCanEditBusinessName(permissions.canEditBusinessName);
         setTimezone(nextTimezone);
+        setDefaultCustomerLocale(tenant.defaultCustomerLocale);
         setLogo(nextLogo);
         setBrandColor(nextBrandColor);
         setSelectedTemplate(nextTemplate);
@@ -428,6 +463,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             hideQuoteFlyAttribution: nextHideAttribution,
             brandColor: nextBrandColor,
             timezone: nextTimezone,
+            defaultCustomerLocale: tenant.defaultCustomerLocale,
             businessProfile: nextBusinessProfile,
             selectedTemplate: nextTemplate,
             componentColors: nextComponentColors,
@@ -438,7 +474,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
       .catch((error) => {
         if (!isActive) return;
         setCanEditBusinessName(false);
-        setLoadErrorMessage(error instanceof ApiError ? error.message : "Could not load branding settings.");
+        setLoadErrorMessage(t("branding.loadFallback"));
+        console.error("Failed to load branding:", error);
         setHasLoaded(false);
       })
       .finally(() => {
@@ -448,7 +485,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     return () => {
       isActive = false;
     };
-  }, [browserTimezone, effectiveTenantId, loadAttempt]);
+  }, [browserTimezone, effectiveTenantId, loadAttempt, t]);
 
   useEffect(
     () => () => {
@@ -460,11 +497,16 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
   );
 
   const selectedTemplateIndex = useMemo(() => {
-    const index = QUOTE_TEMPLATE_OPTIONS.findIndex((template) => template.id === selectedTemplate);
+    const index = templates.findIndex((template) => template.id === selectedTemplate);
     return index >= 0 ? index : 0;
-  }, [selectedTemplate]);
+  }, [selectedTemplate, templates]);
 
-  const activeTemplate = QUOTE_TEMPLATE_OPTIONS[selectedTemplateIndex] ?? getQuoteTemplateOption(selectedTemplate);
+  const activeTemplate = templates[selectedTemplateIndex] ?? {
+    ...getQuoteTemplateOption(selectedTemplate),
+    name: t(`branding.templates.${selectedTemplate}.name`),
+    bestFor: t(`branding.templates.${selectedTemplate}.bestFor`),
+    description: t(`branding.templates.${selectedTemplate}.description`),
+  };
   const businessAddressLines = formatBusinessAddress(businessProfile);
   const hasBusinessInfo = Boolean(
     businessProfile.businessEmail?.trim() ||
@@ -479,13 +521,13 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     Boolean,
   ).length;
   const sectionCompletionLabel: Partial<Record<BrandingSectionId, string>> = {
-    business: hasBusinessInfo ? "Ready" : undefined,
-    logo: logo ? "Uploaded" : undefined,
-    colors: brandColor ? "Set" : undefined,
-    templates: selectedTemplate ? "Selected" : undefined,
-    preview: "Live",
+    business: hasBusinessInfo ? t("branding.completion.ready") : undefined,
+    logo: logo ? t("branding.completion.uploaded") : undefined,
+    colors: brandColor ? t("branding.completion.set") : undefined,
+    templates: selectedTemplate ? t("branding.completion.selected") : undefined,
+    preview: t("branding.completion.live"),
   };
-  const brandingLinks = BRANDING_SECTIONS.map((section) => ({
+  const brandingLinks = sections.map((section) => ({
     id: `branding-${section.id}`,
     label: section.title,
     hint: section.description,
@@ -499,6 +541,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
         hideQuoteFlyAttribution,
         brandColor,
         timezone,
+        defaultCustomerLocale,
         businessProfile,
         selectedTemplate,
         componentColors,
@@ -513,6 +556,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
       logoPosition,
       selectedTemplate,
       timezone,
+      defaultCustomerLocale,
     ],
   );
   const isDirty = hasLoaded && lastSavedSnapshot !== currentSnapshot;
@@ -522,7 +566,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     cancelNavigation,
     continueNavigation,
   } = useUnsavedChangesGuard(isDirty && !isSaving, {
-    historyPrompt: "You have unsaved branding changes. Leave this page and discard them?",
+    historyPrompt: t("branding.leavePrompt"),
   });
 
   const toggleSection = (sectionId: BrandingSectionId) => {
@@ -559,6 +603,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
         primaryColor: brandColor,
         templateId: selectedTemplate,
         timezone,
+        defaultCustomerLocale,
         businessProfile: normalizeBusinessProfileForSave(businessProfile),
         componentColors: componentColorPayload,
       });
@@ -573,6 +618,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
       setCompanyName(result.tenant.name);
       setTimezone(nextTimezone);
+      setDefaultCustomerLocale(result.tenant.defaultCustomerLocale);
       setBrandColor(result.branding.primaryColor);
       setSelectedTemplate(nextTemplate);
       setLogo(nextLogo);
@@ -588,6 +634,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           hideQuoteFlyAttribution: nextHideAttribution,
           brandColor: result.branding.primaryColor,
           timezone: nextTimezone,
+          defaultCustomerLocale: result.tenant.defaultCustomerLocale,
           businessProfile: nextBusinessProfile,
           selectedTemplate: nextTemplate,
           componentColors: nextComponentColors,
@@ -599,8 +646,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
       saveStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (err) {
       setSaveStatus("error");
-      setSaveErrorMessage(err instanceof ApiError ? err.message : "Failed to save branding.");
-      console.error("Failed to save branding:", err instanceof ApiError ? err.message : err);
+      setSaveErrorMessage(t("branding.saveFallback"));
+      console.error("Failed to save branding:", err);
     } finally {
       setIsSaving(false);
     }
@@ -611,13 +658,13 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     if (!file) return;
     if (file.type !== "image/png" && file.type !== "image/jpeg") {
       setSaveStatus("error");
-      setSaveErrorMessage("Choose a PNG or JPG logo.");
+      setSaveErrorMessage(t("branding.logoSection.invalidType"));
       event.target.value = "";
       return;
     }
     if (file.size > 8 * 1024 * 1024) {
       setSaveStatus("error");
-      setSaveErrorMessage("Logo file is too large. Keep it under 8 MB before upload.");
+      setSaveErrorMessage(t("branding.logoSection.tooLarge"));
       event.target.value = "";
       return;
     }
@@ -629,7 +676,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
       setSaveErrorMessage(null);
     } catch (err) {
       setSaveStatus("error");
-      setSaveErrorMessage(err instanceof Error ? err.message : "Could not process logo file.");
+      setSaveErrorMessage(t("branding.logoSection.processFailed"));
+      console.error("Failed to process branding logo:", err);
     } finally {
       event.target.value = "";
     }
@@ -689,52 +737,54 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
     footerTextColor: getComponentColorValue("footerTextColor"),
   };
   const componentColorOverrideCount = Object.keys(normalizeComponentColors(componentColors)).length;
+  const documentT = i18n.getFixedT(defaultCustomerLocale);
+  const previewPreparedDate = formatPreviewDate(defaultCustomerLocale, timezone);
   const contrastWarnings = [
     {
-      label: "Table header text",
+      label: t("branding.colors.components.tableText.label"),
       ratio: getContrastRatio(
         previewComponentColors.tableHeaderTextColor ?? "#ffffff",
         previewComponentColors.tableHeaderBgColor ?? brandColor,
       ),
     },
     {
-      label: "Section titles",
+      label: t("branding.colors.components.sectionTitle.label"),
       ratio: getContrastRatio(previewComponentColors.sectionTitleColor ?? brandColor, "#ffffff"),
     },
     {
-      label: "Totals",
+      label: t("branding.colors.components.totals.label"),
       ratio: getContrastRatio(previewComponentColors.totalsColor ?? brandColor, "#ffffff"),
     },
     {
-      label: "Footer text",
+      label: t("branding.colors.components.footerText.label"),
       ratio: getContrastRatio(previewComponentColors.footerTextColor ?? "#666666", "#ffffff"),
     },
   ].filter((warning) => warning.ratio < 4.5);
   return (
     <div className="space-y-5 pb-24 xl:pb-0">
         <PageHeader
-          title="Quote Branding"
-          subtitle="Set the sender identity, colors, and template your customers actually see."
+          title={t("branding.title")}
+          subtitle={t("branding.subtitle")}
           mode="actions-only"
-          actions={hasLoaded ? <Badge tone="blue">{completedSectionCount}/4 ready</Badge> : undefined}
+          actions={hasLoaded ? <Badge tone="blue">{t("branding.readyCount", { count: completedSectionCount })}</Badge> : undefined}
         />
 
         {!effectiveTenantId ? (
           <div className="rounded-[28px] border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <h2 className="font-display text-xl font-semibold text-slate-900">Sign in to manage quote branding</h2>
-            <p className="mt-2 text-sm text-slate-500">Your saved business details, logo, and PDF styling will appear here.</p>
+            <h2 className="font-display text-xl font-semibold text-slate-900">{t("branding.signInTitle")}</h2>
+            <p className="mt-2 text-sm text-slate-500">{t("branding.signInDescription")}</p>
           </div>
         ) : isLoading ? (
           <LoadingState
-            title="Loading saved branding settings"
-            description="Editing and saving stay disabled until the saved version is ready."
+            title={t("branding.loading")}
+            description={t("branding.loadingDescription")}
             variant="cards"
             rows={4}
           />
         ) : loadErrorMessage || !hasLoaded ? (
           <div className="rounded-[28px] border border-red-200 bg-white p-8 text-center shadow-sm" role="alert">
-            <h2 className="font-display text-xl font-semibold text-slate-900">Branding settings did not load</h2>
-            <p className="mt-2 text-sm text-red-600">{loadErrorMessage ?? "Could not load branding settings."}</p>
+            <h2 className="font-display text-xl font-semibold text-slate-900">{t("branding.loadFailed")}</h2>
+            <p className="mt-2 text-sm text-red-600">{loadErrorMessage ?? t("branding.loadFallback")}</p>
             <Button
               type="button"
               variant="outline"
@@ -742,7 +792,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               className="mt-5"
               onClick={() => setLoadAttempt((attempt) => attempt + 1)}
             >
-              Try again
+              {t("branding.tryAgain")}
             </Button>
           </div>
         ) : (
@@ -750,63 +800,68 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 sm:gap-6 xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]">
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-24 xl:self-start">
             <WorkspaceRailCard
-              eyebrow="Brand Setup"
+              eyebrow={t("branding.setup")}
               title={companyName}
-              description="Manage sender identity, visual styling, and quote layout from one operator surface."
+              description={t("branding.setupDescription")}
             >
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-1">
-                <BrandingSummaryTile label="Timezone">
+                <BrandingSummaryTile label={t("branding.timezone")}>
                   <p className="text-sm font-semibold text-slate-900">{timezone}</p>
                 </BrandingSummaryTile>
-                <BrandingSummaryTile label="Template">
+                <BrandingSummaryTile label={t("branding.customerLanguage")}>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {defaultCustomerLocale === "es-US" ? t("branding.spanishUs") : t("branding.englishUs")}
+                  </p>
+                </BrandingSummaryTile>
+                <BrandingSummaryTile label={t("branding.template")}>
                   <p className="text-sm font-semibold text-slate-900">{activeTemplate.name}</p>
                 </BrandingSummaryTile>
-                <BrandingSummaryTile label="Logo">
+                <BrandingSummaryTile label={t("branding.logo")}>
                   {logo ? (
                     <div className="flex items-center gap-3">
                       <div className="flex h-11 w-16 items-center justify-center rounded-xl border border-slate-200 bg-white px-2">
-                        <img src={logo} alt="Saved logo" className="max-h-8 w-auto max-w-full object-contain" />
+                        <img src={logo} alt={t("branding.savedLogoAlt")} className="max-h-8 w-auto max-w-full object-contain" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-slate-900">Active</p>
-                        <p className="text-xs text-slate-500">Editor, preview, and PDF</p>
+                        <p className="text-sm font-semibold text-slate-900">{t("branding.active")}</p>
+                        <p className="text-xs text-slate-500">{t("branding.activeEverywhere")}</p>
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm font-semibold text-slate-900">Not uploaded</p>
+                    <p className="text-sm font-semibold text-slate-900">{t("branding.notUploaded")}</p>
                   )}
                 </BrandingSummaryTile>
-                <BrandingSummaryTile label="Placement">
-                  <p className="text-sm font-semibold capitalize text-slate-900">{logoPosition}</p>
+                <BrandingSummaryTile label={t("branding.placement")}>
+                  <p className="text-sm font-semibold text-slate-900">{t(`branding.placementValue.${logoPosition}`)}</p>
                 </BrandingSummaryTile>
-                <BrandingSummaryTile label="QuoteFly footer">
+                <BrandingSummaryTile label={t("branding.footer")}>
                   <p className="text-sm font-semibold text-slate-900">
-                    {showQuoteFlyAttribution ? "Visible on quotes" : "Hidden on quotes"}
+                    {showQuoteFlyAttribution ? t("branding.footerVisible") : t("branding.footerHidden")}
                   </p>
                   <p className="mt-1 text-xs text-slate-600">
                     {effectivePlanCode === "starter"
-                      ? "Starter always shows QuoteFly attribution."
-                      : "Professional and Enterprise can hide it."}
+                      ? t("branding.starterAttribution")
+                      : t("branding.paidAttribution")}
                   </p>
                 </BrandingSummaryTile>
               </div>
               <ProgressBar
                 value={(completedSectionCount / 4) * 100}
-                label="Branding completion"
-                hint={`${completedSectionCount}/4 ready`}
+                label={t("branding.completionLabel")}
+                hint={t("branding.readyCount", { count: completedSectionCount })}
                 className="mt-4"
               />
               <WorkspaceJumpBar links={brandingLinks} className="mt-4" />
             </WorkspaceRailCard>
 
             <WorkspaceRailCard
-              eyebrow="Save"
-              title="Customer-facing output"
-              description="Branding changes affect the quote PDF your customer opens, prints, or forwards."
+              eyebrow={t("branding.saveEyebrow")}
+              title={t("branding.outputTitle")}
+              description={t("branding.outputDescription")}
             >
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
-                  {BRANDING_SECTIONS.map((section) => {
+                  {sections.map((section) => {
                     const completion = sectionCompletionLabel[section.id];
 
                     return (
@@ -823,15 +878,15 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   })}
                 </div>
                 <Button onClick={handleSave} disabled={isSaving || !isDirty || isBusinessNameInvalid} loading={isSaving} fullWidth>
-                  {isSaving ? "Saving..." : isDirty ? "Save Branding" : "Branding Saved"}
+                  {isSaving ? t("branding.saving") : isDirty ? t("branding.saveBranding") : t("branding.brandingSaved")}
                 </Button>
                 <div className="min-h-[20px] text-sm" aria-live="polite">
-                  {saveStatus === "saved" && !isDirty ? <span className="font-medium text-quotefly-blue">Saved</span> : null}
-                  {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? "Save failed"}</span> : null}
-                  {isDirty && saveStatus !== "error" ? <span className="font-medium text-amber-700">Unsaved changes</span> : null}
+                  {saveStatus === "saved" && !isDirty ? <span className="font-medium text-quotefly-blue">{t("branding.saved")}</span> : null}
+                  {saveStatus === "error" ? <span className="font-medium text-red-500">{saveErrorMessage ?? t("branding.saveFailed")}</span> : null}
+                  {isDirty && saveStatus !== "error" ? <span className="font-medium text-amber-700">{t("branding.unsaved")}</span> : null}
                 </div>
                 <p className="text-xs leading-5 text-slate-500">
-                  Save applies your business details, logo, template, and colors to new quote output.
+                  {t("branding.saveHelp")}
                 </p>
               </div>
             </WorkspaceRailCard>
@@ -860,8 +915,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <BrandingSectionCard
               id="branding-business"
-              title="Business Info"
-              description="Customer PDFs use this sender block and footer message."
+              title={t("branding.business.title")}
+              description={t("branding.business.description")}
               icon={Building2}
               isOpen={openSections.business}
               completionLabel={sectionCompletionLabel.business}
@@ -873,27 +928,27 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     value={companyName}
                     onChange={(event) => setCompanyName(event.target.value)}
                     disabled={!canEditBusinessName}
-                    label="Business Name"
+                    label={t("branding.business.name")}
                     maxLength={120}
                     className={!canEditBusinessName ? "bg-slate-100 text-slate-700" : undefined}
                   />
                   <p className={`mt-1 text-xs ${isBusinessNameInvalid ? "text-red-600" : "text-slate-500"}`}>
                     {isBusinessNameInvalid
-                      ? "Business name must be at least 2 characters."
+                      ? t("branding.business.nameInvalid")
                       : canEditBusinessName
-                      ? "Owners and admins can update the name shown on customer quotes."
-                      : "Ask an owner or admin to update the name shown on customer quotes."}
+                      ? t("branding.business.nameEditable")
+                      : t("branding.business.nameLocked")}
                   </p>
                 </div>
                 <Input
-                  label="Business Email"
+                  label={t("branding.business.email")}
                   type="email"
                   value={businessProfile.businessEmail ?? ""}
                   onChange={(event) => updateBusinessField("businessEmail", event.target.value)}
                   placeholder="office@yourcompany.com"
                 />
                 <Input
-                  label="Business Phone"
+                  label={t("branding.business.phone")}
                   type="tel"
                   value={businessProfile.businessPhone ?? ""}
                   onChange={(event) => updateBusinessField("businessPhone", event.target.value)}
@@ -901,24 +956,14 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                 />
                 <div className="md:col-span-2">
                   <Textarea
-                    label="Quote Message Template"
+                    label={t("branding.business.message")}
                     rows={7}
                     value={businessProfile.quoteMessageTemplate ?? ""}
                     onChange={(event) => updateBusinessField("quoteMessageTemplate", event.target.value)}
-                    placeholder={[
-                      "Hi {customer_name},",
-                      "",
-                      "Thanks for the opportunity to quote this project.",
-                      "",
-                      "Quote: {quote_title}",
-                      "Total: {quote_total}",
-                      "",
-                      "Call: {business_phone}",
-                      "Email: {business_email}",
-                    ].join("\n")}
+                    placeholder={t("branding.business.messagePlaceholder")}
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    Used when QuoteFly opens Email App or Text App. Leave blank to use the default message.
+                    {t("branding.business.messageHelp")}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {QUOTE_MESSAGE_TEMPLATE_TOKENS.map((token) => (
@@ -929,13 +974,13 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   </div>
                 </div>
                 <Input
-                  label="Address Line 1"
+                  label={t("branding.business.address1")}
                   value={businessProfile.addressLine1 ?? ""}
                   onChange={(event) => updateBusinessField("addressLine1", event.target.value)}
                   placeholder="123 Main Street"
                 />
                 <Input
-                  label="Address Line 2"
+                  label={t("branding.business.address2")}
                   value={businessProfile.addressLine2 ?? ""}
                   onChange={(event) => updateBusinessField("addressLine2", event.target.value)}
                   placeholder="Suite 200"
@@ -943,20 +988,20 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-1">
                     <Input
-                      label="City"
+                      label={t("branding.business.city")}
                       value={businessProfile.city ?? ""}
                       onChange={(event) => updateBusinessField("city", event.target.value)}
                       placeholder="Charlotte"
                     />
                   </div>
                   <Input
-                    label="State"
+                    label={t("branding.business.state")}
                       value={businessProfile.state ?? ""}
                       onChange={(event) => updateBusinessField("state", event.target.value)}
                       placeholder="NC"
                   />
                   <Input
-                    label="ZIP"
+                    label={t("branding.business.zip")}
                       value={businessProfile.postalCode ?? ""}
                       onChange={(event) => updateBusinessField("postalCode", event.target.value)}
                       placeholder="28202"
@@ -964,7 +1009,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                 </div>
                 <div>
                   <div className="mb-1 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <label className="block text-xs font-medium text-slate-600">Timezone</label>
+                    <label className="block text-xs font-medium text-slate-600">{t("branding.timezone")}</label>
                     <Button
                       type="button"
                       variant="ghost"
@@ -972,8 +1017,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                       className="w-full sm:w-auto"
                       onClick={() => setTimezone(browserTimezone)}
                     >
-                      <span className="sm:hidden">Use local timezone</span>
-                      <span className="hidden sm:inline">Use local timezone ({browserTimezone})</span>
+                      <span className="sm:hidden">{t("branding.business.useLocal")}</span>
+                      <span className="hidden sm:inline">{t("branding.business.useLocalNamed", { timezone: browserTimezone })}</span>
                     </Button>
                   </div>
                   <Select
@@ -983,12 +1028,29 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                     options={timezoneOptions.map((option) => ({ value: option, label: option }))}
                   />
                 </div>
+                <div>
+                  <Select
+                    label={t("branding.business.defaultLanguage")}
+                    value={defaultCustomerLocale}
+                    disabled={!canEditBusinessName}
+                    onChange={(event) =>
+                      setDefaultCustomerLocale(event.target.value as SupportedLocale)
+                    }
+                    options={[
+                      { value: "en-US", label: t("branding.englishUs") },
+                      { value: "es-US", label: t("branding.spanishUs") },
+                    ]}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    {t("branding.business.languageHelp")}
+                  </p>
+                </div>
                 <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">QuoteFly footer attribution</p>
+                      <p className="text-sm font-semibold text-slate-900">{t("branding.business.footerTitle")}</p>
                       <p className="mt-1 text-sm text-slate-500">
-                        Show a small "Created with QuoteFly" footer at the bottom of customer-facing quotes.
+                        {t("branding.business.footerDescription")}
                       </p>
                     </div>
                     <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -999,13 +1061,13 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                         onChange={(event) => setHideQuoteFlyAttribution(!event.target.checked)}
                         className="h-4 w-4 rounded border-slate-300 text-quotefly-blue focus:ring-quotefly-blue"
                       />
-                      Show footer
+                      {t("branding.business.showFooter")}
                     </label>
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
                     {effectivePlanCode === "starter"
-                      ? "Starter always shows QuoteFly attribution."
-                      : "Turn this off if you do not want QuoteFly attribution on customer-facing quotes."}
+                      ? t("branding.starterAttribution")
+                      : t("branding.business.footerPaidHelp")}
                   </p>
                 </div>
               </div>
@@ -1013,8 +1075,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <BrandingSectionCard
               id="branding-logo"
-              title="Logo"
-              description="Upload the mark that appears on customer-facing quote PDFs."
+              title={t("branding.logo")}
+              description={t("branding.logoSection.description")}
               icon={ImageIcon}
               isOpen={openSections.logo}
               completionLabel={sectionCompletionLabel.logo}
@@ -1025,25 +1087,25 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   {logo ? (
                     <>
                       <div className="flex min-h-[180px] items-center justify-center rounded-xl border-2 border-dashed border-quotefly-primary bg-quotefly-primary/5 p-6">
-                        <img src={logo} alt="Your logo" className="max-h-28 max-w-full object-contain" />
+                        <img src={logo} alt={t("branding.logoSection.yourLogoAlt")} className="max-h-28 max-w-full object-contain" />
                       </div>
                       <div className="flex flex-wrap items-center gap-3">
                         <Button type="button" variant="outline" icon={<Upload size={14} />} onClick={() => logoInputRef.current?.click()}>
-                          Replace Logo
+                          {t("branding.logoSection.replace")}
                         </Button>
                         <Button type="button" variant="ghost" onClick={() => setLogo(null)}>
-                          Remove Logo
+                          {t("branding.logoSection.remove")}
                         </Button>
                         <p className="text-xs leading-5 text-slate-500">
-                          Current logo is ready. Save branding to publish it across the quote editor, preview, and PDF.
+                          {t("branding.logoSection.readyHelp")}
                         </p>
                       </div>
                     </>
                   ) : (
                     <div className="rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition-colors hover:border-quotefly-primary">
                         <Upload size={28} className="mx-auto mb-3 text-slate-400" />
-                        <p className="text-sm font-medium text-slate-700">Add your business logo</p>
-                        <p className="mt-1 text-xs text-slate-600">PNG or JPG, automatically resized for previews and PDFs.</p>
+                        <p className="text-sm font-medium text-slate-700">{t("branding.logoSection.add")}</p>
+                        <p className="mt-1 text-xs text-slate-600">{t("branding.logoSection.formats")}</p>
                         <Button
                           type="button"
                           variant="outline"
@@ -1051,18 +1113,18 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                           className="mt-4"
                           onClick={() => logoInputRef.current?.click()}
                         >
-                          Choose Logo
+                          {t("branding.logoSection.choose")}
                         </Button>
                     </div>
                   )}
 
                   <div className="rounded-xl border border-slate-200 bg-white p-4">
-                    <p className="text-sm font-semibold text-slate-900">Logo placement</p>
+                    <p className="text-sm font-semibold text-slate-900">{t("branding.logoSection.placementTitle")}</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      Choose where the logo sits in the quote header. The live preview and PDF use the same position.
+                      {t("branding.logoSection.placementDescription")}
                     </p>
                     <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                      {LOGO_POSITION_OPTIONS.map((option) => {
+                      {logoPositions.map((option) => {
                         const Icon = option.icon;
                         const active = logoPosition === option.value;
 
@@ -1071,7 +1133,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                             key={option.value}
                             type="button"
                             onClick={() => setLogoPosition(option.value)}
-                            className={`rounded-[20px] border px-4 py-3 text-left transition ${
+                            className={`min-h-11 rounded-[20px] border px-4 py-3 text-left transition ${
                               active
                                 ? "border-quotefly-blue bg-quotefly-blue/[0.06] shadow-[0_10px_24px_rgba(42,127,216,0.10)]"
                                 : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -1101,19 +1163,19 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Logo guidance</p>
+                  <p className="text-sm font-semibold text-slate-900">{t("branding.logoSection.guidance")}</p>
                   <ul className="mt-3 space-y-2 text-sm text-slate-600">
-                    <li>Use a transparent PNG if possible.</li>
-                    <li>Keep the logo wide enough for PDF headers.</li>
-                    <li>Test against lighter and darker template headers.</li>
+                    <li>{t("branding.logoSection.guidanceTransparent")}</li>
+                    <li>{t("branding.logoSection.guidanceWide")}</li>
+                    <li>{t("branding.logoSection.guidanceHeaders")}</li>
                   </ul>
                   <div className="mt-5 rounded-xl border border-slate-200 bg-white px-3 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Current status</p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? "Logo selected" : "No logo selected"}</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("branding.logoSection.currentStatus")}</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">{logo ? t("branding.logoSection.selected") : t("branding.logoSection.none")}</p>
                     <p className="mt-1 text-xs leading-5 text-slate-500">
                       {logo
-                        ? "Your logo should appear in the quote editor header, preview modal, and PDF after you save branding."
-                        : "Upload a logo here to brand the quote editor, live preview, and final PDF."}
+                        ? t("branding.logoSection.selectedHelp")
+                        : t("branding.logoSection.noneHelp")}
                     </p>
                   </div>
                 </div>
@@ -1122,8 +1184,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <BrandingSectionCard
               id="branding-colors"
-              title="Colors"
-              description="Set the primary brand color and override PDF components only where needed."
+              title={t("branding.sections.colors.title")}
+              description={t("branding.colors.description")}
               icon={Palette}
               isOpen={openSections.colors}
               completionLabel={sectionCompletionLabel.colors}
@@ -1131,11 +1193,11 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             >
               <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="font-display text-lg font-semibold text-slate-900">Primary Brand Color</h3>
+                  <h3 className="font-display text-lg font-semibold text-slate-900">{t("branding.colors.primaryTitle")}</h3>
 
                   <div className="mt-4 space-y-3">
                     <label htmlFor="branding-primary-color" className="block text-xs font-medium text-slate-600">
-                      Primary color
+                      {t("branding.colors.primary")}
                     </label>
                     <input
                       id="branding-primary-color"
@@ -1151,22 +1213,22 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
                 <div className="rounded-xl border border-slate-200 p-4">
                   <div className="mb-4">
-                    <h3 className="font-display text-lg font-semibold text-slate-900">Component Overrides</h3>
+                    <h3 className="font-display text-lg font-semibold text-slate-900">{t("branding.colors.overrides")}</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Leave a component unassigned to use its brand-aware default.
+                      {t("branding.colors.overridesDescription")}
                     </p>
                   </div>
 
                   <div className="space-y-4">
-                    {COLOR_COMPONENTS.map((component) => {
+                    {componentOptions.map((component) => {
                       const value = getComponentColorValue(component.key);
                       const hasOverride = componentColors[component.key] !== undefined;
                       const resetLabel =
                         component.key === "footerTextColor"
-                          ? "Use neutral default"
+                          ? t("branding.colors.resetNeutral")
                           : component.key === "tableHeaderTextColor"
-                            ? "Use automatic contrast"
-                            : "Use brand color";
+                            ? t("branding.colors.resetContrast")
+                            : t("branding.colors.resetBrand");
 
                       return (
                         <div key={component.key} className="rounded-lg border border-slate-200 p-3">
@@ -1186,7 +1248,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                                 type="color"
                                 value={value}
                                 onChange={(event) => updateComponentColor(component.key, event.target.value)}
-                                className="h-10 w-12 cursor-pointer rounded border border-slate-300"
+                                className="h-11 w-12 cursor-pointer rounded border border-slate-300"
                               />
                               <span className="w-20 text-right font-mono text-xs text-slate-500">{value}</span>
                             </div>
@@ -1198,7 +1260,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                               type="button"
                               onClick={() => clearComponentColorOverride(component.key)}
                               disabled={!hasOverride}
-                              className="w-full rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                              className="min-h-11 w-full rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                             >
                               {resetLabel}
                             </button>
@@ -1214,11 +1276,11 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   <div className="flex items-start gap-3">
                     <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-700" />
                     <div>
-                      <p className="text-sm font-semibold text-amber-950">Some text may be hard to read</p>
+                      <p className="text-sm font-semibold text-amber-950">{t("branding.colors.warningTitle")}</p>
                       <p className="mt-1 text-xs leading-5 text-amber-900">
-                        Aim for a contrast ratio of at least 4.5:1. Review {contrastWarnings
-                          .map((warning) => `${warning.label} (${warning.ratio.toFixed(1)}:1)`)
-                          .join(", ")}.
+                        {t("branding.colors.warningDescription", {
+                          warnings: contrastWarnings.map((warning) => `${warning.label} (${warning.ratio.toFixed(1)}:1)`).join(", "),
+                        })}
                       </p>
                     </div>
                   </div>
@@ -1228,8 +1290,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <BrandingSectionCard
               id="branding-templates"
-              title="Templates"
-              description="Choose one of three customer-ready layouts. The preview updates instantly."
+              title={t("branding.sections.templates.title")}
+              description={t("branding.templatesDescription")}
               icon={SwatchBook}
               isOpen={openSections.templates}
               completionLabel={sectionCompletionLabel.templates}
@@ -1237,7 +1299,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
             >
               <div className="rounded-[28px] border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)]">
                 <div className="grid gap-3 md:grid-cols-3">
-                  {QUOTE_TEMPLATE_OPTIONS.map((template) => (
+                  {templates.map((template) => (
                     <TemplateMiniPreview
                       key={template.id}
                       template={template}
@@ -1251,8 +1313,8 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
 
             <BrandingSectionCard
               id="branding-preview"
-              title="Preview"
-              description="Review the customer-facing PDF layout with your sender details."
+              title={t("branding.sections.preview.title")}
+              description={t("branding.preview.description")}
               icon={Eye}
               isOpen={openSections.preview}
               completionLabel={sectionCompletionLabel.preview}
@@ -1261,9 +1323,9 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-8">
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">Customer-facing output</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">{t("branding.preview.output")}</p>
                     <p className="mt-1 text-sm text-slate-600">
-                      This is the style your customer will open, print, or forward.
+                      {t("branding.preview.outputHelp")}
                     </p>
                   </div>
                   <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
@@ -1272,19 +1334,19 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                 </div>
                 <QuoteLivePreview
                   businessName={companyName}
-                  businessHint={previewBusinessHint || "Add address, phone, or email to show sender details here."}
-                  customerName="John Doe"
+                  businessHint={previewBusinessHint || documentT("branding.preview.businessHint")}
+                  customerName={documentT("branding.preview.customerName")}
                   customerPhone="(555) 123-4567"
                   customerEmail="john@example.com"
-                  preparedDateLabel="Apr 10, 2026"
-                  sentDateLabel="N/A"
-                  quoteTitle="Install/replace furnace unit"
-                  scopeText="Install new condenser and indoor coil, pressure test the system, verify refrigerant levels, and confirm startup performance."
+                  preparedDateLabel={previewPreparedDate}
+                  sentDateLabel={documentT("branding.preview.notAvailable")}
+                  quoteTitle={documentT("branding.preview.quoteTitle")}
+                  scopeText={documentT("branding.preview.scope")}
                   lines={[
                     {
                       id: "preview-line-1",
-                      title: "Equipment and installation labor",
-                      details: "Includes startup testing, haul-away, and final system checks.",
+                      title: documentT("branding.preview.lineTitle"),
+                      details: documentT("branding.preview.lineDetails"),
                       quantity: "1",
                       unitPrice: "2450",
                       lineTotal: 2450,
@@ -1300,8 +1362,9 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   componentColors={previewComponentColors}
                   footerText={previewFooterText}
                   showQuoteFlyAttribution={showQuoteFlyAttribution}
-                  quoteReferenceLabel="Quote #12345"
-                  subtitle="Customer quote"
+                  documentLocale={defaultCustomerLocale}
+                  quoteReferenceLabel={documentT("branding.preview.quoteReference")}
+                  subtitle={documentT("branding.preview.subtitle")}
                 />
               </div>
             </BrandingSectionCard>
@@ -1313,12 +1376,12 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
               <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1" aria-live="polite">
                   <p className="text-sm font-semibold text-[var(--qf-text)]">
-                    {isDirty ? "Unsaved branding changes" : "Branding is up to date"}
+                    {isDirty ? t("branding.mobile.unsaved") : t("branding.mobile.current")}
                   </p>
                   {saveStatus === "error" ? (
-                    <p className="truncate text-xs text-red-600">{saveErrorMessage ?? "Save failed"}</p>
+                    <p className="truncate text-xs text-red-600">{saveErrorMessage ?? t("branding.saveFailed")}</p>
                   ) : (
-                    <p className="truncate text-xs text-[var(--qf-text-muted)]">Logo, colors, template, and business details</p>
+                    <p className="truncate text-xs text-[var(--qf-text-muted)]">{t("branding.mobile.details")}</p>
                   )}
                 </div>
                 <Button
@@ -1327,7 +1390,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
                   loading={isSaving}
                   className="min-h-11 shrink-0"
                 >
-                  {isSaving ? "Saving..." : "Save"}
+                  {isSaving ? t("branding.saving") : t("branding.mobile.save")}
                 </Button>
               </div>
             </WorkflowActionDock>
@@ -1337,9 +1400,10 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           open={navigationPromptOpen}
           onClose={cancelNavigation}
           onConfirm={continueNavigation}
-          title="Leave with unsaved branding changes?"
-          description="Your business details, logo, colors, or template changes have not been saved and will be lost."
-          confirmLabel="Discard changes and leave"
+          title={t("branding.leaveTitle")}
+          description={t("branding.leaveDescription")}
+          confirmLabel={t("branding.leaveConfirm")}
+          cancelLabel={t("common.cancel")}
           confirmVariant="warning"
         />
     </div>

@@ -1,7 +1,9 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
-import { useDashboard, money } from "../components/dashboard/DashboardContext";
+import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { KodyButton } from "../components/ai/KodyButton";
 import { publishKodyOutcome } from "../components/ai/kody-events";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
@@ -30,7 +32,7 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type TenantBranding, type WorkPreset } from "../lib/api";
+import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
 import {
   quoteBuilderDraftStorageKey,
@@ -53,81 +55,60 @@ import {
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
-
-function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
-  if (unitType === "SQ_FT") return "SQ FT";
-  if (unitType === "HOUR") return "Hours";
-  if (unitType === "EACH") return "Units";
-  return "Qty";
-}
+import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
+import { localizedApiError } from "../lib/localized-api-error";
 
 function buildStructuredAiPromptStarter(
+  t: TFunction,
   serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
   customerLead: string,
 ) {
-  const tradeLabel = serviceType.toLowerCase();
-  return [
-    `New quote for ${customerLead}. Trade: ${tradeLabel}.`,
-    "Line 1: Primary scope here | Qty: 1",
-    "Line 2: Secondary scope here | Qty: 1",
-    "Line 3: Optional/alternate scope here (optional) | Qty: 1",
-    "Notes: Keep each line separate and preserve quantities.",
-  ].join("\n");
+  return t("quoteBuilder.aiStarters.structured", {
+    customer: customerLead,
+    trade: t(`domain.trade.${serviceType}`),
+  });
 }
 
 function buildAiPromptStarters(
+  t: TFunction,
   serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
   customer?: { fullName: string; phone: string } | null,
 ) {
   const customerLead = customer
     ? `${customer.fullName} ${customer.phone}`
-    : "Alan Johnson 818-233-4333";
-
-  if (serviceType === "ROOFING") {
-    return [
-      `New quote for ${customerLead}. Replace a 1,250 square foot asphalt shingle roof and include tear-off, disposal, underlayment, and installation.`,
-      `Draft a roofing quote for ${customerLead}. Replace a Spanish tile roof at 22 roofing squares, include underlayment and flashing, and keep deck repair as an optional allowance line.`,
-      buildStructuredAiPromptStarter(serviceType, customerLead),
-    ];
-  }
-
-  if (serviceType === "HVAC") {
-    return [
-      `New quote for ${customerLead}. Install a new AC condenser and reconnect refrigerant lines with startup testing.`,
-      `Draft an HVAC quote for ${customerLead}. Replace a 4-ton high-efficiency heat pump (SEER2/HSPF2), include evaporator coil, thermostat setup, duct sealing, startup/commissioning, and one optional electrical upgrade line if needed.`,
-      buildStructuredAiPromptStarter(serviceType, customerLead),
-    ];
-  }
-
-  if (serviceType === "PLUMBING") {
-    return [
-      `New quote for ${customerLead}. Replace a burst pipe section, patch wall access, and test the line after repair.`,
-      `Draft a plumbing quote for ${customerLead}. Combine partial PEX repipe, tankless water heater upgrade with venting, sewer camera + hydro-jet line service, and optional trenchless sewer repair allowance as separate lines.`,
-      buildStructuredAiPromptStarter(serviceType, customerLead),
-    ];
-  }
-
-  if (serviceType === "FLOORING") {
-    return [
-      `New quote for ${customerLead}. Install 650 square feet of LVP flooring with underlayment and trim.`,
-      `Draft a flooring quote for ${customerLead}. Install linoleum tile in two bathrooms and one hallway, include moisture barrier, subfloor leveling allowance, uncoupling membrane + thinset/grout prep, and transition/baseboard finish lines.`,
-      buildStructuredAiPromptStarter(serviceType, customerLead),
-    ];
-  }
-
-  if (serviceType === "GARDENING") {
-    return [
-      `New quote for ${customerLead}. Monthly landscaping maintenance with mowing, edging, cleanup, and shrub trimming.`,
-      `Draft a gardening quote for ${customerLead}. Add sod replacement, lawn aeration + overseed, irrigation controller setup by hydrozone, pre-emergent treatment, mulch refresh, and debris haul-away with an optional drainage correction allowance.`,
-      buildStructuredAiPromptStarter(serviceType, customerLead),
-    ];
-  }
+    : t("quoteBuilder.aiStarters.fallbackCustomer");
+  const tradeKey = serviceType.toLowerCase();
 
   return [
-    `New quote for ${customerLead}. Remodel a small bathroom and include demolition, framing touchups, finish work, and cleanup.`,
-    `Draft a construction quote for ${customerLead}. Build a backyard patio cover and include labor, materials, and site cleanup.`,
-    buildStructuredAiPromptStarter(serviceType, customerLead),
+    t(`quoteBuilder.aiStarters.${tradeKey}.one`, { customer: customerLead }),
+    t(`quoteBuilder.aiStarters.${tradeKey}.two`, { customer: customerLead }),
+    buildStructuredAiPromptStarter(t, serviceType, customerLead),
   ];
+}
+
+function localizedQuoteHeadingError(
+  t: TFunction,
+  title: string,
+  scopeText: string,
+  taxAmount: string,
+) {
+  const error = validateQuoteHeading(title, scopeText, taxAmount);
+  if (!error) return null;
+  if (error.startsWith("Quote title")) return t("quoteComponents.validation.title");
+  if (error.startsWith("Quote scope")) return t("quoteComponents.validation.scope");
+  if (error.startsWith("Tax")) return t("quoteComponents.validation.tax");
+  return t("quoteComponents.validation.generic");
+}
+
+function localizedQuoteLineError(t: TFunction, line: EditableQuoteLine, label: string) {
+  const error = validateQuoteLine(line, label);
+  if (!error) return null;
+  if (error.endsWith("needs a title.")) return t("quoteComponents.validation.lineTitle", { label });
+  if (error.includes("option label")) return t("quoteComponents.validation.optionLabel", { label });
+  if (error.includes("quantity")) return t("quoteComponents.validation.quantity", { label });
+  if (error.includes(" cost ")) return t("quoteComponents.validation.cost", { label });
+  if (error.includes(" price ")) return t("quoteComponents.validation.price", { label });
+  return t("quoteComponents.validation.generic");
 }
 
 function buildBusinessHint(branding: TenantBranding | null): string | undefined {
@@ -154,6 +135,7 @@ type BuilderDraftData = {
     title: string;
     scopeText: string;
     taxAmount: string;
+    documentLocale: SupportedLocale;
   };
   lines: BuilderDraftLine[];
   mobilePane: BuilderPane;
@@ -248,6 +230,7 @@ function readKodyDraftLineItems(value: unknown): KodyQuoteDraftHandoff["lineItem
 }
 
 function buildEditableKodyDraftLines(
+  t: TFunction,
   lineItems: KodyQuoteDraftHandoff["lineItems"],
   estimatedTotalAmount: number | null,
   estimatedTaxAmount: number | null,
@@ -271,7 +254,7 @@ function buildEditableKodyDraftLines(
       title: title || lineItem.description,
       details,
       sectionType: lineItem.sectionType ?? "INCLUDED",
-      sectionLabel: lineItem.sectionType === "ALTERNATE" ? "Alternate Scope" : "",
+      sectionLabel: lineItem.sectionType === "ALTERNATE" ? t("quoteComponents.line.alternate") : "",
       quantity: String(quantity),
       unitCost: "0.00",
       unitPrice: shouldSeedEstimate ? (estimatedSubtotal / quantity).toFixed(2) : "0.00",
@@ -280,7 +263,7 @@ function buildEditableKodyDraftLines(
   });
 }
 
-function readKodyQuoteDraftState(value: unknown): KodyQuoteDraftHandoff | null {
+function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHandoff | null {
   if (!isRecord(value) || !isRecord(value.kodyQuoteDraft)) return null;
   const draft = value.kodyQuoteDraft;
   const prompt = cleanKodyDraftLongText(draft.prompt, 2_000);
@@ -300,26 +283,26 @@ function readKodyQuoteDraftState(value: unknown): KodyQuoteDraftHandoff | null {
   );
   const promptParts = [
     prompt ?? "",
-    customerName ? `Customer: ${customerName}` : "",
-    title ? `Title: ${title}` : "",
-    scopeText ? `Scope: ${scopeText}` : "",
+    customerName ? t("quoteBuilder.handoff.promptCustomer", { customer: customerName }) : "",
+    title ? t("quoteBuilder.handoff.promptTitle", { title }) : "",
+    scopeText ? t("quoteBuilder.handoff.promptScope", { scope: scopeText }) : "",
     lineItems.length
       ? [
-          "Suggested line items:",
+          t("quoteBuilder.handoff.promptLines"),
           ...lineItems.map((lineItem, index) => {
-            const quantity = lineItem.quantity ? ` | Qty: ${lineItem.quantity}` : "";
-            const section = lineItem.sectionType === "ALTERNATE" ? " | Alternate" : "";
-            return `Line ${index + 1}: ${lineItem.description}${quantity}${section}`;
+            const quantity = lineItem.quantity ? t("quoteBuilder.handoff.promptQuantity", { count: lineItem.quantity }) : "";
+            const section = lineItem.sectionType === "ALTERNATE" ? t("quoteBuilder.handoff.promptAlternate") : "";
+            return t("quoteBuilder.handoff.promptLine", { number: index + 1, description: lineItem.description, quantity, section });
           }),
         ].join("\n")
       : "",
-    estimatedTotalAmount !== null ? `Estimated customer total: ${estimatedTotalAmount}` : "",
+    estimatedTotalAmount !== null ? t("quoteBuilder.handoff.promptEstimate", { amount: estimatedTotalAmount }) : "",
   ].filter(Boolean);
   const serviceType = isDraftString(draft.serviceType, 32) && SERVICE_TYPE_SET.has(draft.serviceType)
     ? draft.serviceType as BuilderDraftData["quote"]["serviceType"]
     : null;
   const customerId = isDraftString(draft.customerId, 200) && draft.customerId.trim() ? draft.customerId.trim() : null;
-  const editableLines = buildEditableKodyDraftLines(lineItems, estimatedTotalAmount, estimatedTaxAmount);
+  const editableLines = buildEditableKodyDraftLines(t, lineItems, estimatedTotalAmount, estimatedTaxAmount);
   const hasQuickCustomerDraft = Boolean(!customerId && (customerName || customerPhone || customerEmail));
   const hasStructuredDraft = Boolean(
     customerId ||
@@ -369,7 +352,8 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
     !SERVICE_TYPE_SET.has(value.quote.serviceType) ||
     !isDraftString(value.quote.title, 500) ||
     !isDraftString(value.quote.scopeText, 20_000) ||
-    !isDraftString(value.quote.taxAmount, 100)
+    !isDraftString(value.quote.taxAmount, 100) ||
+    (value.quote.documentLocale !== undefined && value.quote.documentLocale !== "en-US" && value.quote.documentLocale !== "es-US")
   ) return null;
   if (value.mobilePane !== "editor" && value.mobilePane !== "preview") return null;
   if (typeof value.quickCustomerOpen !== "boolean" || !isRecord(value.quickCustomerForm)) return null;
@@ -418,6 +402,7 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
       title: value.quote.title,
       scopeText: value.quote.scopeText,
       taxAmount: value.quote.taxAmount,
+      documentLocale: value.quote.documentLocale === "es-US" ? "es-US" : "en-US",
     },
     lines,
     mobilePane: value.mobilePane,
@@ -466,6 +451,9 @@ const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 
 export function QuoteBuilderView() {
   usePageView("quote_builder");
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const formatMoney = (value: string | number) => money(value, locale);
   const navigate = useNavigate();
   const location = useLocation();
   const track = useTrack();
@@ -513,6 +501,7 @@ export function QuoteBuilderView() {
     canUseChatToQuote,
     canViewInternalCosts,
     canManageCatalog,
+    defaultCustomerLocale,
     chatPrompt,
     setChatPrompt,
     setChatParsed,
@@ -536,14 +525,18 @@ export function QuoteBuilderView() {
         usedUsd: session?.usage?.monthlyAiSpendUsd,
         limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
         renewsAtUtc: session?.usage?.periodEndUtc,
-      }),
+      }, locale),
     [
       session?.entitlements?.limits.aiSpendUsdPerMonth,
       session?.usage?.monthlyAiSpendUsd,
       session?.usage?.periodEndUtc,
+      locale,
     ],
   );
-  const preparedDateLabel = useMemo(() => new Date().toLocaleDateString(), []);
+  const preparedDateLabel = useMemo(
+    () => formatQuoteDocumentDate(new Date(), quoteForm.documentLocale, session?.timezone),
+    [quoteForm.documentLocale, session?.timezone],
+  );
   const draftStorageKey = useMemo(
     () => session ? quoteBuilderDraftStorageKey(session.tenantId, session.userId) : null,
     [session],
@@ -556,6 +549,7 @@ export function QuoteBuilderView() {
         title: quoteForm.title,
         scopeText: quoteForm.scopeText,
         taxAmount: quoteForm.taxAmount,
+        documentLocale: quoteForm.documentLocale,
       },
       lines: draftLines.map((line) => ({
         title: line.title,
@@ -605,7 +599,7 @@ export function QuoteBuilderView() {
         const stored = parseStoredBuilderDraft(raw);
         if (!stored || !hasMeaningfulBuilderDraft(stored)) {
           await removeQuoteBuilderDraft(draftStorageKey);
-          if (!cancelled) setDraftRecoveryMessage("An incompatible saved draft was cleared safely.");
+          if (!cancelled) setDraftRecoveryMessage(t("quoteBuilder.recovery.incompatible"));
           return;
         }
         if (selectedCustomerIdRef.current && stored.quote.customerId !== selectedCustomerIdRef.current) {
@@ -620,6 +614,7 @@ export function QuoteBuilderView() {
           title: stored.quote.title,
           scopeText: stored.quote.scopeText,
           taxAmount: stored.quote.taxAmount,
+          documentLocale: stored.quote.documentLocale,
           internalCostSubtotal: "0",
           customerPriceSubtotal: "0",
         }));
@@ -634,7 +629,7 @@ export function QuoteBuilderView() {
         setConflictingStoredDraft(null);
       } catch {
         await removeQuoteBuilderDraft(draftStorageKey);
-        if (!cancelled) setDraftRecoveryMessage("The saved draft could not be read and was cleared safely.");
+        if (!cancelled) setDraftRecoveryMessage(t("quoteBuilder.recovery.unreadable"));
       } finally {
         if (!cancelled && !hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
       }
@@ -642,10 +637,10 @@ export function QuoteBuilderView() {
     return () => {
       cancelled = true;
     };
-  }, [draftStorageKey, setQuoteForm]);
+  }, [draftStorageKey, setQuoteForm, t]);
 
   useEffect(() => {
-    const draft = readKodyQuoteDraftState(location.state);
+    const draft = readKodyQuoteDraftState(t, location.state);
     if (!draft) return;
     if (handledKodyDraftStateRef.current === location.state) return;
     handledKodyDraftStateRef.current = location.state;
@@ -683,8 +678,8 @@ export function QuoteBuilderView() {
     setMobilePane("editor");
     setNotice(
       canApplyKodyContext
-        ? "Kody prepared a review draft in the builder. Review customer, scope, line pricing, and totals before creating anything."
-        : "Kody prepared a quote prompt without changing your existing draft. Review it, then generate and apply the quote suggestion.",
+        ? t("quoteBuilder.notices.kodyReviewDraft")
+        : t("quoteBuilder.notices.kodyPromptReady"),
     );
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
   }, [
@@ -697,6 +692,7 @@ export function QuoteBuilderView() {
     setChatPrompt,
     setNotice,
     setQuoteForm,
+    t,
   ]);
 
   useEffect(() => {
@@ -745,7 +741,7 @@ export function QuoteBuilderView() {
       })
       .catch(() => {
         if (!mounted) return;
-        setPresetLoadError("Products and services could not be loaded.");
+        setPresetLoadError(t("quoteBuilder.errors.catalogLoad"));
       })
       .finally(() => {
         if (mounted) setPresetsLoading(false);
@@ -754,7 +750,7 @@ export function QuoteBuilderView() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!session?.tenantId) return;
@@ -858,8 +854,8 @@ export function QuoteBuilderView() {
     [filteredDraftLines],
   );
   const aiPromptStarters = useMemo(
-    () => buildAiPromptStarters(quoteForm.serviceType, activeCustomer ? { fullName: activeCustomer.fullName, phone: activeCustomer.phone } : null),
-    [quoteForm.serviceType, activeCustomer],
+    () => buildAiPromptStarters(t, quoteForm.serviceType, activeCustomer ? { fullName: activeCustomer.fullName, phone: activeCustomer.phone } : null),
+    [t, quoteForm.serviceType, activeCustomer],
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
@@ -869,8 +865,9 @@ export function QuoteBuilderView() {
         businessName: session?.tenantName ?? "QuoteFly",
         businessPhone: branding?.businessPhone ?? null,
         businessEmail: branding?.businessEmail ?? null,
+        documentLocale: quoteForm.documentLocale,
       }),
-    [branding?.businessEmail, branding?.businessPhone, session?.tenantName],
+    [branding?.businessEmail, branding?.businessPhone, quoteForm.documentLocale, session?.tenantName],
   );
   const showQuoteFlyAttribution = useMemo(
     () => shouldShowQuoteFlyAttribution(session?.effectivePlanCode, branding?.hideQuoteFlyAttribution),
@@ -881,13 +878,13 @@ export function QuoteBuilderView() {
     event.preventDefault();
 
     if (!canUseChatToQuote) {
-      setError("AI drafting is not available on this workspace.");
+      setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
     }
 
     const prompt = chatPrompt.trim();
     if (!prompt) {
-      setError("Enter a prompt before generating a quote.");
+      setError(t("quoteBuilder.errors.promptRequired"));
       return;
     }
 
@@ -938,23 +935,27 @@ export function QuoteBuilderView() {
       setAiModalOpen(false);
       setMobilePane("editor");
       publishAiUsageUpdate(usage);
-      const usageSummary = formatAiUsageNotice(usage);
+      const usageSummary = formatAiUsageNotice(usage, locale);
       const patchSummary = [
-        patch.updated ? `updated ${patch.updated}` : null,
-        patch.added ? `added ${patch.added}` : null,
-        patch.removed ? `removed ${patch.removed}` : null,
+        patch.updated ? t("quoteBuilder.aiPatch.updated", { count: patch.updated }) : null,
+        patch.added ? t("quoteBuilder.aiPatch.added", { count: patch.added }) : null,
+        patch.removed ? t("quoteBuilder.aiPatch.removed", { count: patch.removed }) : null,
       ]
         .filter(Boolean)
         .join(", ");
       setNotice(
-        `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? "customer"}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then create the quote.`,
+        t("quoteBuilder.notices.aiApplied", {
+          customer: customer?.fullName ?? parsed.customerName ?? t("quoteBuilder.customerGeneric"),
+          changes: patchSummary ? `${patchSummary}. ` : "",
+          usage: usageSummary ? `${usageSummary} ` : "",
+        }),
       );
     } catch (err) {
       if (err instanceof ApiError && err.details && typeof err.details === "object") {
         const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
         if (usage) publishAiUsageUpdate(usage);
       }
-      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
+      const message = localizedApiError(err, t, { fallbackKey: "quoteBuilder.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
     } finally {
@@ -1033,7 +1034,7 @@ export function QuoteBuilderView() {
       title: prev.title.trim() ? prev.title : preset.name,
       scopeText: prev.scopeText.trim() ? prev.scopeText : preset.description ?? "",
     }));
-    setNotice(`${preset.name} loaded into the quote.`);
+    setNotice(t("quoteBuilder.notices.presetLoaded", { name: preset.name }));
   }
 
   async function saveDraftLineAsPreset(includeDescription: boolean) {
@@ -1060,10 +1061,10 @@ export function QuoteBuilderView() {
         ),
       );
       setSelectedPresetId(result.preset.id);
-      setNotice(includeDescription ? "Saved job name and description for future quotes." : "Saved job name for future quotes.");
+      setNotice(includeDescription ? t("quoteBuilder.notices.presetFullSaved") : t("quoteBuilder.notices.presetNameSaved"));
       setPresetPromptLine(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed saving work name.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteBuilder.errors.presetSave" }));
     } finally {
       setPresetPromptSaving(false);
     }
@@ -1090,6 +1091,7 @@ export function QuoteBuilderView() {
       title: stored.quote.title,
       scopeText: stored.quote.scopeText,
       taxAmount: stored.quote.taxAmount,
+      documentLocale: stored.quote.documentLocale,
       internalCostSubtotal: "0",
       customerPriceSubtotal: "0",
     }));
@@ -1102,7 +1104,7 @@ export function QuoteBuilderView() {
     setDraftRestored(true);
     setConflictingStoredDraft(null);
     setHydratedDraftStorageKey(draftStorageKey);
-    setNotice("Restored the saved quote draft.");
+    setNotice(t("quoteBuilder.notices.draftRestored"));
   }
 
   function startFreshForSelectedCustomer() {
@@ -1112,7 +1114,7 @@ export function QuoteBuilderView() {
     setDraftRestored(false);
     setDraftSavedAtUtc(null);
     setHydratedDraftStorageKey(draftStorageKey);
-    setNotice("Started a fresh quote for the selected customer.");
+    setNotice(t("quoteBuilder.notices.freshForCustomer"));
   }
 
   function clearStoredBuilderDraft() {
@@ -1133,6 +1135,7 @@ export function QuoteBuilderView() {
       internalCostSubtotal: "0",
       customerPriceSubtotal: "0",
       taxAmount: "0",
+      documentLocale: defaultCustomerLocale,
     });
     setDraftLines([makeEditableQuoteLine()]);
     setQuickCustomerOpen(false);
@@ -1148,7 +1151,7 @@ export function QuoteBuilderView() {
     setDiscardDraftConfirmOpen(false);
     setDraftRecoveryMessage(null);
     setConflictingStoredDraft(null);
-    setNotice("Started a fresh quote.");
+    setNotice(t("quoteBuilder.notices.fresh"));
     window.setTimeout(() => {
       quoteCreationCompletedRef.current = false;
     }, 0);
@@ -1156,17 +1159,17 @@ export function QuoteBuilderView() {
 
   async function handleCreateQuote() {
     if (!quoteForm.customerId) {
-      setError("Select a customer before creating the quote.");
+      setError(t("quoteBuilder.errors.customerRequired"));
       return;
     }
 
     if (filteredDraftLines.length === 0) {
-      setError("Add at least one quote line before creating the quote.");
+      setError(t("quoteBuilder.errors.lineRequired"));
       return;
     }
 
     if (filteredDraftLines.length > QUOTE_LINE_CHANGE_LIMIT) {
-      setError(`A quote can include at most ${QUOTE_LINE_CHANGE_LIMIT} lines.`);
+      setError(t("quoteBuilder.errors.lineLimit", { count: QUOTE_LINE_CHANGE_LIMIT }));
       return;
     }
 
@@ -1174,14 +1177,14 @@ export function QuoteBuilderView() {
     const scopeText =
       quoteForm.scopeText.trim() ||
       linesToCreate.map((line) => joinQuoteLineDescription(line.title, line.details)).join("\n");
-    const headingError = validateQuoteHeading(quoteForm.title, scopeText, quoteForm.taxAmount);
+    const headingError = localizedQuoteHeadingError(t, quoteForm.title, scopeText, quoteForm.taxAmount);
     if (headingError) {
       setError(headingError);
       return;
     }
     const invalidLineIndex = linesToCreate.findIndex((line) => validateQuoteLine(line) !== null);
     if (invalidLineIndex >= 0) {
-      setError(validateQuoteLine(linesToCreate[invalidLineIndex], `Line ${invalidLineIndex + 1}`));
+      setError(localizedQuoteLineError(t, linesToCreate[invalidLineIndex], t("quoteDesk.line.number", { number: invalidLineIndex + 1 })));
       return;
     }
     const promptCandidate = canManageCatalog ?
@@ -1214,7 +1217,7 @@ export function QuoteBuilderView() {
         unitPrice: Number(line.unitPrice) || 0,
         sourcePresetId: line.sourcePresetId ?? undefined,
       })),
-      successNotice: "Quote ready. Review it, then share it from the quote desk.",
+      successNotice: t("quoteBuilder.notices.quoteReady"),
     });
 
     if (createdQuote) {
@@ -1240,20 +1243,20 @@ export function QuoteBuilderView() {
   return (
     <div className="space-y-5" data-testid="quote-builder">
       <PageHeader
-        title="Quick Quote"
-        subtitle="Choose the customer, add the work, then review the quote."
+        title={t("quoteBuilder.title")}
+        subtitle={t("quoteBuilder.subtitle")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {selectedQuoteId ? (
-              <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>Open Active Quote</Button>
+              <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>{t("quoteBuilder.openActive")}</Button>
             ) : null}
             <KodyButton
-              label="Draft with Kody"
+              label={t("quoteBuilder.draftWithKody")}
               prompt={[
-                activeCustomer ? `Draft a quote for ${activeCustomer.fullName}.` : "Draft a new quote.",
-                `Trade: ${quoteForm.serviceType}.`,
-                quoteForm.title.trim() ? `Current title: ${quoteForm.title.trim()}.` : "",
-                quoteForm.scopeText.trim() ? `Current scope: ${quoteForm.scopeText.trim()}` : "Ask me for missing customer, scope, quantities, and pricing details before generating anything final.",
+                activeCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
+                t("quoteBuilder.kodyPrompt.trade", { trade: t(`domain.trade.${quoteForm.serviceType}`) }),
+                quoteForm.title.trim() ? t("quoteBuilder.kodyPrompt.title", { title: quoteForm.title.trim() }) : "",
+                quoteForm.scopeText.trim() ? t("quoteBuilder.kodyPrompt.scope", { scope: quoteForm.scopeText.trim() }) : t("quoteBuilder.kodyPrompt.askMissing"),
               ].filter(Boolean).join("\n")}
               tool="DRAFT_QUOTE"
               context={{
@@ -1288,16 +1291,16 @@ export function QuoteBuilderView() {
           data-testid="quote-builder-draft-conflict"
           className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
         >
-          <p className="text-sm font-semibold">Workspace recovery draft found</p>
+          <p className="text-sm font-semibold">{t("quoteBuilder.conflictTitle")}</p>
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-            Your workspace has a recovery draft for a different customer. Choose which quote you want to continue.
+            {t("quoteBuilder.conflictDescription")}
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Button variant="outline" size="sm" onClick={restoreConflictingDraft}>
-              Restore Saved Draft
+              {t("quoteBuilder.restoreDraft")}
             </Button>
             <Button size="sm" onClick={startFreshForSelectedCustomer}>
-              Start Fresh for Selected Customer
+              {t("quoteBuilder.startFresh")}
             </Button>
           </div>
         </div>
@@ -1317,15 +1320,15 @@ export function QuoteBuilderView() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-[var(--qf-text)]">
                   {draftPersistenceFailed
-                    ? "Draft open in this tab"
+                    ? t("quoteBuilder.draftOpen")
                     : draftRestored
-                      ? "Draft restored"
-                      : "Draft autosaved"}
+                      ? t("quoteBuilder.draftRestored")
+                      : t("quoteBuilder.draftAutosaved")}
                 </p>
                 <p className="truncate text-xs text-[var(--qf-text-soft)]">
                   {draftPersistenceFailed
-                    ? "Keep this tab open until the quote is created."
-                    : `Saved securely to your workspace${draftSavedAtUtc ? ` at ${new Date(draftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}
+                    ? t("quoteBuilder.keepOpen")
+                    : t("quoteBuilder.savedWorkspace", { time: draftSavedAtUtc ? ` · ${formatDateTime(draftSavedAtUtc, locale, session?.timezone)}` : "" })}
                 </p>
               </div>
             </div>
@@ -1334,20 +1337,20 @@ export function QuoteBuilderView() {
                 type="button"
                 className="min-h-[44px] shrink-0 rounded-lg px-2 text-xs font-semibold text-[var(--qf-text-soft)] transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-danger-text)] sm:min-h-[36px]"
                 onClick={() => setDiscardDraftConfirmOpen(true)}
-                aria-label="Discard saved quote draft and start over"
+                aria-label={t("quoteBuilder.discardAria")}
               >
-                Start Over
+                {t("quoteBuilder.startOver")}
               </button>
             ) : null}
           </div>
           {discardDraftConfirmOpen ? (
-            <div role="group" aria-label="Confirm discard saved quote draft" className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-quotefly-blue/10 pt-2">
-              <span className="mr-auto text-xs font-semibold text-[var(--qf-text-soft)]">Discard this draft?</span>
+            <div role="group" aria-label={t("quoteBuilder.confirmDiscardAria")} className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-quotefly-blue/10 pt-2">
+              <span className="mr-auto text-xs font-semibold text-[var(--qf-text-soft)]">{t("quoteBuilder.discardQuestion")}</span>
               <Button ref={keepDraftButtonRef} variant="outline" size="sm" onClick={() => setDiscardDraftConfirmOpen(false)}>
-                Keep Draft
+                {t("quoteBuilder.keepDraft")}
               </Button>
               <Button variant="danger" size="sm" onClick={startBuilderOver}>
-                Discard Draft
+                {t("quoteBuilder.discardDraft")}
               </Button>
             </div>
           ) : null}
@@ -1357,7 +1360,7 @@ export function QuoteBuilderView() {
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3 text-sm text-[var(--qf-text-soft)]">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">{t("quoteBuilder.whyAi")}</p>
               <p className="mt-1 font-medium text-[var(--qf-text)]">{aiInsight.summary}</p>
             </div>
             <button
@@ -1365,7 +1368,7 @@ export function QuoteBuilderView() {
               onClick={() => setAiInsight(null)}
               className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-[var(--qf-text-muted)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] sm:min-h-[36px]"
             >
-              Dismiss
+              {t("quoteBuilder.dismiss")}
             </button>
           </div>
           {aiInsight.reasons.length ? (
@@ -1383,7 +1386,7 @@ export function QuoteBuilderView() {
           </div>
           {aiInsight.sources.length ? (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--qf-text-soft)]">
-              <span className="font-semibold text-[var(--qf-text)]">Context used:</span>
+              <span className="font-semibold text-[var(--qf-text)]">{t("quoteBuilder.contextUsed")}</span>
               {aiInsight.sources.map((source, index) => (
                 <span
                   key={`${source.type}-${source.label}-${index}`}
@@ -1397,8 +1400,8 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
 
-      <ol className="grid grid-cols-3 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1.5 xl:hidden" aria-label="Quote progress">
-        {["Customer", "Work", "Review"].map((label, index) => {
+      <ol className="grid grid-cols-3 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1.5 xl:hidden" aria-label={t("quoteBuilder.progressAria")}>
+        {[t("quoteBuilder.steps.customer"), t("quoteBuilder.steps.work"), t("quoteBuilder.steps.review")].map((label, index) => {
           const step = index + 1;
           const active = step === mobileBuilderStep;
           const complete = step < mobileBuilderStep;
@@ -1424,12 +1427,12 @@ export function QuoteBuilderView() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px] 2xl:grid-cols-[minmax(0,1fr)_300px]">
         <Card variant="blue" padding="md" className="order-2 hidden self-start xl:block xl:sticky xl:top-24">
           <CardHeader
-            title="Quote actions"
-            subtitle="Keep math and create actions visible while you build."
+            title={t("quoteBuilder.actionsTitle")}
+            subtitle={t("quoteBuilder.actionsDescription")}
           />
           <div className="mb-4">
             <Select
-              label="Trade"
+              label={t("quoteBuilder.trade")}
               value={quoteForm.serviceType}
               onChange={(event) =>
                 setQuoteForm((prev) => ({
@@ -1438,31 +1441,31 @@ export function QuoteBuilderView() {
                 }))
               }
               options={[
-                { value: "HVAC", label: "HVAC" },
-                { value: "PLUMBING", label: "Plumbing" },
-                { value: "FLOORING", label: "Flooring" },
-                { value: "ROOFING", label: "Roofing" },
-                { value: "GARDENING", label: "Gardening" },
-                { value: "CONSTRUCTION", label: "Construction" },
+                { value: "HVAC", label: t("domain.trade.HVAC") },
+                { value: "PLUMBING", label: t("domain.trade.PLUMBING") },
+                { value: "FLOORING", label: t("domain.trade.FLOORING") },
+                { value: "ROOFING", label: t("domain.trade.ROOFING") },
+                { value: "GARDENING", label: t("domain.trade.GARDENING") },
+                { value: "CONSTRUCTION", label: t("domain.trade.CONSTRUCTION") },
               ]}
             />
           </div>
           <div className="space-y-3 text-sm">
-            {canViewInternalCosts ? <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} /> : null}
-            <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
-            <SummaryRow label="Tax" value={money(taxAmount)} />
-            <SummaryRow label="Total" value={money(totalAmount)} strong />
-            {canViewInternalCosts ? <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
-            {canViewInternalCosts ? <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
+            {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.internalCost")} value={formatMoney(internalSubtotal)} /> : null}
+            <SummaryRow label={t("quoteComponents.math.customerSubtotal")} value={formatMoney(customerSubtotal)} />
+            <SummaryRow label={t("quoteComponents.math.tax")} value={formatMoney(taxAmount)} />
+            <SummaryRow label={t("quoteComponents.math.total")} value={formatMoney(totalAmount)} strong />
+            {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.estimatedProfit")} value={formatMoney(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
+            {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.margin")} value={new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(estimatedMarginPercent / 100)} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
           </div>
           <div className="mt-4 space-y-2 text-sm text-slate-700">
-            <ChecklistItem compact complete={Boolean(activeCustomer)} label="Customer selected" />
-            <ChecklistItem compact complete={Boolean(quoteForm.title.trim())} label="Quote title added" />
-            <ChecklistItem compact complete={filteredDraftLines.length > 0} label={`${filteredDraftLines.length || 0} line${filteredDraftLines.length === 1 ? "" : "s"} ready`} />
+            <ChecklistItem compact complete={Boolean(activeCustomer)} label={t("quoteBuilder.selected")} />
+            <ChecklistItem compact complete={Boolean(quoteForm.title.trim())} label={t("quoteBuilder.titleAdded")} />
+            <ChecklistItem compact complete={filteredDraftLines.length > 0} label={t("quoteBuilder.linesReady", { count: filteredDraftLines.length || 0 })} />
           </div>
           <div className="mt-4 grid gap-2">
             <Button fullWidth loading={saving} onClick={() => void handleCreateQuote()}>
-              Create Quote
+              {t("quoteBuilder.create")}
             </Button>
           </div>
         </Card>
@@ -1471,26 +1474,43 @@ export function QuoteBuilderView() {
           <QuoteSheetEditor
             title={quoteForm.title}
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
-            titlePlaceholder="Asphalt shingle roof replacement"
+            titlePlaceholder={t("quoteBuilder.titlePlaceholder")}
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? "Select customer"}
-            customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : "Use an existing customer or add one fast."}
+            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
+            customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : t("quoteBuilder.customerHint")}
             headerTools={
               <InlineCustomerLookup
                 selectedCustomer={activeCustomer}
                 onSelectCustomer={(customer) => {
                   selectQuoteCustomer(customer.id);
-                  setNotice(`${customer.fullName} loaded into the quote.`);
+                  setNotice(t("quoteBuilder.notices.customerLoaded", { name: customer.fullName }));
                 }}
                 onAddCustomer={() => setQuickCustomerOpen(true)}
               />
             }
+            customerTools={
+              <div className="min-w-[190px]">
+                <Select
+                  label={t("quoteComponents.documentLanguage.label")}
+                  value={quoteForm.documentLocale}
+                  onChange={(event) => setQuoteForm((previous) => ({
+                    ...previous,
+                    documentLocale: event.target.value as SupportedLocale,
+                  }))}
+                  options={[
+                    { value: "en-US", label: t("quoteComponents.documentLanguage.english") },
+                    { value: "es-US", label: t("quoteComponents.documentLanguage.spanish") },
+                  ]}
+                />
+                <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{t("quoteComponents.documentLanguage.help")}</p>
+              </div>
+            }
             preparedDateLabel={preparedDateLabel}
-            sentDateLabel="N/A"
+            sentDateLabel={quoteDocumentCopy(quoteForm.documentLocale).notAvailable}
             overview={quoteForm.scopeText}
             onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
-            overviewPlaceholder="Optional overview shown near the top of the quote."
+            overviewPlaceholder={t("quoteComponents.sheet.overviewPlaceholder")}
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
             templateId={branding?.templateId ?? "modern"}
@@ -1498,6 +1518,7 @@ export function QuoteBuilderView() {
             componentColors={branding?.componentColors ?? null}
             footerText={quoteFooterText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
+            documentLocale={quoteForm.documentLocale}
             actions={
               <div className="flex items-center gap-2">
                 <Button
@@ -1508,17 +1529,17 @@ export function QuoteBuilderView() {
                   onClick={() => setAiModalOpen(true)}
                   disabled={!canUseChatToQuote}
                 >
-                  AI Prompt
+                  {t("quoteBuilder.aiPrompt")}
                 </Button>
                 <KodyButton
-                  label="Improve scope"
+                  label={t("quoteBuilder.improveScope")}
                   size="sm"
                   className="hidden xl:inline-flex"
                   prompt={[
-                    activeCustomer ? `Improve this quote draft for ${activeCustomer.fullName}.` : "Improve this quote draft.",
-                    `Trade: ${quoteForm.serviceType}.`,
-                    quoteForm.title.trim() ? `Title: ${quoteForm.title.trim()}.` : "",
-                    quoteForm.scopeText.trim() ? `Scope: ${quoteForm.scopeText.trim()}` : "Help me turn rough job notes into a clean quote scope.",
+                    activeCustomer ? t("quoteBuilder.kodyPrompt.improveCustomer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.improve"),
+                    t("quoteBuilder.kodyPrompt.trade", { trade: t(`domain.trade.${quoteForm.serviceType}`) }),
+                    quoteForm.title.trim() ? t("quoteBuilder.handoff.promptTitle", { title: quoteForm.title.trim() }) : "",
+                    quoteForm.scopeText.trim() ? t("quoteBuilder.handoff.promptScope", { scope: quoteForm.scopeText.trim() }) : t("quoteBuilder.kodyPrompt.cleanScope"),
                   ].filter(Boolean).join("\n")}
                   tool="DRAFT_QUOTE"
                   context={{
@@ -1530,20 +1551,20 @@ export function QuoteBuilderView() {
                   disabled={!canUseChatToQuote}
                 />
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                  Draft preview
+                  {t("quoteBuilder.preview")}
                 </Button>
               </div>
             }
           >
             {!activeCustomer ? (
               <div className="rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
-                Choose or add a customer above to start pricing the work.
+                {t("quoteBuilder.selectToStart")}
               </div>
             ) : null}
 
             <div className={`grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2 ${activeCustomer ? "grid" : "hidden"} xl:hidden`}>
               <Select
-                label="Work type"
+                label={t("quoteBuilder.workType")}
                 value={quoteForm.serviceType}
                 onChange={(event) =>
                   setQuoteForm((prev) => ({
@@ -1552,25 +1573,25 @@ export function QuoteBuilderView() {
                   }))
                 }
                 options={[
-                  { value: "HVAC", label: "HVAC" },
-                  { value: "PLUMBING", label: "Plumbing" },
-                  { value: "FLOORING", label: "Flooring" },
-                  { value: "ROOFING", label: "Roofing" },
-                  { value: "GARDENING", label: "Gardening" },
-                  { value: "CONSTRUCTION", label: "Construction" },
+                  { value: "HVAC", label: t("domain.trade.HVAC") },
+                  { value: "PLUMBING", label: t("domain.trade.PLUMBING") },
+                  { value: "FLOORING", label: t("domain.trade.FLOORING") },
+                  { value: "ROOFING", label: t("domain.trade.ROOFING") },
+                  { value: "GARDENING", label: t("domain.trade.GARDENING") },
+                  { value: "CONSTRUCTION", label: t("domain.trade.CONSTRUCTION") },
                 ]}
               />
               <Button variant="outline" onClick={() => setPresetPickerOpen(true)}>
-                <span className="sm:hidden">Products</span>
-                <span className="hidden sm:inline">Products &amp; services</span>
+                <span className="sm:hidden">{t("quoteBuilder.productsShort")}</span>
+                <span className="hidden sm:inline">{t("quoteBuilder.products")}</span>
               </Button>
               <Button
                 variant="outline"
                 icon={<Sparkles size={15} />}
                 onClick={() => setAiModalOpen(true)}
                 disabled={!canUseChatToQuote}
-                aria-label="Build quote with AI"
-                title="Build quote with AI"
+                aria-label={t("quoteBuilder.buildWithAi")}
+                title={t("quoteBuilder.buildWithAi")}
               >
                 AI
               </Button>
@@ -1579,14 +1600,14 @@ export function QuoteBuilderView() {
             <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:block">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Products &amp; services</p>
-                  <p className="mt-1 text-sm text-slate-600">Load standard or custom catalog items into the quote sheet.</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{t("quoteBuilder.products")}</p>
+                  <p className="mt-1 text-sm text-slate-600">{t("quoteBuilder.catalogDescription")}</p>
                 </div>
                 {selectedPreset ? (
                   <div className="hidden flex-col gap-2 sm:flex-row sm:items-end xl:flex">
                     <div className="sm:w-24">
                       <Input
-                        label={formatPresetUnitLabel(selectedPreset.unitType)}
+                        label={t(`quoteComponents.units.${selectedPreset.unitType}`)}
                         type="number"
                         min="0.01"
                         step="0.01"
@@ -1595,7 +1616,7 @@ export function QuoteBuilderView() {
                       />
                     </div>
                     <Button size="sm" variant="outline" onClick={() => applyPresetToDraft(selectedPreset)}>
-                      Load selected job
+                      {t("quoteBuilder.loadSelected")}
                     </Button>
                   </div>
                 ) : null}
@@ -1606,8 +1627,8 @@ export function QuoteBuilderView() {
               <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                 {presetsLoading ? (
                   <LoadingState
-                    title="Loading common work"
-                    description="Fetching your tenant product presets for faster line-item setup."
+                    title={t("quoteBuilder.catalogLoading")}
+                    description={t("quoteBuilder.catalogLoadingDescription")}
                     variant="compact"
                     className="min-w-[260px] bg-white"
                   />
@@ -1626,19 +1647,19 @@ export function QuoteBuilderView() {
                         }`}
                       >
                         <p className="text-sm font-semibold">{preset.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</p>
+                  <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{formatMoney(preset.unitPrice)} / {t(`quoteComponents.units.${preset.unitType}`)}</p>
                       </button>
                     );
                   })
                 ) : (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-                    No products for this trade yet. Add them in Products.
+                    {t("quoteBuilder.catalogEmpty")}
                   </div>
                 )}
               </div>
               <div className="mt-3 flex justify-end">
                 <Button size="sm" variant="ghost" onClick={() => setPresetPickerOpen(true)}>
-                  Browse all products
+                  {t("quoteBuilder.browseAll")}
                 </Button>
               </div>
             </div>
@@ -1648,13 +1669,13 @@ export function QuoteBuilderView() {
                 className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid ${QUOTE_BUILDER_LINE_GRID_COLUMNS} ${QUOTE_BUILDER_LINE_GRID_MIN_WIDTH}`}
               >
                 <span>#</span>
-                <span>Line</span>
-                <span>Description</span>
-                <span>Qty</span>
-                <span>{canViewInternalCosts ? "Cost" : ""}</span>
-                <span>Price</span>
-                <span>Total</span>
-                <span className="text-right">Actions</span>
+                <span>{t("quoteDesk.line.title")}</span>
+                <span>{t("quoteDesk.line.description")}</span>
+                <span>{t("quoteDesk.line.quantity")}</span>
+                <span>{canViewInternalCosts ? t("quoteDesk.line.cost") : ""}</span>
+                <span>{t("quoteDesk.line.price")}</span>
+                <span>{t("quoteComponents.math.total")}</span>
+                <span className="text-right">{t("quoteDesk.line.actions")}</span>
               </div>
               <div className="divide-y divide-slate-200">
                 {draftLines.map((line, index) => (
@@ -1671,7 +1692,7 @@ export function QuoteBuilderView() {
                 ))}
                 <div className="px-3 py-3 xl:hidden">
                   <Button className="w-full" variant="outline" icon={<Plus size={15} />} onClick={() => addBlankLine()}>
-                    Add another item
+                    {t("quoteBuilder.addItem")}
                   </Button>
                 </div>
               </div>
@@ -1685,11 +1706,11 @@ export function QuoteBuilderView() {
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
             customerPhone={activeCustomer?.phone ?? null}
             customerEmail={activeCustomer?.email ?? null}
             preparedDateLabel={preparedDateLabel}
-            sentDateLabel="N/A"
+            sentDateLabel={quoteDocumentCopy(quoteForm.documentLocale).notAvailable}
             quoteTitle={quoteForm.title}
             scopeText={quoteForm.scopeText}
             lines={previewLines}
@@ -1703,6 +1724,7 @@ export function QuoteBuilderView() {
             componentColors={branding?.componentColors ?? null}
             footerText={quoteFooterText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
+            documentLocale={quoteForm.documentLocale}
           />
         </div>
       ) : null}
@@ -1715,21 +1737,21 @@ export function QuoteBuilderView() {
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 pl-1">
                 <p className="text-[11px] font-medium text-[var(--qf-text-muted)]">
-                  {filteredDraftLines.length} work item{filteredDraftLines.length === 1 ? "" : "s"}
+                  {t("quoteBuilder.workItems", { count: filteredDraftLines.length })}
                 </p>
-                <p className="text-sm font-bold text-[var(--qf-text)]">Total {money(totalAmount)}</p>
+                <p className="text-sm font-bold text-[var(--qf-text)]">{t("quoteComponents.math.total")} {formatMoney(totalAmount)}</p>
               </div>
               <Button className="min-w-[148px]" icon={<Eye size={15} />} onClick={() => setMobilePane("preview")}>
-                Review quote
+                {t("quoteBuilder.review")}
               </Button>
             </div>
           ) : (
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2">
               <Button variant="outline" icon={<ArrowLeft size={15} />} onClick={() => setMobilePane("editor")}>
-                Back
+                {t("quoteBuilder.back")}
               </Button>
               <Button loading={saving} onClick={() => void handleCreateQuote()}>
-                Create Quote
+                {t("quoteBuilder.create")}
               </Button>
             </div>
           )}
@@ -1745,15 +1767,15 @@ export function QuoteBuilderView() {
           void loadCustomers();
           selectQuoteCustomer(customer.id);
           const createNotice = reusedExisting
-            ? "Using existing customer record."
+            ? t("quoteBuilder.notices.customerExisting")
             : merged
               ? restored
-                ? "Customer merged and restored."
-                : "Customer merged into existing record."
+                ? t("quoteBuilder.notices.customerMergedRestored")
+                : t("quoteBuilder.notices.customerMerged")
               : restored
-                ? "Customer restored."
-                : "Customer created.";
-          setNotice(intent === "quote" ? `${customer.fullName} is ready for a quote.` : createNotice);
+                ? t("quoteBuilder.notices.customerRestored")
+                : t("quoteBuilder.notices.customerCreated");
+          setNotice(intent === "quote" ? t("quoteBuilder.notices.customerReady", { name: customer.fullName }) : createNotice);
         }}
       />
 
@@ -1774,7 +1796,7 @@ export function QuoteBuilderView() {
         onSelectPreset={setSelectedPresetId}
         quantity={selectedPresetQuantity}
         onQuantityChange={setSelectedPresetQuantity}
-        primaryActionLabel="Load selected product"
+        primaryActionLabel={t("quoteBuilder.loadSelectedProduct")}
         onPrimaryAction={() => {
           if (!selectedPreset) return;
           applyPresetToDraft(selectedPreset);
@@ -1813,33 +1835,33 @@ export function QuoteBuilderView() {
         customerContextText={
           activeCustomer
             ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`
-            : "No customer is locked yet. Select one in the quote sheet or include the name, phone, or email directly in the prompt."
+            : t("quoteBuilder.noCustomerAi")
         }
-        customerContextBadge={activeCustomer ? "Using selected customer" : null}
+        customerContextBadge={activeCustomer ? t("quoteBuilder.usingCustomer") : null}
         usageHint={aiUsageHint}
         errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
-        submitLabel="Apply AI Suggestion"
+        submitLabel={t("quoteBuilder.applyAi")}
       />
 
-      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Draft quote preview">
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel={t("quoteBuilder.preview")}>
         <ModalHeader
-          title="Draft preview"
-          description="This is an in-app preview of the unsaved quote. Create the quote to generate its PDF."
+          title={t("quoteBuilder.preview")}
+          description={t("quoteBuilder.previewDescription")}
           onClose={() => setPreviewOpen(false)}
         />
         <ModalBody className="bg-[var(--qf-panel-muted)]">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? "Select customer"}
+            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
             customerPhone={activeCustomer?.phone ?? null}
             customerEmail={activeCustomer?.email ?? null}
             preparedDateLabel={preparedDateLabel}
-            sentDateLabel="N/A"
+            sentDateLabel={quoteDocumentCopy(quoteForm.documentLocale).notAvailable}
             quoteTitle={quoteForm.title}
             scopeText={quoteForm.scopeText}
             lines={previewLines}
@@ -1853,6 +1875,7 @@ export function QuoteBuilderView() {
             componentColors={branding?.componentColors ?? null}
             footerText={quoteFooterText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
+            documentLocale={quoteForm.documentLocale}
           />
         </ModalBody>
       </Modal>
@@ -1861,9 +1884,9 @@ export function QuoteBuilderView() {
         open={navigationPromptOpen}
         onClose={cancelNavigation}
         onConfirm={continueNavigation}
-        title="Leave this quote draft?"
-        description="Your draft is saved securely to your workspace for up to 12 hours and can be restored when you return."
-        confirmLabel="Keep draft and leave"
+        title={t("quoteBuilder.leaveTitle")}
+        description={t("quoteBuilder.leaveDescription")}
+        confirmLabel={t("quoteBuilder.leaveConfirm")}
         confirmVariant="warning"
       />
     </div>
@@ -1895,12 +1918,6 @@ function SummaryRow({
   );
 }
 
-function serviceTypeLabel(serviceType: KodyQuoteDraftHandoff["serviceType"]) {
-  if (!serviceType) return "Trade not locked";
-  if (serviceType === "HVAC") return "HVAC";
-  return serviceType.charAt(0) + serviceType.slice(1).toLowerCase();
-}
-
 function KodyDraftHandoffBanner({
   handoff,
   activeCustomerName,
@@ -1914,7 +1931,9 @@ function KodyDraftHandoffBanner({
   onDismiss: () => void;
   canViewInternalCosts: boolean;
 }) {
-  const customerLabel = activeCustomerName ?? handoff.customerName ?? "Customer not selected";
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const customerLabel = activeCustomerName ?? handoff.customerName ?? t("quoteBuilder.handoff.customerNotSelected");
   const visibleLines = handoff.lineItems.slice(0, 3);
   const extraLineCount = Math.max(0, handoff.lineItems.length - visibleLines.length);
 
@@ -1926,78 +1945,78 @@ function KodyDraftHandoffBanner({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="blue" icon={<Sparkles size={12} />}>Kody prepared a draft</Badge>
-            <Badge tone="slate">Not saved</Badge>
-            <Badge tone="slate">Not sent</Badge>
+            <Badge tone="blue" icon={<Sparkles size={12} />}>{t("quoteBuilder.handoff.prepared")}</Badge>
+            <Badge tone="slate">{t("quoteBuilder.handoff.notSaved")}</Badge>
+            <Badge tone="slate">{t("quoteBuilder.handoff.notSent")}</Badge>
             {handoff.useWorkspaceContext ? (
               <Badge tone="blue" icon={<Sparkles size={12} />}>
-                {handoff.retrievedSourceCount} workspace source{handoff.retrievedSourceCount === 1 ? "" : "s"}
+                {t("quoteBuilder.handoff.sources", { count: handoff.retrievedSourceCount })}
               </Badge>
             ) : null}
           </div>
-          <h2 className="mt-3 text-base font-semibold text-slate-950">
-            Review this AI handoff before creating the quote.
+          <h2 className="mt-3 text-base font-semibold text-[var(--qf-text)]">
+            {t("quoteBuilder.handoff.reviewTitle")}
           </h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--qf-text-soft)]">
             {handoff.useWorkspaceContext
-              ? "Kody found relevant saved jobs, quote details, or customer context. Generate the grounded draft, then review every scope and price before creating it. Nothing is saved or sent automatically."
-              : "Kody can prefill an empty builder from the parsed prompt, or preserve your existing work and load the prompt into the AI drafting modal. Nothing is saved to the quote list or sent to the customer until you review the sheet and press Create Quote."}
+              ? t("quoteBuilder.handoff.groundedDescription")
+              : t("quoteBuilder.handoff.promptDescription")}
           </p>
           {handoff.pricingNeedsReview && canViewInternalCosts ? (
-            <p className="mt-2 text-sm font-semibold text-amber-700">
-              Pricing still needs review. Kody does not finalize costs, margins, taxes, or customer price without your confirmation.
+            <p className="mt-2 text-sm font-semibold text-[var(--qf-warning-text)]">
+              {t("quoteBuilder.handoff.pricingReview")}
             </p>
           ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
           <Button size="sm" onClick={onOpenAiDraft} icon={<Sparkles size={14} />}>
-            {handoff.useWorkspaceContext ? "Generate grounded draft" : "Open AI Draft"}
+            {handoff.useWorkspaceContext ? t("quoteBuilder.handoff.generateGrounded") : t("quoteBuilder.handoff.openAi")}
           </Button>
           <Button size="sm" variant="ghost" onClick={onDismiss}>
-            Dismiss
+            {t("quoteBuilder.dismiss")}
           </Button>
         </div>
       </div>
 
       {handoff.retrievedSourceLabels.length ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--qf-text-soft)]">
-          <span className="font-semibold text-[var(--qf-text)]">Workspace context:</span>
+          <span className="font-semibold text-[var(--qf-text)]">{t("quoteBuilder.handoff.workspaceContext")}</span>
           {handoff.retrievedSourceLabels.slice(0, 4).map((label) => (
             <span key={label} className="rounded-full border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-2.5 py-1">
               {label}
             </span>
           ))}
           {handoff.retrievedSourceLabels.length > 4 ? (
-            <span>+{handoff.retrievedSourceLabels.length - 4} more</span>
+            <span>{t("quoteBuilder.handoff.moreSources", { count: handoff.retrievedSourceLabels.length - 4 })}</span>
           ) : null}
         </div>
       ) : null}
 
       <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Customer</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.customer")}</p>
           <p className="mt-1 truncate font-semibold text-[var(--qf-text)]">{customerLabel}</p>
         </div>
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Trade</p>
-          <p className="mt-1 font-semibold text-[var(--qf-text)]">{serviceTypeLabel(handoff.serviceType)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.trade")}</p>
+          <p className="mt-1 font-semibold text-[var(--qf-text)]">{handoff.serviceType ? t(`domain.trade.${handoff.serviceType}`) : t("quoteBuilder.handoff.tradeNotLocked")}</p>
         </div>
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-2 sm:col-span-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Title</p>
-          <p className="mt-1 truncate font-semibold text-[var(--qf-text)]">{handoff.title ?? "Kody will generate a title from the prompt"}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.title")}</p>
+          <p className="mt-1 truncate font-semibold text-[var(--qf-text)]">{handoff.title ?? t("quoteBuilder.handoff.titleFallback")}</p>
         </div>
       </div>
 
       {handoff.scopeText || visibleLines.length || handoff.estimatedTotalAmount !== null ? (
         <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.42fr)]">
           <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Scope preview</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.scopePreview")}</p>
             <p className="mt-1 line-clamp-3 text-sm leading-6 text-[var(--qf-text-soft)]">
-              {handoff.scopeText ?? "Kody will generate scope details from the prompt."}
+              {handoff.scopeText ?? t("quoteBuilder.handoff.scopeFallback")}
             </p>
           </div>
           <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-3 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Suggested work</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.suggestedWork")}</p>
             {visibleLines.length ? (
               <ul className="mt-1 space-y-1 text-sm text-[var(--qf-text-soft)]">
                 {visibleLines.map((lineItem, index) => (
@@ -2005,18 +2024,18 @@ function KodyDraftHandoffBanner({
                     <span className="text-[var(--qf-text-muted)]">{index + 1}.</span>
                     <span className="min-w-0">
                       {lineItem.description}
-                      {lineItem.quantity ? <span className="text-[var(--qf-text-muted)]"> · Qty {lineItem.quantity}</span> : null}
+                      {lineItem.quantity ? <span className="text-[var(--qf-text-muted)]"> · {t("quoteBuilder.handoff.quantity", { count: lineItem.quantity })}</span> : null}
                     </span>
                   </li>
                 ))}
-                {extraLineCount ? <li className="text-xs font-semibold text-[var(--qf-text-muted)]">+{extraLineCount} more in prompt</li> : null}
+                {extraLineCount ? <li className="text-xs font-semibold text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.moreInPrompt", { count: extraLineCount })}</li> : null}
               </ul>
             ) : (
-              <p className="mt-1 text-sm text-[var(--qf-text-soft)]">No line preview supplied yet.</p>
+              <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteBuilder.handoff.noLinePreview")}</p>
             )}
             {handoff.estimatedTotalAmount !== null ? (
               <p className="mt-2 text-xs font-semibold text-[var(--qf-text-soft)]">
-                Kody estimate: {money(handoff.estimatedTotalAmount)}
+                {t("quoteBuilder.handoff.estimate", { amount: money(handoff.estimatedTotalAmount, locale) })}
               </p>
             ) : null}
           </div>
@@ -2062,6 +2081,8 @@ function DraftLineEditorRow({
   onRemove: (lineId: string) => void;
   canViewInternalCosts: boolean;
 }) {
+  const { t, i18n } = useTranslation();
+  const formatLineMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
   const [expanded, setExpanded] = useState(startExpanded ?? false);
   const [advancedOpen, setAdvancedOpen] = useState(
     Boolean(line.details.trim() || Number(line.unitCost) > 0 || line.sectionType === "ALTERNATE"),
@@ -2069,8 +2090,8 @@ function DraftLineEditorRow({
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
   const sectionPillLabel =
     line.sectionType === "ALTERNATE"
-      ? line.sectionLabel?.trim() || "Alternate option"
-      : "Included in total";
+      ? line.sectionLabel?.trim() || t("quoteComponents.line.alternate")
+      : t("quoteComponents.line.included");
   const sectionPillClassName =
     line.sectionType === "ALTERNATE"
       ? "border-orange-200 bg-orange-50 text-orange-700"
@@ -2101,22 +2122,22 @@ function DraftLineEditorRow({
               onClick={() => setExpanded((current) => !current)}
               className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-3 text-left"
               aria-expanded={expanded}
-              aria-label={`${expanded ? "Collapse" : "Expand"} line ${index + 1}`}
+              aria-label={t(expanded ? "quoteBuilder.line.collapseAria" : "quoteBuilder.line.expandAria", { number: index + 1 })}
             >
               <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Item {index + 1}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteBuilder.line.item", { number: index + 1 })}</p>
                 {line.sectionType === "ALTERNATE" ? (
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
                     {sectionPillLabel}
                   </span>
                 ) : null}
               </div>
-              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || "Untitled line"}</p>
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || t("quoteComponents.savePreset.untitled")}</p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--qf-text-muted)]">
-                <span>Qty {line.quantity}</span>
-                <span>Price {money(line.unitPrice)}</span>
-                <span>Total {money(lineTotal)}</span>
+                <span>{t("quoteDesk.line.quantity")} {line.quantity}</span>
+                <span>{t("quoteDesk.line.price")} {formatLineMoney(line.unitPrice)}</span>
+                <span>{t("quoteComponents.math.total")} {formatLineMoney(lineTotal)}</span>
               </div>
               </div>
               <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)]">
@@ -2128,7 +2149,7 @@ function DraftLineEditorRow({
                 type="button"
                 onClick={() => onRemove(line.id)}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-muted)] transition hover:border-[var(--qf-danger-border)] hover:bg-[var(--qf-danger-surface)] hover:text-[var(--qf-danger-text)]"
-                aria-label={`Remove item ${index + 1}`}
+                aria-label={t("quoteBuilder.line.removeAria", { number: index + 1 })}
               >
                 <Trash2 size={15} />
               </button>
@@ -2138,15 +2159,15 @@ function DraftLineEditorRow({
           <div className={expanded ? "border-t border-[var(--qf-border)] px-3 py-3" : "hidden"}>
             <div className="space-y-3">
               <Input
-                label="Work item"
-                aria-label={`Line ${index + 1} title`}
-                placeholder="Asphalt shingle tear-off"
+                label={t("quoteBuilder.line.workItem")}
+                aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })}
+                placeholder={t("quoteBuilder.line.workPlaceholder")}
                 value={line.title}
                 onChange={(event) => onChange(line.id, "title", event.target.value)}
               />
               <div className="grid grid-cols-2 gap-2">
-                <Input label="Qty" aria-label={`Line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
-                <Input label="Price" aria-label={`Line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+                <Input label={t("quoteDesk.line.quantity")} aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+                <Input label={t("quoteDesk.line.price")} aria-label={t("quoteDesk.line.priceAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
               </div>
               <button
                 type="button"
@@ -2154,22 +2175,22 @@ function DraftLineEditorRow({
                 className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 text-sm font-medium text-[var(--qf-text-soft)] transition hover:bg-[var(--qf-interactive-hover)]"
                 aria-expanded={advancedOpen}
               >
-                More details
+                {t("quoteBuilder.line.moreDetails")}
                 {advancedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
               </button>
               {advancedOpen ? (
                 <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
                   <Textarea
-                    label="Description"
-                    aria-label={`Line ${index + 1} description`}
+                    label={t("quoteDesk.line.description")}
+                    aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
                     rows={3}
-                    placeholder="Optional scope details for this item"
+                    placeholder={t("quoteBuilder.line.detailsPlaceholder")}
                     value={line.details}
                     onChange={(event) => onChange(line.id, "details", event.target.value)}
                   />
                   {canViewInternalCosts ? <Input
-                    label="Internal cost"
-                    aria-label={`Line ${index + 1} cost`}
+                    label={t("quoteComponents.math.internalCost")}
+                    aria-label={t("quoteDesk.line.costAria", { number: index + 1 })}
                     type="number"
                     min="0"
                     step="0.01"
@@ -2185,7 +2206,7 @@ function DraftLineEditorRow({
                 </div>
               ) : null}
               <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)]">
-                Line total {money(lineTotal)}
+                {t("quoteDesk.line.total", { amount: formatLineMoney(lineTotal) })}
               </div>
             </div>
           </div>
@@ -2204,32 +2225,32 @@ function DraftLineEditorRow({
             sectionLabel={line.sectionLabel}
             onSectionTypeChange={updateSectionType}
             onSectionLabelChange={(value) => onChange(line.id, "sectionLabel", value)}
-            optionNameLabel="Option"
+            optionNameLabel={t("quoteComponents.line.alternateShort")}
             compact
           />
           <Input
-            aria-label={`Line ${index + 1} title`}
+            aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })}
             className="min-h-[38px] rounded-lg"
-            placeholder="Line"
+            placeholder={t("quoteDesk.line.title")}
             value={line.title}
             onChange={(event) => onChange(line.id, "title", event.target.value)}
           />
         </div>
         <Textarea
-          aria-label={`Line ${index + 1} description`}
+          aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
           rows={2}
           className="min-h-[64px] rounded-lg"
-          placeholder="Description"
+          placeholder={t("quoteDesk.line.description")}
           value={line.details}
           onChange={(event) => onChange(line.id, "details", event.target.value)}
         />
-        <Input aria-label={`Line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
+        <Input aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
         {canViewInternalCosts ? (
-          <Input aria-label={`Line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
+          <Input aria-label={t("quoteDesk.line.costAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />
         ) : <span aria-hidden="true" />}
-        <Input aria-label={`Line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
+        <Input aria-label={t("quoteDesk.line.priceAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
-          {money(lineTotal)}
+          {formatLineMoney(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">
           <Button
@@ -2238,8 +2259,8 @@ function DraftLineEditorRow({
             icon={<Plus size={14} />}
             className="w-9 px-0"
             onClick={() => onInsertBelow(line.id)}
-            aria-label="Add line below"
-            title="Add line below"
+            aria-label={t("quoteBuilder.line.addBelow")}
+            title={t("quoteBuilder.line.addBelow")}
           />
           <Button
             size="sm"
@@ -2247,8 +2268,8 @@ function DraftLineEditorRow({
             icon={<X size={14} />}
             className="w-9 px-0 text-[var(--qf-text-muted)] hover:text-[var(--qf-danger-text)]"
             onClick={() => onRemove(line.id)}
-            aria-label="Remove line"
-            title="Remove line"
+            aria-label={t("quoteDesk.line.remove")}
+            title={t("quoteDesk.line.remove")}
           />
         </div>
       </div>

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './components/theme/ThemeProvider.tsx'
+import { LocaleProvider } from './i18n'
 
 const rootElement = document.getElementById('root')!
 
@@ -37,9 +38,11 @@ async function bootstrap() {
 
   createRoot(rootElement).render(
     <StrictMode>
-      <ThemeProvider>
-        <App />
-      </ThemeProvider>
+      <LocaleProvider>
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      </LocaleProvider>
     </StrictMode>,
   )
 }

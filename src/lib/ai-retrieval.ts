@@ -19,6 +19,12 @@ import {
   splitAiFieldIntoChunks,
 } from "./ai-chunking";
 import {
+  AI_RETRIEVAL_CONTENT_GOVERNANCE_VERSION,
+  AiRetrievalContentQuarantinedError,
+  contentFreeAiRetrievalMetadata,
+  governAiRetrievalContent,
+} from "./ai-content-governance";
+import {
   AI_RETRIEVAL_KEYWORD_WEIGHT,
   AI_RETRIEVAL_RANKING_MODE,
   AI_RETRIEVAL_RRF_K,
@@ -30,6 +36,7 @@ import {
 import { prepareAiEmbeddingQuery } from "./ai-retrieval-query-safety";
 import {
   AI_DATA_POLICY_VERSION,
+  AI_RAG_SOURCE_FIELD_MANIFEST,
   AI_RETRIEVABLE_FIELD_POLICY,
   type AiRetrievableField,
 } from "./data-classification";
@@ -47,6 +54,12 @@ const OPENAI_EMBEDDING_DIMENSIONS: Readonly<Record<string, number>> = {
   "text-embedding-3-large": 3072,
   "text-embedding-ada-002": 1536,
 };
+
+// Fits the persisted 64-character chunkerVersion column (37 + 1 + 25).
+// This makes governance changes a first-class index compatibility boundary:
+// legacy rows cannot be reused or retrieved until they are reindexed.
+export const AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION =
+  `${AI_CHUNKER_VERSION}:${AI_RETRIEVAL_CONTENT_GOVERNANCE_VERSION}`;
 
 type AiRetrievalWriteClient =
   | Pick<PrismaClient, "aiIndexJob" | "aiRetrievalChunk" | "aiRetrievalDocument" | "quoteLineItem" | "customerActivityEvent" | "quote">
@@ -179,7 +192,7 @@ function hashToken(value: string) {
 
 export function deterministicEmbedding(text: string): AiEmbeddingResult {
   const vector = Array.from({ length: FALLBACK_EMBEDDING_DIMENSIONS }, () => 0);
-  const tokens = normalizeSourceText(text).toLowerCase().match(/[a-z0-9]{2,}/g) ?? [];
+  const tokens = normalizeSourceText(text).toLocaleLowerCase("und").match(/[\p{L}\p{N}]{2,}/gu) ?? [];
   for (const token of tokens) {
     const { index, sign } = hashToken(token);
     vector[index] += sign;
@@ -275,7 +288,19 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
     filterMetadata: ReturnType<typeof normalizeTypedMetadata>;
   }> = [];
 
+  const sourceType = source.sourceType.trim().slice(0, 64);
+  const manifestFields = AI_RAG_SOURCE_FIELD_MANIFEST[
+    sourceType as keyof typeof AI_RAG_SOURCE_FIELD_MANIFEST
+  ] as readonly AiRetrievableField[] | undefined;
+  if (!manifestFields) {
+    throw new Error(`Unsupported AI retrieval source type: ${sourceType || "(empty)"}.`);
+  }
+  const governedCitationLabel = governAiRetrievalContent(source.citationLabel).content.slice(0, 160);
+
   for (const field of source.fields) {
+    if (!manifestFields.includes(field.field)) {
+      throw new Error(`${field.field} is not an approved RAG field for ${sourceType}.`);
+    }
     const policy = AI_RETRIEVABLE_FIELD_POLICY[field.field];
     if (!policy.vectorEligible) {
       throw new Error(`${field.field} is not vector eligible under policy ${AI_DATA_POLICY_VERSION}.`);
@@ -283,7 +308,11 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
     if ((policy.classification as DataClassification) === "C4_RESTRICTED") {
       throw new Error(`${field.field} is restricted and cannot be indexed for RAG.`);
     }
-    const fieldChunks = splitAiFieldIntoChunks(field.field, field.content ?? "");
+    // Governance happens before chunking and hashing, so every durable hash,
+    // cached embedding, and authorization comparison refers to the exact text
+    // that is eligible to be retrieved.
+    const governedContent = governAiRetrievalContent(field.content ?? "").content;
+    const fieldChunks = splitAiFieldIntoChunks(field.field, governedContent);
     for (const content of fieldChunks) {
       chunks.push({
         sourceField: field.field,
@@ -292,8 +321,8 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
         contentHash: sha256Text(`${field.field}:${content}`),
         embeddingContentHash: sha256Text(content),
         classification: policy.classification,
-        citationLabel: source.citationLabel.slice(0, 160),
-        metadata: field.metadata ?? null,
+        citationLabel: governedCitationLabel,
+        metadata: contentFreeAiRetrievalMetadata(),
         filterMetadata: normalizeTypedMetadata({
           ...source.filterMetadata,
           ...field.filterMetadata,
@@ -305,21 +334,33 @@ function buildSourceChunks(source: AiRetrievalSourceInput) {
   return chunks;
 }
 
+/** Validates the full durable-source boundary without embedding or writing. */
+export function assertAiRetrievalSourceGovernance(source: AiRetrievalSourceInput) {
+  buildSourceChunks(source);
+}
+
 function normalizeOptionalString(value: string | null | undefined, maxLength = 191) {
   const normalized = value?.trim();
   return normalized ? normalized.slice(0, maxLength) : null;
 }
 
+function normalizeContentFreeMetadataString(value: string | null | undefined, maxLength = 191) {
+  const normalized = normalizeOptionalString(value, maxLength);
+  // These columns are for opaque IDs and bounded enum-like filters, never
+  // arbitrary source excerpts. Keep nonconforming values out of metadata.
+  return normalized && /^[A-Za-z0-9_.:-]+$/.test(normalized) ? normalized : null;
+}
+
 function normalizeTypedMetadata(metadata?: AiRetrievalTypedMetadata) {
   const pageNumber = metadata?.pageNumber;
   return {
-    customerId: normalizeOptionalString(metadata?.customerId),
-    quoteId: normalizeOptionalString(metadata?.quoteId),
+    customerId: normalizeContentFreeMetadataString(metadata?.customerId),
+    quoteId: normalizeContentFreeMetadataString(metadata?.quoteId),
     serviceType: metadata?.serviceType ?? null,
-    recordStatus: normalizeOptionalString(metadata?.recordStatus, 64),
+    recordStatus: normalizeContentFreeMetadataString(metadata?.recordStatus, 64),
     lifecycle: metadata?.lifecycle ?? null,
-    assignedTenantUserId: normalizeOptionalString(metadata?.assignedTenantUserId),
-    section: normalizeOptionalString(metadata?.section, 128),
+    assignedTenantUserId: normalizeContentFreeMetadataString(metadata?.assignedTenantUserId),
+    section: normalizeContentFreeMetadataString(metadata?.section, 128),
     pageNumber: Number.isInteger(pageNumber) && Number(pageNumber) > 0 ? Number(pageNumber) : null,
     sourceCreatedAtUtc: metadata?.sourceCreatedAtUtc ?? null,
   };
@@ -348,7 +389,7 @@ async function completeAiIndexPersistenceFence(
   tx: Prisma.TransactionClient,
   tenantId: string,
   fence: AiIndexPersistenceFence | undefined,
-  result: { chunkCount: number; embeddingCacheHitCount: number },
+  result: { chunkCount: number; embeddingCacheHitCount: number; lastErrorCode?: string | null },
 ) {
   if (!fence) return;
   const completedAtUtc = fence.completedAtUtc ?? new Date();
@@ -365,7 +406,7 @@ async function completeAiIndexPersistenceFence(
       completedAtUtc,
       lockedAtUtc: null,
       lockedBy: null,
-      lastErrorCode: null,
+      lastErrorCode: result.lastErrorCode ?? null,
       lastDurationMs: Math.max(0, Date.now() - fence.startedAtMs),
       lastChunkCount: result.chunkCount,
       lastEmbeddingCacheHitCount: result.embeddingCacheHitCount,
@@ -409,6 +450,59 @@ export async function markAiRetrievalSourceDeleted(
       },
     }),
     ]);
+  });
+}
+
+/**
+ * Removes durable RAG material for a source that now contains a restricted
+ * credential. This is deliberately stronger than a soft retirement: derived
+ * chunks are hard-deleted before the document tombstone is scrubbed, so a
+ * legacy raw excerpt cannot survive the rollout.
+ */
+export async function quarantineAiRetrievalSource(
+  prisma: AiRetrievalTenantClient,
+  params: {
+    tenantId: string;
+    sourceType: string;
+    sourceId: string;
+    now?: Date;
+    persistenceFence?: AiIndexPersistenceFence;
+  },
+) {
+  const now = params.now ?? new Date();
+  const sourceType = params.sourceType.trim().slice(0, 64);
+  const sourceId = params.sourceId.trim();
+  if (!params.tenantId.trim() || !sourceType || !sourceId) {
+    throw new Error("AI retrieval quarantine requires tenantId, sourceType, and sourceId.");
+  }
+  const quarantineHash = sha256Text(`quarantined:${params.tenantId}:${sourceType}:${sourceId}`);
+
+  return withTenantRlsContext(prisma, params.tenantId, async (tx) => {
+    await lockAiIndexPersistenceFence(tx, params.tenantId, params.persistenceFence);
+    const [chunks, documents] = await Promise.all([
+      tx.aiRetrievalChunk.deleteMany({
+        where: { tenantId: params.tenantId, sourceType, sourceId },
+      }),
+      tx.aiRetrievalDocument.updateMany({
+        where: { tenantId: params.tenantId, sourceType, sourceId },
+        data: {
+          status: "DELETED",
+          contentHash: quarantineHash,
+          citationLabel: "Quarantined source",
+          metadata: Prisma.JsonNull,
+          policyVersion: AI_DATA_POLICY_VERSION,
+          chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
+          indexedAtUtc: now,
+          deletedAtUtc: now,
+        },
+      }),
+    ]);
+    await completeAiIndexPersistenceFence(tx, params.tenantId, params.persistenceFence, {
+      chunkCount: 0,
+      embeddingCacheHitCount: 0,
+      lastErrorCode: "SOURCE_CONTENT_QUARANTINED",
+    });
+    return { documentCount: documents.count, chunkCount: chunks.count, code: "SOURCE_CONTENT_QUARANTINED" as const };
   });
 }
 
@@ -609,6 +703,7 @@ export async function upsertAiRetrievalSource(
   }
 
   const sourceChunks = buildSourceChunks(source);
+  const governedSourceMetadata = contentFreeAiRetrievalMetadata();
   if (sourceChunks.length === 0) {
     await withTenantRlsContext(prisma, source.tenantId, async (tx) => {
       await lockAiIndexPersistenceFence(tx, source.tenantId, options?.persistenceFence);
@@ -639,7 +734,7 @@ export async function upsertAiRetrievalSource(
 
   const documentContentHash = sha256Text(
     JSON.stringify([
-      AI_CHUNKER_VERSION,
+      AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
       ...sourceChunks.map((chunk) => [chunk.sourceField, chunk.contentHash]),
     ]),
   );
@@ -687,7 +782,7 @@ export async function upsertAiRetrievalSource(
       !existing.deletedAtUtc &&
       existing.contentHash === documentContentHash &&
       existing.policyVersion === AI_DATA_POLICY_VERSION &&
-      existing.chunkerVersion === AI_CHUNKER_VERSION &&
+      existing.chunkerVersion === AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION &&
       existing.chunks.length === sourceChunks.length &&
       existing.chunks.every((chunk, index) => {
         const sourceChunk = sourceChunks[index];
@@ -698,7 +793,7 @@ export async function upsertAiRetrievalSource(
           chunk.sourceField === sourceChunk.sourceField &&
           chunk.embeddingModel === expectedModel &&
           (expectedDimensions === undefined || chunk.embeddingDimensions === expectedDimensions) &&
-          chunk.chunkerVersion === AI_CHUNKER_VERSION
+          chunk.chunkerVersion === AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION
         );
       }),
     );
@@ -711,8 +806,8 @@ export async function upsertAiRetrievalSource(
           data: {
             sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
             maxClassification: documentClassification,
-            citationLabel: source.citationLabel.slice(0, 160),
-            metadata: source.metadata ?? Prisma.JsonNull,
+            citationLabel: sourceChunks[0]?.citationLabel ?? sourceType,
+            metadata: governedSourceMetadata ?? Prisma.JsonNull,
           },
         });
         for (const [index, chunk] of existing.chunks.entries()) {
@@ -759,7 +854,7 @@ export async function upsertAiRetrievalSource(
           embeddingContentHash: { in: Array.from(new Set(sourceChunks.map((chunk) => chunk.embeddingContentHash))) },
           embeddingModel: configuredEmbeddingModel(),
           ...(expectedDimensions === undefined ? {} : { embeddingDimensions: expectedDimensions }),
-          chunkerVersion: AI_CHUNKER_VERSION,
+          chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
           deletedAtUtc: null,
           document: { status: "ACTIVE", deletedAtUtc: null },
         },
@@ -827,10 +922,10 @@ export async function upsertAiRetrievalSource(
         status: "ACTIVE",
         maxClassification: documentClassification,
         contentHash: documentContentHash,
-        citationLabel: source.citationLabel.slice(0, 160),
-        metadata: source.metadata ?? Prisma.JsonNull,
+        citationLabel: sourceChunks[0]?.citationLabel ?? sourceType,
+        metadata: governedSourceMetadata ?? Prisma.JsonNull,
         policyVersion: AI_DATA_POLICY_VERSION,
-        chunkerVersion: AI_CHUNKER_VERSION,
+        chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
         indexedAtUtc: now,
         deletedAtUtc: null,
       },
@@ -842,10 +937,10 @@ export async function upsertAiRetrievalSource(
         status: "ACTIVE",
         maxClassification: documentClassification,
         contentHash: documentContentHash,
-        citationLabel: source.citationLabel.slice(0, 160),
-        metadata: source.metadata ?? Prisma.JsonNull,
+        citationLabel: sourceChunks[0]?.citationLabel ?? sourceType,
+        metadata: governedSourceMetadata ?? Prisma.JsonNull,
         policyVersion: AI_DATA_POLICY_VERSION,
-        chunkerVersion: AI_CHUNKER_VERSION,
+        chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
         indexedAtUtc: now,
       },
       select: { id: true },
@@ -875,7 +970,7 @@ export async function upsertAiRetrievalSource(
           metadata: chunk.metadata ?? Prisma.JsonNull,
           ...chunk.filterMetadata,
           policyVersion: AI_DATA_POLICY_VERSION,
-          chunkerVersion: AI_CHUNKER_VERSION,
+          chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
           sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
           indexedAtUtc: now,
           deletedAtUtc: null,
@@ -898,7 +993,7 @@ export async function upsertAiRetrievalSource(
           metadata: chunk.metadata ?? Prisma.JsonNull,
           ...chunk.filterMetadata,
           policyVersion: AI_DATA_POLICY_VERSION,
-          chunkerVersion: AI_CHUNKER_VERSION,
+          chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
           sourceUpdatedAtUtc: source.sourceUpdatedAtUtc ?? null,
           indexedAtUtc: now,
         },
@@ -1072,7 +1167,16 @@ async function keywordRankAuthorizedChunks(
 }
 
 function fieldContentHashes(field: AiRetrievableField, content: string | null | undefined) {
-  return new Set(splitAiFieldIntoChunks(field, content ?? "").map((chunk) => sha256Text(`${field}:${chunk}`)));
+  try {
+    const governedContent = governAiRetrievalContent(content ?? "").content;
+    return new Set(splitAiFieldIntoChunks(field, governedContent).map((chunk) => sha256Text(`${field}:${chunk}`)));
+  } catch (error) {
+    // A canonical record that now contains restricted credential-like text is
+    // not current retrievable content. Its old chunk hashes therefore cannot
+    // authorize a stale index row while the source is quarantined.
+    if (error instanceof AiRetrievalContentQuarantinedError) return new Set<string>();
+    throw error;
+  }
 }
 
 async function currentRetrievalContentHashes(
@@ -1199,6 +1303,7 @@ export async function retrieveAiContextFromIndex(
           tenantId: params.access.tenantId,
           deletedAtUtc: null,
           policyVersion: AI_DATA_POLICY_VERSION,
+          chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
           ...(queryEmbedding
             ? {
                 embeddingDimensions: queryEmbedding.embedding.length,
@@ -1638,15 +1743,32 @@ export async function refreshQuoteAiRetrievalIndex(
 
   let indexed = 0;
   let chunks = 0;
+  let quarantinedSourceCount = 0;
   let telemetry: AiUsageTelemetry | null = null;
   for (const source of sources) {
-    const result = await upsertAiRetrievalSource(prisma, source, { embedText });
-    if (result.indexed) indexed += 1;
-    chunks += result.chunkCount;
-    telemetry = mergeAiUsageTelemetry(telemetry, result.telemetry);
+    try {
+      const result = await upsertAiRetrievalSource(prisma, source, { embedText });
+      if (result.indexed) indexed += 1;
+      chunks += result.chunkCount;
+      telemetry = mergeAiUsageTelemetry(telemetry, result.telemetry);
+    } catch (error) {
+      if (!(error instanceof AiRetrievalContentQuarantinedError)) throw error;
+      await quarantineAiRetrievalSource(prisma, {
+        tenantId,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+      });
+      quarantinedSourceCount += 1;
+    }
   }
 
-  return { sourceCount: sources.length, indexedSourceCount: indexed, chunkCount: chunks, telemetry };
+  return {
+    sourceCount: sources.length,
+    indexedSourceCount: indexed,
+    quarantinedSourceCount,
+    chunkCount: chunks,
+    telemetry,
+  };
 }
 
 export async function buildGovernedQuoteAiContext(
@@ -1673,7 +1795,7 @@ export async function buildGovernedQuoteAiContext(
         quoteId: params.quoteId,
         embedText: params.embedText,
       })
-    : { sourceCount: 0, indexedSourceCount: 0, chunkCount: 0, telemetry: null };
+    : { sourceCount: 0, indexedSourceCount: 0, quarantinedSourceCount: 0, chunkCount: 0, telemetry: null };
 
   const retrieval = await retrieveAiContextFromIndex(prisma, {
     access: params.access,

@@ -86,7 +86,7 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect(page.getByText("Good morning", { exact: false }).or(page.getByText("Good afternoon", { exact: false })).or(page.getByText("Good evening", { exact: false }))).toBeVisible();
 
   await expect(page.getByText("Unquoted leads", { exact: true })).toBeVisible();
-  await expect(page.getByText("Needs follow-up", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tasks due", { exact: true })).toBeVisible();
   await expect(page.getByText("Open pipeline", { exact: true })).toBeVisible();
   await expect(page.getByText("$1,600", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Home Unquoted Lead", { exact: true }).first()).toBeVisible();
@@ -116,7 +116,7 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect(page.getByText(account.user.id, { exact: true })).toBeVisible();
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   const copyIdButton = page.getByRole("button", { name: "Copy tenant ID", exact: true });
-  expect((await copyIdButton.boundingBox())?.height).toBeGreaterThanOrEqual(38);
+  expect((await copyIdButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   await copyIdButton.click();
   await expect(page.getByText("Tenant ID copied", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Home", exact: true }).click();

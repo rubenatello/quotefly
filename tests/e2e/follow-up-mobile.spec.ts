@@ -27,6 +27,8 @@ test("activity queue stays readable and actionable at phone width", async ({ con
 
   await page.goto("/app/follow-up");
   await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "My work tasks" })).toBeVisible();
+  await page.getByRole("group", { name: "Activity views" }).getByRole("button", { name: "Lead queue", exact: true }).click();
 
   const metrics = page.getByTestId("follow-up-metric");
   await expect(metrics).toHaveCount(4);
@@ -67,6 +69,7 @@ test("activity queue stays readable and actionable at phone width", async ({ con
   await page.evaluate(() => window.localStorage.setItem("qf_theme_preference", "dark"));
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("group", { name: "Activity views" }).getByRole("button", { name: "Lead queue", exact: true }).click();
   await expect(queue.getByText(unquotedCustomer.fullName, { exact: true }).filter({ visible: true })).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))

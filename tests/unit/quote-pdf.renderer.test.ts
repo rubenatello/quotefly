@@ -169,6 +169,40 @@ test("text extraction contains customer output and excludes internal cost", asyn
   assert.doesNotMatch(normalizedText, /\$4,321\.09/);
 });
 
+test("Spanish customer PDF localizes QuoteFly copy and preserves accented tenant content", async () => {
+  const data = await buildPdfData("modern", "left");
+  data.documentLocale = "es-US";
+  data.title = "Reparación de calefacción y plomería";
+  data.scopeText = "Instalar válvulas, revisar presión y limpiar el área del baño.";
+  data.customer.fullName = "José Peña";
+  data.tenant.name = "Servicios del Niño";
+  data.lineItems = [
+    {
+      description: "Instalación eléctrica, revisión y protección del área",
+      quantity: 1,
+      unitPrice: 1_250,
+    },
+  ];
+
+  const pdf = await generateQuotePdfBuffer(data, { compress: false });
+  const normalizedText = extractUncompressedPdfText(pdf).replace(/\s+/g, " ");
+
+  assert.match(normalizedText, /Cotización para el cliente/);
+  assert.match(normalizedText, /Descripción/);
+  assert.match(normalizedText, /Trabajo incluido/);
+  assert.match(normalizedText, /¿Tiene preguntas sobre esta cotización\?/);
+  for (const accentedText of [
+    "Reparación de calefacción y plomería",
+    "José Peña",
+    "Servicios del Niño",
+    "Instalación eléctrica, revisión y protección del área",
+  ]) {
+    assert.match(normalizedText, new RegExp(accentedText));
+  }
+  assert.doesNotMatch(normalizedText, /Internal cost/i);
+  assert.doesNotMatch(normalizedText, /\$4,321\.09/);
+});
+
 test("legacy templates normalize and remote or forged logos are rejected", () => {
   assert.equal(normalizeQuotePdfTemplateId("bold"), "professional");
   assert.equal(normalizeQuotePdfTemplateId("classic"), "professional");

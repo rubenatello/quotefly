@@ -1,11 +1,18 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { processNextAiIndexJob } from "../lib/ai-index-jobs";
+import {
+  processNextAiIndexJob,
+  reconcileAiRetrievalGovernanceJobs,
+} from "../lib/ai-index-jobs";
 import { assertAiRetrievalRlsReady } from "../lib/tenant-rls";
 import { env } from "../config/env";
 
 const workerId = `ai-index-${process.pid}`;
+const GOVERNANCE_RECONCILIATION_BATCH_SIZE = 100;
+const GOVERNANCE_RECONCILIATION_ACTIVE_INTERVAL_MS = 10_000;
+const GOVERNANCE_RECONCILIATION_IDLE_INTERVAL_MS = 15 * 60_000;
 let stopping = false;
+const nextGovernanceReconciliationAtByTenant = new Map<string, number>();
 
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
@@ -34,6 +41,22 @@ async function run() {
       });
       for (const tenant of tenants) {
         if (stopping) break;
+        const nowMs = Date.now();
+        const nextReconciliationAtMs = nextGovernanceReconciliationAtByTenant.get(tenant.id) ?? 0;
+        if (nowMs >= nextReconciliationAtMs) {
+          const reconciliation = await reconcileAiRetrievalGovernanceJobs(prisma, {
+            tenantId: tenant.id,
+            limit: GOVERNANCE_RECONCILIATION_BATCH_SIZE,
+          });
+          nextGovernanceReconciliationAtByTenant.set(
+            tenant.id,
+            nowMs + (
+              reconciliation.reconciledJobCount === GOVERNANCE_RECONCILIATION_BATCH_SIZE
+                ? GOVERNANCE_RECONCILIATION_ACTIVE_INTERVAL_MS
+                : GOVERNANCE_RECONCILIATION_IDLE_INTERVAL_MS
+            ),
+          );
+        }
         const result = await processNextAiIndexJob(prisma, {
           tenantId: tenant.id,
           workerId,

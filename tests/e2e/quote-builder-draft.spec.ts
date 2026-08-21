@@ -31,8 +31,10 @@ async function getServerDraft(request: APIRequestContext, account: E2eAccount) {
 }
 
 async function selectCustomer(page: Page, customerName: string) {
-  await page.getByRole("textbox", { name: /find customer by name/i }).fill(customerName);
-  await page.getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") }).click();
+  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customerName);
+  await page
+    .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use customer`, "i") })
+    .click();
 }
 
 test.describe("quote builder secure server draft recovery", () => {
@@ -47,11 +49,11 @@ test.describe("quote builder secure server draft recovery", () => {
     await page.getByLabel("Quote title").fill("Refresh-safe quote draft");
     await page.getByLabel("Quote overview").fill("Restore this scope after a browser refresh.");
     const firstRow = page.getByTestId("quote-line-row-1");
-    await visibleField(firstRow, "Line 1 title").fill("Refresh-safe line");
-    await visibleField(firstRow, "Line 1 description").fill("Restore quantity and price too");
-    await visibleField(firstRow, "Line 1 quantity").fill("3");
-    await visibleField(firstRow, "Line 1 cost").fill("25");
-    await visibleField(firstRow, "Line 1 price").fill("80");
+    await visibleField(firstRow, "Existing line 1 title").fill("Refresh-safe line");
+    await visibleField(firstRow, "Existing line 1 description").fill("Restore quantity and price too");
+    await visibleField(firstRow, "Existing line 1 quantity").fill("3");
+    await visibleField(firstRow, "Existing line 1 cost").fill("25");
+    await visibleField(firstRow, "Existing line 1 price").fill("80");
     await expect.poll(async () => (await getServerDraft(request, account))?.payload.quote?.title).toBe("Refresh-safe quote draft");
     await expect(page.getByTestId("quote-builder-draft-status")).toContainText("Draft autosaved");
     await expect(page.getByTestId("quote-builder-draft-status")).toContainText("Saved securely to your workspace");
@@ -63,9 +65,9 @@ test.describe("quote builder secure server draft recovery", () => {
     await expect(page.getByText("Draft Restore Customer").filter({ visible: true })).toBeVisible();
     await expect(page.getByLabel("Quote title")).toHaveValue("Refresh-safe quote draft");
     await expect(page.getByLabel("Quote overview")).toHaveValue("Restore this scope after a browser refresh.");
-    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Line 1 title")).toHaveValue("Refresh-safe line");
-    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Line 1 quantity")).toHaveValue("3");
-    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Line 1 price")).toHaveValue("80");
+    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Existing line 1 title")).toHaveValue("Refresh-safe line");
+    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Existing line 1 quantity")).toHaveValue("3");
+    await expect(visibleField(page.getByTestId("quote-line-row-1"), "Existing line 1 price")).toHaveValue("80");
   });
 
   test("successful quote creation clears the scoped stored draft", async ({ context, page, request }) => {
@@ -78,8 +80,8 @@ test.describe("quote builder secure server draft recovery", () => {
     await selectCustomer(page, customer.fullName);
     await page.getByLabel("Quote title").fill("Draft clears after creation");
     const firstRow = page.getByTestId("quote-line-row-1");
-    await visibleField(firstRow, "Line 1 title").fill("Created line");
-    await visibleField(firstRow, "Line 1 price").fill("500");
+    await visibleField(firstRow, "Existing line 1 title").fill("Created line");
+    await visibleField(firstRow, "Existing line 1 price").fill("500");
     await expect.poll(async () => (await getServerDraft(request, account))?.payload.quote?.title).toBe("Draft clears after creation");
     await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
 

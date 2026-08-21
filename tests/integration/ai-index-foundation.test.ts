@@ -209,4 +209,81 @@ describe("AI indexing foundation", () => {
     expect(job.lastErrorCode).toBe("AI_BUDGET_EXHAUSTED");
     expect(job.availableAtUtc.getTime()).toBeGreaterThan(Date.now() + 24 * 60 * 60_000);
   });
+
+  test("quarantines restricted source content as a terminal content-free job outcome", async () => {
+    const tenant = await createTenant("queue-quarantine");
+    const customer = await prisma.customer.create({
+      data: {
+        tenantId: tenant.id,
+        fullName: "Quarantine Customer",
+        phone: "555-0188",
+        phoneDigits: "5550188",
+        notes: "Replace the damaged garden gate latch.",
+      },
+    });
+    await upsertAiRetrievalSource(prisma, {
+      tenantId: tenant.id,
+      sourceType: "Customer",
+      sourceId: customer.id,
+      citationLabel: "Customer notes",
+      fields: [{ field: "Customer.notes", content: customer.notes }],
+    });
+    const usageBefore = await prisma.aiUsageEvent.count({ where: { tenantId: tenant.id } });
+    const credentialLikeNote = [
+      "Database ",
+      "postgresql",
+      "://",
+      "demo",
+      ":",
+      "fake-password",
+      "@db.example.com/quotefly",
+    ].join("");
+    const updated = await prisma.customer.update({
+      where: { id_tenantId: { id: customer.id, tenantId: tenant.id } },
+      data: { notes: credentialLikeNote },
+    });
+    await enqueueAiIndexJob(prisma, {
+      tenantId: tenant.id,
+      sourceType: "Customer",
+      sourceId: customer.id,
+      operation: "UPSERT",
+      expectedSourceUpdatedAtUtc: updated.updatedAt,
+    });
+
+    const outcome = await processNextAiIndexJob(prisma, {
+      tenantId: tenant.id,
+      workerId: "quarantine-worker",
+    });
+    expect(outcome.outcome).toBe("quarantined");
+
+    const state = await withTenantRlsContext(prisma, tenant.id, async (tx) => ({
+      job: await tx.aiIndexJob.findFirstOrThrow({
+        where: { tenantId: tenant.id, sourceType: "Customer", sourceId: customer.id },
+      }),
+      document: await tx.aiRetrievalDocument.findUniqueOrThrow({
+        where: { tenantId_sourceType_sourceId: {
+          tenantId: tenant.id,
+          sourceType: "Customer",
+          sourceId: customer.id,
+        } },
+      }),
+      chunkCount: await tx.aiRetrievalChunk.count({
+        where: { tenantId: tenant.id, sourceType: "Customer", sourceId: customer.id },
+      }),
+    }));
+    expect(state.job).toMatchObject({
+      status: "SUCCEEDED",
+      lastErrorCode: "SOURCE_CONTENT_QUARANTINED",
+      lockedAtUtc: null,
+      lockedBy: null,
+    });
+    expect(state.document).toMatchObject({
+      status: "DELETED",
+      citationLabel: "Quarantined source",
+      metadata: null,
+    });
+    expect(state.document.deletedAtUtc).not.toBeNull();
+    expect(state.chunkCount).toBe(0);
+    expect(await prisma.aiUsageEvent.count({ where: { tenantId: tenant.id } })).toBe(usageBefore);
+  });
 });

@@ -1,4 +1,4 @@
-import type { TenantBranding } from "./api";
+import type { SupportedLocale, TenantBranding } from "./api";
 
 type QuoteMessageTemplateInput = {
   customerName: string;
@@ -6,9 +6,11 @@ type QuoteMessageTemplateInput = {
   quoteTotalAmount: number | string;
   scopeText?: string | null;
   branding?: TenantBranding | null;
+  documentLocale?: SupportedLocale;
 };
 
-const DEFAULT_QUOTE_MESSAGE_TEMPLATE = [
+const DEFAULT_QUOTE_MESSAGE_TEMPLATES: Record<SupportedLocale, string> = {
+  "en-US": [
   "Hi {customer_name},",
   "",
   "Thanks for the opportunity to quote this project.",
@@ -23,18 +25,34 @@ const DEFAULT_QUOTE_MESSAGE_TEMPLATE = [
   "Email: {business_email}",
   "",
   "Reply to confirm or ask for any revisions.",
-].join("\n");
+  ].join("\n"),
+  "es-US": [
+    "Hola {customer_name},",
+    "",
+    "Gracias por la oportunidad de preparar esta cotización.",
+    "",
+    "Cotización: {quote_title}",
+    "Total: {quote_total}",
+    "",
+    "Alcance:",
+    "{quote_scope}",
+    "",
+    "Teléfono: {business_phone}",
+    "Correo electrónico: {business_email}",
+    "",
+    "Responda para confirmar o solicitar cambios.",
+  ].join("\n"),
+};
 
-const USD_FORMATTER = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-function formatMoney(value: number | string) {
+function formatMoney(value: number | string, locale: SupportedLocale) {
   const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? USD_FORMATTER.format(amount) : "$0.00";
+  const formatter = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return Number.isFinite(amount) ? formatter.format(amount) : formatter.format(0);
 }
 
 function normalizeTemplateOutput(text: string) {
@@ -44,7 +62,7 @@ function normalizeTemplateOutput(text: string) {
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/g, "");
     const stripped = line.trim();
-    const labelOnly = /^[A-Za-z][A-Za-z /&()-]*:\s*$/.test(stripped);
+    const labelOnly = /^\p{L}[\p{L} /&()-]*:\s*$/u.test(stripped);
 
     if (labelOnly) continue;
 
@@ -67,14 +85,26 @@ function normalizeTemplateOutput(text: string) {
 export function buildQuoteMessageDraft(
   input: QuoteMessageTemplateInput,
 ): { subject: string; body: string } {
-  const subject = `${input.quoteTitle} - Quote`;
-  const template = input.branding?.quoteMessageTemplate?.trim() || DEFAULT_QUOTE_MESSAGE_TEMPLATE;
-  const scopeText = input.scopeText?.trim() || "See the attached quote PDF for the full scope.";
+  const locale = input.documentLocale === "es-US" ? "es-US" : "en-US";
+  const subject =
+    locale === "es-US"
+      ? `${input.quoteTitle} - Cotización`
+      : `${input.quoteTitle} - Quote`;
+  // A tenant-authored custom template is used exactly as written. QuoteFly does
+  // not machine-translate custom business copy.
+  const template =
+    input.branding?.quoteMessageTemplate?.trim() ||
+    DEFAULT_QUOTE_MESSAGE_TEMPLATES[locale];
+  const scopeText =
+    input.scopeText?.trim() ||
+    (locale === "es-US"
+      ? "Consulte el PDF adjunto para ver el alcance completo."
+      : "See the attached quote PDF for the full scope.");
 
   const replacements: Record<string, string> = {
     customer_name: input.customerName,
     quote_title: input.quoteTitle,
-    quote_total: formatMoney(input.quoteTotalAmount),
+    quote_total: formatMoney(input.quoteTotalAmount, locale),
     quote_scope: scopeText,
     business_phone: input.branding?.businessPhone?.trim() ?? "",
     business_email: input.branding?.businessEmail?.trim() ?? "",

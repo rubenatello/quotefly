@@ -21,6 +21,7 @@ const ASSISTANT_TOOLS: Array<{ value: AiAssistantRequestedTool; label: string }>
   { value: "CUSTOMERS_WITHOUT_QUOTES", label: "Customers without quotes" },
   { value: "PIPELINE_SCENARIO", label: "Pipeline scenario" },
   { value: "SEARCH_CUSTOMERS", label: "Search customers" },
+  { value: "SEARCH_PRODUCTS", label: "Search products" },
   { value: "DRAFT_QUOTE", label: "Draft quote" },
   { value: "SUMMARIZE_PIPELINE", label: "Summarize pipeline" },
   { value: "RANK_PROFITABLE_JOBS", label: "Rank profitable jobs" },

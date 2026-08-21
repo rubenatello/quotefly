@@ -13,6 +13,11 @@ import {
   resolveSubscriptionItemBilling,
 } from "../../src/lib/subscription";
 import { createSignedQuickBooksState } from "../../src/services/quickbooks";
+import {
+  getStandardWorkPresetCatalog,
+  standardWorkPresetContentHash,
+} from "../../src/services/work-preset-catalog";
+import { ServiceCategory } from "@prisma/client";
 
 const quickBooksProviderMocks = vi.hoisted(() => ({
   exchangeAuthorizationCode: vi.fn(),
@@ -535,6 +540,78 @@ describe("QuoteFly API integration", () => {
     expect(betaCannotUseAlphaCustomer.statusCode).toBe(404);
   });
 
+  test("signup copies immutable catalog definitions into independent tenant-owned products", async () => {
+    const definitions = getStandardWorkPresetCatalog(ServiceCategory.ROOFING);
+    const alpha = await signUp("starter-copy-alpha");
+    const beta = await signUp("starter-copy-beta");
+
+    const [alphaProducts, betaProducts] = await Promise.all([
+      prisma.workPreset.findMany({
+        where: { tenantId: alpha.tenant.id, serviceType: "ROOFING", catalogKey: { not: null } },
+      }),
+      prisma.workPreset.findMany({
+        where: { tenantId: beta.tenant.id, serviceType: "ROOFING", catalogKey: { not: null } },
+      }),
+    ]);
+    expect(alphaProducts).toHaveLength(definitions.length);
+    expect(betaProducts).toHaveLength(definitions.length);
+    const betaProductIds = new Set(betaProducts.map((product) => product.id));
+    expect(alphaProducts.every((product) => !betaProductIds.has(product.id))).toBe(true);
+
+    for (const definition of definitions) {
+      const product = alphaProducts.find((candidate) => candidate.catalogKey === definition.catalogKey);
+      expect(product).toMatchObject({
+        catalogVersion: definition.catalogVersion,
+        catalogCustomizedAtUtc: null,
+        deletedAtUtc: null,
+      });
+      expect(product?.catalogContentHash).toBe(standardWorkPresetContentHash(ServiceCategory.ROOFING, definition));
+    }
+
+    const alphaDiagnostic = alphaProducts.find((product) => product.catalogKey === "roof_leak_diagnostic")!;
+    const betaDiagnostic = betaProducts.find((product) => product.catalogKey === "roof_leak_diagnostic")!;
+    const update = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${alphaDiagnostic.id}`,
+      headers: authHeaders(alpha.cookie),
+      payload: { unitPrice: 432.1 },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(parseJson<{ product: Record<string, unknown> }>(update).product).not.toHaveProperty("catalogContentHash");
+
+    const gamma = await signUp("starter-copy-gamma");
+    const [storedAlpha, storedBeta, storedGamma] = await Promise.all([
+      prisma.workPreset.findUniqueOrThrow({ where: { id: alphaDiagnostic.id } }),
+      prisma.workPreset.findUniqueOrThrow({ where: { id: betaDiagnostic.id } }),
+      prisma.workPreset.findFirstOrThrow({
+        where: { tenantId: gamma.tenant.id, serviceType: "ROOFING", catalogKey: "roof_leak_diagnostic" },
+      }),
+    ]);
+    const sourceDefinition = definitions.find((definition) => definition.catalogKey === "roof_leak_diagnostic")!;
+    expect(Number(storedAlpha.unitPrice)).toBe(432.1);
+    expect(storedAlpha.catalogCustomizedAtUtc).toBeInstanceOf(Date);
+    expect(Number(storedBeta.unitPrice)).toBe(sourceDefinition.unitPrice);
+    expect(storedBeta.catalogCustomizedAtUtc).toBeNull();
+    expect(Number(storedGamma.unitPrice)).toBe(sourceDefinition.unitPrice);
+    expect(storedGamma.catalogCustomizedAtUtc).toBeNull();
+
+    const restoreDefaults = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${alphaDiagnostic.id}`,
+      headers: authHeaders(alpha.cookie),
+      payload: {
+        description: sourceDefinition.description,
+        defaultQuantity: sourceDefinition.defaultQuantity,
+        unitCost: sourceDefinition.unitCost,
+        unitPrice: sourceDefinition.unitPrice,
+        isDefault: sourceDefinition.isDefault ?? true,
+      },
+    });
+    expect(restoreDefaults.statusCode).toBe(200);
+    expect(parseJson<{ product: { catalogCustomizedAtUtc: string | null } }>(restoreDefaults).product.catalogCustomizedAtUtc)
+      .toBeNull();
+  });
+
   test("manages products with tenant isolation and soft archive semantics", async () => {
     const alpha = await signUp("product-alpha");
     const beta = await signUp("product-beta");
@@ -687,6 +764,358 @@ describe("QuoteFly API integration", () => {
         select: { deletedAtUtc: true },
       }),
     ).resolves.toEqual({ deletedAtUtc: null });
+  });
+
+  test("adds missing starter products idempotently without resetting tenant copies", async () => {
+    const session = await signUp("starter-catalog");
+    const selection = ["drywall_install_finish", "permit_allowance"];
+
+    const firstImport = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: authHeaders(session.cookie),
+      payload: { serviceType: "CONSTRUCTION", catalogKeys: selection },
+    });
+    expect(firstImport.statusCode).toBe(200);
+    const firstBody = parseJson<{
+      createdCount: number;
+      skippedCount: number;
+    }>(firstImport);
+    expect(firstBody.createdCount).toBe(2);
+    expect(firstBody.skippedCount).toBe(0);
+    const importedProducts = await prisma.workPreset.findMany({
+      where: {
+        tenantId: session.tenant.id,
+        serviceType: "CONSTRUCTION",
+        catalogKey: { in: selection },
+      },
+      select: {
+        id: true,
+        catalogKey: true,
+        catalogVersion: true,
+        catalogContentHash: true,
+        catalogCustomizedAtUtc: true,
+      },
+    });
+    expect(importedProducts.map((product) => product.catalogKey).sort()).toEqual(selection.sort());
+    expect(importedProducts.every((product) => product.catalogVersion === 1)).toBe(true);
+    expect(importedProducts.every((product) => /^[a-f0-9]{64}$/.test(product.catalogContentHash ?? ""))).toBe(true);
+    expect(importedProducts.every((product) => product.catalogCustomizedAtUtc === null)).toBe(true);
+
+    const drywall = importedProducts.find((product) => product.catalogKey === "drywall_install_finish")!;
+    const customize = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${drywall.id}`,
+      headers: authHeaders(session.cookie),
+      payload: { description: "Tenant-specific level-five finish.", unitPrice: 4.75 },
+    });
+    expect(customize.statusCode).toBe(200);
+    expect(parseJson<{ product: { catalogCustomizedAtUtc: string | null } }>(customize).product.catalogCustomizedAtUtc)
+      .not.toBeNull();
+
+    const secondImport = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: authHeaders(session.cookie),
+      payload: { serviceType: "CONSTRUCTION", catalogKeys: selection },
+    });
+    expect(secondImport.statusCode).toBe(200);
+    expect(parseJson<{ createdCount: number; skippedCount: number }>(secondImport)).toMatchObject({
+      createdCount: 0,
+      skippedCount: 2,
+    });
+    await expect(prisma.workPreset.findUniqueOrThrow({ where: { id: drywall.id } })).resolves.toMatchObject({
+      description: "Tenant-specific level-five finish.",
+      deletedAtUtc: null,
+    });
+    const storedDrywall = await prisma.workPreset.findUniqueOrThrow({ where: { id: drywall.id } });
+    expect(Number(storedDrywall.unitPrice)).toBe(4.75);
+
+    await prisma.workPreset.update({
+      where: { id: drywall.id },
+      data: { deletedAtUtc: new Date() },
+    });
+    const archivedImport = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: authHeaders(session.cookie),
+      payload: { serviceType: "CONSTRUCTION", catalogKeys: ["drywall_install_finish"] },
+    });
+    expect(archivedImport.statusCode).toBe(200);
+    expect(parseJson<{ createdCount: number; skippedCount: number }>(archivedImport)).toMatchObject({
+      createdCount: 0,
+      skippedCount: 1,
+    });
+    await expect(prisma.workPreset.findUniqueOrThrow({ where: { id: drywall.id }, select: { deletedAtUtc: true } }))
+      .resolves.toMatchObject({ deletedAtUtc: expect.any(Date) });
+
+    const invalidImport = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: authHeaders(session.cookie),
+      payload: { serviceType: "CONSTRUCTION", catalogKeys: ["not_a_real_template"] },
+    });
+    expect(invalidImport.statusCode).toBe(400);
+    expect(parseJson<{ code: string }>(invalidImport).code).toBe("STARTER_CATALOG_INVALID_SELECTION");
+
+    const concurrentImports = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/products/starter-catalog/add-missing",
+        headers: authHeaders(session.cookie),
+        payload: { serviceType: "CONSTRUCTION", catalogKeys: ["rough_carpentry_labor"] },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/products/starter-catalog/add-missing",
+        headers: authHeaders(session.cookie),
+        payload: { serviceType: "CONSTRUCTION", catalogKeys: ["rough_carpentry_labor"] },
+      }),
+    ]);
+    expect(concurrentImports.map((response) => response.statusCode)).toEqual([200, 200]);
+    expect(concurrentImports
+      .map((response) => parseJson<{ createdCount: number }>(response).createdCount)
+      .sort()).toEqual([0, 1]);
+    await expect(prisma.workPreset.count({
+      where: {
+        tenantId: session.tenant.id,
+        serviceType: "CONSTRUCTION",
+        catalogKey: "rough_carpentry_labor",
+      },
+    })).resolves.toBe(1);
+  });
+
+  test("active and archived tenant products reserve normalized starter names without catalog mutation", async () => {
+    const session = await signUp("starter-name-reservation");
+    const archivedAtUtc = new Date("2026-08-20T12:00:00.000Z");
+    const [activeCustom, archivedCustom] = await Promise.all([
+      prisma.workPreset.create({
+        data: {
+          tenantId: session.tenant.id,
+          serviceType: "CONSTRUCTION",
+          catalogKey: null,
+          name: "  GENERAL   labor ",
+          category: "LABOR",
+          unitType: "HOUR",
+          defaultQuantity: 1,
+          unitCost: 77,
+          unitPrice: 155,
+          isDefault: true,
+        },
+      }),
+      prisma.workPreset.create({
+        data: {
+          tenantId: session.tenant.id,
+          serviceType: "CONSTRUCTION",
+          catalogKey: null,
+          name: "site PREP",
+          category: "SERVICE",
+          unitType: "FLAT",
+          defaultQuantity: 1,
+          unitCost: 210,
+          unitPrice: 475,
+          isDefault: true,
+          deletedAtUtc: archivedAtUtc,
+        },
+      }),
+    ]);
+
+    const imports = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/products/starter-catalog/add-missing",
+        headers: authHeaders(session.cookie),
+        payload: {
+          serviceType: "CONSTRUCTION",
+          catalogKeys: ["general_labor", "site_prep"],
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/products/starter-catalog/add-missing",
+        headers: authHeaders(session.cookie),
+        payload: {
+          serviceType: "CONSTRUCTION",
+          catalogKeys: ["general_labor", "site_prep"],
+        },
+      }),
+    ]);
+    expect(imports.map((response) => response.statusCode)).toEqual([200, 200]);
+    for (const response of imports) {
+      expect(parseJson<{ createdCount: number; skippedCount: number }>(response)).toMatchObject({
+        createdCount: 0,
+        skippedCount: 2,
+      });
+    }
+
+    const [storedActive, storedArchived, managedDuplicates] = await Promise.all([
+      prisma.workPreset.findUniqueOrThrow({ where: { id: activeCustom.id } }),
+      prisma.workPreset.findUniqueOrThrow({ where: { id: archivedCustom.id } }),
+      prisma.workPreset.count({
+        where: {
+          tenantId: session.tenant.id,
+          serviceType: "CONSTRUCTION",
+          catalogKey: { in: ["general_labor", "site_prep"] },
+        },
+      }),
+    ]);
+    expect(storedActive).toMatchObject({ catalogKey: null, deletedAtUtc: null });
+    expect(Number(storedActive.unitCost)).toBe(77);
+    expect(storedArchived.catalogKey).toBeNull();
+    expect(storedArchived.deletedAtUtc?.toISOString()).toBe(archivedAtUtc.toISOString());
+    expect(Number(storedArchived.unitPrice)).toBe(475);
+    expect(managedDuplicates).toBe(0);
+  });
+
+  test("product create and rename reject active starter names case-insensitively", async () => {
+    const session = await signUp("starter-name-owner");
+    const starter = await prisma.workPreset.findFirstOrThrow({
+      where: {
+        tenantId: session.tenant.id,
+        serviceType: "ROOFING",
+        catalogKey: { not: null },
+        deletedAtUtc: null,
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    const collidingCreate = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(session.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: starter.name.toUpperCase().replaceAll(" ", "   "),
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 10,
+        unitPrice: 20,
+        isDefault: true,
+      },
+    });
+    expect(collidingCreate.statusCode).toBe(409);
+    expect(parseJson<{ code: string; productId: string }>(collidingCreate)).toMatchObject({
+      code: "PRODUCT_NAME_CONFLICT",
+      productId: starter.id,
+    });
+
+    const customCreate = await app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeaders(session.cookie),
+      payload: {
+        serviceType: "ROOFING",
+        name: "Temporary rename target",
+        category: "SERVICE",
+        unitType: "FLAT",
+        defaultQuantity: 1,
+        unitCost: 10,
+        unitPrice: 20,
+        isDefault: true,
+      },
+    });
+    expect(customCreate.statusCode).toBe(201);
+    const customId = parseJson<{ product: { id: string } }>(customCreate).product.id;
+    const collidingRename = await app.inject({
+      method: "PATCH",
+      url: `/v1/products/${customId}`,
+      headers: authHeaders(session.cookie),
+      payload: { name: starter.name.toLowerCase().replaceAll(" ", "   ") },
+    });
+    expect(collidingRename.statusCode).toBe(409);
+    expect(parseJson<{ code: string; productId: string }>(collidingRename)).toMatchObject({
+      code: "PRODUCT_NAME_CONFLICT",
+      productId: starter.id,
+    });
+    await expect(prisma.workPreset.findUniqueOrThrow({ where: { id: customId }, select: { name: true } }))
+      .resolves.toEqual({ name: "Temporary rename target" });
+  });
+
+  test("starter catalog import preserves the 200 active-product limit", async () => {
+    const session = await signUp("starter-capacity");
+    const activeCount = await prisma.workPreset.count({
+      where: { tenantId: session.tenant.id, deletedAtUtc: null },
+    });
+    await prisma.workPreset.createMany({
+      data: Array.from({ length: 199 - activeCount }, (_, index) => ({
+        tenantId: session.tenant.id,
+        serviceType: "ROOFING" as const,
+        category: "SERVICE" as const,
+        unitType: "FLAT" as const,
+        name: `Starter capacity filler ${index}`,
+        defaultQuantity: 1,
+        unitCost: 1,
+        unitPrice: 2,
+        isDefault: true,
+      })),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/products/starter-catalog/add-missing",
+      headers: authHeaders(session.cookie),
+      payload: {
+        serviceType: "CONSTRUCTION",
+        catalogKeys: ["drywall_install_finish", "permit_allowance"],
+      },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(parseJson<{ code: string; activeProductCount: number }>(response)).toMatchObject({
+      code: "PRODUCT_CATALOG_LIMIT",
+      activeProductCount: 199,
+    });
+    await expect(prisma.workPreset.count({ where: { tenantId: session.tenant.id, deletedAtUtc: null } }))
+      .resolves.toBe(199);
+  });
+
+  test("database rejects a QuickBooks item map linked to another tenant's product", async () => {
+    const alpha = await signUp("quickbooks-preset-alpha");
+    const beta = await signUp("quickbooks-preset-beta");
+    const alphaProduct = await prisma.workPreset.findFirstOrThrow({
+      where: { tenantId: alpha.tenant.id, catalogKey: { not: null }, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const betaConnection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: beta.tenant.id,
+        realmId: `starter-catalog-${Date.now()}`,
+        environment: "sandbox",
+      },
+    });
+
+    await expect(prisma.quickBooksItemMap.create({
+      data: {
+        tenantId: beta.tenant.id,
+        quickBooksConnectionId: betaConnection.id,
+        itemKey: "cross-tenant-starter-product",
+        quickBooksItemId: "qb-item-cross-tenant",
+        quickBooksItemName: "Cross tenant starter product",
+        workPresetId: alphaProduct.id,
+      },
+    })).rejects.toMatchObject({ code: "P2003" });
+  });
+
+  test("database rejects a QuickBooks item map linked to another tenant's connection", async () => {
+    const alpha = await signUp("quickbooks-connection-alpha");
+    const beta = await signUp("quickbooks-connection-beta");
+    const alphaConnection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: alpha.tenant.id,
+        realmId: `starter-connection-${Date.now()}`,
+        environment: "sandbox",
+      },
+    });
+
+    await expect(prisma.quickBooksItemMap.create({
+      data: {
+        tenantId: beta.tenant.id,
+        quickBooksConnectionId: alphaConnection.id,
+        itemKey: "cross-tenant-quickbooks-connection",
+        quickBooksItemId: "qb-item-cross-tenant-connection",
+        quickBooksItemName: "Cross tenant QuickBooks connection",
+      },
+    })).rejects.toMatchObject({ code: "P2003" });
   });
 
   test("blocks product mutations when workspace billing access is unavailable", async () => {

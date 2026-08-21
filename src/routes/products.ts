@@ -1,12 +1,20 @@
-import { PresetCategory, PresetUnitType, Prisma } from "@prisma/client";
+import { PresetCategory, PresetUnitType, Prisma, type WorkPreset } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { markWorkPresetAiRetrievalSourceDeleted } from "../lib/ai-retrieval";
-import { enqueueAiIndexJob } from "../lib/ai-index-jobs";
+import { enqueueAiIndexJob, enqueueAiIndexJobs } from "../lib/ai-index-jobs";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import {
+  addMissingTenantStarterCatalog,
+  findTenantProductNameMatches,
+  lockTenantProductCatalog,
+  StarterCatalogCapacityError,
+  StarterCatalogSelectionError,
+} from "../services/tenant-starter-catalog";
+import { isStandardWorkPresetCustomized } from "../services/work-preset-catalog";
 
 const ServiceTypeEnum = z.enum([
   "HVAC",
@@ -62,9 +70,19 @@ const UpdateProductSchema = ProductFieldsSchema.partial().refine(
   { message: "At least one product field is required." },
 );
 
+const AddMissingStarterCatalogSchema = z.object({
+  serviceType: ServiceTypeEnum,
+  catalogKeys: z.array(z.string().trim().min(2).max(120)).min(1).max(50).optional(),
+});
+
 function normalizeOptionalText(value: string | null | undefined): string | null | undefined {
   if (value === undefined) return undefined;
   return value?.trim() || null;
+}
+
+function productResponse(product: WorkPreset) {
+  const { catalogContentHash: _catalogContentHash, ...visibleProduct } = product;
+  return visibleProduct;
 }
 
 export const productRoutes: FastifyPluginAsync = async (app) => {
@@ -77,9 +95,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       // invariants. Lock the tenant row before reading catalog state so concurrent
       // API replicas make those decisions in order without exhausting optimistic
       // serializable retries and leaking a transient P2034 as a 500 response.
-      await transaction.$queryRaw(
-        Prisma.sql`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`,
-      );
+      await lockTenantProductCatalog(transaction, tenantId);
       return operation(transaction);
     }, {
       isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
@@ -90,6 +106,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const query = ProductQuerySchema.parse(request.query);
+    const canViewInternalCosts = hasCapability(access, "viewInternalCosts");
 
     const where: Prisma.WorkPresetWhereInput = {
       tenantId: claims.tenantId,
@@ -116,6 +133,25 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ serviceType: "asc" }, { category: "asc" }, { name: "asc" }, { id: "asc" }],
         take: query.limit,
         skip: query.offset,
+        select: {
+          id: true,
+          tenantId: true,
+          serviceType: true,
+          catalogKey: true,
+          catalogVersion: true,
+          catalogCustomizedAtUtc: true,
+          category: true,
+          unitType: true,
+          name: true,
+          description: true,
+          defaultQuantity: true,
+          ...(canViewInternalCosts ? { unitCost: true } : {}),
+          unitPrice: true,
+          isDefault: true,
+          createdAt: true,
+          updatedAt: true,
+          deletedAtUtc: true,
+        },
       }),
       app.prisma.workPreset.count({ where }),
       app.prisma.workPreset.count({ where: { ...where, catalogKey: { not: null } } }),
@@ -128,15 +164,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     return {
       primaryTrade: tenant.primaryTrade,
       supportedTrades: ServiceTypeEnum.options,
-      products: products.map((product) => {
-        const { unitCost, ...visibleProduct } = product;
-        return hasCapability(access, "viewInternalCosts")
-          ? { ...visibleProduct, unitCost }
-          : visibleProduct;
-      }),
+      products,
       policy: {
         canManageCatalog: hasCapability(access, "manageCatalog"),
-        canViewInternalCosts: hasCapability(access, "viewInternalCosts"),
+        canViewInternalCosts,
       },
       pagination: {
         limit: query.limit,
@@ -147,6 +178,66 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         standardCount,
       },
     };
+  });
+
+  app.post("/products/starter-catalog/add-missing", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageCatalog")) {
+      return reply.code(403).send({ error: "Only workspace owners and admins can add starter products." });
+    }
+    const payload = AddMissingStarterCatalogSchema.parse(request.body);
+
+    try {
+      const result = await app.prisma.$transaction(async (transaction) => {
+        const imported = await addMissingTenantStarterCatalog(transaction, {
+          tenantId: claims.tenantId,
+          serviceType: payload.serviceType,
+          catalogKeys: payload.catalogKeys,
+        });
+        await enqueueAiIndexJobs(transaction, {
+          tenantId: claims.tenantId,
+          jobs: imported.products.map((product) => ({
+            sourceType: "WorkPreset",
+            sourceId: product.id,
+            operation: "UPSERT",
+            expectedSourceUpdatedAtUtc: product.updatedAt,
+          })),
+        });
+        return imported;
+      });
+
+      return reply.send({
+        message: result.createdCount > 0
+          ? `${result.createdCount} starter product${result.createdCount === 1 ? "" : "s"} added.`
+          : "Starter catalog is already up to date.",
+        serviceType: payload.serviceType,
+        requestedCount: result.requestedCount,
+        createdCount: result.createdCount,
+        skippedCount: result.skippedCount,
+      });
+    } catch (error) {
+      if (error instanceof StarterCatalogSelectionError) {
+        return reply.code(400).send({
+          error: error.message,
+          code: "STARTER_CATALOG_INVALID_SELECTION",
+          unknownCatalogKeys: error.unknownCatalogKeys,
+        });
+      }
+      if (error instanceof StarterCatalogCapacityError) {
+        return reply.code(409).send({
+          error: error.message,
+          code: "PRODUCT_CATALOG_LIMIT",
+          activeProductCount: error.activeProductCount,
+          requestedMissingCount: error.missingProductCount,
+          maximumProductCount: error.maximumProductCount,
+        });
+      }
+      if (error instanceof Error && error.message === "STARTER_CATALOG_TENANT_NOT_FOUND") {
+        return reply.code(404).send({ error: "Tenant not found for account." });
+      }
+      throw error;
+    }
   });
 
   app.post("/products", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -167,29 +258,28 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const outcome = await runTenantSerializedProductWrite(claims.tenantId, async (transaction) => {
-      const existingProduct = await transaction.workPreset.findFirst({
-        where: {
-          tenantId: claims.tenantId,
-          serviceType: payload.serviceType,
-          catalogKey: null,
-          name: { equals: payload.name, mode: "insensitive" },
-        },
+      const sameNameProducts = await findTenantProductNameMatches(transaction, {
+        tenantId: claims.tenantId,
+        serviceType: payload.serviceType,
+        name: payload.name,
       });
+      const activeNameOwner = sameNameProducts.find((product) => !product.deletedAtUtc);
+      const restorableCustomProduct = sameNameProducts.find(
+        (product) => product.deletedAtUtc && !product.catalogKey,
+      );
 
-      if (existingProduct && !existingProduct.deletedAtUtc) {
-        return { kind: "conflict", productId: existingProduct.id } as const;
+      if (activeNameOwner) {
+        return { kind: "conflict", productId: activeNameOwner.id } as const;
       }
 
-      if (!existingProduct || existingProduct.deletedAtUtc) {
-        const activeProductCount = await transaction.workPreset.count({
-          where: {
-            tenantId: claims.tenantId,
-            deletedAtUtc: null,
-          },
-        });
-        if (activeProductCount >= 200) {
-          return { kind: "limit" } as const;
-        }
+      const activeProductCount = await transaction.workPreset.count({
+        where: {
+          tenantId: claims.tenantId,
+          deletedAtUtc: null,
+        },
+      });
+      if (activeProductCount >= 200) {
+        return { kind: "limit" } as const;
       }
 
       const data = {
@@ -205,9 +295,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         deletedAtUtc: null,
       } satisfies Prisma.WorkPresetUncheckedUpdateInput;
 
-      const product = existingProduct
+      const product = restorableCustomProduct
         ? await transaction.workPreset.update({
-            where: { id: existingProduct.id },
+            where: { id: restorableCustomProduct.id },
             data,
           })
         : await transaction.workPreset.create({
@@ -225,10 +315,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             },
           });
 
-      if (existingProduct) {
+      if (restorableCustomProduct) {
         await markWorkPresetAiRetrievalSourceDeleted(transaction, {
           tenantId: claims.tenantId,
-          workPresetIds: [existingProduct.id],
+          workPresetIds: [restorableCustomProduct.id],
         });
       }
       await enqueueAiIndexJob(transaction, {
@@ -239,7 +329,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         expectedSourceUpdatedAtUtc: product.updatedAt,
       });
 
-      return { kind: "success", product, restored: Boolean(existingProduct) } as const;
+      return { kind: "success", product, restored: Boolean(restorableCustomProduct) } as const;
     });
 
     if (outcome.kind === "conflict") {
@@ -259,7 +349,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.code(outcome.restored ? 200 : 201).send({
       message: outcome.restored ? "Product restored." : "Product created.",
-      product: outcome.product,
+      product: productResponse(outcome.product),
     });
   });
 
@@ -298,22 +388,31 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const nextServiceType = payload.serviceType ?? existingProduct.serviceType;
       const nextName = payload.name ?? existingProduct.name;
       if (!existingProduct.catalogKey && (payload.name !== undefined || payload.serviceType !== undefined)) {
-        const conflictingProduct = await transaction.workPreset.findFirst({
-          where: {
-            tenantId: claims.tenantId,
-            serviceType: nextServiceType,
-            catalogKey: null,
-            deletedAtUtc: null,
-            id: { not: existingProduct.id },
-            name: { equals: nextName, mode: "insensitive" },
-          },
-          select: { id: true },
-        });
+        const conflictingProduct = (await findTenantProductNameMatches(transaction, {
+          tenantId: claims.tenantId,
+          serviceType: nextServiceType,
+          name: nextName,
+        })).find((product) => !product.deletedAtUtc && product.id !== existingProduct.id);
 
         if (conflictingProduct) {
           return { kind: "conflict", productId: conflictingProduct.id } as const;
         }
       }
+
+      const nextDescription = payload.description !== undefined
+        ? normalizeOptionalText(payload.description)
+        : existingProduct.description;
+      const catalogCustomizedAtUtc = existingProduct.catalogKey && isStandardWorkPresetCustomized(
+        existingProduct.serviceType,
+        existingProduct.catalogKey,
+        {
+          description: nextDescription,
+          defaultQuantity: payload.defaultQuantity ?? existingProduct.defaultQuantity,
+          unitCost: payload.unitCost ?? existingProduct.unitCost,
+          unitPrice: payload.unitPrice ?? existingProduct.unitPrice,
+          isDefault: payload.isDefault ?? existingProduct.isDefault,
+        },
+      ) ? new Date() : null;
 
       const product = await transaction.workPreset.update({
         where: { id: existingProduct.id },
@@ -329,6 +428,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           ...(payload.unitCost !== undefined ? { unitCost: payload.unitCost } : {}),
           ...(payload.unitPrice !== undefined ? { unitPrice: payload.unitPrice } : {}),
           ...(payload.isDefault !== undefined ? { isDefault: payload.isDefault } : {}),
+          ...(existingProduct.catalogKey ? { catalogCustomizedAtUtc } : {}),
         },
       });
       await markWorkPresetAiRetrievalSourceDeleted(transaction, {
@@ -361,7 +461,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    return reply.send({ message: "Product updated.", product: outcome.product });
+    return reply.send({ message: "Product updated.", product: productResponse(outcome.product) });
   });
 
   app.delete("/products/:productId", { preHandler: [app.authenticate] }, async (request, reply) => {

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Alert, Badge, Button, ConfirmModal, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
 import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
+import { localizedApiError } from "../../lib/localized-api-error";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits } from "../../lib/phone";
 
 type QuickCustomerIntent = "save" | "quote";
@@ -64,6 +66,7 @@ function preferredDuplicateMatchId(matches: CustomerDuplicateMatch[]) {
 }
 
 export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, onCreated }: QuickCustomerModalProps) {
+  const { t } = useTranslation();
   const [internalForm, setInternalForm] = useState<QuickCustomerForm>(EMPTY_FORM);
   const form = draftValue ?? internalForm;
   const [error, setError] = useState<string | null>(null);
@@ -129,11 +132,11 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
   ) {
     const payload = normalizePayload(form);
     if (!payload.fullName || !payload.phone) {
-      setError("Full name and phone are required.");
+      setError(t("customers.quick.required"));
       return;
     }
     if (!normalizeUsPhoneDigits(payload.phone)) {
-      setError("Enter a valid 10-digit US phone number.");
+      setError(t("customers.quick.invalidPhone"));
       return;
     }
 
@@ -172,14 +175,17 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
           setMatches(details.matches);
           setSelectedMatchId(preferredDuplicateMatchId(details.matches));
           if (details.code === "STALE_DUPLICATE_TARGET") {
-            setError("Customer details changed after the duplicate warning. Review the refreshed matches before continuing.");
+            setError(t("customers.quick.changed"));
           }
           setSaving(false);
           return;
         }
-        setError(err.message);
+        setError(localizedApiError(err, t, {
+          fallbackKey: "customers.quick.createError",
+          statusKeys: { 400: "apiErrors.invalidRequest" },
+        }));
       } else {
-        setError("Failed creating customer.");
+        setError(localizedApiError(err, t, { fallbackKey: "customers.quick.createError" }));
       }
     } finally {
       setSaving(false);
@@ -188,10 +194,10 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
 
   return (
     <>
-    <Modal open={open} onClose={closeModal} closeOnBackdrop={!discardConfirmOpen} size="lg" ariaLabel="Add customer fast">
+    <Modal open={open} onClose={closeModal} closeOnBackdrop={!discardConfirmOpen} size="lg" ariaLabel={t("customers.quick.title")}>
       <ModalHeader
-        title="Add customer fast"
-        description="Create a customer without leaving the board. Save only, or save and jump straight into a quote."
+        title={t("customers.quick.title")}
+        description={t("customers.quick.description")}
         onClose={closeModal}
       />
       <ModalBody className="space-y-4">
@@ -199,14 +205,14 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Input
-            label="Full name"
+            label={t("customers.quick.fullName")}
             placeholder="Alan Johnson"
             value={form.fullName}
             onChange={(event) => updateForm((prev) => ({ ...prev, fullName: event.target.value }))}
             disabled={saving}
           />
           <Input
-            label="Phone"
+            label={t("customers.quick.phone")}
             type="tel"
             placeholder="(818) 233-4333"
             value={form.phone}
@@ -218,18 +224,18 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
         </div>
 
         <Input
-          label="Email"
+          label={t("customers.quick.email")}
           type="email"
-          placeholder="Optional"
+          placeholder={t("customers.quick.optional")}
           value={form.email}
           onChange={(event) => updateForm((prev) => ({ ...prev, email: event.target.value }))}
           disabled={saving}
         />
 
         <Textarea
-          label="Customer notes"
+          label={t("customers.quick.notes")}
           rows={4}
-          placeholder="Internal notes, property details, concerns, preferences, or follow-up context for your team and AI."
+          placeholder={t("customers.quick.notesPlaceholder")}
           value={form.notes}
           onChange={(event) => updateForm((prev) => ({ ...prev, notes: event.target.value }))}
           disabled={saving}
@@ -239,12 +245,12 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
           <div className="space-y-3 rounded-2xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] p-4">
             <div>
               <p className="text-sm font-semibold text-[var(--qf-warning-text)]">
-                {phoneConflictExists ? "Exact phone match found" : "Possible email duplicate found"}
+                {phoneConflictExists ? t("customers.quick.phoneDuplicate") : t("customers.quick.emailDuplicate")}
               </p>
               <p className="mt-1 text-xs text-[var(--qf-warning-text)]">
                 {phoneConflictExists
-                  ? "Use Existing is the fastest path and is the default recommendation. Add as New is disabled for exact phone matches."
-                  : "Email-only matches are a softer warning. You can use existing, merge updates, or add as new."}
+                  ? t("customers.quick.phoneDuplicateHelp")
+                  : t("customers.quick.emailDuplicateHelp")}
               </p>
             </div>
             <div className="space-y-2">
@@ -268,15 +274,15 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-[var(--qf-text)]">{match.fullName}</p>
                     <p className="mt-1 text-xs text-[var(--qf-text-soft)]">{formatUsPhoneDisplay(match.phone)}</p>
-                    <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{match.email ?? "No email"}</p>
+                    <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{match.email ?? t("customers.quick.noEmail")}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {match.matchReasons.map((reason) => (
                         <Badge key={`${match.id}-${reason}`} tone={reason === "phone" ? "red" : "amber"}>
-                          {reason === "phone" ? "Phone match" : "Email match"}
+                          {reason === "phone" ? t("customers.quick.phoneMatch") : t("customers.quick.emailMatch")}
                         </Badge>
                       ))}
-                      {match.archivedAtUtc ? <Badge tone="slate">Archived</Badge> : null}
-                      {match.deletedAtUtc ? <Badge tone="slate">Deleted</Badge> : null}
+                      {match.archivedAtUtc ? <Badge tone="slate">{t("customers.quick.archived")}</Badge> : null}
+                      {match.deletedAtUtc ? <Badge tone="slate">{t("customers.quick.deleted")}</Badge> : null}
                     </div>
                   </div>
                 </label>
@@ -284,7 +290,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
             </div>
             {selectedMatchInactive ? (
               <p className="rounded-lg border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-soft)]">
-                Selected record is inactive. Choose <span className="font-semibold">Merge Selected</span> to restore the customer. Retained quotes stay archived or deleted and are not restored automatically.
+                {t("customers.quick.inactiveHelp")}
               </p>
             ) : null}
           </div>
@@ -292,7 +298,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
       </ModalBody>
       <ModalFooter>
         <Button variant="ghost" onClick={closeModal} disabled={saving}>
-          Cancel
+          {t("common.cancel")}
         </Button>
         {matches.length > 0 ? (
           <>
@@ -301,30 +307,30 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
               loading={saving}
               disabled={saving || !selectedMatchId || selectedMatchInactive}
             >
-              Use Existing
+              {t("customers.quick.useExisting")}
             </Button>
             <Button
               variant="outline"
               onClick={() => void createCustomer(intent, "merge")}
               disabled={saving || !selectedMatchId}
             >
-              Merge Selected
+              {t("customers.quick.merge")}
             </Button>
             <Button
               variant="outline"
               onClick={() => void createCustomer(intent, "create_new")}
               disabled={saving || phoneConflictExists}
             >
-              Save as New
+              {t("customers.quick.saveNew")}
             </Button>
           </>
         ) : (
           <>
             <Button variant="outline" onClick={() => void createCustomer("save")} disabled={saving}>
-              Save Customer
+              {t("customers.quick.saveCustomer")}
             </Button>
             <Button onClick={() => void createCustomer("quote")} loading={saving} disabled={saving}>
-              Save + Build Quote
+              {t("customers.quick.saveQuote")}
             </Button>
           </>
         )}
@@ -334,9 +340,9 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
       open={discardConfirmOpen}
       onClose={() => setDiscardConfirmOpen(false)}
       onConfirm={completeAndCloseModal}
-      title="Discard unsaved customer?"
-      description="The customer details entered in this window will be lost."
-      confirmLabel="Discard changes"
+      title={t("customers.quick.discardTitle")}
+      description={t("customers.quick.discardDescription")}
+      confirmLabel={t("customers.quick.discard")}
       confirmVariant="warning"
     />
     </>

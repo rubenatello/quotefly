@@ -75,7 +75,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       <MarketingMomentumStrip
         tone="blue"
-        items={["Find the customer", "Draft with Kody", "Price the work", "Review the margin", "Preview the PDF", "Send and follow up"]}
+        items={["Find the customer", "Draft with Kody", "Price the work", "Review the margin"]}
       />
 
       <section aria-label="QuoteFly plan and workflow highlights" className="border-b border-slate-200 bg-white px-4 py-5 sm:px-6 lg:px-8">

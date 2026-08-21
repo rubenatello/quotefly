@@ -6,9 +6,13 @@ import {
   type PrismaClient,
 } from "@prisma/client";
 import {
+  AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
+  assertAiRetrievalSourceGovernance,
+  quarantineAiRetrievalSource,
   upsertAiRetrievalSource,
   type AiRetrievalSourceInput,
 } from "./ai-retrieval";
+import { AiRetrievalContentQuarantinedError } from "./ai-content-governance";
 import { sha256Text } from "./ai-data-governance";
 import { assertAiUsageAvailable, type AiUsageTelemetry } from "./ai-usage";
 import { buildTenantEntitlements } from "./subscription";
@@ -17,6 +21,7 @@ import { withTenantRlsContext, type TenantRlsClient } from "./tenant-rls";
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_LEASE_MS = 5 * 60_000;
 const MAX_WORKER_ID_LENGTH = 128;
+const GOVERNANCE_RECONCILIATION_MAX_JOBS = 250;
 
 type AiIndexJobClient = TenantRlsClient;
 
@@ -315,6 +320,50 @@ export async function enqueueTenantWorkPresetAiIndexJobs(
     })),
   });
   return { presetCount: presets.length };
+}
+
+/**
+ * Rollout reconciliation for a mixed worker fleet. A pre-governance worker
+ * can finish a migration-requeued job with its old chunker version; the new
+ * worker periodically requeues only those stale ACTIVE documents. Pending and
+ * processing jobs are intentionally excluded to avoid generation churn.
+ */
+export async function reconcileAiRetrievalGovernanceJobs(
+  prisma: PrismaClient,
+  params: { tenantId: string; limit?: number },
+) {
+  const tenantId = normalizeRequired(params.tenantId, "AI governance reconciliation tenantId");
+  const limit = Math.min(Math.max(params.limit ?? 100, 1), GOVERNANCE_RECONCILIATION_MAX_JOBS);
+  const staleSources = await withTenantRlsContext(prisma, tenantId, (tx) => tx.$queryRaw<Array<{
+    sourceType: string;
+    sourceId: string;
+    sourceUpdatedAtUtc: Date | null;
+  }>>(Prisma.sql`
+    SELECT document."sourceType", document."sourceId", document."sourceUpdatedAtUtc"
+    FROM "AiRetrievalDocument" document
+    LEFT JOIN "AiIndexJob" job
+      ON job."tenantId" = document."tenantId"
+     AND job."sourceType" = document."sourceType"
+     AND job."sourceId" = document."sourceId"
+    WHERE document."tenantId" = ${tenantId}
+      AND document."status" = 'ACTIVE'::"AiRetrievalDocumentStatus"
+      AND document."deletedAtUtc" IS NULL
+      AND document."chunkerVersion" IS DISTINCT FROM ${AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION}
+      AND (job."id" IS NULL OR job."status" NOT IN ('PENDING'::"AiIndexJobStatus", 'PROCESSING'::"AiIndexJobStatus"))
+    ORDER BY document."indexedAtUtc" ASC, document."id" ASC
+    LIMIT ${limit}
+  `));
+  if (staleSources.length === 0) return { reconciledJobCount: 0 };
+  await enqueueAiIndexJobs(prisma, {
+    tenantId,
+    jobs: staleSources.map((source) => ({
+      sourceType: source.sourceType,
+      sourceId: source.sourceId,
+      operation: "UPSERT" as const,
+      expectedSourceUpdatedAtUtc: source.sourceUpdatedAtUtc,
+    })),
+  });
+  return { reconciledJobCount: staleSources.length };
 }
 
 export async function claimAiIndexJob(
@@ -654,6 +703,10 @@ export async function executeAiIndexJob(prisma: PrismaClient, job: ClaimedAiInde
     ) {
       throw new Error("AI_INDEX_SOURCE_VERSION_PENDING");
     }
+    // Quarantine malformed/restricted content before checking budget or
+    // contacting an embedding provider. A source fix should not consume retry
+    // attempts or AI quota.
+    assertAiRetrievalSourceGovernance(source);
     await assertIndexingBudgetAvailable(prisma, job.tenantId);
   }
   const result = await upsertAiRetrievalSource(prisma, sourceToPersist, {
@@ -682,6 +735,20 @@ export async function processClaimedAiIndexJob(
     if (error instanceof Error && error.message === "AI_INDEX_JOB_STALE") {
       await releaseStaleClaim(prisma, job, new Date());
       return { outcome: "stale" as const };
+    }
+    if (error instanceof AiRetrievalContentQuarantinedError) {
+      const quarantine = await quarantineAiRetrievalSource(prisma, {
+        tenantId: job.tenantId,
+        sourceType: job.sourceType,
+        sourceId: job.sourceId,
+        persistenceFence: {
+          jobId: job.id,
+          generation: job.generation,
+          leaseToken: job.lockedBy ?? "",
+          startedAtMs: Date.now(),
+        },
+      });
+      return { outcome: "quarantined" as const, quarantine };
     }
     if (error instanceof AiIndexBudgetExhaustedError) {
       const deferred = await withTenantRlsContext(prisma, job.tenantId, (tx) => tx.aiIndexJob.updateMany({

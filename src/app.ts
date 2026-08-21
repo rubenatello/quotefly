@@ -32,6 +32,7 @@ import { aiAssistantRoutes } from "./routes/ai-assistant";
 import { aiBusinessInsightRoutes } from "./routes/ai-business-insights";
 import { feedbackRoutes } from "./routes/feedback";
 import { workspaceRoutes } from "./routes/workspace";
+import { activityRoutes } from "./routes/activities";
 import { swaggerPlugin } from "./plugins/swagger";
 import {
   applyRequestPerformanceHeaders,
@@ -76,6 +77,7 @@ function buildCorsOrigin(): CorsOriginFunction {
 
 const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
   "/v1/customers",
+  "/v1/activities",
   "/v1/quotes",
   "/v1/products",
   "/v1/ai",
@@ -194,7 +196,7 @@ export function buildServer() {
   app.register(cors, {
     origin: buildCorsOrigin(),
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
     credentials: true,
   });
   app.register(cookie);
@@ -371,6 +373,7 @@ export function buildServer() {
   app.register(authRoutes, { prefix: "/v1" });
   app.register(feedbackRoutes, { prefix: "/v1" });
   app.register(workspaceRoutes, { prefix: "/v1" });
+  app.register(activityRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });

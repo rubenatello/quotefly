@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type { AiAssistantContext, AiAssistantRequestedTool } from "../../lib/api";
 import { useTrack } from "../../lib/analytics";
 import { cn } from "../../lib/utils";
@@ -10,7 +11,7 @@ export function KodyButton({
   prompt,
   tool = "AUTO",
   context,
-  label = "Ask Kody",
+  label,
   icon,
   size = "md",
   className,
@@ -27,7 +28,9 @@ export function KodyButton({
   disabled?: boolean;
   showLabel?: boolean;
 }) {
+  const { t } = useTranslation();
   const track = useTrack();
+  const resolvedLabel = label ?? t("kody.button");
   const iconSize = size === "lg" ? 34 : size === "md" ? 30 : 24;
   const handleClick = () => {
     track("kody_context_open", { tool, currentPage: context?.currentPage ?? "unknown" });
@@ -45,7 +48,7 @@ export function KodyButton({
         disabled={disabled}
         onClick={handleClick}
       >
-        {label}
+        {resolvedLabel}
       </Button>
     );
   }
@@ -56,8 +59,8 @@ export function KodyButton({
       variant="kodyTrigger"
       size={size}
       className={cn("qf-kody-context-action !rounded-full", className)}
-      label={label}
-      title={label}
+      label={resolvedLabel}
+      title={resolvedLabel}
       icon={icon ?? <KodySparkIcon size={iconSize} />}
       disabled={disabled}
       onClick={handleClick}

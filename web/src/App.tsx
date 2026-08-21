@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import { Navbar } from "./components/Navbar";
@@ -17,6 +18,7 @@ import {
 import type { AppSession, SessionRecovery } from "./lib/app-session";
 import { browserTimeZone } from "./lib/display-format";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
+import { useLocale } from "./i18n";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
@@ -64,6 +66,7 @@ function toSession(payload: AuthSessionPayload): AppSession {
     userId: payload.user.id,
     email: payload.user.email,
     fullName: payload.user.fullName,
+    preferredLocale: payload.user.preferredLocale,
     tenantId: payload.tenant.id,
     tenantName: payload.tenant.name,
     timezone: payload.tenant.timezone?.trim() || browserTimeZone(),
@@ -98,6 +101,7 @@ function MarketingLayout({
   isLoggedIn: boolean;
   session?: AppSession | null;
 }) {
+  const { t } = useTranslation();
   const location = useLocation();
   const currentPage = location.pathname === "/" ? "landing" : location.pathname.slice(1);
 
@@ -118,7 +122,7 @@ function MarketingLayout({
         onLogout={onLogout}
       />
       <main id="main-content" className="flex-1">
-        <Suspense fallback={<AppLoadingScreen message="Loading page..." />}>
+        <Suspense fallback={<AppLoadingScreen message={t("auth.loadingPage")} />}>
           <Routes>
             <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
             <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
@@ -173,11 +177,17 @@ function ScrollToRoute() {
 
 function AppRoutes() {
   const { resolvedTheme } = useTheme();
+  const { reconcileLocale } = useLocale();
+  const { t } = useTranslation();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authEntryMode, setAuthEntryMode] = useState<AuthEntryMode>("signup");
   const [session, setSession] = useState<AppSession | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const [sessionRecovery, setSessionRecovery] = useState<SessionRecovery | null>(null);
+
+  useEffect(() => {
+    void reconcileLocale(session?.preferredLocale);
+  }, [reconcileLocale, session?.preferredLocale]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const navigate = useNavigate();
   const location = useLocation();
@@ -195,6 +205,7 @@ function AppRoutes() {
       localStorage.setItem("qf_tenant_id", payload.tenant.id);
       localStorage.setItem("qf_full_name", payload.user.fullName);
       const nextSession = toSession(payload);
+      await reconcileLocale(nextSession.preferredLocale);
       setSession(nextSession);
       return nextSession;
     } catch (error) {
@@ -205,7 +216,7 @@ function AppRoutes() {
       }
       throw error;
     }
-  }, []);
+  }, [reconcileLocale]);
 
   const refreshSessionState = useCallback(async (): Promise<void> => {
     await hydrateSessionState();
@@ -251,7 +262,10 @@ function AppRoutes() {
         prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
         localStorage.setItem("qf_tenant_id", payload.tenant.id);
         localStorage.setItem("qf_full_name", payload.user.fullName);
-        setSession(toSession(payload));
+        const restoredSession = toSession(payload);
+        await reconcileLocale(restoredSession.preferredLocale);
+        if (!isMounted) return;
+        setSession(restoredSession);
       } catch (error) {
         if (isMounted) handleSessionCheckFailure(error, "restore");
       } finally {
@@ -261,7 +275,7 @@ function AppRoutes() {
 
     void restoreSession();
     return () => { isMounted = false; };
-  }, [handleSessionCheckFailure]);
+  }, [handleSessionCheckFailure, reconcileLocale]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
     purgeQuoteBuilderDraftStorage();
@@ -317,7 +331,7 @@ function AppRoutes() {
   if (sessionRecovery && (isAppRoute || sessionRecovery.source === "post-auth")) {
     return (
       <AppLoadingScreen
-        message="QuoteFly couldn't verify your secure session. Your current page has not been changed."
+        message={t("auth.secureSessionFailure")}
         recovery={{
           isOnline,
           retrying: isSessionChecking,
@@ -328,7 +342,7 @@ function AppRoutes() {
   }
 
   if (isSessionChecking && isAppRoute) {
-    return <AppLoadingScreen message="Restoring your session..." />;
+    return <AppLoadingScreen message={t("auth.restoringSession")} />;
   }
 
   const isLoggedIn = session !== null;
@@ -339,7 +353,7 @@ function AppRoutes() {
         href="#main-content"
         className="sr-only z-[100] rounded-md bg-white px-4 py-3 font-semibold text-slate-900 shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
       >
-        Skip to main content
+        {t("auth.skipToMain")}
       </a>
       <ScrollToRoute />
       <Routes>
@@ -347,7 +361,7 @@ function AppRoutes() {
           <Route
             path="/app/*"
             element={
-              <Suspense fallback={<AppLoadingScreen message="Loading workspace..." />}>
+              <Suspense fallback={<AppLoadingScreen message={t("auth.loadingWorkspace")} />}>
                 <CrmAppLayout session={session} onLogout={handleLogout} onRefreshSession={refreshSessionState} />
               </Suspense>
             }

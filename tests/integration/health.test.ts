@@ -46,6 +46,8 @@ describe("health and readiness routes", () => {
         { tableName: "AiRetrievalChunk", enabled: true, forced: true },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
         { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
+        { tableName: "ActivityTask", enabled: true, forced: true },
+        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
       ];
     });
     const app = buildHealthServer(queryRaw);
@@ -137,6 +139,8 @@ describe("health and readiness routes", () => {
         { tableName: "AiRetrievalChunk", enabled: true, forced: false },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
         { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
+        { tableName: "ActivityTask", enabled: true, forced: true },
+        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
       ];
     });
     const app = buildHealthServer(queryRaw);
@@ -159,6 +163,8 @@ describe("health and readiness routes", () => {
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },
           { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
+          { tableName: "ActivityTask", enabled: true, forced: true },
+          { tableName: "ActivityTaskEvent", enabled: true, forced: true },
         ];
       }
       return [{
@@ -189,6 +195,8 @@ describe("health and readiness routes", () => {
           { tableName: "AiRetrievalChunk", enabled: true, forced: true },
           { tableName: "AiRetrievalDocument", enabled: true, forced: true },
           { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
+          { tableName: "ActivityTask", enabled: true, forced: true },
+          { tableName: "ActivityTaskEvent", enabled: true, forced: true },
         ];
       }
       return [{

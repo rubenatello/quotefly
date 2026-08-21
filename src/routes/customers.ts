@@ -23,12 +23,15 @@ import {
   tenantScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   WorkspaceAssigneeSelect,
   assignedRecordScope,
   defaultAssigneeForCreatedRecord,
+  lockActiveTenantAssignee,
   validateActiveTenantAssignee,
 } from "../lib/workspace-assignment";
+import { SupportedLocaleSchema } from "../lib/supported-locale";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -48,6 +51,7 @@ const CreateCustomerSchema = z.object({
   phone: CustomerPhoneSchema,
   email: z.string().trim().email().nullable().optional(),
   notes: z.string().max(5_000).nullable().optional(),
+  preferredLocale: SupportedLocaleSchema.nullable().optional(),
   followUpStatus: LeadFollowUpStatusSchema.optional(),
   duplicateAction: z.enum(["merge", "create_new", "use_existing"]).optional(),
   duplicateCustomerId: z.string().min(1).optional(),
@@ -77,12 +81,33 @@ const CustomerParamsSchema = z.object({
 
 const CustomerActivityQuerySchema = PaginationQuerySchema;
 
+async function lockActiveCustomerForRetention(
+  tx: Prisma.TransactionClient,
+  input: { customerId: string; tenantId: string; assignedTenantUserId?: string },
+) {
+  const assignmentScope = input.assignedTenantUserId
+    ? Prisma.sql`AND customer."assignedTenantUserId" = ${input.assignedTenantUserId}`
+    : Prisma.empty;
+  const [customer] = await tx.$queryRaw<Array<{ id: string; fullName: string }>>(Prisma.sql`
+    SELECT customer.id, customer."fullName"
+    FROM "Customer" AS customer
+    WHERE customer.id = ${input.customerId}
+      AND customer."tenantId" = ${input.tenantId}
+      AND customer."archivedAtUtc" IS NULL
+      AND customer."deletedAtUtc" IS NULL
+      ${assignmentScope}
+    FOR UPDATE OF customer
+  `);
+  return customer ?? null;
+}
+
 const UpdateCustomerSchema = z
   .object({
     fullName: z.string().trim().min(2).optional(),
     phone: CustomerPhoneSchema.optional(),
     email: z.string().trim().email().nullable().optional(),
     notes: z.string().max(5_000).nullable().optional(),
+    preferredLocale: SupportedLocaleSchema.nullable().optional(),
     followUpStatus: LeadFollowUpStatusSchema.optional(),
     assignedTenantUserId: z.string().min(1).nullable().optional(),
   })
@@ -525,6 +550,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       const actor = await resolveActivityActor(app.prisma, claims);
 
       const mergeOutcome = await runSerializableCustomerWrite(async (tx) => {
+        if (
+          assignee.assignedTenantUserId
+          && !await lockActiveTenantAssignee(tx, {
+            tenantId: claims.tenantId,
+            tenantUserId: assignee.assignedTenantUserId,
+          })
+        ) {
+          return { kind: "assignee_inactive" as const };
+        }
         const target = await tx.customer.findFirst({
           where: { id: targetId, ...tenantScope(claims.tenantId), ...recordScope },
         });
@@ -555,6 +589,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             phoneDigits: normalizePhoneSearchDigits(target.phone),
             email: mergedEmail,
             notes: mergedNotes,
+            ...(payload.preferredLocale !== undefined
+              ? { preferredLocale: payload.preferredLocale }
+              : {}),
             ...(payload.followUpStatus
               ? {
                   followUpStatus: payload.followUpStatus,
@@ -628,6 +665,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           error: "Merge stopped because both records contain different contact details. Use the existing record or save this customer separately.",
         });
       }
+      if (mergeOutcome.kind === "assignee_inactive") {
+        return reply.code(409).send({
+          code: "ASSIGNEE_INACTIVE",
+          error: "That team member is no longer active. Choose another assignee.",
+        });
+      }
 
       return reply.send({
         customer: formatCustomerPhoneResponse(mergeOutcome.customer),
@@ -682,6 +725,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     try {
       const actor = await resolveActivityActor(app.prisma, claims);
       const customer = await app.prisma.$transaction(async (tx) => {
+        if (
+          assignee.assignedTenantUserId
+          && !await lockActiveTenantAssignee(tx, {
+            tenantId: claims.tenantId,
+            tenantUserId: assignee.assignedTenantUserId,
+          })
+        ) {
+          return null;
+        }
         const createdCustomer = await tx.customer.create({
           data: {
             tenantId: claims.tenantId,
@@ -690,6 +742,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             phoneDigits: normalizedPhoneDigits,
             email: normalizedEmail,
             notes: payload.notes,
+            preferredLocale: payload.preferredLocale ?? null,
             followUpStatus: payload.followUpStatus,
             followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
             assignedTenantUserId: assignee.assignedTenantUserId,
@@ -751,6 +804,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
         return createdCustomer;
       });
+
+      if (!customer) {
+        return reply.code(409).send({
+          code: "ASSIGNEE_INACTIVE",
+          error: "That team member is no longer active. Choose another assignee.",
+        });
+      }
 
       return reply.code(201).send({ customer: formatCustomerPhoneResponse(customer) });
     } catch (error) {
@@ -1249,6 +1309,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const customer = await app.prisma.$transaction(async (tx) => {
+      if (
+        assignee?.assignedTenantUserId
+        && !await lockActiveTenantAssignee(tx, {
+          tenantId: claims.tenantId,
+          tenantUserId: assignee.assignedTenantUserId,
+        })
+      ) {
+        return null;
+      }
       const updatedCustomer = await tx.customer.update({
         where: { id: existing.id },
         data: {
@@ -1257,6 +1326,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           phoneDigits: normalizedPhoneDigits,
           email: normalizedEmail,
           notes: payload.notes,
+          preferredLocale: payload.preferredLocale,
           followUpStatus: payload.followUpStatus,
           followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
           ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
@@ -1297,6 +1367,20 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      if (
+        payload.preferredLocale !== undefined &&
+        payload.preferredLocale !== existing.preferredLocale
+      ) {
+        await createCustomerActivityEvent(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedCustomer.id,
+          actor,
+          eventType: "DOCUMENT_LANGUAGE_UPDATED",
+          title: "Customer document language updated",
+          detail: "Customer document preference changed.",
+        });
+      }
+
       if (payload.followUpStatus && payload.followUpStatus !== existing.followUpStatus) {
         await createCustomerActivityEvent(tx, {
           tenantId: claims.tenantId,
@@ -1318,6 +1402,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       return updatedCustomer;
     });
+
+    if (!customer) {
+      return reply.code(409).send({
+        code: "ASSIGNEE_INACTIVE",
+        error: "That team member is no longer active. Choose another assignee.",
+      });
+    }
 
     return { customer: formatCustomerPhoneResponse(customer) };
   });
@@ -1390,18 +1481,27 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
 
-    const archived = await app.prisma.$transaction(async (tx) => {
-      const existing = await tx.customer.findFirst({
-        where: {
-          id: customerId,
-          ...tenantActiveCustomerScope(claims.tenantId),
-          ...assignedRecordScope(access),
-        },
-        select: { id: true, fullName: true },
+    const archived = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const existing = await lockActiveCustomerForRetention(tx, {
+        customerId,
+        tenantId: claims.tenantId,
+        assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
       });
 
       if (!existing) {
-        return false;
+        return { kind: "not_found" as const };
+      }
+
+      const activeTaskCount = await tx.activityTask.count({
+        where: {
+          tenantId: claims.tenantId,
+          customerId: existing.id,
+          deletedAtUtc: null,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+        },
+      });
+      if (activeTaskCount > 0) {
+        return { kind: "active_tasks" as const, activeTaskCount };
       }
 
       const relatedQuotes = await tx.quote.findMany({
@@ -1460,11 +1560,18 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         includeQuotes: true,
       });
 
-      return true;
+      return { kind: "changed" as const };
     });
 
-    if (!archived) {
+    if (archived.kind === "not_found") {
       return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
+    if (archived.kind === "active_tasks") {
+      return reply.code(409).send({
+        code: "ACTIVE_ACTIVITY_TASKS",
+        error: `Complete, cancel, or remove ${archived.activeTaskCount} active task(s) before archiving this customer.`,
+        activeTaskCount: archived.activeTaskCount,
+      });
     }
 
     return reply.code(204).send();
@@ -1480,18 +1587,27 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
 
-    const deleted = await app.prisma.$transaction(async (tx) => {
-      const existing = await tx.customer.findFirst({
-        where: {
-          id: customerId,
-          ...tenantActiveCustomerScope(claims.tenantId),
-          ...assignedRecordScope(access),
-        },
-        select: { id: true, fullName: true },
+    const deleted = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const existing = await lockActiveCustomerForRetention(tx, {
+        customerId,
+        tenantId: claims.tenantId,
+        assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
       });
 
       if (!existing) {
-        return false;
+        return { kind: "not_found" as const };
+      }
+
+      const activeTaskCount = await tx.activityTask.count({
+        where: {
+          tenantId: claims.tenantId,
+          customerId: existing.id,
+          deletedAtUtc: null,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+        },
+      });
+      if (activeTaskCount > 0) {
+        return { kind: "active_tasks" as const, activeTaskCount };
       }
 
       const relatedQuotes = await tx.quote.findMany({
@@ -1565,11 +1681,18 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         includeQuotes: true,
       });
 
-      return true;
+      return { kind: "changed" as const };
     });
 
-    if (!deleted) {
+    if (deleted.kind === "not_found") {
       return reply.code(404).send({ error: "Customer not found for tenant." });
+    }
+    if (deleted.kind === "active_tasks") {
+      return reply.code(409).send({
+        code: "ACTIVE_ACTIVITY_TASKS",
+        error: `Complete, cancel, or remove ${deleted.activeTaskCount} active task(s) before deleting this customer.`,
+        activeTaskCount: deleted.activeTaskCount,
+      });
     }
 
     return reply.code(204).send();

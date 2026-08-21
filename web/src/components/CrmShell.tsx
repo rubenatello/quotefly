@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { BadgeInfo, FilePlus2, LayoutDashboard, Lightbulb, ListTodo, MoreHorizontal, PackageSearch, Palette, Search, Settings2, UserRoundPlus, UsersRound } from "lucide-react";
 import type { PlanCode, TenantEntitlements, TenantUsageSnapshot } from "../lib/api";
@@ -55,18 +56,6 @@ function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"
   return <Settings2 size={16} />;
 }
 
-const OPERATIONS_LINKS: readonly CrmNavLink[] = WORKSPACE_OPERATIONS_LINKS.map((item) => ({
-  label: item.label,
-  path: item.id,
-  icon: navigationIcon(item.icon),
-}));
-
-const SETTINGS_LINKS: readonly CrmNavLink[] = WORKSPACE_SETTINGS_LINKS.map((item) => ({
-  label: item.label,
-  path: item.id,
-  icon: navigationIcon(item.icon),
-}));
-
 export function CrmShell({
   currentPage,
   onNavigate,
@@ -81,6 +70,7 @@ export function CrmShell({
   usage,
   canManageCatalog = false,
 }: CrmShellProps) {
+  const { t } = useTranslation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
@@ -158,23 +148,35 @@ export function CrmShell({
   };
 
   const pageMeta = WORKSPACE_PAGE_META[currentPage];
+  const pageLabel = t(`${pageMeta.translationKey}.label`);
+  const pageHint = t(`${pageMeta.translationKey}.hint`);
+  const translatedOperationsLinks: readonly CrmNavLink[] = WORKSPACE_OPERATIONS_LINKS.map((item) => ({
+    label: t(item.labelKey),
+    path: item.id,
+    icon: navigationIcon(item.icon),
+  }));
+  const translatedSettingsLinks: readonly CrmNavLink[] = WORKSPACE_SETTINGS_LINKS.map((item) => ({
+    label: t(item.labelKey),
+    path: item.id,
+    icon: navigationIcon(item.icon),
+  }));
   const operationsLinks = canManageCatalog
-    ? OPERATIONS_LINKS
-    : OPERATIONS_LINKS.filter((link) => link.path !== "products");
+    ? translatedOperationsLinks
+    : translatedOperationsLinks.filter((link) => link.path !== "products");
   const settingsLinks = canManageCatalog
-    ? SETTINGS_LINKS
-    : SETTINGS_LINKS.filter((link) => link.path === "settings" || link.path === "about");
+    ? translatedSettingsLinks
+    : translatedSettingsLinks.filter((link) => link.path === "settings" || link.path === "about");
   const allowedNavigationPages = [...operationsLinks, ...settingsLinks].map((link) => link.path);
 
   useEffect(() => {
     setSEOMetadata({
       title: pageMeta.label,
-      description: pageMeta.hint,
+      description: pageHint,
     });
-  }, [pageMeta.hint, pageMeta.label]);
+  }, [pageHint, pageLabel, pageMeta.label]);
   return (
     <div className="qf-workspace qf-theme-scope min-h-screen bg-qf-canvas text-qf-text">
-      {pageMeta.headingPlacement === "shell" ? <h1 className="sr-only">{pageMeta.label}</h1> : null}
+      {pageMeta.headingPlacement === "shell" ? <h1 className="sr-only">{pageLabel}</h1> : null}
       <CrmMobileHeader
         mobileOpen={mobileOpen}
         backgroundInert={mobileOpen}
@@ -184,7 +186,7 @@ export function CrmShell({
         onNavigate={handleNavigate}
         onQuickAction={handleQuickAction}
         onLogout={onLogout}
-        currentLabel={pageMeta.label}
+        currentLabel={pageLabel}
         canManageWorkspace={canManageCatalog}
       />
       {commandOpen ? (
@@ -224,7 +226,7 @@ export function CrmShell({
         {mobileOpen && (
           <button
             type="button"
-            aria-label="Close navigation"
+            aria-label={t("navigation.close")}
             aria-hidden="true"
             tabIndex={-1}
             onClick={() => setMobileOpen(false)}
@@ -241,30 +243,30 @@ export function CrmShell({
             <div className="flex w-full items-center justify-between gap-4 px-5 py-2 xl:px-8 2xl:px-10">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">
-                  <span>QuoteFly workspace</span>
+                  <span>{t("navigation.workspaceName")}</span>
                   <span className="h-1 w-1 rounded-full bg-[var(--qf-border-strong)]" />
-                  <span>{pageMeta.label}</span>
+                  <span>{pageLabel}</span>
                 </div>
-                <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{pageMeta.hint}</p>
+                <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{pageHint}</p>
               </div>
 
               <div className="flex items-center gap-2">
                 <AppTooltipProvider>
-                  <div className="flex items-center gap-1.5" role="group" aria-label="Quick commands">
-                    <AppTooltip content="New customer" side="bottom">
+                  <div className="flex items-center gap-1.5" role="group" aria-label={t("navigation.quickCommands")}>
+                    <AppTooltip content={t("navigation.newCustomer")} side="bottom">
                       <button
                         type="button"
-                        aria-label="New customer"
+                        aria-label={t("navigation.newCustomer")}
                         onClick={() => handleQuickAction("new-customer")}
                         className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-qf-border bg-qf-surface text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-selected)]"
                       >
                         <UserRoundPlus size={18} aria-hidden="true" />
                       </button>
                     </AppTooltip>
-                    <AppTooltip content="New quote" side="bottom">
+                    <AppTooltip content={t("navigation.newQuote")} side="bottom">
                       <button
                         type="button"
-                        aria-label="New quote"
+                        aria-label={t("navigation.newQuote")}
                         onClick={() => handleQuickAction("new-quote")}
                         className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] text-[var(--qf-action-primary-text)] transition hover:border-[var(--qf-action-primary-hover)] hover:bg-[var(--qf-action-primary-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] active:bg-[var(--qf-action-primary-active)]"
                       >
@@ -281,7 +283,7 @@ export function CrmShell({
                 >
                   <span className="inline-flex items-center gap-2">
                     <Search size={15} />
-                    Search or jump
+                    {t("navigation.searchOrJump")}
                   </span>
                 </button>
 
@@ -316,12 +318,12 @@ export function CrmShell({
                       </div>
                       <div className="mt-2 space-y-1">
                         {([
-                          { label: "Open home", page: "home" },
-                          { label: "Open customers", page: "customers" },
-                          { label: "Open products", page: "products" },
-                          { label: "Open settings", page: "settings" },
-                          ...(canManageCatalog ? [{ label: "Open branding", page: "branding" } as const] : []),
-                          { label: "My info", page: "about" },
+                          { label: t("navigation.openHome"), page: "home" },
+                          { label: t("navigation.openCustomers"), page: "customers" },
+                          { label: t("navigation.openProducts"), page: "products" },
+                          { label: t("navigation.openSettings"), page: "settings" },
+                          ...(canManageCatalog ? [{ label: t("navigation.openBranding"), page: "branding" } as const] : []),
+                          { label: t("navigation.myInfo"), page: "about" },
                         ] as const).map((item) => (
                           <DropdownMenuPrimitive.Item
                             key={item.page}
@@ -338,14 +340,14 @@ export function CrmShell({
                         className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                       >
                         <Lightbulb size={15} className="text-quotefly-blue" aria-hidden="true" />
-                        Request a feature
+                        {t("navigation.requestFeature")}
                       </DropdownMenuPrimitive.Item>
                       <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                       <DropdownMenuPrimitive.Item
                         onSelect={() => onLogout()}
                         className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                       >
-                        Sign out
+                        {t("navigation.signOut")}
                       </DropdownMenuPrimitive.Item>
                     </DropdownMenuPrimitive.Content>
                   </DropdownMenuPrimitive.Portal>
@@ -365,15 +367,15 @@ export function CrmShell({
         open={featureRequestOpen}
         onClose={() => setFeatureRequestOpen(false)}
         size="lg"
-        ariaLabel="Request a QuoteFly feature"
+        ariaLabel={t("navigation.requestFeatureTitle")}
       >
         <ModalHeader
-          title="Request a feature"
-          description="Tell us what would make QuoteFly faster or easier on the job."
+          title={t("navigation.requestFeature")}
+          description={t("navigation.requestFeatureDescription")}
           onClose={() => setFeatureRequestOpen(false)}
         />
         <ModalBody>
-          <Suspense fallback={<p className="text-sm text-slate-500">Loading feature request form...</p>}>
+          <Suspense fallback={<p className="text-sm text-slate-500">{t("navigation.loadingFeatureForm")}</p>}>
             <FeatureRequestForm
               source="WORKSPACE"
               initialName={fullName}

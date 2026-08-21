@@ -10,10 +10,13 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   const account = await signUpViaApi(request, "mobile-builder-draft");
   const customer = await createCustomerViaApi(request, account, { fullName: "Mobile Draft Customer" });
   await addSessionCookie(context, account);
+  await page.addInitScript(() => {
+    window.localStorage.setItem("qf_locale", "en-US");
+  });
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole("textbox", { name: /find customer by name/i }).fill(customer.fullName);
+  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customer.fullName);
   await page
     .getByRole("button", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") })
     .click();
@@ -22,9 +25,9 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await page.getByRole("button", { name: "Show details" }).click();
   await page.getByLabel("Quote overview").fill("Keep this mobile scope across navigation and refresh.");
   const firstRow = page.getByTestId("quote-line-row-1");
-  await firstRow.locator('[aria-label="Line 1 title"]:visible').fill("Mobile saved line");
-  await firstRow.locator('[aria-label="Line 1 quantity"]:visible').fill("2");
-  await firstRow.locator('[aria-label="Line 1 price"]:visible').fill("325");
+  await firstRow.getByRole("textbox", { name: "Existing line 1 title", exact: true }).fill("Mobile saved line");
+  await firstRow.getByRole("spinbutton", { name: "Existing line 1 quantity", exact: true }).fill("2");
+  await firstRow.getByRole("spinbutton", { name: "Existing line 1 price", exact: true }).fill("325");
   await page.getByRole("button", { name: "Review quote", exact: true }).click();
   const backToEdit = page.getByRole("button", { name: "Back", exact: true });
   await expect(backToEdit).toBeVisible();
@@ -65,8 +68,8 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(page.getByLabel("Quote overview")).toHaveValue("Keep this mobile scope across navigation and refresh.");
   const restoredFirstRow = page.getByTestId("quote-line-row-1");
   await restoredFirstRow.getByRole("button").first().click();
-  await expect(restoredFirstRow.locator('[aria-label="Line 1 title"]:visible')).toHaveValue("Mobile saved line");
-  await expect(restoredFirstRow.locator('[aria-label="Line 1 quantity"]:visible')).toHaveValue("2");
+  await expect(restoredFirstRow.getByRole("textbox", { name: "Existing line 1 title", exact: true })).toHaveValue("Mobile saved line");
+  await expect(restoredFirstRow.getByRole("spinbutton", { name: "Existing line 1 quantity", exact: true })).toHaveValue("2");
 
   const startOver = page.getByRole("button", { name: "Discard saved quote draft and start over" });
   expect((await startOver.boundingBox())?.height).toBeGreaterThanOrEqual(44);

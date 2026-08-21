@@ -3,6 +3,8 @@ import { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { BrandLogoDataUrlSchema, sanitizeBrandLogoDataUrl } from "../lib/brand-logo";
+import { isValidIanaTimeZone } from "../lib/tenant-time";
+import { SupportedLocaleSchema } from "../lib/supported-locale";
 
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
@@ -78,7 +80,10 @@ const UpsertBrandingSchema = z.object({
   hideQuoteFlyAttribution: z.boolean().optional().default(false),
   primaryColor: HexColorSchema.default("#5B85AA"),
   templateId: TemplateIdSchema.default("modern"),
-  timezone: z.string().trim().min(1).max(100).default("UTC"),
+  timezone: z.string().trim().min(1).max(100).refine(isValidIanaTimeZone, {
+    message: "Choose a valid IANA timezone such as America/Los_Angeles.",
+  }).default("UTC"),
+  defaultCustomerLocale: SupportedLocaleSchema.optional(),
   businessProfile: BusinessProfileSchema,
   componentColors: BrandingComponentColorsSchema,
 });
@@ -92,7 +97,7 @@ function requireSameTenant(request: FastifyRequest, reply: FastifyReply, tenantI
   return true;
 }
 
-function canEditBusinessName(request: FastifyRequest): boolean {
+function canManageBranding(request: FastifyRequest): boolean {
   const role = request.liveAuthMembership?.role.trim().toLowerCase();
   return role === "owner" || role === "admin";
 }
@@ -111,6 +116,7 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
         select: {
           name: true,
           timezone: true,
+          defaultCustomerLocale: true,
           branding: {
             select: {
               logoUrl: true,
@@ -140,9 +146,11 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
         tenant: {
           name: tenant.name,
           timezone: tenant.timezone,
+          defaultCustomerLocale: tenant.defaultCustomerLocale,
         },
         permissions: {
-          canEditBusinessName: canEditBusinessName(request),
+          canEditBusinessName: canManageBranding(request),
+          canManageBranding: canManageBranding(request),
         },
         branding: tenant.branding
           ? {
@@ -164,8 +172,11 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
       if (!requireSameTenant(request, reply, tenantId)) return;
 
       const payload = UpsertBrandingSchema.parse(request.body);
-      if (payload.businessName !== undefined && !canEditBusinessName(request)) {
-        return reply.code(403).send({ error: "Only owners and admins can change the business name." });
+      if (!canManageBranding(request)) {
+        return reply.code(403).send({
+          code: "BRANDING_ADMIN_REQUIRED",
+          error: "Only owners and admins can change workspace branding and customer document settings.",
+        });
       }
       const businessProfile = payload.businessProfile ?? {};
       const componentColorsInput =
@@ -180,11 +191,15 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
           where: { id: tenantId },
           data: {
             timezone: payload.timezone,
+            ...(payload.defaultCustomerLocale !== undefined
+              ? { defaultCustomerLocale: payload.defaultCustomerLocale }
+              : {}),
             ...(payload.businessName !== undefined ? { name: payload.businessName } : {}),
           },
           select: {
             name: true,
             timezone: true,
+            defaultCustomerLocale: true,
           },
         });
 

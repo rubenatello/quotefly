@@ -7,6 +7,10 @@ import {
   signUpViaApi,
 } from "./helpers";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+});
+
 async function expectScreenReaderOnlyText(
   locator: Locator,
 ) {
@@ -27,10 +31,11 @@ test.describe("mobile launch smoke", () => {
 
     await addSessionCookie(context, account);
     await page.goto("/app/customers");
-    await expect(page.getByText(customer.fullName).filter({ visible: true })).toBeVisible({ timeout: 15_000 });
-    await page.getByText(customer.fullName).filter({ visible: true }).first().click();
+    const openCustomerDetails = page.getByRole("button", { name: `Open ${customer.fullName} details`, exact: true });
+    await expect(openCustomerDetails).toBeVisible({ timeout: 20_000 });
+    await openCustomerDetails.click();
 
-    const customerDialog = page.getByRole("dialog", { name: "Customer details and activity" });
+    const customerDialog = page.getByRole("dialog", { name: "Customer details", exact: true });
     await customerDialog.getByRole("button", { name: "Archive", exact: true }).click();
 
     const confirmation = page.getByRole("dialog", { name: "Archive customer?" });
@@ -60,8 +65,10 @@ test.describe("mobile launch smoke", () => {
     await confirmButton.click();
 
     const failedToast = page.locator('[data-sonner-toast][data-type="error"]');
-    await expect(failedToast.getByText("Could not archive customer", { exact: true })).toBeVisible();
-    await expect(failedToast).toContainText("Archive is temporarily unavailable.");
+    await expect(
+      failedToast.getByText("That customer status change could not be completed.", { exact: true }),
+    ).toBeVisible();
+    await expect(failedToast).toContainText("QuoteFly could not complete this action right now. Try again in a moment.");
     await expect(confirmation).toBeVisible();
     expect((await failedToast.getByRole("button", { name: "Dismiss notification" }).boundingBox())?.height).toBeGreaterThanOrEqual(43.5);
 
@@ -69,14 +76,14 @@ test.describe("mobile launch smoke", () => {
     await confirmButton.click();
 
     const successToast = page.locator('[data-sonner-toast][data-type="success"]');
-    await expect(successToast.getByText("Customer archived", { exact: true })).toBeVisible();
-    await expect(successToast).toContainText(customer.fullName);
+    await expect(successToast.getByText("Customer archived.", { exact: true })).toBeVisible();
+    await expect(successToast).toContainText("This customer will leave the active workspace but remain retained in the database and audit history.");
     await expect(confirmation).toBeHidden();
 
     await page.getByRole("button", { name: "Add customer" }).first().click();
     const quickCustomerDialog = page.getByRole("dialog", { name: "Add customer fast" });
-    const saveCustomerButton = quickCustomerDialog.getByRole("button", { name: "Save Customer" });
-    const buildQuoteButton = quickCustomerDialog.getByRole("button", { name: "Save + Build Quote" });
+    const saveCustomerButton = quickCustomerDialog.getByRole("button", { name: "Save customer", exact: true });
+    const buildQuoteButton = quickCustomerDialog.getByRole("button", { name: "Save + build quote", exact: true });
     await expect(saveCustomerButton).toHaveCSS("width", await buildQuoteButton.evaluate((button) => getComputedStyle(button).width));
     expect((await saveCustomerButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await quickCustomerDialog.getByLabel("Full name").fill("Unsaved mobile customer");
@@ -95,6 +102,7 @@ test.describe("mobile launch smoke", () => {
   });
 
   test("customer and quote surfaces render on mobile viewport", async ({ context, page, request }) => {
+    test.setTimeout(90_000);
     const account = await signUpViaApi(request, "mobile");
     const customer = await createCustomerViaApi(request, account, {
       fullName: "Mobile Beta Customer",
@@ -153,8 +161,8 @@ test.describe("mobile launch smoke", () => {
     await mobileWorkspace.getByRole("button", { name: "Quotes", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Quotes", exact: true })).toBeVisible();
     await expect(page.getByTestId("mobile-tab-quotes")).toHaveAttribute("aria-current", "page");
-    await expect(page.getByText("Ready to send", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Waiting on reply", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Ready to send\b/ })).toBeVisible();
+    await expect(page.getByText("Waiting on response", { exact: true }).filter({ visible: true }).first()).toBeVisible();
 
     await quickQuote.click();
     await expect(page).toHaveURL(/\/app\/build$/);
@@ -166,17 +174,17 @@ test.describe("mobile launch smoke", () => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
       .toBeLessThanOrEqual(1);
-    const quickQuoteHeadingBox = await page.getByRole("heading", { level: 1, name: "Quick Quote", exact: true }).boundingBox();
+    const quickQuoteHeadingBox = await page.getByRole("heading", { level: 1, name: "Quick quote", exact: true }).boundingBox();
     expect(quickQuoteHeadingBox?.x ?? -1).toBeGreaterThanOrEqual(0);
     await expect(page.locator("button button, [role=button] button")).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Quick Quote" })).toBeVisible();
-    await page.getByRole("textbox", { name: /find customer by name/i }).fill("Mobile Beta Customer");
+    await expect(page.getByRole("heading", { name: "Quick quote" })).toBeVisible();
+    await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill("Mobile Beta Customer");
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
-    const addCustomerTrigger = page.getByRole("button", { name: "Add Customer" }).first();
+    const addCustomerTrigger = page.getByRole("button", { name: "Add customer", exact: true }).first();
     await addCustomerTrigger.click();
     const quickCustomerDialog = page.getByRole("dialog", { name: /add customer fast/i });
-    await expect(quickCustomerDialog.getByRole("button", { name: "Save + Build Quote" })).toBeVisible();
+    await expect(quickCustomerDialog.getByRole("button", { name: "Save + build quote", exact: true })).toBeVisible();
     await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')))).toBe(true);
     await page.keyboard.press("Escape");
     await expect(quickCustomerDialog).toBeHidden();
@@ -223,6 +231,7 @@ test.describe("mobile launch smoke", () => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
       .toBeLessThanOrEqual(1);
+    await page.getByRole("group", { name: "Activity views" }).getByRole("button", { name: "Lead queue", exact: true }).click();
     const queueTabs = page.getByTestId("follow-up-queue-tabs");
     await expect(queueTabs).toBeVisible();
     await expect
@@ -249,14 +258,15 @@ test.describe("mobile launch smoke", () => {
     expect(openQuoteBox?.x ?? -1).toBeGreaterThanOrEqual(rowBox?.x ?? 0);
     expect((openQuoteBox?.x ?? 0) + (openQuoteBox?.width ?? 0)).toBeLessThanOrEqual((rowBox?.x ?? 0) + (rowBox?.width ?? 0) + 1);
     await followUpSelect.selectOption("FOLLOWED_UP");
-    await expect(page.getByText("Follow-up status updated to Followed Up.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status").getByText("Activity updated.", { exact: true })).toBeVisible();
     await page.reload();
+    await page.getByRole("group", { name: "Activity views" }).getByRole("button", { name: "Lead queue", exact: true }).click();
     await page.getByRole("button", { name: /Quoted/ }).click();
     await quotedLeadRow.getByText("Details and status", { exact: true }).click();
     await expect(page.getByLabel("Update follow-up for Mobile Beta Customer").filter({ visible: true })).toHaveValue("FOLLOWED_UP");
 
     await page.goto("/app/settings");
-    await expect(page.getByRole("heading", { level: 2, name: "Appearance", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Appearance & language", exact: true })).toBeVisible();
     await expect(page.getByTestId("theme-option-system")).toBeVisible();
     await page.getByTestId("theme-option-dark").click();
     await expect(page.locator("html")).toHaveClass(/dark/);

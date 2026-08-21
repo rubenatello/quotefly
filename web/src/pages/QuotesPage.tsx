@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Archive, BadgeCheck, CircleDot, Eye, FileText, MoreHorizontal, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
@@ -19,7 +20,7 @@ import {
 } from "../components/ui";
 import { useDashboard, formatDateTime, money } from "../components/dashboard/DashboardContext";
 import { usePageView } from "../lib/analytics";
-import { api, ApiError, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
+import { api, type Quote, type QuoteOutboundChannel, type QuoteStatus } from "../lib/api";
 import { QuickCustomerModal } from "../components/customers/QuickCustomerModal";
 import { buildQuoteMessageDraft } from "../lib/quote-message-template";
 import { toPhoneHrefValue } from "../lib/phone";
@@ -31,6 +32,9 @@ import {
   sharePdfBlobNatively,
 } from "../lib/quote-pdf-actions";
 import { notify } from "../lib/notifications";
+import i18n from "../i18n/i18n";
+import { useLocale } from "../i18n";
+import { localizedApiError } from "../lib/localized-api-error";
 
 type QuoteLifecycleStage = "DRAFT" | "READY" | "SENT" | "ACCEPTED" | "DECLINED" | "INVOICED";
 type PdfActionType = "preview" | "download" | "email" | "sms" | "native-share";
@@ -78,12 +82,7 @@ function quoteLifecycleStage(quote: Quote): QuoteLifecycleStage {
 }
 
 function lifecycleLabel(stage: QuoteLifecycleStage) {
-  if (stage === "DRAFT") return "Draft";
-  if (stage === "READY") return "Ready to send";
-  if (stage === "SENT") return "Sent";
-  if (stage === "ACCEPTED") return "Accepted";
-  if (stage === "DECLINED") return "Declined";
-  return "Invoiced";
+  return i18n.t(`domain.quoteStage.${stage}`);
 }
 
 function lifecycleInitial(stage: QuoteLifecycleStage) {
@@ -117,14 +116,14 @@ function rawStatusHint(quote: Quote) {
 
   if (stage === "INVOICED") {
     const sync = quote.quickBooksInvoiceSyncs?.[0];
-    return sync?.quickBooksDocNumber ? `Invoice ${sync.quickBooksDocNumber}` : "Synced to QuickBooks";
+    return sync?.quickBooksDocNumber ? i18n.t("quotes.hint.invoice", { number: sync.quickBooksDocNumber }) : i18n.t("quotes.hint.synced");
   }
 
-  if (quote.status === "ACCEPTED") return "Accepted by customer";
-  if (quote.status === "REJECTED") return "Declined by customer";
-  if (quote.status === "SENT_TO_CUSTOMER") return "Waiting on response";
-  if (quote.status === "READY_FOR_REVIEW") return "Ready to send";
-  return "Still being drafted";
+  if (quote.status === "ACCEPTED") return i18n.t("quotes.hint.accepted");
+  if (quote.status === "REJECTED") return i18n.t("quotes.hint.rejected");
+  if (quote.status === "SENT_TO_CUSTOMER") return i18n.t("quotes.hint.waiting");
+  if (quote.status === "READY_FOR_REVIEW") return i18n.t("quotes.hint.ready");
+  return i18n.t("quotes.hint.draft");
 }
 
 function MetricCard({
@@ -210,7 +209,7 @@ function StageCountCard({
         <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${active ? "text-[var(--qf-link)]" : "text-[var(--qf-text-muted)]"}`}>{label}</p>
         {stage === "ALL" ? (
           <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-1 text-[10px] font-bold text-[var(--qf-text-muted)]">
-            All
+            {i18n.t("domain.quoteStage.ALL")}
           </span>
         ) : (
           <span
@@ -254,20 +253,20 @@ function QuoteActionsMenu({
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <Button size="sm" variant="outline" icon={<MoreHorizontal size={15} />} aria-label={`More actions for ${quoteNumber(quote.id)}`}>
-          More
+        <Button size="sm" variant="outline" icon={<MoreHorizontal size={15} />} aria-label={`${i18n.t("quotes.columns.actions")} ${quoteNumber(quote.id)}`}>
+          {i18n.t("quotes.columns.actions")}
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
         <DropdownMenuPrimitive.Content align="end" sideOffset={8} className="qf-theme-scope z-[130] min-w-[190px] rounded-xl border border-qf-border bg-qf-surface p-1.5 text-qf-text shadow-[var(--qf-shadow-md)]">
           <DropdownMenuPrimitive.Item onSelect={() => onOpenPdfActions(quote)} className={itemClass}>
-            <FileText size={14} /> Quote PDF and sharing
+            <FileText size={14} /> {i18n.t("quotes.share")}
           </DropdownMenuPrimitive.Item>
           {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "archive", quote })} className={itemClass}>
-            <Archive size={14} /> Archive quote
+            <Archive size={14} /> {i18n.t("quotes.archive")}
           </DropdownMenuPrimitive.Item> : null}
           {canManageRecordRetention ? <DropdownMenuPrimitive.Item onSelect={() => onRetentionAction({ type: "delete", quote })} className={`${itemClass} text-[var(--qf-danger-text)] hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)]`}>
-            <Trash2 size={14} /> Delete quote
+            <Trash2 size={14} /> {i18n.t("quotes.delete")}
           </DropdownMenuPrimitive.Item> : null}
         </DropdownMenuPrimitive.Content>
       </DropdownMenuPrimitive.Portal>
@@ -282,6 +281,7 @@ function QuoteDesktopRow({
   onRetentionAction,
   canViewInternalCosts,
   canManageRecordRetention,
+  timezone,
 }: {
   quote: Quote;
   onOpenQuote: (quoteId: string) => void;
@@ -289,12 +289,13 @@ function QuoteDesktopRow({
   onRetentionAction: (action: QuoteRetentionAction) => void;
   canViewInternalCosts: boolean;
   canManageRecordRetention: boolean;
+  timezone?: string | null;
 }) {
   return (
     <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 px-4 py-3 xl:grid xl:items-center`}>
       <div className="space-y-1">
         <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
-        <p className="text-xs text-[var(--qf-text-muted)]">Updated {formatDateTime(quote.updatedAt)}</p>
+        <p className="text-xs text-[var(--qf-text-muted)]">{i18n.t("customers.updated", { date: formatDateTime(quote.updatedAt, i18n.resolvedLanguage, timezone) })}</p>
       </div>
 
       <div className="min-w-0">
@@ -303,14 +304,14 @@ function QuoteDesktopRow({
             {customerInitials(quote.customer?.fullName ?? "QM")}
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{quote.customer?.fullName ?? "Customer missing"}</p>
+            <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{quote.customer?.fullName ?? i18n.t("quotes.columns.customer")}</p>
             <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{quote.title}</p>
           </div>
         </div>
       </div>
 
-      <div className="text-sm text-[var(--qf-text-soft)]">{canViewInternalCosts ? money(quote.internalCostSubtotal ?? 0) : null}</div>
-      <div className="text-sm font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal)}</div>
+      <div className="text-sm text-[var(--qf-text-soft)]">{canViewInternalCosts ? money(quote.internalCostSubtotal ?? 0, i18n.resolvedLanguage) : null}</div>
+      <div className="text-sm font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal, i18n.resolvedLanguage)}</div>
 
       <div className="min-w-0">
         <QuoteLifecycleMini quote={quote} />
@@ -319,7 +320,7 @@ function QuoteDesktopRow({
       <div className="flex items-center justify-end gap-2">
         <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} canManageRecordRetention={canManageRecordRetention} />
         <Button size="sm" onClick={() => onOpenQuote(quote.id)}>
-          Open
+          {i18n.t("quotes.open")}
         </Button>
       </div>
     </div>
@@ -346,7 +347,7 @@ function QuoteMobileCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
-          <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{quote.customer?.fullName ?? "Customer missing"}</p>
+          <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{quote.customer?.fullName ?? i18n.t("quotes.columns.customer")}</p>
           <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{quote.title}</p>
         </div>
         <QuoteLifecycleMini quote={quote} />
@@ -354,17 +355,17 @@ function QuoteMobileCard({
 
       <div className={`grid gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3 text-sm ${canViewInternalCosts ? "grid-cols-2" : "grid-cols-1"}`}>
         {canViewInternalCosts ? <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">Cost</p>
-          <p className="mt-1 text-[var(--qf-text-soft)]">{money(quote.internalCostSubtotal ?? 0)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{i18n.t("products.columns.cost")}</p>
+          <p className="mt-1 text-[var(--qf-text-soft)]">{money(quote.internalCostSubtotal ?? 0, i18n.resolvedLanguage)}</p>
         </div> : null}
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">Price</p>
-          <p className="mt-1 font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{i18n.t("products.columns.price")}</p>
+          <p className="mt-1 font-semibold text-[var(--qf-text)]">{money(quote.customerPriceSubtotal, i18n.resolvedLanguage)}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-[1fr_auto] gap-2">
-        <Button fullWidth size="sm" onClick={() => onOpenQuote(quote.id)}>Open quote</Button>
+        <Button fullWidth size="sm" onClick={() => onOpenQuote(quote.id)}>{i18n.t("quotes.open")}</Button>
         <QuoteActionsMenu quote={quote} onOpenPdfActions={onOpenPdfActions} onRetentionAction={onRetentionAction} canManageRecordRetention={canManageRecordRetention} />
       </div>
     </div>
@@ -372,6 +373,8 @@ function QuoteMobileCard({
 }
 
 export function QuotesPage() {
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   usePageView("quotes");
   const {
     error,
@@ -383,9 +386,9 @@ export function QuotesPage() {
     navigateToQuote,
     navigateToBuilder,
     branding,
-    canViewCommunicationLog,
     canViewInternalCosts,
     canManageRecordRetention,
+    session,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
@@ -436,11 +439,11 @@ export function QuotesPage() {
       setQuoteSummary(result.summary);
     } catch (err) {
       if (requestId !== quoteRequestIdRef.current) return;
-      setQuoteLoadError(err instanceof Error ? err.message : "Failed loading quotes.");
+      setQuoteLoadError(localizedApiError(err, t, { fallbackKey: "quotes.loadError" }));
     } finally {
       if (requestId === quoteRequestIdRef.current) setQuoteLoading(false);
     }
-  }, [debouncedSearchTerm, quotePage, quotePageSize, statusFilter]);
+  }, [debouncedSearchTerm, quotePage, quotePageSize, statusFilter, t]);
 
   useEffect(() => {
     void loadQuotePage();
@@ -471,7 +474,7 @@ export function QuotesPage() {
       const blob = await getPdfBlob(quote.id, { inline: true });
       openPdfPreviewBlob(blob);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed opening quote PDF preview.");
+      setError(localizedApiError(err, t, { fallbackKey: "quotes.pdfError" }));
     } finally {
       setPdfActionLoading(null);
     }
@@ -491,9 +494,9 @@ export function QuotesPage() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
-      setNotice("PDF downloaded.");
+      setNotice(t("quotes.download"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed downloading quote PDF.");
+      setError(localizedApiError(err, t, { fallbackKey: "quotes.pdfError" }));
     } finally {
       setPdfActionLoading(null);
     }
@@ -529,9 +532,9 @@ export function QuotesPage() {
     try {
       await recordOutboundAndMarkSent(quote, preparedSend);
       setPreparedSend(null);
-      setNotice(canViewCommunicationLog ? "Quote marked sent and the communication was logged." : "Quote marked sent.");
+      setNotice(t("quotes.send"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed marking the quote sent.");
+      setError(localizedApiError(err, t, { fallbackKey: "quotes.sendError" }));
     } finally {
       setPdfActionLoading(null);
     }
@@ -539,17 +542,17 @@ export function QuotesPage() {
 
   async function openQuoteInApp(quote: Quote, channel: "email" | "sms") {
     if (!quote.customer) {
-      setError("This quote is missing customer information.");
+      setError(t("quotes.sendError"));
       return;
     }
 
     if (channel === "email" && !quote.customer.email) {
-      setError("This customer does not have an email address yet.");
+      setError(t("quotes.sendError"));
       return;
     }
 
     if (channel === "sms" && !quote.customer.phone) {
-      setError("This customer does not have a phone number yet.");
+      setError(t("quotes.sendError"));
       return;
     }
 
@@ -563,6 +566,7 @@ export function QuotesPage() {
         quoteTotalAmount: quote.totalAmount,
         scopeText: quote.scopeText,
         branding,
+        documentLocale: quote.documentLocale,
       });
       const shouldPreferAttachmentShare = channel === "email" && isLikelyMobileRuntime();
 
@@ -577,9 +581,7 @@ export function QuotesPage() {
             idempotencyKey: createSendIdempotencyKey(),
             draft,
           });
-          setNotice(
-            `Share sheet completed. Confirm here after you send the quote through ${channel === "email" ? "Mail" : "Messages"}.`,
-          );
+          setNotice(t("quotes.confirmSendDescription"));
           return;
         }
       }
@@ -594,16 +596,16 @@ export function QuotesPage() {
       if (channel === "email") {
         const mailto = `mailto:${quote.customer.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
         window.location.assign(mailto);
-        setNotice("Email app opened. Return here after sending to mark the quote sent.");
+        setNotice(t("quotes.confirmSendDescription"));
       } else {
         window.location.assign(`sms:${toPhoneHrefValue(quote.customer.phone)}?&body=${encodeURIComponent(draft.body)}`);
-        setNotice("Text app opened with the customer's phone number. Return here after sending to mark the quote sent.");
+        setNotice(t("quotes.confirmSendDescription"));
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
       }
-      setError(err instanceof ApiError ? err.message : `Failed opening ${channel} app.`);
+      setError(localizedApiError(err, t, { fallbackKey: "quotes.sendError" }));
     } finally {
       setPdfActionLoading(null);
     }
@@ -611,7 +613,7 @@ export function QuotesPage() {
 
   async function shareQuotePdfNatively(quote: Quote) {
     if (!quote.customer) {
-      setError("This quote is missing customer information.");
+      setError(t("quotes.sendError"));
       return;
     }
 
@@ -621,7 +623,8 @@ export function QuotesPage() {
     try {
       const blob = await getPdfBlob(quote.id);
       if (!canNativePdfShareOnDevice()) {
-        throw new Error("Native PDF sharing is not available on this device.");
+        setError(t("quotes.nativeShareUnavailable"));
+        return;
       }
 
       const draft = buildQuoteMessageDraft({
@@ -630,6 +633,7 @@ export function QuotesPage() {
         quoteTotalAmount: quote.totalAmount,
         scopeText: quote.scopeText,
         branding,
+        documentLocale: quote.documentLocale,
       });
       const shared = await sharePdfBlobNatively(blob, quote.title, draft);
       if (shared) {
@@ -639,13 +643,13 @@ export function QuotesPage() {
           idempotencyKey: createSendIdempotencyKey(),
           draft,
         });
-        setNotice("Share sheet completed. Return here after sending to mark the quote sent.");
+        setNotice(t("quotes.confirmSendDescription"));
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
       }
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Failed opening share sheet.");
+      setError(localizedApiError(err, t, { fallbackKey: "quotes.sendError" }));
     } finally {
       setPdfActionLoading(null);
     }
@@ -664,21 +668,21 @@ export function QuotesPage() {
     try {
       if (action.type === "archive") {
         await api.quotes.archive(action.quote.id);
-        notify.success("Quote archived", {
-          description: `${action.quote.title} left active views, while its history remains retained.`,
+        notify.success(t("quotes.archivedNotice"), {
+          description: t("quotes.archiveDescription"),
         });
       } else {
         await api.quotes.delete(action.quote.id);
-        notify.success("Quote removed from the workspace", {
-          description: `${action.quote.title} remains retained with its audit history.`,
+        notify.success(t("quotes.deletedNotice"), {
+          description: t("quotes.deleteDescription"),
         });
       }
       setPdfActionQuote((current) => (current?.id === action.quote.id ? null : current));
       await Promise.all([loadQuotes(), loadQuotePage()]);
       setQuoteRetentionAction(null);
     } catch (err) {
-      notify.error(`Could not ${action.type} quote`, {
-        description: err instanceof Error ? err.message : "Please try again. The quote was not changed.",
+      notify.error(t("quotes.sendError"), {
+        description: localizedApiError(err, t, { fallbackKey: "quotes.actionError" }),
       });
     } finally {
       setQuoteRetentionSaving(false);
@@ -692,37 +696,37 @@ export function QuotesPage() {
 
       <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <MetricCard
-          label="Ready to send"
+          label={t("quotes.metrics.needsAction")}
           value={String(readyToSendCount)}
-          hint="Finished quotes waiting for you"
+          hint={t("quotes.hint.ready")}
           icon={<FileText size={18} strokeWidth={2.1} />}
           tone="blue"
         />
         <MetricCard
-          label="Waiting on reply"
+          label={t("quotes.hint.waiting")}
           value={String(awaitingResponseCount)}
-          hint="Sent quotes awaiting the customer"
+          hint={t("quotes.hint.waiting")}
           icon={<Send size={18} strokeWidth={2.1} />}
           tone="orange"
         />
         <MetricCard
-          label="Open quote value"
-          value={money(awaitingAmount)}
-          hint="Sent value still awaiting a decision"
+          label={t("quotes.metrics.open")}
+          value={money(awaitingAmount, locale)}
+          hint={t("quotes.hint.waiting")}
           icon={<ReceiptText size={18} strokeWidth={2.1} />}
           tone="slate"
         />
         <MetricCard
-          label="Won quote value"
-          value={money(acceptedAmount)}
-          hint="Value accepted by customers"
+          label={t("quotes.metrics.accepted")}
+          value={money(acceptedAmount, locale)}
+          hint={t("quotes.hint.accepted")}
           icon={<BadgeCheck size={18} strokeWidth={2.1} />}
           tone="emerald"
         />
       </div>
 
       <div className="qf-horizontal-filter-strip -mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
-        <StageCountCard label="All" count={allQuoteCount} stage="ALL" active={statusFilter === "ALL"} onClick={() => { setStatusFilter("ALL"); setQuotePage(1); }} />
+        <StageCountCard label={t("domain.quoteStage.ALL")} count={allQuoteCount} stage="ALL" active={statusFilter === "ALL"} onClick={() => { setStatusFilter("ALL"); setQuotePage(1); }} />
         {QUOTE_STAGE_ORDER.map((stage) => (
           <StageCountCard
             key={stage}
@@ -738,21 +742,21 @@ export function QuotesPage() {
       <Card variant="default" padding="md">
         <div className="flex flex-col gap-3 border-b border-[var(--qf-border)] pb-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quote board</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight text-[var(--qf-text)]">Most recent quotes first</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quotes.board")}</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{t("quotes.boardDescription")}</h2>
           </div>
           <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
             <div className="w-full lg:w-[300px]">
-              <label htmlFor="quote-search" className="sr-only">Search quotes</label>
+              <label htmlFor="quote-search" className="sr-only">{t("quotes.searchLabel")}</label>
               <Input
                 id="quote-search"
-                placeholder="Search quote number, customer, or title"
+                placeholder={t("quotes.searchPlaceholder")}
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>
+              <Button variant="outline" onClick={() => setQuickCustomerOpen(true)}>{t("customers.add")}</Button>
             </div>
           </div>
         </div>
@@ -761,8 +765,8 @@ export function QuotesPage() {
           {quoteLoading ? (
             <div className="p-4">
               <LoadingState
-                title="Loading quotes"
-                description="Building the quote board with current status, customer, PDF, and accounting context."
+                title={t("quotes.loading")}
+                description={t("quotes.loadingDescription")}
                 variant="table"
                 rows={5}
               />
@@ -770,28 +774,28 @@ export function QuotesPage() {
           ) : quoteLoadError ? (
             <div className="p-4">
               <EmptyState
-                title="Quotes are temporarily unavailable"
-                description={`${quoteLoadError} No quote records were changed.`}
-                action={<Button variant="outline" onClick={() => void loadQuotePage()}>Try again</Button>}
+                title={t("quotes.loadError")}
+                description={quoteLoadError}
+                action={<Button variant="outline" onClick={() => void loadQuotePage()}>{t("quotes.retry")}</Button>}
               />
             </div>
           ) : filteredQuotes.length === 0 ? (
             <div className="p-4">
               <EmptyState
-                title={debouncedSearchTerm || statusFilter !== "ALL" ? "No matching quotes" : "Create your first quote"}
-                description={debouncedSearchTerm || statusFilter !== "ALL" ? "Clear the search or choose another status." : "Add a customer and build a professional quote in minutes."}
-                action={debouncedSearchTerm || statusFilter !== "ALL" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); setQuotePage(1); }}>Clear filters</Button> : <Button onClick={() => navigateToBuilder()}>New quote</Button>}
+                title={debouncedSearchTerm || statusFilter !== "ALL" ? t("quotes.noMatches") : t("quotes.empty")}
+                description={debouncedSearchTerm || statusFilter !== "ALL" ? t("quotes.noMatchesDescription") : t("quotes.emptyDescription")}
+                action={debouncedSearchTerm || statusFilter !== "ALL" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); setQuotePage(1); }}>{t("products.clearFilters")}</Button> : <Button onClick={() => navigateToBuilder()}>{t("quotes.new")}</Button>}
               />
             </div>
           ) : (
             <>
               <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid`}>
-                <span>Quote No.</span>
-                <span>Customer</span>
-                <span>{canViewInternalCosts ? "Cost" : ""}</span>
-                <span>Price</span>
-                <span>Status</span>
-                <span className="text-right">Action</span>
+                <span>{t("quotes.columns.quote")}</span>
+                <span>{t("quotes.columns.customer")}</span>
+                <span>{canViewInternalCosts ? t("products.columns.cost") : ""}</span>
+                <span>{t("products.columns.price")}</span>
+                <span>{t("quotes.columns.status")}</span>
+                <span className="text-right">{t("quotes.columns.actions")}</span>
               </div>
               <div className="divide-y divide-[var(--qf-border)]">
                 {filteredQuotes.map((quote) => (
@@ -803,6 +807,7 @@ export function QuotesPage() {
                       onRetentionAction={setQuoteRetentionAction}
                       canViewInternalCosts={canViewInternalCosts}
                       canManageRecordRetention={canManageRecordRetention}
+                      timezone={session?.timezone}
                     />
                     <QuoteMobileCard
                       quote={quote}
@@ -825,7 +830,7 @@ export function QuotesPage() {
         offset={(quotePage - 1) * quotePageSize}
         total={quoteTotal}
         loading={quoteLoading}
-        itemLabel="quotes"
+        itemLabel={t("navigation.quotes").toLocaleLowerCase(locale)}
         onLimitChange={(nextLimit) => {
           setQuotePageSize(nextLimit);
           setQuotePage(1);
@@ -834,10 +839,10 @@ export function QuotesPage() {
       />
 
       {pdfActionQuote ? (
-        <Modal open={true} onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }} size="lg" ariaLabel="PDF quote actions">
+        <Modal open={true} onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }} size="lg" ariaLabel={t("quotes.share")}>
           <ModalHeader
-            title="PDF quote actions"
-            description={`${quoteNumber(pdfActionQuote.id)} · ${pdfActionQuote.customer?.fullName ?? "Customer missing"}`}
+            title={t("quotes.share")}
+            description={`${quoteNumber(pdfActionQuote.id)} · ${pdfActionQuote.customer?.fullName ?? t("quotes.columns.customer")}`}
             onClose={() => { setPdfActionQuote(null); setPreparedSend(null); }}
           />
           <ModalBody className="space-y-5">
@@ -847,42 +852,42 @@ export function QuotesPage() {
               </span>
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-[var(--qf-text)]">{pdfActionQuote.title}</p>
-                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{money(pdfActionQuote.totalAmount)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{money(pdfActionQuote.totalAmount, locale)} · {lifecycleLabel(quoteLifecycleStage(pdfActionQuote))}</p>
                 <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
-                  Preview first to verify the layout. Email quote can share the PDF on supported phones; Text quote opens Messages with the customer's number and message filled in.
+                  {t("quotes.confirmSendDescription")}
                 </p>
               </div>
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">
               <Button variant="outline" icon={<Eye size={14} />} loading={pdfActionLoading === "preview"} onClick={() => void previewQuotePdf(pdfActionQuote)}>
-                Preview PDF
+                {t("quotes.preview")}
               </Button>
               <Button variant="outline" icon={<FileText size={14} />} loading={pdfActionLoading === "download"} onClick={() => void downloadQuotePdf(pdfActionQuote)}>
-                Download PDF
+                {t("quotes.download")}
               </Button>
               <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "email"} onClick={() => void openQuoteInApp(pdfActionQuote, "email")}>
-                Email quote
+                {t("quotes.sendEmail")}
               </Button>
               <Button variant="outline" icon={<Send size={14} />} loading={pdfActionLoading === "sms"} onClick={() => void openQuoteInApp(pdfActionQuote, "sms")}>
-                Text quote
+                {t("quotes.sendSms")}
               </Button>
               {canUseNativeShare ? (
                 <Button className="sm:col-span-2" variant="secondary" icon={<Share2 size={14} />} loading={pdfActionLoading === "native-share"} onClick={() => void shareQuotePdfNatively(pdfActionQuote)}>
-                  Share PDF
+                  {t("quotes.share")}
                 </Button>
               ) : null}
             </div>
             {preparedSend?.quoteId === pdfActionQuote.id ? (
               <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-4">
-                <p className="text-sm font-semibold text-[var(--qf-text)]">Did you send it?</p>
-                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">QuoteFly has not changed the status yet. Confirm only after the message leaves your phone.</p>
+                <p className="text-sm font-semibold text-[var(--qf-text)]">{t("quotes.confirmSendTitle")}</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quotes.confirmSendDescription")}</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                   <Button variant="outline" onClick={() => setPreparedSend(null)} disabled={pdfActionLoading !== null}>
-                    Share Again
+                    {t("quotes.share")}
                   </Button>
                   <Button onClick={() => void confirmPreparedSend(pdfActionQuote)} loading={pdfActionLoading !== null}>
-                    Yes, Mark Sent
+                    {t("quotes.send")}
                   </Button>
                 </div>
               </div>
@@ -890,7 +895,7 @@ export function QuotesPage() {
           </ModalBody>
           <ModalFooter>
             <Button variant="ghost" onClick={() => { setPdfActionQuote(null); setPreparedSend(null); }} disabled={pdfActionLoading !== null}>
-              Close
+              {t("common.close")}
             </Button>
           </ModalFooter>
         </Modal>
@@ -902,13 +907,13 @@ export function QuotesPage() {
           if (!quoteRetentionSaving) setQuoteRetentionAction(null);
         }}
         onConfirm={() => void confirmQuoteRetentionAction()}
-        title={quoteRetentionAction?.type === "archive" ? "Archive quote?" : "Delete quote?"}
+        title={quoteRetentionAction?.type === "archive" ? t("quotes.archiveTitle") : t("quotes.deleteTitle")}
         description={
           quoteRetentionAction?.type === "archive"
-            ? "This quote will leave the active workspace but remain retained in the database and audit history."
-            : "This quote will leave the active workspace but remain retained in the database and audit history."
+            ? t("quotes.archiveDescription")
+            : t("quotes.deleteDescription")
         }
-        confirmLabel={quoteRetentionAction?.type === "archive" ? "Archive quote" : "Delete quote"}
+        confirmLabel={quoteRetentionAction?.type === "archive" ? t("quotes.archiveConfirm") : t("quotes.deleteConfirm")}
         loading={quoteRetentionSaving}
         confirmVariant={quoteRetentionAction?.type === "archive" ? "warning" : "danger"}
       />
@@ -918,16 +923,9 @@ export function QuotesPage() {
         onClose={() => setQuickCustomerOpen(false)}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
           void loadCustomers();
-          const message = reusedExisting
-              ? "Using existing customer record."
-              : merged
-                ? restored
-                  ? "Customer merged and restored."
-                  : "Customer merged into existing record."
-                : restored
-                  ? "Customer restored."
-                  : "Customer created.";
-          notify.success(message, { description: `${customer.fullName} is ready for quoting.` });
+          void merged;
+          void reusedExisting;
+          notify.success(restored ? t("customers.restoredNotice") : t("customers.saved"), { description: customer.fullName });
           if (intent === "quote") {
             navigateToBuilder(customer.id);
           }

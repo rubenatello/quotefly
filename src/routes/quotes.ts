@@ -25,10 +25,12 @@ import {
   tenantActiveScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   WorkspaceAssigneeSelect,
   assignedRecordScope,
   defaultAssigneeForCreatedRecord,
+  lockActiveTenantAssignee,
   validateActiveTenantAssignee,
 } from "../lib/workspace-assignment";
 import {
@@ -61,6 +63,10 @@ import {
 } from "../services/quote-sheet";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
+import {
+  normalizeSupportedLocale,
+  SupportedLocaleSchema,
+} from "../lib/supported-locale";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QuoteStatusSchema = z.enum([
@@ -96,6 +102,7 @@ const CreateQuoteSchema = z.object({
   taxAmount: z.number().nonnegative().default(0),
   aiUsageEventId: z.string().min(1).optional(),
   assignedTenantUserId: z.string().min(1).nullable().optional(),
+  documentLocale: SupportedLocaleSchema.optional(),
   lineItems: z
     .array(
       z.object({
@@ -125,6 +132,7 @@ const UpdateQuoteSchema = z
     customerPriceSubtotal: z.number().nonnegative().optional(),
     taxAmount: z.number().nonnegative().optional(),
     assignedTenantUserId: z.string().min(1).nullable().optional(),
+    documentLocale: SupportedLocaleSchema.optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: "At least one field is required.",
@@ -224,6 +232,7 @@ const SaveQuoteSheetSchema = z
       title: z.string().min(3),
       scopeText: z.string().min(3),
       taxAmount: z.number().nonnegative(),
+      documentLocale: SupportedLocaleSchema.optional(),
     }),
     lineItems: z.array(QuoteSheetLineSchema.extend({ id: z.string().min(1) })).max(300).default([]),
     newLineItems: z.array(QuoteSheetLineSchema).max(300).default([]),
@@ -398,6 +407,17 @@ function isIncludedQuoteLineSection(value?: string | null) {
   return normalizeQuoteLineSectionType(value) === "INCLUDED";
 }
 
+function canEditQuoteDocumentLocale(status: string): boolean {
+  return status === "DRAFT" || status === "READY_FOR_REVIEW";
+}
+
+class QuoteDocumentLocaleLockedError extends Error {
+  constructor() {
+    super("Customer document language cannot change after the quote has been sent.");
+    this.name = "QuoteDocumentLocaleLockedError";
+  }
+}
+
 function formatAiRenewalDate(value: Date) {
   return value.toISOString().slice(0, 10);
 }
@@ -514,6 +534,7 @@ interface RevisionSnapshot {
     customerPriceSubtotal: number;
     taxAmount: number;
     totalAmount: number;
+    documentLocale?: string;
     sentAtUtc?: string | null;
     closedAtUtc: string | null;
     jobCompletedAtUtc: string | null;
@@ -528,6 +549,7 @@ interface RevisionSnapshot {
   };
   lineItems: RevisionSnapshotLineItem[];
   document?: {
+    locale?: string;
     tenant: QuotePdfData["tenant"];
     branding: Omit<QuotePdfData["branding"], "logoUrl"> & {
       logoUrl?: string | null;
@@ -542,6 +564,7 @@ const QuoteBrandAssetReferenceSchema = z.object({
 });
 
 const RevisionDocumentSnapshotSchema = z.object({
+  locale: SupportedLocaleSchema.optional(),
   tenant: z.object({
     name: z.string().min(1),
     timezone: z.string().min(1),
@@ -599,6 +622,7 @@ const RevisionSnapshotSchema = z.object({
     customerPriceSubtotal: z.number().finite(),
     taxAmount: z.number().finite(),
     totalAmount: z.number().finite(),
+    documentLocale: SupportedLocaleSchema.optional(),
     sentAtUtc: z.string().datetime().nullable().optional(),
     closedAtUtc: z.string().datetime().nullable(),
     jobCompletedAtUtc: z.string().datetime().nullable(),
@@ -702,6 +726,7 @@ function buildQuoteRevisionSnapshot(
       customerPriceSubtotal: Number(context.customerPriceSubtotal),
       taxAmount: Number(context.taxAmount),
       totalAmount: Number(context.totalAmount),
+      documentLocale: normalizeSupportedLocale(context.documentLocale),
       sentAtUtc: context.sentAt?.toISOString() ?? null,
       closedAtUtc: context.closedAtUtc?.toISOString() ?? null,
       jobCompletedAtUtc: context.jobCompletedAtUtc?.toISOString() ?? null,
@@ -731,6 +756,7 @@ function buildQuoteRevisionSnapshot(
     ...(options?.captureDocument
       ? {
           document: {
+            locale: normalizeSupportedLocale(context.documentLocale),
             tenant: {
               name: context.tenant.name,
               timezone: context.tenant.timezone,
@@ -940,6 +966,7 @@ async function restoreQuoteRevision(
       customerPriceSubtotal: roundCurrency(snapshot.quote.customerPriceSubtotal),
       taxAmount: roundCurrency(snapshot.quote.taxAmount),
       totalAmount: roundCurrency(snapshot.quote.totalAmount),
+      documentLocale: normalizeSupportedLocale(snapshot.quote.documentLocale),
       sentAt,
       closedAtUtc: snapshot.quote.closedAtUtc ? new Date(snapshot.quote.closedAtUtc) : null,
       jobCompletedAtUtc: snapshot.quote.jobCompletedAtUtc ? new Date(snapshot.quote.jobCompletedAtUtc) : null,
@@ -1244,6 +1271,44 @@ async function findOrCreatePromptCustomer(
     });
     return customer;
   });
+}
+
+async function lockActiveQuoteForRetention(
+  tx: Prisma.TransactionClient,
+  input: { quoteId: string; tenantId: string; assignedTenantUserId?: string },
+) {
+  const candidate = await tx.quote.findFirst({
+    where: {
+      id: input.quoteId,
+      ...tenantActiveQuoteScope(input.tenantId),
+      ...(input.assignedTenantUserId ? { assignedTenantUserId: input.assignedTenantUserId } : {}),
+    },
+    select: { customerId: true },
+  });
+  if (!candidate) return null;
+
+  await tx.$queryRaw(Prisma.sql`
+    SELECT customer.id
+    FROM "Customer" AS customer
+    WHERE customer.id = ${candidate.customerId}
+      AND customer."tenantId" = ${input.tenantId}
+    FOR UPDATE OF customer
+  `);
+
+  const assignmentScope = input.assignedTenantUserId
+    ? Prisma.sql`AND quote."assignedTenantUserId" = ${input.assignedTenantUserId}`
+    : Prisma.empty;
+  const [quote] = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT quote.id
+    FROM "Quote" AS quote
+    WHERE quote.id = ${input.quoteId}
+      AND quote."tenantId" = ${input.tenantId}
+      AND quote."archivedAtUtc" IS NULL
+      AND quote."deletedAtUtc" IS NULL
+      ${assignmentScope}
+    FOR UPDATE OF quote
+  `);
+  return quote ?? null;
 }
 
 function normalizeTextForComparison(value: string): string {
@@ -4087,7 +4152,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ...tenantActiveCustomerScope(claims.tenantId),
           ...recordScope,
         },
-        select: { id: true, assignedTenantUserId: true },
+        select: {
+          id: true,
+          assignedTenantUserId: true,
+          preferredLocale: true,
+          tenant: { select: { defaultCustomerLocale: true } },
+        },
       }),
       resolveActivityActor(app.prisma, claims),
     ]);
@@ -4141,6 +4211,15 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         : 0;
 
     const quote = await app.prisma.$transaction(async (tx) => {
+      if (
+        assignee.assignedTenantUserId
+        && !await lockActiveTenantAssignee(tx, {
+          tenantId: claims.tenantId,
+          tenantUserId: assignee.assignedTenantUserId,
+        })
+      ) {
+        return null;
+      }
       const createdQuote = await tx.quote.create({
         data: {
           tenantId: claims.tenantId,
@@ -4149,6 +4228,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           serviceType: payload.serviceType,
           title: payload.title,
           scopeText: payload.scopeText,
+          documentLocale: normalizeSupportedLocale(
+            payload.documentLocale ??
+              customer.preferredLocale ??
+              customer.tenant.defaultCustomerLocale,
+          ),
           internalCostSubtotal,
           customerPriceSubtotal: payload.customerPriceSubtotal,
           taxAmount: payload.taxAmount,
@@ -4216,6 +4300,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       return createdQuote;
     });
+
+    if (!quote) {
+      return reply.code(409).send({
+        code: "ASSIGNEE_INACTIVE",
+        error: "That team member is no longer active. Choose another assignee.",
+      });
+    }
 
     return reply.code(201).send({ quote });
   });
@@ -4933,6 +5024,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     const pdfBuffer = await generateQuotePdfBuffer({
       quoteId: quote.id,
+      documentLocale: normalizeSupportedLocale(
+        sentSnapshot?.document?.locale ??
+          pdfQuote?.documentLocale ??
+          quote.documentLocale,
+      ),
       serviceType: pdfQuote?.serviceType ?? quote.serviceType,
       status: pdfQuote?.status ?? quote.status,
       title: pdfQuote?.title ?? quote.title,
@@ -4989,6 +5085,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         );
         if (!existingQuote) return null;
 
+        if (
+          payload.quote.documentLocale !== undefined &&
+          payload.quote.documentLocale !== existingQuote.documentLocale &&
+          !canEditQuoteDocumentLocale(existingQuote.status)
+        ) {
+          throw new QuoteDocumentLocaleLockedError();
+        }
+
         const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload.quote);
         const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.quote.status);
         const updatedQuote = await tx.quote.update({
@@ -4998,6 +5102,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             status: payload.quote.status,
             title: payload.quote.title,
             scopeText: payload.quote.scopeText,
+            documentLocale: payload.quote.documentLocale,
             taxAmount: payload.quote.taxAmount,
             sentAt:
               payload.quote.status === "SENT_TO_CUSTOMER"
@@ -5115,6 +5220,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       if (error instanceof QuoteSheetLineNotFoundError) {
         return reply.code(404).send({ error: error.message });
       }
+      if (error instanceof QuoteDocumentLocaleLockedError) {
+        return reply.code(409).send({
+          code: "QUOTE_DOCUMENT_LOCALE_LOCKED",
+          error: error.message,
+        });
+      }
       throw error;
     }
   });
@@ -5153,6 +5264,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (
+      payload.documentLocale !== undefined &&
+      payload.documentLocale !== existingQuote.documentLocale &&
+      !canEditQuoteDocumentLocale(existingQuote.status)
+    ) {
+      return reply.code(409).send({
+        code: "QUOTE_DOCUMENT_LOCALE_LOCKED",
+        error: "Customer document language cannot change after the quote has been sent.",
+      });
+    }
+
     const assignee = payload.assignedTenantUserId !== undefined
       ? await resolveRequestedQuoteAssignee(
           app.prisma,
@@ -5186,12 +5308,22 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
 
     const quote = await app.prisma.$transaction(async (tx) => {
+      if (
+        assignee?.assignedTenantUserId
+        && !await lockActiveTenantAssignee(tx, {
+          tenantId: claims.tenantId,
+          tenantUserId: assignee.assignedTenantUserId,
+        })
+      ) {
+        return null;
+      }
       const updateData: Prisma.QuoteUncheckedUpdateInput = {
         ...(payload.customerId ? { customerId: payload.customerId } : {}),
         serviceType: payload.serviceType,
         status: payload.status,
         title: payload.title,
         scopeText: payload.scopeText,
+        documentLocale: payload.documentLocale,
         internalCostSubtotal: hasCapability(access, "viewInternalCosts")
           ? payload.internalCostSubtotal
           : undefined,
@@ -5248,6 +5380,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return updatedQuote;
     });
 
+    if (!quote) {
+      return reply.code(409).send({
+        code: "ASSIGNEE_INACTIVE",
+        error: "That team member is no longer active. Choose another assignee.",
+      });
+    }
+
     return { quote };
   });
 
@@ -5261,9 +5400,28 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const now = new Date();
 
-    const deleted = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
-      if (!quote) return false;
+    const deleted = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const assignedTenantUserId = assignedRecordScope(access).assignedTenantUserId;
+      const lockedQuote = await lockActiveQuoteForRetention(tx, {
+        quoteId,
+        tenantId: claims.tenantId,
+        assignedTenantUserId,
+      });
+      if (!lockedQuote) return { kind: "not_found" as const };
+      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedTenantUserId);
+      if (!quote) return { kind: "not_found" as const };
+
+      const activeTaskCount = await tx.activityTask.count({
+        where: {
+          tenantId: claims.tenantId,
+          quoteId: quote.id,
+          deletedAtUtc: null,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+        },
+      });
+      if (activeTaskCount > 0) {
+        return { kind: "active_tasks" as const, activeTaskCount };
+      }
 
       await createCustomerActivityEvent(tx, {
         tenantId: claims.tenantId,
@@ -5313,11 +5471,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         operation: "DELETE",
       });
 
-      return true;
+      return { kind: "changed" as const };
     });
 
-    if (!deleted) {
+    if (deleted.kind === "not_found") {
       return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+    if (deleted.kind === "active_tasks") {
+      return reply.code(409).send({
+        code: "ACTIVE_ACTIVITY_TASKS",
+        error: `Complete, cancel, or remove ${deleted.activeTaskCount} active task(s) before deleting this quote.`,
+        activeTaskCount: deleted.activeTaskCount,
+      });
     }
 
     return reply.code(204).send();
@@ -5333,9 +5498,28 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const now = new Date();
 
-    const archived = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
-      if (!quote) return false;
+    const archived = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const assignedTenantUserId = assignedRecordScope(access).assignedTenantUserId;
+      const lockedQuote = await lockActiveQuoteForRetention(tx, {
+        quoteId,
+        tenantId: claims.tenantId,
+        assignedTenantUserId,
+      });
+      if (!lockedQuote) return { kind: "not_found" as const };
+      const quote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedTenantUserId);
+      if (!quote) return { kind: "not_found" as const };
+
+      const activeTaskCount = await tx.activityTask.count({
+        where: {
+          tenantId: claims.tenantId,
+          quoteId: quote.id,
+          deletedAtUtc: null,
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+        },
+      });
+      if (activeTaskCount > 0) {
+        return { kind: "active_tasks" as const, activeTaskCount };
+      }
 
       await createCustomerActivityEvent(tx, {
         tenantId: claims.tenantId,
@@ -5369,11 +5553,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         operation: "DELETE",
       });
 
-      return true;
+      return { kind: "changed" as const };
     });
 
-    if (!archived) {
+    if (archived.kind === "not_found") {
       return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+    if (archived.kind === "active_tasks") {
+      return reply.code(409).send({
+        code: "ACTIVE_ACTIVITY_TASKS",
+        error: `Complete, cancel, or remove ${archived.activeTaskCount} active task(s) before archiving this quote.`,
+        activeTaskCount: archived.activeTaskCount,
+      });
     }
 
     return reply.code(204).send();

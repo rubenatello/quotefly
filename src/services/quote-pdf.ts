@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import PDFDocument from "pdfkit";
 import { decodeValidatedBrandLogoDataUrl } from "../lib/brand-logo";
+import {
+  normalizeSupportedLocale,
+  type SupportedLocale,
+} from "../lib/supported-locale";
 
 export type QuotePdfTemplateId = "modern" | "professional" | "minimal";
 export type QuotePdfLogoPosition = "left" | "center" | "right";
@@ -26,6 +30,7 @@ export interface QuotePdfLineItem {
 
 export interface QuotePdfData {
   quoteId: string;
+  documentLocale?: SupportedLocale;
   serviceType: string;
   status: string;
   title: string;
@@ -117,15 +122,13 @@ const TEMPLATE_THEMES: Record<QuotePdfTemplateId, ThemeDefinition> = {
   },
 };
 
-const USD_FORMATTER = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-function formatMoney(value: number): string {
-  return USD_FORMATTER.format(value);
+function formatMoney(value: number, locale: SupportedLocale): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function formatQuantity(value: number): string {
@@ -133,18 +136,18 @@ function formatQuantity(value: number): string {
   return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
-function formatLocalDate(value: Date | null, timeZone: string): string {
-  if (!value) return "Not sent";
+function formatLocalDate(value: Date | null, timeZone: string, locale: SupportedLocale): string {
+  if (!value) return locale === "es-US" ? "No enviada" : "Not sent";
 
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat(locale, {
       timeZone,
       month: "short",
       day: "numeric",
       year: "numeric",
     }).format(value);
   } catch {
-    return value.toLocaleDateString("en-US", {
+    return value.toLocaleDateString(locale, {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -185,15 +188,100 @@ function buildSenderLines(data: QuotePdfData): string[] {
   return lines;
 }
 
-function buildFooterText(data: QuotePdfData): string {
+function buildFooterText(data: QuotePdfData, locale: SupportedLocale): string {
   const contactParts = [data.branding.businessPhone?.trim(), data.branding.businessEmail?.trim()].filter(Boolean);
 
   if (contactParts.length > 0) {
+    if (locale === "es-US") {
+      return `¿Tiene preguntas sobre esta cotización? Comuníquese con ${data.tenant.name}: ${contactParts.join(" o ")}.`;
+    }
     return `Questions about this quote? Contact ${data.tenant.name} at ${contactParts.join(" or ")}.`;
   }
 
+  if (locale === "es-US") {
+    return `¿Tiene preguntas sobre esta cotización? Comuníquese con ${data.tenant.name}.`;
+  }
   return `Questions about this quote? Contact ${data.tenant.name}.`;
 }
+
+interface QuotePdfCopy {
+  quoteNumber: string;
+  untitledQuote: string;
+  customerQuote: string;
+  prepared: string;
+  sent: string;
+  notAvailable: string;
+  business: string;
+  customer: string;
+  overview: string;
+  includedWork: string;
+  description: string;
+  quantity: string;
+  unit: string;
+  total: string;
+  subtotal: string;
+  tax: string;
+  defaultAlternate: string;
+  emptyIncluded: string;
+  emptyAlternate: string;
+  optionalPricing: string;
+  alternateSubtotal: string;
+  attribution: string;
+  subject: string;
+}
+
+const QUOTE_PDF_COPY: Record<SupportedLocale, QuotePdfCopy> = {
+  "en-US": {
+    quoteNumber: "Quote",
+    untitledQuote: "Untitled quote",
+    customerQuote: "Customer quote",
+    prepared: "Prepared",
+    sent: "Sent",
+    notAvailable: "N/A",
+    business: "Business",
+    customer: "Customer",
+    overview: "Overview",
+    includedWork: "Included Work",
+    description: "Description",
+    quantity: "Qty",
+    unit: "Unit",
+    total: "Total",
+    subtotal: "Subtotal",
+    tax: "Tax",
+    defaultAlternate: "Alternate Option",
+    emptyIncluded: "Scope summary",
+    emptyAlternate: "Alternate scope summary",
+    optionalPricing: "Optional pricing. This section is not included in the primary total below.",
+    alternateSubtotal: "Alternate subtotal",
+    attribution: "Created with QuoteFly",
+    subject: "Customer Quote",
+  },
+  "es-US": {
+    quoteNumber: "Cotización",
+    untitledQuote: "Cotización sin título",
+    customerQuote: "Cotización para el cliente",
+    prepared: "Preparada",
+    sent: "Enviada",
+    notAvailable: "N/D",
+    business: "Empresa",
+    customer: "Cliente",
+    overview: "Resumen",
+    includedWork: "Trabajo incluido",
+    description: "Descripción",
+    quantity: "Cant.",
+    unit: "Precio unit.",
+    total: "Total",
+    subtotal: "Subtotal",
+    tax: "Impuestos",
+    defaultAlternate: "Opción alternativa",
+    emptyIncluded: "Resumen del alcance",
+    emptyAlternate: "Resumen del alcance alternativo",
+    optionalPricing: "Precio opcional. Esta sección no está incluida en el total principal que aparece abajo.",
+    alternateSubtotal: "Subtotal de la alternativa",
+    attribution: "Creado con QuoteFly",
+    subject: "Cotización para el cliente",
+  },
+};
 
 export function normalizeQuotePdfTemplateId(templateId?: string | null): QuotePdfTemplateId {
   if (templateId === "minimal") {
@@ -275,18 +363,20 @@ function writeHeader(
   colors: ResolvedComponentColors,
   logoBuffer: Buffer | null,
 ): number {
+  const locale = normalizeSupportedLocale(data.documentLocale);
+  const copy = QUOTE_PDF_COPY[locale];
   const left = 48;
   const right = doc.page.width - 48;
   const width = right - left;
-  const quoteLabel = `Quote #${data.quoteId.slice(0, 8).toUpperCase()}`;
-  const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone);
+  const quoteLabel = `${copy.quoteNumber} #${data.quoteId.slice(0, 8).toUpperCase()}`;
+  const createdDate = formatLocalDate(data.createdAt, data.tenant.timezone, locale);
   const logoPosition = safeLogoPosition(data.branding.logoPosition);
   const innerLeft = left + 18;
   const innerRight = right - 18;
   const contentWidth = innerRight - innerLeft;
   const logoFit: [number, number] = theme.headerStyle === "minimal" ? [80, 42] : [92, 48];
   const titleFontSize = theme.headerStyle === "minimal" ? 20 : 21;
-  const rawTitle = data.title.trim() || "Untitled quote";
+  const rawTitle = data.title.trim() || copy.untitledQuote;
   const title = rawTitle.length > 500 ? `${rawTitle.slice(0, 497)}...` : rawTitle;
   const frameTop = 28;
   const contentTop = frameTop + 18;
@@ -353,7 +443,7 @@ function writeHeader(
     }
   }
 
-  const subtitle = "Customer quote";
+  const subtitle = copy.customerQuote;
 
   doc.fillColor(frame.textColor).font("Helvetica-Bold").fontSize(titleFontSize);
   doc.text(title, headingX, headingTop, {
@@ -367,8 +457,8 @@ function writeHeader(
     align: headingAlign,
   });
 
-  const sentDate = data.sentAt ? formatLocalDate(data.sentAt, data.tenant.timezone) : "N/A";
-  doc.text(`Prepared ${createdDate}  |  Sent ${sentDate}`, innerLeft, metaTop, {
+  const sentDate = data.sentAt ? formatLocalDate(data.sentAt, data.tenant.timezone, locale) : copy.notAvailable;
+  doc.text(`${copy.prepared} ${createdDate}  |  ${copy.sent} ${sentDate}`, innerLeft, metaTop, {
     width: contentWidth * 0.68,
     align: "left",
   });
@@ -472,7 +562,9 @@ function drawLineItemsTable(
   emptyDescription: string,
   tableHeaderColor: string,
   tableHeaderTextColor: string,
+  locale: SupportedLocale,
 ): number {
+  const copy = QUOTE_PDF_COPY[locale];
   let y = yStart;
   const normalizedItems =
     items.length > 0
@@ -487,10 +579,10 @@ function drawLineItemsTable(
   const drawTableHeader = (top: number) => {
     doc.rect(48, top, 516, 24).fill(tableHeaderColor);
     doc.fillColor(tableHeaderTextColor).font("Helvetica-Bold").fontSize(10);
-    doc.text("Description", xDescription + 8, top + 8, { width: 280 });
-    doc.text("Qty", xQty + 8, top + 8, { width: 42, align: "right" });
-    doc.text("Unit", xUnit + 8, top + 8, { width: 66, align: "right" });
-    doc.text("Total", xTotal + 8, top + 8, { width: 58, align: "right" });
+    doc.text(copy.description, xDescription + 8, top + 8, { width: 280 });
+    doc.text(copy.quantity, xQty + 8, top + 8, { width: 42, align: "right" });
+    doc.text(copy.unit, xUnit + 8, top + 8, { width: 66, align: "right" });
+    doc.text(copy.total, xTotal + 8, top + 8, { width: 58, align: "right" });
   };
 
   drawTableHeader(y);
@@ -540,8 +632,8 @@ function drawLineItemsTable(
 
       if (isFirstChunk) {
         doc.text(formatQuantity(item.quantity), xQty + 8, textY, { width: 42, align: "right" });
-        doc.text(formatMoney(item.unitPrice), xUnit + 8, textY, { width: 66, align: "right" });
-        doc.text(formatMoney(total), xTotal + 8, textY, { width: 58, align: "right" });
+        doc.text(formatMoney(item.unitPrice, locale), xUnit + 8, textY, { width: 66, align: "right" });
+        doc.text(formatMoney(total, locale), xTotal + 8, textY, { width: 58, align: "right" });
       }
 
       doc.moveTo(48, y + rowHeight).lineTo(564, y + rowHeight).stroke("#e2e8f0");
@@ -561,12 +653,12 @@ function drawLineItemsTable(
   return y + 12;
 }
 
-function groupAlternateLineItems(items: QuotePdfLineItem[]) {
+function groupAlternateLineItems(items: QuotePdfLineItem[], locale: SupportedLocale) {
   const grouped = new Map<string, QuotePdfLineItem[]>();
 
   for (const item of items) {
     if (item.sectionType !== "ALTERNATE") continue;
-    const key = item.sectionLabel?.trim() || "Alternate Option";
+    const key = item.sectionLabel?.trim() || QUOTE_PDF_COPY[locale].defaultAlternate;
     const existing = grouped.get(key) ?? [];
     existing.push(item);
     grouped.set(key, existing);
@@ -579,7 +671,14 @@ function groupAlternateLineItems(items: QuotePdfLineItem[]) {
   }));
 }
 
-function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, totalsColor: string): number {
+function drawTotals(
+  doc: PDFKit.PDFDocument,
+  y: number,
+  data: QuotePdfData,
+  totalsColor: string,
+  locale: SupportedLocale,
+): number {
+  const copy = QUOTE_PDF_COPY[locale];
   y = ensureSpace(doc, y, 94);
   const boxX = 360;
   const boxWidth = 204;
@@ -587,17 +686,17 @@ function drawTotals(doc: PDFKit.PDFDocument, y: number, data: QuotePdfData, tota
 
   doc.roundedRect(boxX, y, boxWidth, boxHeight, 10).fillAndStroke("#ffffff", "#dbe3ef");
   doc.font("Helvetica").fontSize(10).fillColor("#334155");
-  doc.text("Subtotal", boxX + 16, y + 13, { width: 90 });
-  doc.text(formatMoney(data.customerPriceSubtotal), boxX + 112, y + 13, {
+  doc.text(copy.subtotal, boxX + 16, y + 13, { width: 90 });
+  doc.text(formatMoney(data.customerPriceSubtotal, locale), boxX + 112, y + 13, {
     width: 76,
     align: "right",
   });
-  doc.text("Tax", boxX + 16, y + 31, { width: 90 });
-  doc.text(formatMoney(data.taxAmount), boxX + 112, y + 31, { width: 76, align: "right" });
+  doc.text(copy.tax, boxX + 16, y + 31, { width: 90 });
+  doc.text(formatMoney(data.taxAmount, locale), boxX + 112, y + 31, { width: 76, align: "right" });
   doc.moveTo(boxX + 16, y + 50).lineTo(boxX + boxWidth - 16, y + 50).stroke("#e2e8f0");
   doc.font("Helvetica-Bold").fontSize(12).fillColor(totalsColor);
-  doc.text("Total", boxX + 16, y + 58, { width: 90 });
-  doc.text(formatMoney(data.totalAmount), boxX + 112, y + 58, { width: 76, align: "right" });
+  doc.text(copy.total, boxX + 16, y + 58, { width: 90 });
+  doc.text(formatMoney(data.totalAmount, locale), boxX + 112, y + 58, { width: 76, align: "right" });
   return y + boxHeight + 10;
 }
 
@@ -607,7 +706,8 @@ function drawDocumentFooter(
   footerTextColor: string,
   quoteFlyMarkBuffer: Buffer | null,
 ): void {
-  const footerText = buildFooterText(data);
+  const locale = normalizeSupportedLocale(data.documentLocale);
+  const footerText = buildFooterText(data, locale);
   doc.font("Helvetica").fontSize(9);
   const footerTextHeight = Math.ceil(doc.heightOfString(footerText, { width: 516, align: "center" }));
   const attributionHeight = data.branding.showQuoteFlyAttribution ? 17 : 0;
@@ -622,7 +722,7 @@ function drawDocumentFooter(
 
   if (!data.branding.showQuoteFlyAttribution) return;
 
-  const attributionText = "Created with QuoteFly";
+  const attributionText = QUOTE_PDF_COPY[locale].attribution;
   doc.font("Helvetica").fontSize(8).fillColor(footerTextColor);
   const textWidth = doc.widthOfString(attributionText);
   const iconSize = quoteFlyMarkBuffer ? 10 : 0;
@@ -644,6 +744,8 @@ export async function generateQuotePdfBuffer(
   data: QuotePdfData,
   options: QuotePdfRenderOptions = {},
 ): Promise<Buffer> {
+  const locale = normalizeSupportedLocale(data.documentLocale);
+  const copy = QUOTE_PDF_COPY[locale];
   const templateId = normalizeQuotePdfTemplateId(data.branding.templateId);
   const theme = TEMPLATE_THEMES[templateId];
   const accentColor = safeHexColor(data.branding.primaryColor, theme.accentColor);
@@ -651,7 +753,7 @@ export async function generateQuotePdfBuffer(
   const logoBuffer = decodeSupportedLogoDataUrl(data.branding.logoUrl);
   const quoteFlyMarkBuffer = data.branding.showQuoteFlyAttribution ? await loadQuoteFlyMarkBuffer() : null;
   const includedLineItems = data.lineItems.filter((lineItem) => lineItem.sectionType !== "ALTERNATE");
-  const alternateSections = groupAlternateLineItems(data.lineItems);
+  const alternateSections = groupAlternateLineItems(data.lineItems, locale);
 
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
@@ -661,7 +763,7 @@ export async function generateQuotePdfBuffer(
       info: {
         Title: `${data.title.slice(0, 500)} - ${data.tenant.name.slice(0, 200)}`,
         Author: "QuoteFly",
-        Subject: "Customer Quote",
+        Subject: copy.subject,
         CreationDate: data.sentAt ?? data.createdAt,
       },
     });
@@ -681,32 +783,33 @@ export async function generateQuotePdfBuffer(
     );
     y = ensureSpace(doc, y, partyCardHeight + 20);
     const partyCardBottom = Math.max(
-      drawPartyCard(doc, 48, y, 250, "Business", senderLines, componentColors.sectionTitleColor),
-      drawPartyCard(doc, 314, y, 250, "Customer", customerLines, componentColors.sectionTitleColor),
+      drawPartyCard(doc, 48, y, 250, copy.business, senderLines, componentColors.sectionTitleColor),
+      drawPartyCard(doc, 314, y, 250, copy.customer, customerLines, componentColors.sectionTitleColor),
     );
     y = partyCardBottom + 20;
 
-    y = drawSectionTitle(doc, y, "Overview", componentColors.sectionTitleColor);
+    y = drawSectionTitle(doc, y, copy.overview, componentColors.sectionTitleColor);
     doc.font("Helvetica").fontSize(10).fillColor("#222222");
     doc.text(data.scopeText, 48, y, { width: 516 });
     y = doc.y + 16;
 
     y = ensureSpace(doc, y, 100);
-    y = drawSectionTitle(doc, y, "Included Work", componentColors.sectionTitleColor);
+    y = drawSectionTitle(doc, y, copy.includedWork, componentColors.sectionTitleColor);
     y = drawLineItemsTable(
       doc,
       y,
       includedLineItems,
-      "Scope summary",
+      copy.emptyIncluded,
       componentColors.tableHeaderBgColor,
       componentColors.tableHeaderTextColor,
+      locale,
     );
 
     for (const section of alternateSections) {
       y = ensureSpace(doc, y, 110);
       y = drawSectionTitle(doc, y, section.label, componentColors.sectionTitleColor);
       doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-      doc.text("Optional pricing. This section is not included in the primary total below.", 48, y, {
+      doc.text(copy.optionalPricing, 48, y, {
         width: 516,
       });
       y = doc.y + 10;
@@ -714,17 +817,18 @@ export async function generateQuotePdfBuffer(
         doc,
         y,
         section.lineItems,
-        "Alternate scope summary",
+        copy.emptyAlternate,
         componentColors.tableHeaderBgColor,
         componentColors.tableHeaderTextColor,
+        locale,
       );
       doc.font("Helvetica-Bold").fontSize(10).fillColor(componentColors.totalsColor);
-      doc.text("Alternate subtotal", 390, y, { width: 90, align: "left" });
-      doc.text(formatMoney(section.subtotal), 478, y, { width: 86, align: "right" });
+      doc.text(copy.alternateSubtotal, 366, y, { width: 114, align: "left" });
+      doc.text(formatMoney(section.subtotal, locale), 478, y, { width: 86, align: "right" });
       y += 20;
     }
 
-    y = drawTotals(doc, y, data, componentColors.totalsColor);
+    y = drawTotals(doc, y, data, componentColors.totalsColor, locale);
 
     drawDocumentFooter(doc, data, componentColors.footerTextColor, quoteFlyMarkBuffer);
 

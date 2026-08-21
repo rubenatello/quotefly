@@ -12,6 +12,7 @@ export const LiveAuthMembershipSelect = Prisma.validator<Prisma.TenantUserSelect
       id: true,
       email: true,
       fullName: true,
+      preferredLocale: true,
       authVersion: true,
       createdAt: true,
     },

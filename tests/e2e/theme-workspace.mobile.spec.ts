@@ -7,6 +7,22 @@ const captureDirectory = process.env.E2E_THEME_CAPTURE_DIR
   ? resolve(process.env.E2E_THEME_CAPTURE_DIR)
   : null;
 
+const KODY_QUICK_PROMPT_TEST_IDS = [
+  "kody-quick-draft_customer",
+  "kody-quick-draft_quote",
+  "kody-quick-prepare_quote_send",
+  "kody-quick-draft_product",
+  "kody-quick-search_customers",
+  "kody-quick-search_products",
+  "kody-quick-summarize_pipeline",
+  "kody-quick-follow_up_queue",
+  "kody-quick-rank_profitable_jobs",
+] as const;
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+});
+
 async function captureThemeScreenshot(page: Page, name: string, fullPage = true) {
   if (!captureDirectory) return;
   mkdirSync(captureDirectory, { recursive: true });
@@ -66,7 +82,10 @@ async function expectKodyPromptLabels(panel: Locator) {
   const morePrompts = prompts.locator("details");
   await morePrompts.locator(":scope > summary").click();
   const buttons = prompts.locator('button[data-testid^="kody-quick-"]');
-  await expect(buttons).toHaveCount(8);
+  await expect(buttons).toHaveCount(KODY_QUICK_PROMPT_TEST_IDS.length);
+  for (const testId of KODY_QUICK_PROMPT_TEST_IDS) {
+    await expect(panel.getByTestId(testId)).toHaveCount(1);
+  }
   for (const button of await buttons.all()) {
     await expect(button).toBeVisible();
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -217,8 +236,8 @@ test("workspace controls remain readable in light and dark themes", async ({ con
   }
   await quotePresetButtons.nth(1).click();
   await expect(quotePresetButtons.nth(1)).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Save Brand", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Brand Saved", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save brand", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Brand saved", exact: true })).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
     .toBeLessThanOrEqual(1);

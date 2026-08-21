@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
@@ -33,11 +35,13 @@ import {
   type AiUsageUpdateDetail,
 } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
-import { formatBackendLabel, formatShortLocalDate, isDateResultKey } from "../../lib/display-format";
+import { formatBackendLabel, isDateResultKey } from "../../lib/display-format";
+import { useLocale } from "../../i18n";
 import { cn } from "../../lib/utils";
 import { Alert, Button, ConfirmModal, IconButton, LoadingState, Textarea } from "../ui";
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KodySparkIcon } from "./KodySparkIcon";
+import { visibleKodyResultEntries } from "./kody-result-display";
 import { KODY_OPEN_EVENT, KODY_OUTCOME_EVENT, type KodyOpenDetail, type KodyOutcomeDetail } from "./kody-events";
 import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
 
@@ -59,74 +63,83 @@ type QuickPrompt = {
   submitImmediately?: boolean;
 };
 
-const QUICK_PROMPTS: QuickPrompt[] = [
+function quickPrompts(t: TFunction): QuickPrompt[] {
+  return [
   {
     tool: "DRAFT_CUSTOMER",
-    label: "Add customer",
-    description: "Prepare a contact for review.",
-    prompt: "Add a new customer named ",
+    label: t("kody.quick.addCustomer.label"),
+    description: t("kody.quick.addCustomer.description"),
+    prompt: t("kody.quick.addCustomer.prompt"),
     icon: <UserPlus size={15} />,
   },
   {
     tool: "DRAFT_QUOTE",
-    label: "Draft quote",
-    description: "Start with customer, job, and rough scope.",
-    prompt: "Draft a quote for ",
+    label: t("kody.quick.draftQuote.label"),
+    description: t("kody.quick.draftQuote.description"),
+    prompt: t("kody.quick.draftQuote.prompt"),
     icon: <FilePlus2 size={15} />,
   },
   {
     tool: "PREPARE_QUOTE_SEND",
-    label: "Send quote",
-    description: "Find a saved quote and review the recipient.",
-    prompt: "Send the latest quote to ",
+    label: t("kody.quick.sendQuote.label"),
+    description: t("kody.quick.sendQuote.description"),
+    prompt: t("kody.quick.sendQuote.prompt"),
     icon: <Send size={15} />,
   },
   {
     tool: "DRAFT_PRODUCT",
-    label: "Add product",
-    description: "Prepare a priced catalog item for review.",
-    prompt: "Add a new product or service named ",
+    label: t("kody.quick.addProduct.label"),
+    description: t("kody.quick.addProduct.description"),
+    prompt: t("kody.quick.addProduct.prompt"),
     icon: <PackagePlus size={15} />,
   },
   {
     tool: "SEARCH_CUSTOMERS",
-    label: "Find customer",
-    description: "Search by name, phone, or email.",
-    prompt: "Find customer ",
+    label: t("kody.quick.findCustomer.label"),
+    description: t("kody.quick.findCustomer.description"),
+    prompt: t("kody.quick.findCustomer.prompt"),
     icon: <Search size={15} />,
   },
   {
+    tool: "SEARCH_PRODUCTS",
+    label: t("kody.quick.findProduct.label"),
+    description: t("kody.quick.findProduct.description"),
+    prompt: t("kody.quick.findProduct.prompt"),
+    icon: <PackagePlus size={15} />,
+  },
+  {
     tool: "SUMMARIZE_PIPELINE",
-    label: "Pipeline",
-    description: "Revenue-only status summary.",
-    prompt: "Summarize my sales pipeline for the last 90 days.",
+    label: t("kody.quick.pipeline.label"),
+    description: t("kody.quick.pipeline.description"),
+    prompt: t("kody.quick.pipeline.prompt"),
     icon: <BarChart3 size={15} />,
     submitImmediately: true,
   },
   {
     tool: "FOLLOW_UP_QUEUE",
-    label: "Needs follow-up",
-    description: "See who needs attention today and why.",
-    prompt: "Who needs follow-up today, and why?",
+    label: t("kody.quick.followUp.label"),
+    description: t("kody.quick.followUp.description"),
+    prompt: t("kody.quick.followUp.prompt"),
     icon: <Clock3 size={15} />,
     submitImmediately: true,
   },
   {
     tool: "RANK_PROFITABLE_JOBS",
-    label: "Profitability",
-    description: "Owner/admin cost and margin view.",
-    prompt: "Rank profitable jobs by service for the last 90 days.",
+    label: t("kody.quick.profitability.label"),
+    description: t("kody.quick.profitability.description"),
+    prompt: t("kody.quick.profitability.prompt"),
     icon: <TrendingUp size={15} />,
     submitImmediately: true,
   },
-];
+  ];
+}
 
 const QUICK_PROMPT_PRIORITY: Partial<Record<WorkspacePage, AiAssistantTool[]>> = {
   home: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "FOLLOW_UP_QUEUE"],
   customers: ["DRAFT_CUSTOMER", "SEARCH_CUSTOMERS", "DRAFT_QUOTE"],
   quotes: ["DRAFT_QUOTE", "PREPARE_QUOTE_SEND", "SUMMARIZE_PIPELINE"],
   "quote-desk": ["PREPARE_QUOTE_SEND", "DRAFT_QUOTE", "SUMMARIZE_PIPELINE"],
-  products: ["DRAFT_PRODUCT", "DRAFT_QUOTE", "SEARCH_CUSTOMERS"],
+  products: ["SEARCH_PRODUCTS", "DRAFT_PRODUCT", "DRAFT_QUOTE"],
   build: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "DRAFT_PRODUCT"],
   "follow-up": ["FOLLOW_UP_QUEUE", "SEARCH_CUSTOMERS", "PREPARE_QUOTE_SEND"],
   analytics: ["SUMMARIZE_PIPELINE", "RANK_PROFITABLE_JOBS", "FOLLOW_UP_QUEUE"],
@@ -208,136 +221,169 @@ function elapsedSince(startedAt: number) {
   return Number((performance.now() - startedAt).toFixed(1));
 }
 
-function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO") {
-  if (elapsedMs < 900) return "Thinking...";
+function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: TFunction) {
+  if (elapsedMs < 900) return t("kody.loading.thinking");
 
   if (elapsedMs < 2_700) {
-    if (tool === "SEARCH_CUSTOMERS") return "Looking through your customers...";
-    if (tool === "NAVIGATE_WORKSPACE") return "Finding the right page...";
-    if (tool === "FOLLOW_UP_QUEUE") return "Checking your follow-ups...";
-    if (tool === "CUSTOMERS_WITHOUT_QUOTES") return "Checking who still needs a quote...";
-    if (tool === "PIPELINE_SCENARIO") return "Crunching the numbers...";
-    if (tool === "DRAFT_CUSTOMER") return "Preparing customer details...";
-    if (tool === "DRAFT_PRODUCT") return "Preparing your product details...";
-    if (tool === "DRAFT_QUOTE") return "Gathering quote details...";
-    if (tool === "PREPARE_QUOTE_SEND") return "Checking the quote and recipient...";
-    if (tool === "SUMMARIZE_PIPELINE") return "Gathering pipeline info...";
-    if (tool === "RANK_PROFITABLE_JOBS") return "Comparing job performance...";
-    if (tool === "ASSISTANT_HELP") return "Getting Kody ready...";
-    if (tool === "OUT_OF_SCOPE") return "Checking what Kody can help with...";
-    return "Gathering info...";
+    if (tool === "SEARCH_CUSTOMERS") return t("kody.loading.customers");
+    if (tool === "SEARCH_PRODUCTS") return t("kody.loading.products");
+    if (tool === "NAVIGATE_WORKSPACE") return t("kody.loading.navigation");
+    if (tool === "FOLLOW_UP_QUEUE") return t("kody.loading.followUps");
+    if (tool === "CUSTOMERS_WITHOUT_QUOTES") return t("kody.loading.unquoted");
+    if (tool === "PIPELINE_SCENARIO") return t("kody.loading.math");
+    if (tool === "DRAFT_CUSTOMER") return t("kody.loading.customerDraft");
+    if (tool === "DRAFT_PRODUCT") return t("kody.loading.productDraft");
+    if (tool === "DRAFT_QUOTE") return t("kody.loading.quoteDraft");
+    if (tool === "PREPARE_QUOTE_SEND") return t("kody.loading.quoteSend");
+    if (tool === "SUMMARIZE_PIPELINE") return t("kody.loading.pipeline");
+    if (tool === "RANK_PROFITABLE_JOBS") return t("kody.loading.profitability");
+    if (tool === "ASSISTANT_HELP") return t("kody.loading.help");
+    if (tool === "OUT_OF_SCOPE") return t("kody.loading.scope");
+    return t("kody.loading.gathering");
   }
 
-  if (elapsedMs < 4_500) return "Preparing your response...";
-  if (elapsedMs < 8_000) return "Double-checking the details...";
-  return "Still working through it...";
+  if (elapsedMs < 4_500) return t("kody.loading.preparing");
+  if (elapsedMs < 8_000) return t("kody.loading.checking");
+  return t("kody.loading.stillWorking");
 }
 
 function getString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function formatKey(key: string) {
-  return key
-    .replace(/Id$/, "")
-    .replace(/Utc$/, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replaceAll("_", " ")
-    .replace(/^./, (character) => character.toUpperCase());
+function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
+  const labels: Record<AiAssistantTool, string> = {
+    NAVIGATE_WORKSPACE: t("kody.tools.navigate"), DRAFT_CUSTOMER: t("kody.tools.draftCustomer"),
+    SEARCH_CUSTOMERS: t("kody.tools.searchCustomers"), CUSTOMERS_WITHOUT_QUOTES: t("kody.tools.customersWithoutQuotes"),
+    DRAFT_PRODUCT: t("kody.tools.draftProduct"), SEARCH_PRODUCTS: t("kody.tools.searchProducts"),
+    DRAFT_QUOTE: t("kody.tools.draftQuote"), PREPARE_QUOTE_SEND: t("kody.tools.prepareQuoteSend"),
+    FOLLOW_UP_QUEUE: t("kody.tools.followUpQueue"), SUMMARIZE_PIPELINE: t("kody.tools.pipeline"),
+    PIPELINE_SCENARIO: t("kody.tools.pipelineScenario"), RANK_PROFITABLE_JOBS: t("kody.tools.profitability"),
+    ASSISTANT_HELP: t("kody.tools.help"), OUT_OF_SCOPE: t("kody.tools.outOfScope"),
+  };
+  return labels[tool];
 }
 
-function formatResultValue(
-  key: string,
-  value: string | number | boolean | null,
-  displayTimeZone?: string | null,
-) {
+function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
+  const labels: Record<AiAssistantAction["type"], string> = {
+    OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
+    OPEN_PRODUCT_DRAFT: t("kody.actions.reviewProduct"), OPEN_QUOTE_DRAFT: t("kody.actions.reviewQuote"),
+    OPEN_QUOTE_SEND: t("kody.actions.reviewSend"), OPEN_ANALYTICS: t("kody.actions.openAnalytics"),
+    OPEN_WORKSPACE_PAGE: t("kody.actions.openPage"), REQUEST_ADMIN_ACCESS: t("kody.actions.requestAccess"),
+  };
+  return labels[action.type];
+}
+
+function localizedResultField(key: string, t: TFunction) {
+  const labels: Record<string, string> = {
+    fullName: t("kody.resultFields.fullName"), name: t("kody.resultFields.name"), title: t("kody.resultFields.title"),
+    customerName: t("kody.resultFields.customerName"), quoteTitle: t("kody.resultFields.quoteTitle"),
+    quoteNumber: t("kody.resultFields.quoteNumber"), phone: t("kody.resultFields.phone"), email: t("kody.resultFields.email"),
+    status: t("kody.resultFields.status"), serviceType: t("kody.resultFields.trade"), category: t("kody.resultFields.category"),
+    unitType: t("kody.resultFields.unit"), defaultQuantity: t("kody.resultFields.quantity"),
+    unitPrice: t("kody.resultFields.customerPrice"), unitCost: t("kody.resultFields.internalCost"),
+    quoteAmount: t("kody.resultFields.quoteAmount"), amount: t("kody.resultFields.amount"), revenue: t("kody.resultFields.revenue"),
+    cost: t("kody.resultFields.cost"), profit: t("kody.resultFields.profit"), margin: t("kody.resultFields.margin"),
+    followUpType: t("kody.resultFields.followUpType"), dueSince: t("kody.resultFields.dueSince"),
+    assignedTo: t("kody.resultFields.assignedTo"), description: t("kody.resultFields.description"), notes: t("kody.resultFields.notes"),
+    createdAtUtc: t("kody.resultFields.created"), updatedAtUtc: t("kody.resultFields.updated"),
+  };
+  return labels[key] ?? t("kody.resultFields.detail");
+}
+
+function localizedKnownValue(value: string, t: TFunction) {
+  const values: Record<string, string> = {
+    DRAFT: t("domain.quoteStatus.DRAFT"), READY_FOR_REVIEW: t("domain.quoteStatus.READY_FOR_REVIEW"),
+    SENT_TO_CUSTOMER: t("domain.quoteStatus.SENT_TO_CUSTOMER"), ACCEPTED: t("domain.quoteStatus.ACCEPTED"),
+    REJECTED: t("domain.quoteStatus.REJECTED"), NEW: t("domain.customerStage.NEW"),
+    CONTACTED: t("domain.customerStage.CONTACTED"), READY: t("domain.customerStage.READY"),
+    SENT: t("domain.customerStage.SENT"), WON: t("domain.customerStage.WON"), LOST: t("domain.customerStage.LOST"),
+    NEEDS_FOLLOW_UP: t("kody.values.needsFollowUp"), FOLLOWED_UP: t("kody.values.followedUp"),
+    NEW_CUSTOMER: t("kody.values.newCustomer"), SENT_QUOTE: t("kody.values.sentQuote"),
+    CUSTOMER_CHECK_IN: t("kody.values.customerCheckIn"), PREPARE_QUOTE: t("kody.values.prepareQuote"),
+    ACTIVE: t("kody.values.active"), ARCHIVED: t("kody.values.archived"), DELETED: t("kody.values.deleted"),
+    QUOTED: t("kody.values.quoted"), CLOSED: t("kody.values.closed"), POST_JOB: t("kody.values.postJob"),
+    SCHEDULED: t("kody.values.scheduled"), DISPATCHED: t("kody.values.dispatched"),
+    IN_PROGRESS: t("kody.values.inProgress"), COMPLETED: t("kody.values.completed"), CANCELED: t("kody.values.canceled"),
+    OVERDUE: t("kody.values.overdue"), TODAY: t("kody.values.today"), UPCOMING: t("kody.values.upcoming"),
+    EMAIL: t("kody.values.email"), SMS: t("kody.values.text"), COPY: t("kody.values.copy"),
+    CONSTRUCTION: t("domain.trade.CONSTRUCTION"), HVAC: t("domain.trade.HVAC"), PLUMBING: t("domain.trade.PLUMBING"),
+    FLOORING: t("domain.trade.FLOORING"), ROOFING: t("domain.trade.ROOFING"), GARDENING: t("domain.trade.GARDENING"),
+    SERVICE: t("domain.category.SERVICE"), LABOR: t("domain.category.LABOR"), MATERIAL: t("domain.category.MATERIAL"),
+    FEE: t("domain.category.FEE"), FLAT: t("domain.unit.FLAT"), FLAT_RATE: t("domain.unit.FLAT"),
+    SQ_FT: t("domain.unit.SQ_FT"), HOUR: t("domain.unit.HOUR"), EACH: t("domain.unit.EACH"),
+  };
+  // Unknown values may be tenant-entered titles or notes. Preserve them
+  // verbatim; only known backend enums are localized above.
+  return values[value] ?? value;
+}
+
+function formatKodyDate(value: string, locale: string, displayTimeZone?: string | null) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
+  if (displayTimeZone) options.timeZone = displayTimeZone;
+  try { return new Intl.DateTimeFormat(locale, options).format(date); }
+  catch { delete options.timeZone; return new Intl.DateTimeFormat(locale, options).format(date); }
+}
+
+function formatResultValue(key: string, value: string | number | boolean | null, locale: string, t: TFunction, displayTimeZone?: string | null) {
   if (value === null) return "—";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return value ? t("kody.values.yes") : t("kody.values.no");
   if (typeof value === "number") {
-    if (/amount|revenue|cost|profit|price|total/i.test(key)) {
-      return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(value);
-    }
+    if (/amount|revenue|cost|profit|price|total/i.test(key)) return new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(value);
     if (/percent|rate/i.test(key)) return `${value}%`;
-    return value.toLocaleString();
+    return value.toLocaleString(locale);
   }
   if (isDateResultKey(key)) {
-    const formattedDate = formatShortLocalDate(value, displayTimeZone);
+    const formattedDate = formatKodyDate(value, locale, displayTimeZone);
     if (formattedDate) return formattedDate;
   }
-  return formatBackendLabel(value);
+  return localizedKnownValue(value, t);
 }
 
-function visibleResultEntries(result: Record<string, string | number | boolean | null>) {
-  return Object.entries(result)
-    .filter(([key]) => !/^(customerId|quoteId|quoteRefHash|id|tenantId)$/i.test(key))
-    .slice(0, 6);
+function resultTitle(result: Record<string, string | number | boolean | null>, fallback: string, t: TFunction) {
+  const tenantTitle = getString(result.fullName) ?? getString(result.name) ?? getString(result.title) ?? getString(result.item);
+  if (tenantTitle) return tenantTitle;
+  const enumTitle = getString(result.serviceType) ?? getString(result.status);
+  return enumTitle ? localizedKnownValue(enumTitle, t) : fallback;
 }
 
-function resultTitle(result: Record<string, string | number | boolean | null>, fallback: string) {
-  const title = (
-    getString(result.fullName) ??
-    getString(result.title) ??
-    getString(result.serviceType) ??
-    getString(result.item) ??
-    getString(result.status) ??
-    fallback
-  );
-  return formatBackendLabel(title);
+function classificationMeta(classification: DataClassification, t: TFunction) {
+  if (classification === "C4_RESTRICTED") return { label: t("kody.classification.restricted"), description: t("kody.classification.restrictedDescription") };
+  if (classification === "C3_FINANCIAL_CONFIDENTIAL") return { label: t("kody.classification.financial"), description: t("kody.classification.financialDescription") };
+  if (classification === "C2_CUSTOMER_CONFIDENTIAL") return { label: t("kody.classification.customer"), description: t("kody.classification.customerDescription") };
+  if (classification === "C1_BUSINESS_INTERNAL") return { label: t("kody.classification.workspace"), description: t("kody.classification.workspaceDescription") };
+  return { label: t("kody.classification.public"), description: t("kody.classification.publicDescription") };
 }
 
-function classificationMeta(classification: DataClassification) {
-  if (classification === "C4_RESTRICTED") {
-    return {
-      label: "Restricted data",
-      description: "Kody should not use this unless a tightly approved internal workflow allows it.",
-    };
-  }
-  if (classification === "C3_FINANCIAL_CONFIDENTIAL") {
-    return {
-      label: "Financial data",
-      description: "Costs, margins, profit, and pricing insights are limited to owner/admin access.",
-    };
-  }
-  if (classification === "C2_CUSTOMER_CONFIDENTIAL") {
-    return {
-      label: "Customer data",
-      description: "Customer and quote context is limited to your signed-in workspace.",
-    };
-  }
-  if (classification === "C1_BUSINESS_INTERNAL") {
-    return {
-      label: "Workspace data",
-      description: "Internal business context is available only inside this tenant workspace.",
-    };
-  }
-  return {
-    label: "Public data",
-    description: "This response only used data that is safe for public or product-level display.",
-  };
-}
-
-function compactSourceList(citations: AiAssistantResponse["assistant"]["citations"]) {
+function compactSourceList(citations: AiAssistantResponse["assistant"]["citations"], t: TFunction) {
   const sources = Array.from(new Set(citations.map((citation) => citation.sourceType))).filter(Boolean);
-  if (!sources.length) return "No workspace rows were retrieved.";
-  return sources.slice(0, 3).join(" + ");
+  if (!sources.length) return t("kody.safety.noSources");
+  const knownSources: Record<string, string> = {
+    WORKSPACE: t("kody.sources.workspace"), Workspace: t("kody.sources.workspace"), Customer: t("kody.sources.customers"), Customers: t("kody.sources.customers"),
+    Quote: t("kody.sources.quotes"), Quotes: t("kody.sources.quotes"), Product: t("kody.sources.products"),
+    Products: t("kody.sources.products"), Analytics: t("kody.sources.analytics"), Job: t("kody.sources.jobs"), Jobs: t("kody.sources.jobs"),
+  };
+  return sources.slice(0, 3).map((source) => knownSources[source] ?? formatBackendLabel(source)).join(" + ");
 }
 
-function formatHiddenField(field: string) {
+function formatHiddenField(field: string, t: TFunction) {
   const normalized = field.toLowerCase();
-  if (normalized.includes("tenant")) return "tenant boundary fields";
-  if (normalized.includes("deleted")) return "deleted records";
-  if (normalized.includes("archived")) return "archived records";
-  if (normalized.includes("internal cost")) return "internal costs";
-  if (normalized.includes("margin")) return "margin details";
-  if (normalized.includes("password") || normalized.includes("token") || normalized.includes("secret")) return "secrets";
-  return formatKey(field);
+  if (normalized.includes("tenant")) return t("kody.hidden.tenant");
+  if (normalized.includes("deleted")) return t("kody.hidden.deleted");
+  if (normalized.includes("archived")) return t("kody.hidden.archived");
+  if (normalized.includes("internal cost")) return t("kody.hidden.costs");
+  if (normalized.includes("margin")) return t("kody.hidden.margin");
+  if (normalized.includes("password") || normalized.includes("token") || normalized.includes("secret")) return t("kody.hidden.secrets");
+  return t("kody.hidden.protected");
 }
 
-function compactHiddenList(fieldsExcluded: string[]) {
-  if (!fieldsExcluded.length) return "No extra fields hidden.";
-  const visible = fieldsExcluded.slice(0, 3).map(formatHiddenField);
+function compactHiddenList(fieldsExcluded: string[], t: TFunction) {
+  if (!fieldsExcluded.length) return t("kody.safety.noHidden");
+  const visible = fieldsExcluded.slice(0, 3).map((field) => formatHiddenField(field, t));
   const remaining = fieldsExcluded.length - visible.length;
-  return `${visible.join(", ")}${remaining > 0 ? `, +${remaining} more` : ""}`;
+  return `${visible.join(", ")}${remaining > 0 ? t("kody.safety.moreHidden", { count: remaining }) : ""}`;
 }
 
 function formatVisibleAnswer(answer: string) {
@@ -347,59 +393,55 @@ function formatVisibleAnswer(answer: string) {
     .trim();
 }
 
-function actionConfirmationCopy(action: AiAssistantAction) {
+function actionConfirmationCopy(action: AiAssistantAction, t: TFunction) {
   if (action.type === "OPEN_CUSTOMER_DRAFT") {
-    const fullName = getString(action.payload.fullName) ?? "this customer";
+    const fullName = getString(action.payload.fullName) ?? t("kody.confirm.thisCustomer");
     const phone = getString(action.payload.phone);
     const email = getString(action.payload.email);
     const contactSummary = [phone, email].filter(Boolean).join(" · ");
     return {
-      title: `Review ${fullName}?`,
-      description: `${contactSummary ? `${contactSummary}. ` : ""}Kody will open the customer form with these details. Nothing is saved until you review the form and press Save customer.`,
-      confirmLabel: "Open customer review",
+      title: t("kody.confirm.customerTitle", { name: fullName }),
+      description: t("kody.confirm.customerDescription", { contact: contactSummary ? `${contactSummary}. ` : "" }),
+      confirmLabel: t("kody.confirm.customerButton"),
     };
   }
   if (action.type === "OPEN_PRODUCT_DRAFT") {
     return {
-      title: "Review Kody's product draft?",
-      description:
-        "Kody will open the Products form with the details it understood. Nothing is added until you review the unit, internal cost, customer price, and click Add product.",
-      confirmLabel: "Open product review",
+      title: t("kody.confirm.productTitle"),
+      description: t("kody.confirm.productDescription"),
+      confirmLabel: t("kody.confirm.productButton"),
     };
   }
   if (action.type === "OPEN_QUOTE_DRAFT") {
     return {
-      title: "Review Kody's quote draft?",
-      description:
-        "Kody will open this in the quote builder. Nothing will be saved or sent until you review the customer, scope, pricing, and click Create Quote.",
-      confirmLabel: "Open review draft",
+      title: t("kody.confirm.quoteTitle"),
+      description: t("kody.confirm.quoteDescription"),
+      confirmLabel: t("kody.confirm.quoteButton"),
     };
   }
   if (action.type === "OPEN_QUOTE_SEND") {
-    const quoteTitle = getString(action.payload.quoteTitle) ?? "this quote";
-    const customerName = getString(action.payload.customerName) ?? "the customer";
+    const quoteTitle = getString(action.payload.quoteTitle) ?? t("kody.confirm.thisQuote");
+    const customerName = getString(action.payload.customerName) ?? t("kody.confirm.theCustomer");
     const destination = getString(action.payload.destination);
     const channel = getString(action.payload.channel);
-    const channelLabel = channel === "sms" ? "text" : channel === "copy" ? "copy" : "email";
+    const channelLabel = channel === "sms" ? t("kody.values.text") : channel === "copy" ? t("kody.values.copy") : t("kody.values.email");
     return {
-      title: `Review ${channelLabel} for ${customerName}?`,
-      description: `${quoteTitle}${destination ? ` · ${destination}` : ""}. Kody will open the existing send composer for your review. It will not contact the customer or mark the quote sent automatically.`,
-      confirmLabel: "Open send review",
+      title: t("kody.confirm.sendTitle", { channel: channelLabel, customer: customerName }),
+      description: t("kody.confirm.sendDescription", { quote: quoteTitle, destination: destination ? ` · ${destination}` : "" }),
+      confirmLabel: t("kody.confirm.sendButton"),
     };
   }
   if (action.type === "REQUEST_ADMIN_ACCESS") {
     return {
-      title: "Open access settings?",
-      description:
-        "Kody will take you to workspace settings so an owner or admin can review the required permission.",
-      confirmLabel: "Open settings",
+      title: t("kody.confirm.accessTitle"),
+      description: t("kody.confirm.accessDescription"),
+      confirmLabel: t("kody.confirm.accessButton"),
     };
   }
   return {
-    title: "Continue with Kody action?",
-    description:
-      "Kody will move you to the matching workspace page. Review anything important before saving or sending.",
-    confirmLabel: "Continue",
+    title: t("kody.confirm.defaultTitle"),
+    description: t("kody.confirm.defaultDescription"),
+    confirmLabel: t("kody.confirm.continue"),
   };
 }
 
@@ -412,21 +454,23 @@ function KodyResultCard({
   index: number;
   displayTimeZone?: string | null;
 }) {
-  const entries = visibleResultEntries(result);
+  const { t } = useTranslation();
+  const { locale } = useLocale();
+  const entries = visibleKodyResultEntries(result);
   return (
     <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3 transition-colors hover:border-[var(--qf-info-border)]">
       <div className="flex items-start gap-2">
         <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--qf-info-surface)] text-[11px] font-bold text-[var(--qf-info-text)]">
           {index + 1}
         </span>
-        <p className="min-w-0 text-sm font-semibold text-[var(--qf-text)]">{resultTitle(result, `Result ${index + 1}`)}</p>
+        <p className="min-w-0 text-sm font-semibold text-[var(--qf-text)]">{resultTitle(result, t("kody.results.item", { number: index + 1 }), t)}</p>
       </div>
       {entries.length ? (
         <dl className="mt-2 grid gap-1.5 text-xs text-[var(--qf-text-soft)]">
           {entries.map(([key, value]) => (
             <div key={key} className="flex items-start justify-between gap-3">
-              <dt className="shrink-0 text-[var(--qf-text-muted)]">{formatKey(key)}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value, displayTimeZone)}</dd>
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{localizedResultField(key, t)}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value, locale, t, displayTimeZone)}</dd>
             </div>
           ))}
         </dl>
@@ -446,8 +490,9 @@ function KodyResponse({
   onAction: (action: AiAssistantAction) => void;
   displayTimeZone?: string | null;
 }) {
+  const { t } = useTranslation();
   const track = useTrack();
-  const meta = classificationMeta(response.maxClassification);
+  const meta = classificationMeta(response.maxClassification, t);
   const visibleAnswer = formatVisibleAnswer(response.answer);
   const [feedback, setFeedback] = useState<AiAssistantFeedbackRating | null>(null);
   const [feedbackStatus, setFeedbackStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -495,7 +540,7 @@ function KodyResponse({
           </p>
         ) : null}
         <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--qf-kody-eyebrow)]">
-          {formatKey(response.diagnostics.resolvedTool)}
+          {localizedToolLabel(response.diagnostics.resolvedTool, t)}
         </p>
         <p
           className="whitespace-pre-wrap text-sm leading-6 text-[var(--qf-text)]"
@@ -503,7 +548,7 @@ function KodyResponse({
           aria-live="polite"
           aria-atomic="true"
         >
-          {visibleAnswer || "Kody returned a response, but there was no answer text to show."}
+          {visibleAnswer || t("kody.response.emptyAnswer")}
         </p>
 
         {response.actions.length ? (
@@ -517,19 +562,19 @@ function KodyResponse({
                 onClick={() => onAction(action)}
                 className="w-full sm:w-auto"
               >
-                {action.label}
+                {localizedActionLabel(action, t)}
               </Button>
             ))}
           </div>
         ) : null}
 
         <div className="order-5 flex min-h-11 flex-wrap items-center gap-2 border-t border-[var(--qf-border)] pt-3">
-          <span className="mr-1 text-xs font-medium text-[var(--qf-text-muted)]">Helpful?</span>
+          <span className="mr-1 text-xs font-medium text-[var(--qf-text-muted)]">{t("kody.feedback.helpful")}</span>
           <button
             type="button"
             onClick={() => void submitFeedback("UP")}
             disabled={feedbackStatus === "saving" || response.auditEventId === "audit-unavailable"}
-            aria-label="Good response"
+            aria-label={t("kody.feedback.good")}
             aria-pressed={feedback === "UP"}
             data-testid="kody-feedback-up"
             className={cn(
@@ -545,7 +590,7 @@ function KodyResponse({
             type="button"
             onClick={() => void submitFeedback("DOWN")}
             disabled={feedbackStatus === "saving" || response.auditEventId === "audit-unavailable"}
-            aria-label="Poor response"
+            aria-label={t("kody.feedback.poor")}
             aria-pressed={feedback === "DOWN"}
             data-testid="kody-feedback-down"
             className={cn(
@@ -566,13 +611,13 @@ function KodyResponse({
             aria-live="polite"
           >
             {feedbackStatus === "saving"
-              ? "Saving feedback..."
+              ? t("kody.feedback.saving")
               : feedbackStatus === "saved"
                 ? lastFeedbackSave === "note"
-                  ? "Thanks—your note was saved."
-                  : "Thanks—this helps Kody improve."
+                  ? t("kody.feedback.noteSaved")
+                  : t("kody.feedback.thanks")
                 : feedbackStatus === "error"
-                  ? "Feedback didn’t save. Try again."
+                  ? t("kody.feedback.error")
                   : ""}
           </span>
           {feedback && !showFeedbackNote ? (
@@ -581,7 +626,7 @@ function KodyResponse({
               onClick={() => setShowFeedbackNote(true)}
               className="ml-auto min-h-11 rounded-lg px-2 text-xs font-semibold text-[var(--qf-info-text)] hover:bg-[var(--qf-info-surface)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
             >
-              Add a note
+              {t("kody.feedback.addNote")}
             </button>
           ) : null}
         </div>
@@ -592,22 +637,22 @@ function KodyResponse({
           >
             <Textarea
               data-testid="kody-feedback-note"
-              label={feedback === "DOWN" ? "What should Kody do differently? (optional)" : "What worked well? (optional)"}
+              label={feedback === "DOWN" ? t("kody.feedback.downLabel") : t("kody.feedback.upLabel")}
               value={feedbackNote}
               onChange={(event) => setFeedbackNote(event.target.value)}
               maxLength={500}
               rows={2}
               className="min-h-[76px] resize-none"
-              placeholder="Example: I asked for products, but the answer searched customers."
+              placeholder={t("kody.feedback.placeholder")}
               disabled={feedbackStatus === "saving"}
             />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] leading-4 text-[var(--qf-text-muted)]">
-                {feedbackNote.length}/500 · Avoid customer contact details or secrets.
+                {t("kody.feedback.privacy", { count: feedbackNote.length })}
               </p>
               <div className="flex items-center gap-2">
                 <Button type="button" size="sm" variant="ghost" onClick={() => setShowFeedbackNote(false)}>
-                  Close
+                  {t("common.close")}
                 </Button>
                 <Button
                   type="button"
@@ -615,12 +660,12 @@ function KodyResponse({
                   loading={feedbackStatus === "saving"}
                   onClick={() => void submitFeedback(feedback, feedbackNote.trim() || null)}
                 >
-                  Save note
+                  {t("kody.feedback.saveNote")}
                 </Button>
               </div>
             </div>
             <p className="mt-2 text-[11px] leading-4 text-[var(--qf-text-muted)]">
-              QuoteFly uses this feedback to improve Kody’s prompts and evaluations. It is not sent as a new Kody request.
+              {t("kody.feedback.usage")}
             </p>
           </div>
         ) : null}
@@ -632,7 +677,7 @@ function KodyResponse({
           data-testid="kody-results"
         >
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
-            <span>View {response.results.length} {response.results.length === 1 ? "result" : "results"}</span>
+            <span>{t("kody.results.view", { count: response.results.length })}</span>
             <ChevronDown
               size={16}
               className="text-[var(--qf-text-muted)] motion-safe:transition-transform motion-safe:group-open:rotate-180"
@@ -659,25 +704,26 @@ function KodyResponse({
         <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-[var(--qf-text-soft)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
           <span className="inline-flex min-w-0 items-center gap-2">
             <ShieldCheck size={14} className="shrink-0 text-[var(--qf-info-text)]" />
-            <span className="font-semibold text-[var(--qf-text)]">Sources & safety</span>
+            <span className="font-semibold text-[var(--qf-text)]">{t("kody.safety.title")}</span>
           </span>
-          <span className="text-[11px] text-[var(--qf-text-muted)] group-open:hidden">Workspace-only</span>
+          <span className="text-[11px] text-[var(--qf-text-muted)] group-open:hidden">{t("kody.safety.workspaceOnly")}</span>
         </summary>
         <div className="mt-3 space-y-2 border-t border-[var(--qf-border)] pt-3">
+          <p className="font-semibold text-[var(--qf-text)]">{meta.label}</p>
           <p>{meta.description}</p>
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
-              <p className="font-semibold text-[var(--qf-text-muted)]">Sources</p>
-              <p className="mt-0.5 text-[var(--qf-text)]">{compactSourceList(response.citations)}</p>
+              <p className="font-semibold text-[var(--qf-text-muted)]">{t("kody.safety.sources")}</p>
+              <p className="mt-0.5 text-[var(--qf-text)]">{compactSourceList(response.citations, t)}</p>
             </div>
             <div>
-              <p className="font-semibold text-[var(--qf-text-muted)]">Hidden for safety</p>
-              <p className="mt-0.5 text-[var(--qf-text)]">{compactHiddenList(response.fieldsExcluded)}</p>
+              <p className="font-semibold text-[var(--qf-text-muted)]">{t("kody.safety.hidden")}</p>
+              <p className="mt-0.5 text-[var(--qf-text)]">{compactHiddenList(response.fieldsExcluded, t)}</p>
             </div>
           </div>
           {usageNotice ? <p>{usageNotice}</p> : null}
         </div>
-        <p className="sr-only">Policy class {response.maxClassification}</p>
+        <p className="sr-only">{t("kody.safety.policyClass", { classification: response.maxClassification })}</p>
       </details>
     </div>
   );
@@ -699,6 +745,8 @@ export function KodyAssistant({
   const navigate = useNavigate();
   const location = useLocation();
   const track = useTrack();
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [selectedTool, setSelectedTool] = useState<AiAssistantTool | "AUTO">("AUTO");
@@ -721,22 +769,23 @@ export function KodyAssistant({
   const pendingMessageIdRef = useRef<string | null>(null);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
-  const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc);
+  const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc, locale);
   const aiUsageLimitMessage = aiUsageRenewalLabel
-    ? `Kody and AI tools are paused until your monthly usage resets on ${aiUsageRenewalLabel}.`
-    : "Kody and AI tools are paused until your monthly usage resets.";
+    ? t("kody.usage.pausedUntil", { date: aiUsageRenewalLabel })
+    : t("kody.usage.paused");
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
+  const allQuickPrompts = useMemo(() => quickPrompts(t), [t]);
   const availableQuickPrompts = canViewInternalCosts
-    ? QUICK_PROMPTS
-    : QUICK_PROMPTS.filter((quickPrompt) => quickPrompt.tool !== "RANK_PROFITABLE_JOBS");
+    ? allQuickPrompts
+    : allQuickPrompts.filter((quickPrompt) => quickPrompt.tool !== "RANK_PROFITABLE_JOBS");
   const orderedQuickPrompts = orderQuickPrompts(workspacePage, availableQuickPrompts);
   const primaryQuickPrompts = orderedQuickPrompts.slice(0, 3);
   const additionalQuickPrompts = orderedQuickPrompts.slice(3);
 
   const starterText = useMemo(() => {
-    if (messages.length) return "Ask a follow-up in plain language. Kody will keep the recent conversation in mind.";
-    return "Ask about customers, quotes, follow-ups, products, pipeline, or job profitability.";
-  }, [messages.length]);
+    if (messages.length) return t("kody.starter.followUp");
+    return t("kody.starter.initial");
+  }, [messages.length, t]);
   const closeKody = useCallback((source: "button" | "keyboard") => {
     setOpen(false);
     track("kody_close", { source, page: currentContextPage });
@@ -785,10 +834,12 @@ export function KodyAssistant({
       const detail = (event as CustomEvent<KodyOutcomeDetail>).detail;
       if (!detail) return;
       const text = detail.type === "CUSTOMER_CREATED"
-        ? `${detail.customerName} is now in your workspace. You can ask me to draft their quote next.`
+        ? t("kody.outcomes.customerCreated", { customer: detail.customerName })
         : detail.type === "QUOTE_CREATED"
-          ? `${detail.quoteTitle} was created${detail.customerName ? ` for ${detail.customerName}` : ""}. Open it when you’re ready to review and send.`
-          : `${detail.quoteTitle} for ${detail.customerName} is now marked sent.`;
+          ? detail.customerName
+            ? t("kody.outcomes.quoteCreatedFor", { quote: detail.quoteTitle, customer: detail.customerName })
+            : t("kody.outcomes.quoteCreated", { quote: detail.quoteTitle })
+          : t("kody.outcomes.quoteSent", { quote: detail.quoteTitle, customer: detail.customerName });
       setMessages((current) => current.length
         ? [...current, { id: makeMessageId(), role: "kody", text }]
         : current);
@@ -796,7 +847,7 @@ export function KodyAssistant({
     };
     window.addEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
     return () => window.removeEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
-  }, [track]);
+  }, [t, track]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -867,7 +918,7 @@ export function KodyAssistant({
     const updatePendingMessage = () => {
       const pendingMessageId = pendingMessageIdRef.current;
       if (!pendingMessageId) return;
-      const text = kodyLoadingText(elapsedSince(loadingStartedAt), loadingTool);
+      const text = kodyLoadingText(elapsedSince(loadingStartedAt), loadingTool, t);
       setMessages((current) =>
         current.map((message) =>
           message.id === pendingMessageId && message.pending ? { ...message, text } : message,
@@ -878,7 +929,7 @@ export function KodyAssistant({
     updatePendingMessage();
     const timer = window.setInterval(updatePendingMessage, 900);
     return () => window.clearInterval(timer);
-  }, [loadingStartedAt, loadingTool]);
+  }, [loadingStartedAt, loadingTool, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -926,7 +977,7 @@ export function KodyAssistant({
       {
         id: pendingMessageId,
         role: "kody",
-        text: kodyLoadingText(0, tool),
+        text: kodyLoadingText(0, tool, t),
         pending: true,
       },
     ]);
@@ -956,7 +1007,7 @@ export function KodyAssistant({
           text: assistantResponse.answer,
           pending: false,
           response: assistantResponse,
-          usageNotice: formatAiUsageNotice(response.usage),
+          usageNotice: formatAiUsageNotice(response.usage, locale),
         };
         return current.some((message) => message.id === pendingMessageId)
           ? current.map((message) => (message.id === pendingMessageId ? replacement : message))
@@ -974,10 +1025,11 @@ export function KodyAssistant({
         const usage = (err as ApiError).details as { usage?: AiUsageUpdateDetail };
         if (usage.usage) publishAiUsageUpdate(usage.usage);
       }
-      const message =
-        err instanceof ApiError
+      const message = errorCode === "AI_USAGE_LIMIT_REACHED"
+        ? aiUsageLimitMessage
+        : err instanceof ApiError
           ? err.message
-          : "Kody could not complete that request. Try again or use the regular workspace tools.";
+          : t("kody.errors.requestFailed");
       setError(message);
       track("kody_response", {
         tool,
@@ -1051,7 +1103,7 @@ export function KodyAssistant({
     track("kody_action", { type: action.type, source, requiresConfirmation: action.requiresConfirmation });
     if (action.type === "OPEN_CUSTOMER") {
       const customerId = getString(action.payload.customerId);
-      if (!customerId) return rejectInvalidAction("Kody could not open that customer. Try the search again.", action);
+      if (!customerId) return rejectInvalidAction(t("kody.errors.openCustomer"), action);
       collapseForMobileHandoff(action.type);
       navigate("/app/customers", { state: { kodyCustomerId: customerId } });
       return;
@@ -1061,7 +1113,7 @@ export function KodyAssistant({
       const fullName = getString(action.payload.fullName);
       const phone = getString(action.payload.phone);
       if (!fullName || !phone) {
-        return rejectInvalidAction("Kody needs a customer name and 10-digit phone before opening the review form.", action);
+        return rejectInvalidAction(t("kody.errors.customerDraft"), action);
       }
       collapseForMobileHandoff(action.type);
       navigate("/app/customers", {
@@ -1093,7 +1145,7 @@ export function KodyAssistant({
       const quoteId = getString(action.payload.quoteId);
       const channel = getString(action.payload.channel);
       if (!quoteId || (channel !== "email" && channel !== "sms" && channel !== "copy")) {
-        return rejectInvalidAction("Kody could not open that send review. Ask Kody to find the quote again.", action);
+        return rejectInvalidAction(t("kody.errors.quoteSend"), action);
       }
       collapseForMobileHandoff(action.type);
       navigate(`/app/quotes/${encodeURIComponent(quoteId)}`, {
@@ -1137,7 +1189,7 @@ export function KodyAssistant({
     executeAction(action, "direct");
   }
 
-  const pendingActionCopy = pendingAction ? actionConfirmationCopy(pendingAction) : null;
+  const pendingActionCopy = pendingAction ? actionConfirmationCopy(pendingAction, t) : null;
 
   return (
     <>
@@ -1156,7 +1208,7 @@ export function KodyAssistant({
               ? "bottom-[calc(var(--qf-mobile-nav-clearance)+5.5rem)] lg:bottom-[7rem] xl:bottom-6"
               : "bottom-[calc(var(--qf-mobile-nav-clearance)+0.5rem)] lg:bottom-6",
           )}
-          aria-label="Ask Kody"
+          aria-label={t("kody.button")}
           aria-expanded="false"
           data-testid="kody-launcher"
         >
@@ -1178,7 +1230,7 @@ export function KodyAssistant({
           ) : null}
           <section
             ref={panelRef}
-            aria-label="Kody assistant"
+            aria-label={t("kody.assistantLabel")}
             aria-modal={isModalViewport ? "true" : "false"}
             role="dialog"
             data-testid="kody-chat-panel"
@@ -1198,7 +1250,7 @@ export function KodyAssistant({
               <div className="min-w-0">
                 <h2 className="text-base font-semibold text-[var(--qf-kody-header-text)]">Kody</h2>
                 <p className="mt-0.5 truncate text-xs leading-5 text-[var(--qf-kody-header-muted)]">
-                  QuoteFly assistant · Workspace only
+                  {t("kody.subtitle")}
                 </p>
               </div>
             </div>
@@ -1209,7 +1261,7 @@ export function KodyAssistant({
                   variant="ghost"
                   size="sm"
                   icon={<RotateCcw size={17} />}
-                  label="Start a new Kody conversation"
+                  label={t("kody.newConversation")}
                   disabled={loading}
                   onClick={startNewConversation}
                   className="qf-kody-header-control !h-11 !min-h-11 !w-11 rounded-full"
@@ -1220,7 +1272,7 @@ export function KodyAssistant({
                 variant="ghost"
                 size="sm"
                 icon={<X size={18} />}
-                label="Close Kody"
+                label={t("kody.close")}
                 onClick={() => closeKody("button")}
                 className="qf-kody-header-control !h-11 !min-h-11 !w-11 rounded-full"
               />
@@ -1234,9 +1286,9 @@ export function KodyAssistant({
             data-testid="kody-quick-prompts"
           >
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
-              <span>Suggested actions</span>
+              <span>{t("kody.suggestions.title")}</span>
               <span className="inline-flex items-center gap-2 text-xs font-medium text-[var(--qf-text-muted)]">
-                {primaryQuickPrompts.length} suggestions
+                {t("kody.suggestions.count", { count: primaryQuickPrompts.length })}
                 <ChevronDown size={16} className="motion-safe:transition-transform motion-safe:group-open:rotate-180" aria-hidden="true" />
               </span>
             </summary>
@@ -1255,7 +1307,7 @@ export function KodyAssistant({
               {additionalQuickPrompts.length ? (
                 <details className="group/more mt-2 border-t border-[var(--qf-border)] pt-1">
                   <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between rounded-lg px-2 text-xs font-semibold text-[var(--qf-text-soft)] marker:hidden hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
-                    <span>More prompts</span>
+                    <span>{t("kody.suggestions.more")}</span>
                     <span className="inline-flex items-center gap-2 text-[var(--qf-text-muted)]">
                       {additionalQuickPrompts.length}
                       <ChevronDown size={15} className="motion-safe:transition-transform motion-safe:group-open/more:rotate-180" aria-hidden="true" />
@@ -1282,9 +1334,9 @@ export function KodyAssistant({
           <div ref={conversationRef} className="qf-kody-thread min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-[var(--qf-border)] p-3 sm:p-4">
             {!messages.length ? (
               <div className="flex min-h-[160px] flex-col items-center justify-center px-4 text-center">
-                <p className="text-base font-semibold text-[var(--qf-text)]">What can I help you get done?</p>
+                <p className="text-base font-semibold text-[var(--qf-text)]">{t("kody.empty.title")}</p>
                 <p className="mt-1 max-w-md text-sm leading-6 text-[var(--qf-text-soft)]">{starterText}</p>
-                <p className="mt-3 text-xs font-medium text-[var(--qf-info-text)]">Workspace-only · You approve every change</p>
+                <p className="mt-3 text-xs font-medium text-[var(--qf-info-text)]">{t("kody.empty.safety")}</p>
               </div>
             ) : (
               messages.map((message) => (
@@ -1315,12 +1367,12 @@ export function KodyAssistant({
                         <div aria-hidden="true">
                           <LoadingState
                             title={message.text}
-                            description="Checking your workspace safely."
+                            description={t("kody.loading.safeCheck")}
                             variant="compact"
                             className="border-[var(--qf-info-border)] bg-[var(--qf-info-surface)]"
                           />
                         </div>
-                        <span className="sr-only" role="status" aria-live="polite">Kody is working.</span>
+                        <span className="sr-only" role="status" aria-live="polite">{t("kody.loading.working")}</span>
                       </>
                     ) : message.response ? (
                       <KodyResponse
@@ -1352,7 +1404,7 @@ export function KodyAssistant({
                 void submitPrompt();
               }}
             >
-              <label htmlFor="kody-prompt-input" className="sr-only">Ask Kody</label>
+              <label htmlFor="kody-prompt-input" className="sr-only">{t("kody.button")}</label>
               <textarea
                 id="kody-prompt-input"
                 ref={inputRef}
@@ -1367,9 +1419,9 @@ export function KodyAssistant({
                 }}
                 rows={1}
                 maxLength={2_000}
-                aria-label="Ask Kody"
+                aria-label={t("kody.button")}
                 aria-describedby="kody-prompt-instructions"
-                placeholder={aiUsageLimitReached ? "Monthly AI limit reached" : "Ask Kody..."}
+                placeholder={aiUsageLimitReached ? t("kody.usage.limitPlaceholder") : t("kody.composer.placeholder")}
                 className="max-h-32 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
                 disabled={loading || aiUsageLimitReached}
               />
@@ -1377,14 +1429,14 @@ export function KodyAssistant({
                 type="submit"
                 variant="kody"
                 icon={<Send size={17} />}
-                label="Send"
+                label={t("kody.composer.send")}
                 loading={loading}
                 disabled={!prompt.trim() || aiUsageLimitReached}
                 className="rounded-xl"
               />
             </form>
             <span id="kody-prompt-instructions" className="sr-only">
-              Press Enter to send. Press Shift and Enter for a new line.
+              {t("kody.composer.instructions")}
             </span>
           </div>
           </div>
@@ -1400,9 +1452,10 @@ export function KodyAssistant({
           setPendingAction(null);
           if (action) executeAction(action, "confirmed");
         }}
-        title={pendingActionCopy?.title ?? "Continue with Kody action?"}
+        title={pendingActionCopy?.title ?? t("kody.confirm.defaultTitle")}
         description={pendingActionCopy?.description}
-        confirmLabel={pendingActionCopy?.confirmLabel ?? "Continue"}
+        confirmLabel={pendingActionCopy?.confirmLabel ?? t("kody.confirm.continue")}
+        cancelLabel={t("common.cancel")}
         confirmVariant="kody"
       />
     </>

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, LifeBuoy, Lightbulb } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 import { CloseIcon } from "../Icons";
@@ -65,6 +66,7 @@ export function CrmSidebar({
   entitlements,
   usage,
 }: CrmSidebarProps) {
+  const { t } = useTranslation();
   const sidebarRef = useRef<HTMLElement>(null);
   const [isDesktop, setIsDesktop] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   const collapsed = desktopCollapsed && !mobileOpen;
@@ -80,7 +82,10 @@ export function CrmSidebar({
     (aiSpendLimitUsd && aiSpendLimitUsd > 0
       ? Math.min((aiSpendUsedUsd / aiSpendLimitUsd) * 100, 100)
       : 0);
-  const usagePercentLabel = useMemo(() => `${Math.round(aiUsagePercent)}% used`, [aiUsagePercent]);
+  const usagePercentLabel = useMemo(
+    () => t("navigation.percentUsed", { percent: Math.round(aiUsagePercent) }),
+    [aiUsagePercent, t],
+  );
   const aiRenewalLabel = formatAiRenewalDate(usage?.periodEndUtc ?? null);
 
   useEffect(() => {
@@ -143,7 +148,7 @@ export function CrmSidebar({
         data-collapsed={collapsed ? "true" : "false"}
         role={!isDesktop && mobileOpen ? "dialog" : undefined}
         aria-modal={!isDesktop && mobileOpen ? "true" : undefined}
-        aria-label="Workspace navigation"
+        aria-label={t("navigation.region")}
         aria-hidden={isHidden || undefined}
         inert={isHidden || undefined}
         tabIndex={-1}
@@ -161,8 +166,8 @@ export function CrmSidebar({
                 "relative inline-flex h-7 shrink-0 items-center overflow-hidden transition-[width] duration-300",
                 collapsed ? "w-7 justify-center" : "w-[126px]",
               )}
-              title="QuoteFly workspace home"
-              aria-label="Go to workspace home"
+              title={t("navigation.workspaceName")}
+              aria-label={t("navigation.goHome")}
             >
               <img
                 src="/logo.png"
@@ -183,8 +188,8 @@ export function CrmSidebar({
                 "hidden items-center justify-center rounded-lg text-[var(--qf-text-muted)] transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-[var(--qf-focus)] lg:inline-flex",
                 collapsed ? "h-7 w-7 self-center" : "h-7 w-7",
               )}
-              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? t("navigation.expand") : t("navigation.collapse")}
+              aria-label={collapsed ? t("navigation.expand") : t("navigation.collapse")}
             >
               {collapsed ? <ChevronRight size={18} strokeWidth={2.25} /> : <ChevronLeft size={18} strokeWidth={2.25} />}
             </button>
@@ -193,14 +198,14 @@ export function CrmSidebar({
               onClick={onCloseMobile}
               data-mobile-drawer-initial-focus
               className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] lg:hidden"
-              aria-label="Close navigation"
+              aria-label={t("navigation.close")}
             >
               <CloseIcon size={18} />
             </button>
           </div>
 
           {!collapsed ? <div className="flex items-center justify-between px-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Navigation</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("navigation.section")}</p>
           </div> : null}
 
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
@@ -248,7 +253,7 @@ export function CrmSidebar({
             })}
           </nav>
 
-          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Workspace</p> : null}
+          {!collapsed ? <p className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("navigation.workspaceSection")}</p> : null}
           <nav className={cn("space-y-1", collapsed ? "px-0" : "px-1")}>
             {settingsLinks.map((link) => {
               const active = isWorkspaceNavigationActive(link.path, currentPage);
@@ -301,7 +306,7 @@ export function CrmSidebar({
             <div aria-hidden={collapsed} className="qf-sidebar-detail rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">
-                  {showTrialBadge ? "Full trial access" : displayPlanName}
+                  {showTrialBadge ? t("navigation.fullTrialAccess") : displayPlanName}
                 </p>
                 <span className="text-xs font-semibold text-[var(--qf-text)]">
                   {usagePercentLabel}
@@ -309,15 +314,15 @@ export function CrmSidebar({
               </div>
               <ProgressBar
                 value={aiUsagePercent}
-                label="Monthly AI usage"
+                label={t("navigation.monthlyAiUsage")}
                 tone={aiUsageProgressTone(aiUsagePercent)}
                 hint={
                   aiUsagePercent >= 100
                     ? aiRenewalLabel
-                      ? `Usage limit reached · renews ${aiRenewalLabel}`
-                      : "Limit reached"
+                      ? `${t("navigation.usageLimitReached")} · ${t("navigation.renews", { date: aiRenewalLabel })}`
+                      : t("navigation.limitReached")
                     : aiRenewalLabel
-                      ? `Renews ${aiRenewalLabel}`
+                      ? t("navigation.renews", { date: aiRenewalLabel })
                       : undefined
                 }
                 className="mt-3"
@@ -325,41 +330,41 @@ export function CrmSidebar({
             </div>
           ) : null}
 
-          <SidebarTooltip label="Request a feature" collapsed={collapsed}>
+          <SidebarTooltip label={t("navigation.requestFeature")} collapsed={collapsed}>
             <button
               type="button"
               onClick={onRequestFeature}
-              aria-label="Request a feature"
+              aria-label={t("navigation.requestFeature")}
               className={cn(
                 "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] py-2.5 text-sm font-medium text-[var(--qf-info-text)] transition hover:bg-[var(--qf-info-surface-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "px-0" : "gap-2 px-4",
               )}
             >
               <Lightbulb size={15} aria-hidden="true" />
-              <span aria-hidden={collapsed} className="qf-sidebar-action-label">Request a feature</span>
+              <span aria-hidden={collapsed} className="qf-sidebar-action-label">{t("navigation.requestFeature")}</span>
             </button>
           </SidebarTooltip>
 
-          <SidebarTooltip label="Contact support" collapsed={collapsed}>
+          <SidebarTooltip label={t("navigation.contactSupport")} collapsed={collapsed}>
             <a
               href={SUPPORT_MAILTO}
-              aria-label="Contact support"
+              aria-label={t("navigation.contactSupport")}
               className={cn(
                 "inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] py-2.5 text-sm font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "px-0" : "gap-2 px-4",
               )}
             >
               <LifeBuoy size={15} className="text-quotefly-blue" aria-hidden="true" />
-              <span aria-hidden={collapsed} className="qf-sidebar-action-label">Contact support</span>
+              <span aria-hidden={collapsed} className="qf-sidebar-action-label">{t("navigation.contactSupport")}</span>
             </a>
           </SidebarTooltip>
 
-          <SidebarTooltip label="Sign out" collapsed={collapsed}>
+          <SidebarTooltip label={t("navigation.signOut")} collapsed={collapsed}>
             <button
               type="button"
               onClick={onLogout}
-              title="Sign Out"
-              aria-label="Sign out"
+              title={t("navigation.signOut")}
+              aria-label={t("navigation.signOut")}
               className={cn(
                 "min-h-[44px] rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] py-2.5 text-sm font-medium text-[var(--qf-text-soft)] transition hover:border-[var(--qf-danger-border)] hover:bg-[var(--qf-danger-surface)] hover:text-[var(--qf-danger-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]",
                 collapsed ? "w-full px-0 text-center" : "w-full px-4",
@@ -367,7 +372,7 @@ export function CrmSidebar({
             >
               <span className={cn("inline-flex items-center", collapsed ? "justify-center gap-0" : "gap-2")}>
                 <CloseIcon size={14} />
-                <span aria-hidden={collapsed} className="qf-sidebar-action-label">Sign Out</span>
+                <span aria-hidden={collapsed} className="qf-sidebar-action-label">{t("navigation.signOut")}</span>
               </span>
             </button>
           </SidebarTooltip>

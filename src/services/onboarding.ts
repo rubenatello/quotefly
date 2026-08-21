@@ -2,7 +2,6 @@ import {
   PresetCategory,
   PresetUnitType,
   Prisma,
-  PrismaClient,
   ServiceCategory,
 } from "@prisma/client";
 import { sanitizeBrandLogoDataUrl } from "../lib/brand-logo";
@@ -11,11 +10,23 @@ import {
   buildSquareFootBaselinePreset,
   getStandardWorkPresetCatalog,
   getStandardWorkPresetDefinition,
+  isStandardWorkPresetCustomized,
+  standardWorkPresetContentHash,
 } from "./work-preset-catalog";
+import {
+  addMissingTenantStarterCatalogLocked,
+  assertTenantProductActivationCapacity,
+  findTenantProductNameMatches,
+  lockTenantProductCatalog,
+  TenantProductNameConflictError,
+} from "./tenant-starter-catalog";
 
 export interface OnboardingPresetInput {
   id?: string;
   catalogKey?: string | null;
+  catalogVersion?: number | null;
+  catalogContentHash?: string | null;
+  wasSubmitted?: boolean;
   name: string;
   description?: string;
   category: PresetCategory;
@@ -66,6 +77,7 @@ function normalizePresetName(value: string): string {
 export function recommendedPresetsForTrade(serviceType: ServiceCategory): OnboardingPresetInput[] {
   return getStandardWorkPresetCatalog(serviceType).map((preset) => ({
     catalogKey: preset.catalogKey,
+    catalogVersion: preset.catalogVersion,
     name: preset.name,
     description: preset.description,
     category: preset.category,
@@ -81,6 +93,8 @@ function sqFtPreset(serviceType: ServiceCategory, unitCost: number, unitPrice: n
   const preset = buildSquareFootBaselinePreset(serviceType, unitCost, unitPrice);
   return {
     catalogKey: preset.catalogKey,
+    catalogVersion: preset.catalogVersion,
+    catalogContentHash: standardWorkPresetContentHash(serviceType, preset),
     name: preset.name,
     description: preset.description,
     category: preset.category,
@@ -115,7 +129,7 @@ function resolvePrimaryColor(suppliedPrimaryColor: string): string {
 }
 
 export async function applyOnboardingSetup(
-  prisma: PrismaClient | Prisma.TransactionClient,
+  prisma: Prisma.TransactionClient,
   input: OnboardingSetupInput,
 ): Promise<{
   presetsCreatedOrUpdated: number;
@@ -143,10 +157,6 @@ export async function applyOnboardingSetup(
   const logoUrl = input.logoUrl === undefined ? undefined : resolveLogoUrl(input.logoUrl);
   const primaryColor = input.primaryColor === undefined ? undefined : resolvePrimaryColor(input.primaryColor);
 
-  // Omission means the caller is saving setup preferences, not reconciling the
-  // tenant's product catalog. An explicit array (including []) opts into the
-  // reconciliation and pruning behavior below.
-  const presetsWereProvided = input.customPresets !== undefined;
   const submittedPresets = input.customPresets ?? [];
 
   const standardPresets = recommendedPresetsForTrade(input.primaryTrade);
@@ -168,21 +178,29 @@ export async function applyOnboardingSetup(
         return true;
       }
 
-      return !candidate.catalogKey && normalizePresetName(candidate.name) === normalizePresetName(presetItem.name);
+      return !candidate.id &&
+        !candidate.catalogKey &&
+        normalizePresetName(candidate.name) === normalizePresetName(presetItem.name);
     });
 
     const matchedPreset = matchedIndex >= 0 ? submittedPresets[matchedIndex] : undefined;
     if (matchedIndex >= 0) matchedPresetIndexes.add(matchedIndex);
 
-    const catalogPreset = presetItem.catalogKey
-      ? getStandardWorkPresetDefinition(input.primaryTrade, presetItem.catalogKey) ?? presetItem
-      : presetItem;
+    const catalogDefinition = presetItem.catalogKey
+      ? getStandardWorkPresetDefinition(input.primaryTrade, presetItem.catalogKey)
+      : null;
+    const catalogPreset = catalogDefinition ?? presetItem;
     const hasAuthoritativeSquareFootPricing =
       hasExplicitSquareFootPricing && presetItem.catalogKey === STANDARD_SQ_FT_BASE_CATALOG_KEY;
 
     return {
       id: matchedPreset?.id,
       catalogKey: catalogPreset.catalogKey ?? null,
+      catalogVersion: catalogDefinition?.catalogVersion ?? presetItem.catalogVersion ?? null,
+      catalogContentHash: catalogDefinition
+        ? standardWorkPresetContentHash(input.primaryTrade, catalogDefinition)
+        : presetItem.catalogContentHash ?? null,
+      wasSubmitted: Boolean(matchedPreset),
       name: catalogPreset.name,
       description: matchedPreset?.description?.trim() || catalogPreset.description,
       category: catalogPreset.category,
@@ -214,6 +232,11 @@ export async function applyOnboardingSetup(
       isDefault: presetItem.isDefault ?? true,
     } satisfies OnboardingPresetInput));
 
+  // All product capacity, restore, and name decisions below are serialized by
+  // the tenant row. Callers must supply a real transaction so the lock remains
+  // held until setup and its AI-index outbox writes commit atomically.
+  await lockTenantProductCatalog(prisma, input.tenantId);
+
   await prisma.tenant.update({
     where: { id: input.tenantId },
     data: {
@@ -221,6 +244,14 @@ export async function applyOnboardingSetup(
       onboardingCompletedAtUtc: new Date(),
     },
   });
+
+  const starterCatalogResult = await addMissingTenantStarterCatalogLocked(
+    prisma,
+    {
+      tenantId: input.tenantId,
+      serviceType: input.primaryTrade,
+    },
+  );
 
   await prisma.tenantBranding.upsert({
     where: { tenantId: input.tenantId },
@@ -271,12 +302,6 @@ export async function applyOnboardingSetup(
     where: {
       tenantId: input.tenantId,
       serviceType: input.primaryTrade,
-      OR: [
-        { deletedAtUtc: null },
-        // Managed catalog keys are unique across soft deletion. Include deleted
-        // rows so recommendations can restore them instead of creating duplicates.
-        { catalogKey: { not: null } },
-      ],
     },
     select: {
       id: true,
@@ -289,35 +314,65 @@ export async function applyOnboardingSetup(
   const keptPresetIds = new Set<string>();
 
   for (const presetItem of resolvedPresetsToApply) {
-    const legacyMatch = existingPresets.find(
-      (existingPreset) =>
-        !existingPreset.catalogKey &&
-        normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
-    );
-
     if (presetItem.catalogKey) {
       const catalogMatch = existingPresets.find((existingPreset) => existingPreset.catalogKey === presetItem.catalogKey);
-      const targetPreset = catalogMatch ?? legacyMatch;
+      const tenantNameReservation = existingPresets.find(
+        (existingPreset) =>
+          !existingPreset.catalogKey &&
+          normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
+      );
+      if (!catalogMatch && tenantNameReservation) {
+        // A tenant-authored row owns its name even when archived. Do not turn it
+        // into a managed starter, restore it, or create a same-name duplicate.
+        keptPresetIds.add(tenantNameReservation.id);
+        continue;
+      }
+      const targetPreset = catalogMatch;
 
       if (targetPreset) {
         const hasAuthoritativeSquareFootPricing =
           hasExplicitSquareFootPricing && presetItem.catalogKey === STANDARD_SQ_FT_BASE_CATALOG_KEY;
         if (
-          !presetsWereProvided &&
           catalogMatch &&
-          catalogMatch.deletedAtUtc === null &&
+          !presetItem.wasSubmitted &&
           !hasAuthoritativeSquareFootPricing
         ) {
-          // Preserve any tenant customization already attached to a canonical
-          // catalog key. Omitted presets only backfill missing recommendations.
+          // Omission never resets or restores an existing tenant-owned copy.
           keptPresetIds.add(catalogMatch.id);
           continue;
+        }
+
+        const activeNameOwner = existingPresets.find(
+          (existingPreset) =>
+            existingPreset.id !== targetPreset.id &&
+            !existingPreset.deletedAtUtc &&
+            normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
+        );
+        if (activeNameOwner) {
+          throw new TenantProductNameConflictError(activeNameOwner.id, presetItem.name);
+        }
+
+        if (targetPreset.deletedAtUtc) {
+          await assertTenantProductActivationCapacity(prisma, input.tenantId);
         }
 
         const updated = await prisma.workPreset.update({
           where: { id: targetPreset.id },
           data: {
             catalogKey: presetItem.catalogKey,
+            catalogVersion: presetItem.catalogVersion,
+            catalogContentHash: presetItem.catalogContentHash,
+            catalogCustomizedAtUtc: isStandardWorkPresetCustomized(
+              input.primaryTrade,
+              presetItem.catalogKey,
+              {
+                description: presetItem.description,
+                defaultQuantity: presetItem.defaultQuantity,
+                unitCost: presetItem.unitCost,
+                unitPrice: presetItem.unitPrice,
+                isDefault: presetItem.isDefault ?? true,
+              },
+            ) ? new Date() : null,
             category: presetItem.category,
             unitType: presetItem.unitType,
             name: presetItem.name,
@@ -331,14 +386,33 @@ export async function applyOnboardingSetup(
           select: { id: true },
         });
         keptPresetIds.add(updated.id);
+        Object.assign(targetPreset, {
+          name: presetItem.name,
+          catalogKey: presetItem.catalogKey,
+          deletedAtUtc: null,
+        });
         continue;
       }
 
+      await assertTenantProductActivationCapacity(prisma, input.tenantId);
       const created = await prisma.workPreset.create({
         data: {
           tenantId: input.tenantId,
           serviceType: input.primaryTrade,
           catalogKey: presetItem.catalogKey,
+          catalogVersion: presetItem.catalogVersion,
+          catalogContentHash: presetItem.catalogContentHash,
+          catalogCustomizedAtUtc: isStandardWorkPresetCustomized(
+            input.primaryTrade,
+            presetItem.catalogKey,
+            {
+              description: presetItem.description,
+              defaultQuantity: presetItem.defaultQuantity,
+              unitCost: presetItem.unitCost,
+              unitPrice: presetItem.unitPrice,
+              isDefault: presetItem.isDefault ?? true,
+            },
+          ) ? new Date() : null,
           category: presetItem.category,
           unitType: presetItem.unitType,
           name: presetItem.name,
@@ -351,21 +425,40 @@ export async function applyOnboardingSetup(
         select: { id: true },
       });
       keptPresetIds.add(created.id);
+      existingPresets.push({
+        id: created.id,
+        name: presetItem.name,
+        catalogKey: presetItem.catalogKey,
+        deletedAtUtc: null,
+      });
     }
   }
 
   for (const presetItem of customPresetsToApply) {
-    const targetPreset =
-      (presetItem.id
-        ? existingPresets.find((existingPreset) => existingPreset.id === presetItem.id)
-        : undefined) ??
-      existingPresets.find(
-        (existingPreset) =>
-          !existingPreset.catalogKey &&
-          normalizePresetName(existingPreset.name) === normalizePresetName(presetItem.name),
-      );
+    const normalizedName = normalizePresetName(presetItem.name);
+    const idTarget = presetItem.id
+      ? existingPresets.find(
+          (existingPreset) => existingPreset.id === presetItem.id && !existingPreset.catalogKey,
+        )
+      : undefined;
+    const sameNamePresets = existingPresets.filter(
+      (existingPreset) => normalizePresetName(existingPreset.name) === normalizedName,
+    );
+    const activeNameOwner = sameNamePresets.find((existingPreset) => !existingPreset.deletedAtUtc);
+    if (
+      (idTarget && activeNameOwner && activeNameOwner.id !== idTarget.id) ||
+      (!idTarget && activeNameOwner?.catalogKey)
+    ) {
+      throw new TenantProductNameConflictError(activeNameOwner.id, presetItem.name);
+    }
+    const targetPreset = idTarget ??
+      (activeNameOwner && !activeNameOwner.catalogKey ? activeNameOwner : undefined) ??
+      sameNamePresets.find((existingPreset) => existingPreset.deletedAtUtc && !existingPreset.catalogKey);
 
     if (targetPreset) {
+      if (targetPreset.deletedAtUtc) {
+        await assertTenantProductActivationCapacity(prisma, input.tenantId);
+      }
       const updated = await prisma.workPreset.update({
         where: { id: targetPreset.id },
         data: {
@@ -383,9 +476,15 @@ export async function applyOnboardingSetup(
         select: { id: true },
       });
       keptPresetIds.add(updated.id);
+      Object.assign(targetPreset, {
+        name: presetItem.name,
+        catalogKey: null,
+        deletedAtUtc: null,
+      });
       continue;
     }
 
+    await assertTenantProductActivationCapacity(prisma, input.tenantId);
     const created = await prisma.workPreset.create({
       data: {
         tenantId: input.tenantId,
@@ -402,18 +501,23 @@ export async function applyOnboardingSetup(
       select: { id: true },
     });
     keptPresetIds.add(created.id);
+    existingPresets.push({
+      id: created.id,
+      name: presetItem.name,
+      catalogKey: null,
+      deletedAtUtc: null,
+    });
   }
 
-  const presetIdsToDelete = existingPresets
-    .filter((presetItem) => !keptPresetIds.has(presetItem.id))
-    .filter((presetItem) => presetsWereProvided || presetItem.catalogKey !== null)
-    .map((presetItem) => presetItem.id);
-
-  if (presetIdsToDelete.length > 0) {
+  // Disabling the separately managed square-foot baseline is explicit. No
+  // other omitted setup item is pruned or restored by a general setup save.
+  if (input.chargeBySquareFoot === false) {
     await prisma.workPreset.updateMany({
       where: {
         tenantId: input.tenantId,
-        id: { in: presetIdsToDelete },
+        serviceType: input.primaryTrade,
+        catalogKey: STANDARD_SQ_FT_BASE_CATALOG_KEY,
+        deletedAtUtc: null,
       },
       data: {
         deletedAtUtc: new Date(),
@@ -422,7 +526,10 @@ export async function applyOnboardingSetup(
   }
 
   return {
-    presetsCreatedOrUpdated: resolvedPresetsToApply.length + customPresetsToApply.length,
+    presetsCreatedOrUpdated:
+      starterCatalogResult.createdCount +
+      resolvedPresetsToApply.filter((preset) => preset.wasSubmitted).length +
+      customPresetsToApply.length,
   };
 }
 
@@ -434,7 +541,7 @@ export function parseServiceCategory(input: string): ServiceCategory | null {
 }
 
 export async function saveTenantWorkPreset(
-  prisma: PrismaClient | Prisma.TransactionClient,
+  prisma: Prisma.TransactionClient,
   input: SaveTenantWorkPresetInput,
 ) {
   const normalizedName = input.name.trim();
@@ -442,23 +549,23 @@ export async function saveTenantWorkPreset(
     throw new Error("Preset name is required.");
   }
 
-  const existingPresets = await prisma.workPreset.findMany({
-    where: {
-      tenantId: input.tenantId,
-      serviceType: input.serviceType,
-      catalogKey: null,
-    },
-    select: {
-      id: true,
-      name: true,
-      deletedAtUtc: true,
-    },
-    take: 200,
+  await lockTenantProductCatalog(prisma, input.tenantId);
+
+  const existingPresets = await findTenantProductNameMatches(prisma, {
+    tenantId: input.tenantId,
+    serviceType: input.serviceType,
+    name: normalizedName,
   });
 
-  const matchedPreset = existingPresets.find(
+  const sameNamePresets = existingPresets.filter(
     (preset) => normalizePresetName(preset.name) === normalizePresetName(normalizedName),
   );
+  const activeNameOwner = sameNamePresets.find((preset) => !preset.deletedAtUtc);
+  if (activeNameOwner?.catalogKey) {
+    throw new TenantProductNameConflictError(activeNameOwner.id, normalizedName);
+  }
+  const matchedPreset = activeNameOwner ??
+    sameNamePresets.find((preset) => preset.deletedAtUtc && !preset.catalogKey);
 
   const normalizedDescription =
     input.description !== undefined ? input.description.trim() || null : undefined;
@@ -476,6 +583,9 @@ export async function saveTenantWorkPreset(
   } satisfies Prisma.WorkPresetUncheckedUpdateInput;
 
   if (matchedPreset) {
+    if (matchedPreset.deletedAtUtc) {
+      await assertTenantProductActivationCapacity(prisma, input.tenantId);
+    }
     const preset = await prisma.workPreset.update({
       where: { id: matchedPreset.id },
       data: payload,
@@ -486,6 +596,7 @@ export async function saveTenantWorkPreset(
     } as const;
   }
 
+  await assertTenantProductActivationCapacity(prisma, input.tenantId);
   const preset = await prisma.workPreset.create({
     data: {
       tenantId: input.tenantId,

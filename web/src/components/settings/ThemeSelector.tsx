@@ -3,54 +3,56 @@ import { useTheme } from "../theme/theme-context";
 import { Card } from "../ui";
 import { cn } from "../../lib/utils";
 import type { ThemePreference } from "../../lib/theme";
+import { useTranslation } from "react-i18next";
 
 const THEME_OPTIONS: Array<{
   value: ThemePreference;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
   icon: typeof Monitor;
 }> = [
   {
     value: "system",
-    label: "System",
-    description: "Match this device automatically.",
+    labelKey: "settings.theme.system",
+    descriptionKey: "settings.theme.systemDescription",
     icon: Monitor,
   },
   {
     value: "light",
-    label: "Light",
-    description: "Bright, crisp workspace surfaces.",
+    labelKey: "settings.theme.light",
+    descriptionKey: "settings.theme.lightDescription",
     icon: Sun,
   },
   {
     value: "dark",
-    label: "Dark",
-    description: "Lower-glare surfaces for night work.",
+    labelKey: "settings.theme.dark",
+    descriptionKey: "settings.theme.darkDescription",
     icon: Moon,
   },
 ];
 
 export function ThemeSelector() {
+  const { t } = useTranslation();
   const { preference, resolvedTheme, setPreference } = useTheme();
 
   return (
     <Card variant="elevated" padding="lg">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-semibold text-[var(--qf-text)]">Choose your workspace look</p>
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{t("settings.theme.title")}</p>
           <p className="mt-1 max-w-2xl text-sm text-[var(--qf-text-soft)]">
-            This preference stays on this device. System mode follows your phone or computer as it changes.
+            {t("settings.theme.description")}
           </p>
         </div>
         <span
           className="inline-flex w-fit items-center rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-2.5 py-1 text-xs font-semibold capitalize text-[var(--qf-text-soft)]"
           aria-live="polite"
         >
-          Currently {resolvedTheme}
+          {t("settings.theme.current", { theme: t(`settings.theme.${resolvedTheme}`) })}
         </span>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-3" role="group" aria-label="Workspace color theme">
+      <div className="mt-5 grid gap-3 sm:grid-cols-3" role="group" aria-label={t("settings.theme.group")}>
         {THEME_OPTIONS.map((option) => {
           const selected = preference === option.value;
           const Icon = option.icon;
@@ -81,11 +83,11 @@ export function ThemeSelector() {
               </span>
               <span className="min-w-0">
                 <span className="flex items-center gap-2 text-sm font-semibold text-[var(--qf-text)]">
-                  {option.label}
+                  {t(option.labelKey)}
                   {selected ? <Check size={15} className="text-[var(--qf-link)]" aria-hidden="true" /> : null}
                 </span>
                 <span className={cn("mt-1 block text-xs leading-5", selected ? "text-[var(--qf-text-soft)]" : "text-[var(--qf-text-muted)]")}>
-                  {option.description}
+                  {t(option.descriptionKey)}
                 </span>
               </span>
             </button>

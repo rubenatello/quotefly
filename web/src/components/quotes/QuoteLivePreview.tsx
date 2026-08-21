@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId } from "../../lib/api";
+import type { BrandingComponentColors, BrandingLogoPosition, BrandingTemplateId, SupportedLocale } from "../../lib/api";
 import { isSupportedBrandLogoDataUrl } from "../../lib/brand-logo";
-import { money } from "../dashboard/DashboardContext";
+import { formatQuoteDocumentMoney, quoteDocumentCopy } from "../../lib/quote-document-copy";
 import { QuoteAttributionFooter } from "./quote-footer";
 import { getQuoteTemplateOption } from "./quote-template";
 
@@ -37,8 +37,9 @@ export function QuoteLivePreview({
   componentColors,
   footerText,
   showQuoteFlyAttribution,
-  quoteReferenceLabel = "Quote preview",
-  subtitle = "Customer quote",
+  documentLocale = "en-US",
+  quoteReferenceLabel,
+  subtitle,
 }: {
   businessName: string;
   businessHint?: string;
@@ -60,9 +61,12 @@ export function QuoteLivePreview({
   componentColors?: BrandingComponentColors | null;
   footerText?: string;
   showQuoteFlyAttribution?: boolean;
+  documentLocale?: SupportedLocale;
   quoteReferenceLabel?: string;
   subtitle?: string;
 }) {
+  const copy = quoteDocumentCopy(documentLocale);
+  const money = (value: string | number) => formatQuoteDocumentMoney(value, documentLocale);
   const logo = isSupportedBrandLogoDataUrl(logoUrl) ? <BrandLogo logoUrl={logoUrl} /> : null;
   const template = getQuoteTemplateOption(templateId);
   const headerBgColor = componentColors?.headerBgColor ?? accentColor;
@@ -76,12 +80,12 @@ export function QuoteLivePreview({
     lines
       .filter((line) => line.sectionType === "ALTERNATE")
       .reduce<Record<string, QuotePreviewLine[]>>((groups, line) => {
-        const key = line.sectionLabel?.trim() || "Alternate Option";
+        const key = line.sectionLabel?.trim() || copy.alternateOption;
         groups[key] = groups[key] ? [...groups[key], line] : [line];
         return groups;
       }, {}),
   ).map((sectionLines) => ({
-    label: sectionLines[0]?.sectionLabel?.trim() || "Alternate Option",
+    label: sectionLines[0]?.sectionLabel?.trim() || copy.alternateOption,
     lines: sectionLines,
     subtotal: sectionLines.reduce((sum, line) => sum + line.lineTotal, 0),
   }));
@@ -101,22 +105,23 @@ export function QuoteLivePreview({
           quoteTitle={quoteTitle}
           preparedDateLabel={preparedDateLabel}
           sentDateLabel={sentDateLabel}
-          quoteReferenceLabel={quoteReferenceLabel}
-          subtitle={subtitle}
+          quoteReferenceLabel={quoteReferenceLabel ?? copy.quotePreview}
+          subtitle={subtitle ?? copy.customerQuote}
+          copy={copy}
           templateId={template.id}
         />
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <PreviewInfoCard
-            label="Business"
+            label={copy.business}
             value={businessName}
             hint={businessHint}
             labelColor={sectionLabelColor}
           />
           <PreviewInfoCard
-            label="Customer"
-            value={customerName || "Select customer"}
-            hint={[customerPhone, customerEmail].filter(Boolean).join(" / ") || "Customer details will show here."}
+            label={copy.customer}
+            value={customerName || copy.selectCustomer}
+            hint={[customerPhone, customerEmail].filter(Boolean).join(" / ") || copy.customerDetailsPlaceholder}
             labelColor={sectionLabelColor}
           />
         </div>
@@ -127,7 +132,7 @@ export function QuoteLivePreview({
               className="text-[11px] font-semibold uppercase tracking-[0.18em]"
               style={{ color: sectionLabelColor }}
             >
-              Overview
+              {copy.overview}
             </p>
             <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{scopeText}</p>
           </div>
@@ -138,7 +143,7 @@ export function QuoteLivePreview({
             className="text-[11px] font-semibold uppercase tracking-[0.18em]"
             style={{ color: sectionLabelColor }}
           >
-            Included Work
+            {copy.includedWork}
           </p>
 
           <div className="mt-3 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-white">
@@ -146,10 +151,10 @@ export function QuoteLivePreview({
               className="hidden grid-cols-[minmax(0,1.7fr)_72px_96px_110px] gap-3 border-b border-[var(--qf-border)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] md:grid"
               style={{ backgroundColor: tableHeaderBgColor, color: tableHeaderTextColor }}
             >
-              <span>Description</span>
-              <span className="text-right">Qty</span>
-              <span className="text-right">Unit</span>
-              <span className="text-right">Total</span>
+              <span>{copy.description}</span>
+              <span className="text-right">{copy.quantity}</span>
+              <span className="text-right">{copy.unit}</span>
+              <span className="text-right">{copy.total}</span>
             </div>
 
             <div className="divide-y divide-slate-200">
@@ -160,22 +165,22 @@ export function QuoteLivePreview({
                     className="space-y-3 px-4 py-3 text-sm md:grid md:grid-cols-[minmax(0,1.7fr)_72px_96px_110px] md:gap-3 md:space-y-0"
                   >
                     <div className="min-w-0">
-                      <p className="font-semibold text-slate-900">{line.title || "Untitled line"}</p>
+                      <p className="font-semibold text-slate-900">{line.title || copy.untitledLine}</p>
                       {line.details.trim() ? (
                         <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-slate-500">{line.details}</p>
                       ) : null}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-2 md:contents md:rounded-none md:border-0 md:bg-transparent md:p-0">
-                      <PreviewLineMeta label="Qty" value={line.quantity} />
-                      <PreviewLineMeta label="Unit" value={money(line.unitPrice)} />
-                      <PreviewLineMeta label="Total" value={money(line.lineTotal)} strong accentColor={totalsColor} />
+                      <PreviewLineMeta label={copy.quantity} value={line.quantity} />
+                      <PreviewLineMeta label={copy.unit} value={money(line.unitPrice)} />
+                      <PreviewLineMeta label={copy.total} value={money(line.lineTotal)} strong accentColor={totalsColor} />
                     </div>
                   </div>
                 ))
               ) : (
                 <div className="px-4 py-8 text-center text-sm text-slate-500">
-                  Add quote lines to see the customer-facing document take shape.
+                  {copy.emptyLines}
                 </div>
               )}
             </div>
@@ -188,7 +193,7 @@ export function QuoteLivePreview({
               className="text-[11px] font-semibold uppercase tracking-[0.18em]"
               style={{ color: sectionLabelColor }}
             >
-              Alternate pricing
+              {copy.alternatePricing}
             </p>
 
             <div className="space-y-3">
@@ -198,7 +203,7 @@ export function QuoteLivePreview({
                     <div>
                       <p className="text-sm font-semibold text-slate-900">{section.label}</p>
                       <p className="text-xs text-slate-500">
-                        Optional pricing. Not included in the main total below.
+                        {copy.optionalPricing}
                       </p>
                     </div>
                     <div className="text-sm font-semibold text-amber-700">{money(section.subtotal)}</div>
@@ -209,7 +214,7 @@ export function QuoteLivePreview({
                       <div key={line.id} className="rounded-lg border border-white/80 bg-white/80 px-3 py-2">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="font-semibold text-slate-900">{line.title || "Untitled line"}</p>
+                            <p className="font-semibold text-slate-900">{line.title || copy.untitledLine}</p>
                             {line.details.trim() ? (
                               <p className="mt-1 text-xs leading-5 text-slate-500">{line.details}</p>
                             ) : null}
@@ -229,9 +234,9 @@ export function QuoteLivePreview({
 
         <div className="mt-5 flex justify-end">
           <div className="w-full max-w-[280px] rounded-xl border border-[var(--qf-border)] bg-white px-4 py-3 shadow-[var(--qf-shadow-sm)]">
-            <PreviewTotalRow label="Subtotal" value={money(customerSubtotal)} />
-            <PreviewTotalRow label="Tax" value={money(taxAmount)} />
-            <PreviewTotalRow label="Total" value={money(totalAmount)} strong accentColor={totalsColor} />
+            <PreviewTotalRow label={copy.subtotal} value={money(customerSubtotal)} />
+            <PreviewTotalRow label={copy.tax} value={money(taxAmount)} />
+            <PreviewTotalRow label={copy.total} value={money(totalAmount)} strong accentColor={totalsColor} />
           </div>
         </div>
 
@@ -240,6 +245,7 @@ export function QuoteLivePreview({
             footerText={footerText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
             textColor={componentColors?.footerTextColor}
+            documentLocale={documentLocale}
           />
         </div>
       </div>
@@ -258,6 +264,7 @@ function PreviewHeaderCard({
   quoteReferenceLabel,
   subtitle,
   templateId,
+  copy,
 }: {
   headerBgColor: string;
   headerTextColor: string;
@@ -269,6 +276,7 @@ function PreviewHeaderCard({
   quoteReferenceLabel: string;
   subtitle: string;
   templateId: "modern" | "professional" | "minimal";
+  copy: ReturnType<typeof quoteDocumentCopy>;
 }) {
   const alignmentClass =
     logoPosition === "center"
@@ -314,7 +322,7 @@ function PreviewHeaderCard({
               }`}
               style={isProfessional ? { color: headerTextColor } : undefined}
             >
-              {quoteTitle.trim() || "Untitled quote"}
+              {quoteTitle.trim() || copy.untitledQuote}
             </h3>
             <p className={`mt-1 text-sm ${isProfessional ? "opacity-80" : "text-slate-500"}`}>{subtitle}</p>
           </div>
@@ -325,7 +333,7 @@ function PreviewHeaderCard({
             isProfessional ? "opacity-80" : "text-slate-500"
           } ${metaClass}`}
         >
-          <span>Prepared {preparedDateLabel} &nbsp;|&nbsp; Sent {sentDateLabel || "N/A"}</span>
+          <span>{copy.prepared} {preparedDateLabel} &nbsp;|&nbsp; {copy.sent} {sentDateLabel || copy.notAvailable}</span>
           <span className={`font-medium ${isProfessional ? "" : "text-slate-500"}`}>{quoteReferenceLabel}</span>
         </div>
       </div>
@@ -336,7 +344,7 @@ function PreviewHeaderCard({
 function BrandLogo({ logoUrl }: { logoUrl: string }) {
   return (
     <div className="flex h-12 max-w-[132px] items-center sm:max-w-[160px]">
-      <img src={logoUrl} alt="Company logo" className="max-h-12 w-auto max-w-full object-contain" />
+      <img src={logoUrl} alt="" aria-hidden="true" className="max-h-12 w-auto max-w-full object-contain" />
     </div>
   );
 }

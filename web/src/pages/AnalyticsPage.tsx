@@ -1,4 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Activity,
   BadgeCheck,
@@ -45,13 +47,7 @@ type DateRange = {
 const DEFAULT_PRESET: RangePreset = "last_week";
 const CHART_HEIGHT = 224;
 
-const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
-  { value: "last_week", label: "Last 7 days" },
-  { value: "last_month", label: "Last month" },
-  { value: "this_month", label: "This month" },
-  { value: "last_90", label: "Last 90 days" },
-  { value: "custom", label: "Custom" },
-];
+const RANGE_OPTIONS: RangePreset[] = ["last_week", "last_month", "this_month", "last_90", "custom"];
 
 function quoteNumber(id: string) {
   return `QF-${id.slice(0, 8).toUpperCase()}`;
@@ -87,9 +83,20 @@ function differenceInDays(start: Date, endExclusive: Date) {
   return Math.max(1, Math.round((endExclusive.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
-function formatRangeLabel(range: DateRange) {
-  const startLabel = range.start.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const endLabel = addDays(range.endExclusive, -1).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function formatRangeLabel(range: DateRange, locale: string, timeZone?: string | null) {
+  const options: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    ...(timeZone ? { timeZone } : {}),
+  };
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat(locale, options);
+  } catch {
+    formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+  }
+  const startLabel = formatter.format(range.start);
+  const endLabel = formatter.format(addDays(range.endExclusive, -1));
   return `${startLabel} - ${endLabel}`;
 }
 
@@ -122,11 +129,20 @@ function isWithinRange(dateValue: string | null | undefined, range: DateRange) {
   return time >= range.start.getTime() && time < range.endExclusive.getTime();
 }
 
-function shortDayLabel(date: Date) {
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function shortDayLabel(date: Date, locale: string, timeZone?: string | null) {
+  try {
+    return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", ...(timeZone ? { timeZone } : {}) }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(date);
+  }
 }
 
-function buildRangeSeries(range: DateRange, getValue: (start: Date, end: Date) => number): TrendPoint[] {
+function buildRangeSeries(
+  range: DateRange,
+  getValue: (start: Date, end: Date) => number,
+  locale: string,
+  timeZone?: string | null,
+): TrendPoint[] {
   const totalDays = differenceInDays(range.start, range.endExclusive);
   const bucketSize = totalDays > 31 ? 7 : 1;
   const points: TrendPoint[] = [];
@@ -136,11 +152,11 @@ function buildRangeSeries(range: DateRange, getValue: (start: Date, end: Date) =
     const isSingleDay = differenceInDays(cursor, bucketEnd) === 1;
     points.push({
       label: isSingleDay
-        ? cursor.toLocaleDateString(undefined, { weekday: "short" })
-        : cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+        ? new Intl.DateTimeFormat(locale, { weekday: "short", ...(timeZone ? { timeZone } : {}) }).format(cursor)
+        : shortDayLabel(cursor, locale, timeZone),
       fullLabel: isSingleDay
-        ? shortDayLabel(cursor)
-        : `${shortDayLabel(cursor)} - ${shortDayLabel(addDays(bucketEnd, -1))}`,
+        ? shortDayLabel(cursor, locale, timeZone)
+        : `${shortDayLabel(cursor, locale, timeZone)} - ${shortDayLabel(addDays(bucketEnd, -1), locale, timeZone)}`,
       value: getValue(cursor, bucketEnd),
     });
   }
@@ -148,16 +164,16 @@ function buildRangeSeries(range: DateRange, getValue: (start: Date, end: Date) =
   return points;
 }
 
-function describeDurationHours(hours: number | null) {
-  if (hours === null || !Number.isFinite(hours)) return "-";
-  if (hours >= 48) return `${(hours / 24).toFixed(1)}d`;
-  return `${hours.toFixed(1)}h`;
+function describeDurationHours(hours: number | null, t: TFunction) {
+  if (hours === null || !Number.isFinite(hours)) return "—";
+  if (hours >= 48) return t("analytics.duration.dayShort", { days: (hours / 24).toFixed(1) });
+  return t("analytics.duration.hourShort", { hours: hours.toFixed(1) });
 }
 
-function describeDurationHint(hours: number | null) {
-  if (hours === null || !Number.isFinite(hours)) return "No response data yet";
-  if (hours < 1) return `${Math.round(hours * 60)} min avg`;
-  return `${hours.toFixed(1)} hrs avg`;
+function describeDurationHint(hours: number | null, t: TFunction) {
+  if (hours === null || !Number.isFinite(hours)) return t("analytics.duration.none");
+  if (hours < 1) return t("analytics.duration.minutes", { count: Math.round(hours * 60) });
+  return t("analytics.duration.hours", { hours: hours.toFixed(1) });
 }
 
 function lifecycleStage(quote: Quote): QuoteLifecycleStage {
@@ -173,13 +189,8 @@ function lifecycleStage(quote: Quote): QuoteLifecycleStage {
   return "DRAFT";
 }
 
-function lifecycleLabel(stage: QuoteLifecycleStage) {
-  if (stage === "DRAFT") return "Draft";
-  if (stage === "READY") return "Ready to send";
-  if (stage === "SENT") return "Sent";
-  if (stage === "ACCEPTED") return "Accepted";
-  if (stage === "DECLINED") return "Declined";
-  return "Invoiced";
+function lifecycleLabel(stage: QuoteLifecycleStage, t: TFunction) {
+  return t(`analytics.lifecycle.${stage.toLowerCase()}`);
 }
 
 function lifecycleInitial(stage: QuoteLifecycleStage) {
@@ -222,7 +233,13 @@ function firstResponseHours(customer: Customer, quotes: Quote[]) {
 
   return (firstResponseMs - createdAtMs) / (1000 * 60 * 60);
 }
-function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateRange) {
+function buildActivityItems(
+  customers: Customer[],
+  quotes: Quote[],
+  range: DateRange,
+  t: TFunction,
+  formatMoney: (value: string | number) => string,
+) {
   const items: ActivityItem[] = [];
 
   for (const customer of customers) {
@@ -230,7 +247,7 @@ function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateR
       items.push({
         id: `${customer.id}-created`,
         occurredAt: customer.createdAt,
-        title: "Lead added",
+        title: t("analytics.activity.leadAdded"),
         detail: customer.fullName,
         tone: "blue",
         icon: <UserRoundCheck size={14} strokeWidth={2.2} />,
@@ -241,8 +258,8 @@ function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateR
       items.push({
         id: `${customer.id}-follow-up`,
         occurredAt: customer.followUpUpdatedAtUtc as string,
-        title: "Lead status updated",
-        detail: `${customer.fullName} - ${customer.followUpStatus.replaceAll("_", " ").toLowerCase()}`,
+        title: t("analytics.activity.leadUpdated"),
+        detail: `${customer.fullName} - ${t(`quoteComponents.followUp.${customer.followUpStatus}`)}`,
         tone: customer.followUpStatus === "WON" ? "emerald" : customer.followUpStatus === "LOST" ? "orange" : "slate",
         icon: <Clock3 size={14} strokeWidth={2.2} />,
       });
@@ -254,8 +271,8 @@ function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateR
       items.push({
         id: `${quote.id}-drafted`,
         occurredAt: quote.createdAt,
-        title: "Quote drafted",
-        detail: `${quote.customer?.fullName ?? "Customer missing"} - ${quote.title}`,
+        title: t("analytics.activity.quoteDrafted"),
+        detail: `${quote.customer?.fullName ?? t("analytics.activity.missingCustomer")} - ${quote.title}`,
         tone: "blue",
         icon: <FileText size={14} strokeWidth={2.2} />,
       });
@@ -265,8 +282,8 @@ function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateR
       items.push({
         id: `${quote.id}-sent`,
         occurredAt: quote.sentAt as string,
-        title: "Quote sent",
-        detail: `${quote.customer?.fullName ?? "Customer missing"} - ${money(quote.totalAmount)}`,
+        title: t("analytics.activity.quoteSent"),
+        detail: `${quote.customer?.fullName ?? t("analytics.activity.missingCustomer")} - ${formatMoney(quote.totalAmount)}`,
         tone: "orange",
         icon: <Send size={14} strokeWidth={2.2} />,
       });
@@ -276,8 +293,8 @@ function buildActivityItems(customers: Customer[], quotes: Quote[], range: DateR
       items.push({
         id: `${quote.id}-accepted`,
         occurredAt: (quote.closedAtUtc ?? quote.updatedAt) as string,
-        title: "Quote accepted",
-        detail: `${quote.customer?.fullName ?? "Customer missing"} - ${money(quote.totalAmount)}`,
+        title: t("analytics.activity.quoteAccepted"),
+        detail: `${quote.customer?.fullName ?? t("analytics.activity.missingCustomer")} - ${formatMoney(quote.totalAmount)}`,
         tone: "emerald",
         icon: <BadgeCheck size={14} strokeWidth={2.2} />,
       });
@@ -433,7 +450,7 @@ function MinimalBarChart({ data, valueFormatter }: { data: TrendPoint[]; valueFo
   );
 }
 
-function ActivityLog({ items }: { items: ActivityItem[] }) {
+function ActivityLog({ items, t, locale, timeZone }: { items: ActivityItem[]; t: TFunction; locale: string; timeZone?: string | null }) {
   return items.length ? (
     <div className="max-h-[520px] space-y-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white">
       {items.map((item, index) => (
@@ -454,7 +471,7 @@ function ActivityLog({ items }: { items: ActivityItem[] }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-              <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt)}</span>
+              <span className="text-xs text-slate-500">{formatDateTime(item.occurredAt, locale, timeZone)}</span>
             </div>
             <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
           </div>
@@ -462,11 +479,11 @@ function ActivityLog({ items }: { items: ActivityItem[] }) {
       ))}
     </div>
   ) : (
-    <EmptyState title="No activity in this range" description="Pick a broader window or wait for more customer and quote activity." />
+    <EmptyState title={t("analytics.activity.none")} description={t("analytics.activity.noneDescription")} />
   );
 }
 
-function LifecycleMix({ quotes }: { quotes: Quote[] }) {
+function LifecycleMix({ quotes, t }: { quotes: Quote[]; t: TFunction }) {
   const counts = lifecycleCountMap(quotes);
   const total = quotes.length || 1;
 
@@ -482,7 +499,7 @@ function LifecycleMix({ quotes }: { quotes: Quote[] }) {
                 <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[10px] font-bold ${lifecycleColorClass(stage)}`}>
                   {lifecycleInitial(stage)}
                 </span>
-                <span className="font-medium text-slate-700">{lifecycleLabel(stage)}</span>
+                <span className="font-medium text-slate-700">{lifecycleLabel(stage, t)}</span>
               </div>
               <span className="font-semibold text-slate-900">{count}</span>
             </div>
@@ -517,7 +534,10 @@ function RangeButton({ active, label, onClick }: { active: boolean; label: strin
 
 export function AnalyticsPage() {
   usePageView("analytics");
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
   const {
+    session,
     customers,
     quotes,
     loading,
@@ -528,6 +548,9 @@ export function AnalyticsPage() {
     loadAll,
     navigateToQuote,
   } = useDashboard();
+  const timeZone = session?.timezone ?? null;
+  const formatMoney = (value: string | number) => money(value, locale);
+  const activeRangeLabel = (range: DateRange) => formatRangeLabel(range, locale, timeZone);
 
   const initialRange = useMemo(() => getDateRangeForPreset(DEFAULT_PRESET), []);
   const [rangePreset, setRangePreset] = useState<RangePreset>(DEFAULT_PRESET);
@@ -537,9 +560,9 @@ export function AnalyticsPage() {
   const parsedCustomEnd = fromDateInputValue(customEnd);
   const customRangeError = rangePreset === "custom"
     ? !parsedCustomStart || !parsedCustomEnd
-      ? "Choose both a start date and an end date to view custom-range analytics."
+      ? t("analytics.range.bothRequired")
       : parsedCustomEnd < parsedCustomStart
-        ? "End date must be on or after the start date."
+        ? t("analytics.range.endAfterStart")
         : null
     : null;
 
@@ -597,13 +620,17 @@ export function AnalyticsPage() {
   const rangeDays = differenceInDays(activeRange.start, activeRange.endExclusive);
   const quotesPerDaySeries = useMemo(
     () =>
-      buildRangeSeries(activeRange, (start, end) =>
-        quotes.filter((quote) => {
-          const createdAt = new Date(quote.createdAt);
-          return createdAt >= start && createdAt < end;
-        }).length,
+      buildRangeSeries(
+        activeRange,
+        (start, end) =>
+          quotes.filter((quote) => {
+            const createdAt = new Date(quote.createdAt);
+            return createdAt >= start && createdAt < end;
+          }).length,
+        locale,
+        timeZone,
       ),
-    [activeRange, quotes],
+    [activeRange, locale, quotes, timeZone],
   );
 
   const responseTimeSeries = useMemo(
@@ -619,8 +646,8 @@ export function AnalyticsPage() {
 
         if (!matchingHours.length) return 0;
         return matchingHours.reduce((sum, value) => sum + value, 0) / matchingHours.length;
-      }),
-    [activeRange, customerQuotesMap, customers],
+      }, locale, timeZone),
+    [activeRange, customerQuotesMap, customers, locale, timeZone],
   );
   const recentQuotes = useMemo(
     () =>
@@ -630,7 +657,10 @@ export function AnalyticsPage() {
     [filteredQuotes],
   );
 
-  const recentActivity = useMemo(() => buildActivityItems(customers, quotes, activeRange), [activeRange, customers, quotes]);
+  const recentActivity = useMemo(
+    () => buildActivityItems(customers, quotes, activeRange, t, (value) => money(value, locale)),
+    [activeRange, customers, locale, quotes, t],
+  );
 
   const acceptedRevenueInRange = filteredQuotes
     .filter((quote) => quote.status === "ACCEPTED" && isWithinRange(quote.closedAtUtc ?? quote.updatedAt, activeRange))
@@ -646,10 +676,10 @@ export function AnalyticsPage() {
   if (loading && customers.length === 0 && quotes.length === 0) {
     return (
       <div className="space-y-5 sm:space-y-6">
-        <PageHeader title="Analytics" subtitle="Track response speed, quote volume, and recent activity." mode="actions-only" />
+        <PageHeader title={t("analytics.title")} subtitle={t("analytics.loadingSubtitle")} mode="actions-only" />
         <LoadingState
-          title="Loading workspace analytics"
-          description="Calculating quote volume, response speed, revenue, and recent activity."
+          title={t("analytics.loadingTitle")}
+          description={t("analytics.loadingDescription")}
           variant="cards"
           rows={4}
         />
@@ -660,13 +690,13 @@ export function AnalyticsPage() {
   return (
     <div className="space-y-5 sm:space-y-6">
       <PageHeader
-        title="Analytics"
-        subtitle="Track response speed, quote volume, and recent activity without leaving the operating workflow."
+        title={t("analytics.title")}
+        subtitle={t("analytics.subtitle")}
         mode="actions-only"
         actions={
           <KodyButton
-            label="Ask Kody for insight"
-            prompt={`Summarize my sales pipeline for ${formatRangeLabel(activeRange)}. Call out quote volume, accepted revenue, stale follow-ups, and one practical action to improve close rate.`}
+            label={t("analytics.askKody")}
+            prompt={t("analytics.kodyPrompt", { range: activeRangeLabel(activeRange) })}
             tool="SUMMARIZE_PIPELINE"
             context={{
               currentPage: "analytics",
@@ -682,7 +712,7 @@ export function AnalyticsPage() {
         <Alert tone="error" onDismiss={() => setError(null)}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <span>{error}</span>
-            <Button variant="outline" size="sm" onClick={() => void loadAll()}>Retry</Button>
+            <Button variant="outline" size="sm" onClick={() => void loadAll()}>{t("analytics.retry")}</Button>
           </div>
         </Alert>
       ) : null}
@@ -691,16 +721,16 @@ export function AnalyticsPage() {
       <Card variant="default" padding="md" className="overflow-hidden">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Analytics range</p>
-            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Filter the board by timeframe</h2>
-            <p className="mt-1 text-sm text-slate-600">Everything below updates live as the selected window changes.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{t("analytics.range.eyebrow")}</p>
+            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">{t("analytics.range.title")}</h2>
+            <p className="mt-1 text-sm text-slate-600">{t("analytics.range.description")}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={customRangeError ? "orange" : "blue"} icon={<CalendarRange size={12} strokeWidth={2.1} />}>
-              {customRangeError ? "Custom range needs attention" : formatRangeLabel(activeRange)}
+              {customRangeError ? t("analytics.range.attention") : activeRangeLabel(activeRange)}
             </Badge>
             <Button variant="outline" size="sm" icon={<RefreshCw size={14} />} onClick={() => void loadAll()}>
-              Refresh
+              {t("analytics.refresh")}
             </Button>
           </div>
         </div>
@@ -708,10 +738,10 @@ export function AnalyticsPage() {
         <div className="qf-horizontal-filter-strip mt-4 flex snap-x gap-2 overflow-x-auto pb-1">
           {RANGE_OPTIONS.map((option) => (
             <RangeButton
-              key={option.value}
-              active={rangePreset === option.value}
-              label={option.label}
-              onClick={() => setRangePreset(option.value)}
+              key={option}
+              active={rangePreset === option}
+              label={t(`analytics.range.${option === "last_week" ? "lastWeek" : option === "last_month" ? "lastMonth" : option === "this_month" ? "thisMonth" : option === "last_90" ? "last90" : "custom"}`)}
+              onClick={() => setRangePreset(option)}
             />
           ))}
         </div>
@@ -719,7 +749,7 @@ export function AnalyticsPage() {
         {rangePreset === "custom" ? (
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[180px_180px_minmax(0,1fr)]">
             <label className="space-y-1">
-              <span className="text-xs font-medium text-slate-600">Start date</span>
+              <span className="text-xs font-medium text-slate-600">{t("analytics.range.start")}</span>
               <input
                 type="date"
                 value={customStart}
@@ -728,7 +758,7 @@ export function AnalyticsPage() {
               />
             </label>
             <label className="space-y-1">
-              <span className="text-xs font-medium text-slate-600">End date</span>
+              <span className="text-xs font-medium text-slate-600">{t("analytics.range.end")}</span>
               <input
                 type="date"
                 value={customEnd}
@@ -740,7 +770,7 @@ export function AnalyticsPage() {
               {customRangeError ? (
                 <span className="font-medium text-red-700">{customRangeError}</span>
               ) : (
-                "Custom range uses inclusive days. Larger windows automatically compress into weekly trend buckets."
+                t("analytics.range.help")
               )}
             </div>
           </div>
@@ -749,36 +779,36 @@ export function AnalyticsPage() {
 
       {customRangeError ? (
         <Alert tone="error">
-          Analytics are hidden until the custom date range is corrected. {customRangeError}
+          {t("analytics.range.hidden", { error: customRangeError })}
         </Alert>
       ) : (
         <>
       <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <MetricCard
-          label="Quotes in range"
+          label={t("analytics.metrics.quotes")}
           value={String(quotesCreatedInRange.length)}
-          hint={`${formatRangeLabel(activeRange)} quote creation volume`}
+          hint={t("analytics.metrics.quotesHint", { range: activeRangeLabel(activeRange) })}
           icon={<ChartColumn size={18} strokeWidth={2.1} />}
           tone="blue"
         />
         <MetricCard
-          label="Won quote value"
-          value={money(acceptedRevenueInRange)}
-          hint="Quote value accepted in the selected window"
+          label={t("analytics.metrics.wonValue")}
+          value={formatMoney(acceptedRevenueInRange)}
+          hint={t("analytics.metrics.wonHint")}
           icon={<CircleDollarSign size={18} strokeWidth={2.1} />}
           tone="emerald"
         />
         <MetricCard
-          label="Avg first response"
-          value={describeDurationHours(averageResponseHours)}
-          hint="Time from new lead to first follow-up or quote send"
+          label={t("analytics.metrics.response")}
+          value={describeDurationHours(averageResponseHours, t)}
+          hint={t("analytics.metrics.responseHint")}
           icon={<Clock3 size={18} strokeWidth={2.1} />}
           tone="orange"
         />
         <MetricCard
-          label="Quotes per day"
-          value={quotesPerDay.toFixed(1)}
-          hint={`${rangeDays}-day average across the selected window`}
+          label={t("analytics.metrics.perDay")}
+          value={new Intl.NumberFormat(locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(quotesPerDay)}
+          hint={t("analytics.metrics.perDayHint", { days: rangeDays })}
           icon={<Activity size={18} strokeWidth={2.1} />}
           tone="slate"
         />
@@ -786,77 +816,77 @@ export function AnalyticsPage() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.95fr)]">
         <ChartFrame
-          eyebrow="Volume trend"
-          title="Quotes over time"
-          subtitle={rangeDays > 31 ? "Weekly quote creation volume across the selected range." : "Daily quote creation volume across the selected range."}
-          action={<Badge tone="blue">{quotesCreatedInRange.length} created</Badge>}
+          eyebrow={t("analytics.charts.volumeEyebrow")}
+          title={t("analytics.charts.volumeTitle")}
+          subtitle={t(rangeDays > 31 ? "analytics.charts.volumeWeekly" : "analytics.charts.volumeDaily")}
+          action={<Badge tone="blue">{t("analytics.charts.created", { count: quotesCreatedInRange.length })}</Badge>}
         >
           <MinimalLineChart data={quotesPerDaySeries} valueFormatter={(value) => String(value)} />
         </ChartFrame>
 
         <ChartFrame
-          eyebrow="History log"
-          title="Recent workspace activity"
-          subtitle="A compact feed of leads, quote sends, and accepted work inside the selected range."
-          action={<Badge tone="slate">{recentActivity.length} events</Badge>}
+          eyebrow={t("analytics.charts.historyEyebrow")}
+          title={t("analytics.charts.historyTitle")}
+          subtitle={t("analytics.charts.historyDescription")}
+          action={<Badge tone="slate">{t("analytics.charts.events", { count: recentActivity.length })}</Badge>}
         >
-          <ActivityLog items={recentActivity} />
+          <ActivityLog items={recentActivity} t={t} locale={locale} timeZone={timeZone} />
         </ChartFrame>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_380px]">
         <ChartFrame
-          eyebrow="Speed trend"
-          title="Lead response time"
-          subtitle={rangeDays > 31 ? "Weekly average hours from lead entry to first follow-up or quote send." : "Daily average hours from lead entry to first follow-up or quote send."}
-          action={<Badge tone="orange" icon={<CalendarClock size={12} strokeWidth={2.1} />}>{describeDurationHint(averageResponseHours)}</Badge>}
+          eyebrow={t("analytics.charts.speedEyebrow")}
+          title={t("analytics.charts.speedTitle")}
+          subtitle={t(rangeDays > 31 ? "analytics.charts.speedWeekly" : "analytics.charts.speedDaily")}
+          action={<Badge tone="orange" icon={<CalendarClock size={12} strokeWidth={2.1} />}>{describeDurationHint(averageResponseHours, t)}</Badge>}
         >
-          <MinimalBarChart data={responseTimeSeries} valueFormatter={(value) => (value > 0 ? `${value.toFixed(1)}h` : "-")} />
+          <MinimalBarChart data={responseTimeSeries} valueFormatter={(value) => (value > 0 ? t("analytics.duration.hourShort", { hours: value.toFixed(1) }) : "—")} />
         </ChartFrame>
 
         <ChartFrame
-          eyebrow="Snapshot"
-          title="Range summary"
-          subtitle="Quote lifecycle mix and average value for the selected window."
+          eyebrow={t("analytics.charts.snapshot")}
+          title={t("analytics.charts.summary")}
+          subtitle={t("analytics.charts.summaryDescription")}
         >
           <div className="space-y-4">
-            <LifecycleMix quotes={filteredQuotes} />
+            <LifecycleMix quotes={filteredQuotes} t={t} />
 
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Average quote value</p>
-              <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{money(averageQuoteValue)}</p>
-              <p className="mt-1 text-xs text-slate-500">{filteredCustomers.length} customer records touched in this window</p>
+              <p className="text-sm font-semibold text-slate-900">{t("analytics.charts.averageValue")}</p>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{formatMoney(averageQuoteValue)}</p>
+              <p className="mt-1 text-xs text-slate-500">{t("analytics.charts.customersTouched", { count: filteredCustomers.length })}</p>
             </div>
           </div>
         </ChartFrame>
       </div>
 
       <ChartFrame
-        eyebrow="Recent quote activity"
-        title="Latest quote outcomes"
-        subtitle="Use this to jump into the most recently changed quotes inside the selected range."
+        eyebrow={t("analytics.charts.recentEyebrow")}
+        title={t("analytics.charts.recentTitle")}
+        subtitle={t("analytics.charts.recentDescription")}
       >
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           {loading ? (
             <div className="p-4">
               <LoadingState
-                title="Loading analytics"
-                description="Calculating quote outcomes, response speed, and revenue trends for this window."
+                title={t("analytics.table.loading")}
+                description={t("analytics.table.loadingDescription")}
                 variant="table"
                 rows={4}
               />
             </div>
           ) : recentQuotes.length === 0 ? (
             <div className="p-4">
-              <EmptyState title="No quote activity in this range" description="Choose a wider timeframe or wait for more quote changes." />
+              <EmptyState title={t("analytics.table.empty")} description={t("analytics.table.emptyDescription")} />
             </div>
           ) : (
             <>
               <div className="hidden grid-cols-[130px_minmax(0,1.25fr)_132px_108px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid 2xl:grid-cols-[140px_minmax(0,1.4fr)_150px_120px]">
-                <span>Quote</span>
-                <span>Customer</span>
-                <span>Status</span>
-                <span>Updated</span>
+                <span>{t("analytics.table.quote")}</span>
+                <span>{t("analytics.table.customer")}</span>
+                <span>{t("analytics.table.status")}</span>
+                <span>{t("analytics.table.updated")}</span>
               </div>
               <div className="divide-y divide-slate-200">
                 {recentQuotes.map((quote) => (
@@ -868,13 +898,13 @@ export function AnalyticsPage() {
                   >
                     <div className="text-sm font-semibold text-slate-900">{quoteNumber(quote.id)}</div>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">{quote.customer?.fullName ?? "Customer missing"}</p>
+                      <p className="truncate text-sm font-semibold text-slate-900">{quote.customer?.fullName ?? t("analytics.activity.missingCustomer")}</p>
                       <p className="mt-1 truncate text-xs text-slate-500">{quote.title}</p>
                     </div>
                     <div>
                       <QuoteStatusPill status={quote.status} compact />
                     </div>
-                    <div className="text-xs text-slate-500">{formatDateTime(quote.updatedAt)}</div>
+                    <div className="text-xs text-slate-500">{formatDateTime(quote.updatedAt, locale, timeZone)}</div>
                   </button>
                 ))}
               </div>

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { WorkspaceRouteLoading } from "./AppLoadingScreen";
 import { CrmShell } from "./CrmShell";
 import { BillingRequiredScreen } from "./billing/BillingRequiredScreen";
@@ -61,6 +62,7 @@ export function CrmAppLayout({
   onLogout: () => void;
   onRefreshSession: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const canManageCatalog = ["owner", "admin"].includes(session.role.trim().toLowerCase());
@@ -181,7 +183,7 @@ export function CrmAppLayout({
                 ownerView={session.role.trim().toLowerCase() === "owner"}
               />
             ) : null}
-            <Suspense fallback={<WorkspaceRouteLoading message={`Loading ${WORKSPACE_PAGE_META[currentPage].label.toLowerCase()}...`} />}>
+            <Suspense fallback={<WorkspaceRouteLoading message={t("pages.loading", { page: t(`${WORKSPACE_PAGE_META[currentPage].translationKey}.label`).toLowerCase() })} />}>
               <Routes>
                 <Route index element={<WorkspaceHomePage />} />
                 <Route path="customers" element={<CustomersPage />} />

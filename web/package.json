@@ -8,7 +8,8 @@
     "generate:sitemap": "tsx scripts/generate-sitemap.ts",
     "check:sitemap": "tsx scripts/generate-sitemap.ts --check",
     "check:sitemap:live": "tsx scripts/check-live-sitemap.ts",
-    "build": "npm run generate:sitemap && tsc -b && vite build && tsx scripts/prerender-public.ts && npm run test:seo",
+    "build": "npm run generate:sitemap && npm run test:i18n && tsc -b && vite build && tsx scripts/prerender-public.ts && npm run test:seo",
+    "test:i18n": "tsx --test scripts/i18n.test.ts",
     "test:seo": "tsx --test scripts/public-seo.test.ts",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -21,9 +22,11 @@
     "@tanstack/react-table": "^8.21.3",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "i18next": "^26.4.0",
     "lucide-react": "^1.7.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-i18next": "^17.0.12",
     "react-router-dom": "^7.18.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0"

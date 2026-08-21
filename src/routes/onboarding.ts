@@ -15,6 +15,10 @@ import {
   recommendedPresetsForTrade,
   saveTenantWorkPreset,
 } from "../services/onboarding";
+import {
+  StarterCatalogCapacityError,
+  TenantProductNameConflictError,
+} from "../services/tenant-starter-catalog";
 
 const ServiceTypeEnum = z.enum([
   "HVAC",
@@ -77,6 +81,41 @@ const PresetQuerySchema = z.object({
   serviceType: z.string().trim().min(2),
 });
 
+function onboardingCatalogWriteError(error: unknown): {
+  statusCode: 404 | 409;
+  body: Record<string, unknown>;
+} | null {
+  if (error instanceof StarterCatalogCapacityError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "Product catalog is limited to 200 active items.",
+        code: "PRODUCT_CATALOG_LIMIT",
+        activeProductCount: error.activeProductCount,
+        requestedMissingCount: error.missingProductCount,
+        maximumProductCount: error.maximumProductCount,
+      },
+    };
+  }
+  if (error instanceof TenantProductNameConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: error.message,
+        code: "PRODUCT_NAME_CONFLICT",
+        productId: error.productId,
+      },
+    };
+  }
+  if (error instanceof Error && error.message === "STARTER_CATALOG_TENANT_NOT_FOUND") {
+    return {
+      statusCode: 404,
+      body: { error: "Tenant not found for account." },
+    };
+  }
+  return null;
+}
+
 export const onboardingRoutes: FastifyPluginAsync = async (app) => {
   app.get("/onboarding/setup", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
@@ -129,7 +168,7 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
           }
         : null,
       defaultPricingProfiles: tenant.pricingProfiles,
-      presets,
+      presets: presets.map(({ catalogContentHash: _catalogContentHash, ...preset }) => preset),
       supportedTrades: ServiceTypeEnum.options,
     };
   });
@@ -168,30 +207,38 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const result = await app.prisma.$transaction(async (transaction) => {
-      const setupResult = await applyOnboardingSetup(transaction, {
-        tenantId: tenant.id,
-        companyName: tenant.name,
-        primaryTrade: payload.primaryTrade,
-        logoUrl: payload.logoUrl,
-        primaryColor: payload.primaryColor,
-        chargeBySquareFoot: payload.chargeBySquareFoot,
-        sqFtUnitCost: payload.sqFtUnitCost,
-        sqFtUnitPrice: payload.sqFtUnitPrice,
-        customPresets: payload.presets,
+    try {
+      const result = await app.prisma.$transaction(async (transaction) => {
+        const setupResult = await applyOnboardingSetup(transaction, {
+          tenantId: tenant.id,
+          companyName: tenant.name,
+          primaryTrade: payload.primaryTrade,
+          logoUrl: payload.logoUrl,
+          primaryColor: payload.primaryColor,
+          chargeBySquareFoot: payload.chargeBySquareFoot,
+          sqFtUnitCost: payload.sqFtUnitCost,
+          sqFtUnitPrice: payload.sqFtUnitPrice,
+          customPresets: payload.presets,
+        });
+        await markTenantAiRetrievalSourceTypeDeleted(transaction, {
+          tenantId: tenant.id,
+          sourceTypes: ["WorkPreset"],
+        });
+        await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
+        return setupResult;
       });
-      await markTenantAiRetrievalSourceTypeDeleted(transaction, {
-        tenantId: tenant.id,
-        sourceTypes: ["WorkPreset"],
-      });
-      await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
-      return setupResult;
-    });
 
-    return reply.send({
-      message: "Onboarding setup saved.",
-      presetsCreatedOrUpdated: result.presetsCreatedOrUpdated,
-    });
+      return reply.send({
+        message: "Onboarding setup saved.",
+        presetsCreatedOrUpdated: result.presetsCreatedOrUpdated,
+      });
+    } catch (error) {
+      const catalogError = onboardingCatalogWriteError(error);
+      if (catalogError) {
+        return reply.code(catalogError.statusCode).send(catalogError.body);
+      }
+      throw error;
+    }
   });
 
   app.post("/onboarding/presets", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -211,30 +258,41 @@ export const onboardingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const result = await app.prisma.$transaction(async (transaction) => {
-      const saved = await saveTenantWorkPreset(transaction, {
-        tenantId: tenant.id,
-        serviceType: payload.serviceType,
-        name: payload.name,
-        description: payload.description,
-        category: payload.category,
-        unitType: payload.unitType,
-        defaultQuantity: payload.defaultQuantity,
-        unitCost: payload.unitCost,
-        unitPrice: payload.unitPrice,
+    try {
+      const result = await app.prisma.$transaction(async (transaction) => {
+        const saved = await saveTenantWorkPreset(transaction, {
+          tenantId: tenant.id,
+          serviceType: payload.serviceType,
+          name: payload.name,
+          description: payload.description,
+          category: payload.category,
+          unitType: payload.unitType,
+          defaultQuantity: payload.defaultQuantity,
+          unitCost: payload.unitCost,
+          unitPrice: payload.unitPrice,
+        });
+        await markWorkPresetAiRetrievalSourceDeleted(transaction, {
+          tenantId: tenant.id,
+          workPresetIds: [saved.preset.id],
+        });
+        await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
+        return saved;
       });
-      await markWorkPresetAiRetrievalSourceDeleted(transaction, {
-        tenantId: tenant.id,
-        workPresetIds: [saved.preset.id],
-      });
-      await enqueueTenantWorkPresetAiIndexJobs(transaction, { tenantId: tenant.id });
-      return saved;
-    });
 
-    return reply.send({
-      message: "Preset saved.",
-      action: result.action,
-      preset: result.preset,
-    });
+      return reply.send({
+        message: "Preset saved.",
+        action: result.action,
+        preset: (() => {
+          const { catalogContentHash: _catalogContentHash, ...preset } = result.preset;
+          return preset;
+        })(),
+      });
+    } catch (error) {
+      const catalogError = onboardingCatalogWriteError(error);
+      if (catalogError) {
+        return reply.code(catalogError.statusCode).send(catalogError.body);
+      }
+      throw error;
+    }
   });
 };

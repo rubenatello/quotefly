@@ -1,4 +1,5 @@
 import { BookmarkPlus, FileText, ListPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { EditableQuoteLine } from "../../lib/quote-lines";
 import { Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader } from "../ui";
 
@@ -17,11 +18,12 @@ export function SaveLinePresetModal({
   onSaveFull: () => void;
   onSaveNameOnly: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Modal open={open} onClose={onClose} size="md" ariaLabel="Save work name for future jobs">
+    <Modal open={open} onClose={onClose} size="md" ariaLabel={t("quoteComponents.savePreset.ariaLabel")}>
       <ModalHeader
-        title="Save this work name for future jobs?"
-        description="QuoteFly can save this line to your tenant's common work library so the crew can load it faster next time."
+        title={t("quoteComponents.savePreset.title")}
+        description={t("quoteComponents.savePreset.description")}
         onClose={onClose}
       />
       <ModalBody>
@@ -29,30 +31,30 @@ export function SaveLinePresetModal({
           <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4">
             <div className="flex items-center gap-2">
               <Badge tone="blue" icon={<ListPlus size={12} />}>
-                Reusable job
+                {t("quoteComponents.savePreset.reusable")}
               </Badge>
-              <span className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Preview</span>
+              <span className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteComponents.savePreset.preview")}</span>
             </div>
-            <p className="mt-3 text-base font-semibold text-[var(--qf-text)]">{line?.title || "Untitled line"}</p>
+            <p className="mt-3 text-base font-semibold text-[var(--qf-text)]">{line?.title || t("quoteComponents.savePreset.untitled")}</p>
             <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--qf-text-soft)]">
-              {line?.details?.trim() ? line.details : "No description on this line yet."}
+              {line?.details?.trim() ? line.details : t("quoteComponents.savePreset.noDescription")}
             </p>
           </div>
 
           <div className="rounded-2xl border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 text-sm text-[var(--qf-text-soft)]">
-            QuoteFly will save the current line under this trade using the line's current quantity, cost, and price defaults.
+            {t("quoteComponents.savePreset.help")}
           </div>
         </div>
       </ModalBody>
       <ModalFooter className="justify-stretch sm:justify-end">
         <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-          No, do not save
+          {t("quoteComponents.savePreset.no")}
         </Button>
         <Button type="button" variant="outline" icon={<FileText size={14} />} onClick={onSaveNameOnly} loading={saving}>
-          Save job name only
+          {t("quoteComponents.savePreset.nameOnly")}
         </Button>
         <Button type="button" icon={<BookmarkPlus size={14} />} onClick={onSaveFull} loading={saving}>
-          Save name + description
+          {t("quoteComponents.savePreset.full")}
         </Button>
       </ModalFooter>
     </Modal>

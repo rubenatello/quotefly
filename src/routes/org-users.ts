@@ -6,6 +6,7 @@ import { getJwtClaims } from "../lib/auth";
 import { loadTenantEntitlements } from "../lib/subscription";
 import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -362,48 +363,87 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "Only owners can update member roles." });
     }
 
-    const targetMembership = await app.prisma.tenantUser.findFirst({
-      where: {
-        id: tenantUserId,
-        tenantId: claims.tenantId,
-        deletedAtUtc: null,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            fullName: true,
-            createdAt: true,
-          },
-        },
-      },
-    });
-
-    if (!targetMembership) {
-      return reply.code(404).send({ error: "Member not found for organization." });
-    }
-
-    if (targetMembership.id === actingMembership.id && payload.role !== "owner") {
+    if (tenantUserId === actingMembership.id && payload.role !== "owner") {
       return reply.code(400).send({ error: "Owner cannot demote their own role." });
     }
 
-    const updated = await app.prisma.tenantUser.update({
-      where: { id: targetMembership.id },
-      data: {
-        role: payload.role,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            fullName: true,
-            createdAt: true,
+    const outcome = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const memberships = await tx.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
+        SELECT membership."id", membership."role"
+        FROM "TenantUser" membership
+        INNER JOIN "User" account ON account."id" = membership."userId"
+        WHERE membership."id" = ${tenantUserId}
+          AND membership."tenantId" = ${claims.tenantId}
+          AND membership."deletedAtUtc" IS NULL
+          AND account."deletedAtUtc" IS NULL
+        FOR UPDATE OF membership
+      `);
+      const targetMembership = memberships[0];
+      if (!targetMembership) return { kind: "missing" as const };
+
+      if (payload.role === "member" && normalizeRole(targetMembership.role) !== "member") {
+        const conflicts = await tx.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::bigint AS "count"
+          FROM "ActivityTask" task
+          INNER JOIN "Customer" customer
+            ON customer."id" = task."customerId"
+           AND customer."tenantId" = task."tenantId"
+          LEFT JOIN "Quote" quote
+            ON quote."id" = task."quoteId"
+           AND quote."tenantId" = task."tenantId"
+          WHERE task."tenantId" = ${claims.tenantId}
+            AND task."assignedTenantUserId" = ${targetMembership.id}
+            AND task."deletedAtUtc" IS NULL
+            AND task."status" IN ('OPEN', 'IN_PROGRESS')
+            AND (
+              customer."archivedAtUtc" IS NOT NULL
+              OR customer."deletedAtUtc" IS NOT NULL
+              OR customer."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
+              OR (
+                task."quoteId" IS NOT NULL
+                AND (
+                  quote."id" IS NULL
+                  OR quote."archivedAtUtc" IS NOT NULL
+                  OR quote."deletedAtUtc" IS NOT NULL
+                  OR quote."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
+                )
+              )
+            )
+        `);
+        const activeTaskCount = Number(conflicts[0]?.count ?? 0);
+        if (activeTaskCount > 0) {
+          return { kind: "task_conflict" as const, activeTaskCount };
+        }
+      }
+
+      const updated = await tx.tenantUser.update({
+        where: { id: targetMembership.id },
+        data: { role: payload.role },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              fullName: true,
+              createdAt: true,
+            },
           },
         },
-      },
-    });
+      });
+      return { kind: "updated" as const, updated };
+    }, { maxWait: 5_000, timeout: 15_000 });
+
+    if (outcome.kind === "missing") {
+      return reply.code(404).send({ error: "Member not found for organization." });
+    }
+    if (outcome.kind === "task_conflict") {
+      return reply.code(409).send({
+        code: "ROLE_CHANGE_ACTIVE_TASK_CONFLICT",
+        error: `Reassign ${outcome.activeTaskCount} active task(s), or align their customer and quote assignments, before changing this admin to a member.`,
+        activeTaskCount: outcome.activeTaskCount,
+      });
+    }
+    const updated = outcome.updated;
 
     return reply.send({
       member: {
@@ -437,43 +477,62 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Owner cannot remove their own active membership." });
     }
 
-    const targetMembership = await app.prisma.tenantUser.findFirst({
-      where: {
-        id: tenantUserId,
-        tenantId: claims.tenantId,
-        deletedAtUtc: null,
-      },
-      select: { id: true, role: true },
-    });
+    const removal = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      const memberships = await tx.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
+        SELECT membership."id", membership."role"
+        FROM "TenantUser" membership
+        INNER JOIN "User" account ON account."id" = membership."userId"
+        WHERE membership."id" = ${tenantUserId}
+          AND membership."tenantId" = ${claims.tenantId}
+          AND membership."deletedAtUtc" IS NULL
+          AND account."deletedAtUtc" IS NULL
+        FOR UPDATE OF membership
+      `);
+      const targetMembership = memberships[0];
+      if (!targetMembership) return { kind: "missing" as const };
+      if (normalizeRole(targetMembership.role) === "owner") return { kind: "owner" as const };
 
-    if (!targetMembership) {
+      const [customers, quotes, activities] = await Promise.all([
+        tx.customer.count({
+          where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
+        }),
+        tx.quote.count({
+          where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
+        }),
+        tx.activityTask.count({
+          where: {
+            tenantId: claims.tenantId,
+            assignedTenantUserId: targetMembership.id,
+            deletedAtUtc: null,
+            status: { in: ["OPEN", "IN_PROGRESS"] },
+          },
+        }),
+      ]);
+      if (customers > 0 || quotes > 0 || activities > 0) {
+        return { kind: "assigned" as const, assignments: { customers, quotes, activities } };
+      }
+
+      const result = await tx.tenantUser.updateMany({
+        where: { id: targetMembership.id, tenantId: claims.tenantId, deletedAtUtc: null },
+        data: { deletedAtUtc: new Date() },
+      });
+      return result.count === 1 ? { kind: "removed" as const } : { kind: "missing" as const };
+    }, { maxWait: 5_000, timeout: 15_000 });
+
+    if (removal.kind === "missing") {
       return reply.code(404).send({ error: "Member not found for organization." });
     }
-
-    if (normalizeRole(targetMembership.role) === "owner") {
+    if (removal.kind === "owner") {
       return reply.code(400).send({ error: "Transfer ownership before removing another owner." });
     }
-
-    const activeAssignments = await app.prisma.$transaction(async (tx) => ({
-      customers: await tx.customer.count({
-        where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
-      }),
-      quotes: await tx.quote.count({
-        where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
-      }),
-    }));
-    if (activeAssignments.customers > 0 || activeAssignments.quotes > 0) {
+    if (removal.kind === "assigned") {
+      const activeAssignments = removal.assignments;
       return reply.code(409).send({
         code: "MEMBER_HAS_ACTIVE_ASSIGNMENTS",
-        error: `Reassign ${activeAssignments.customers} customer(s) and ${activeAssignments.quotes} quote(s) before removing this member.`,
+        error: `Reassign ${activeAssignments.customers} customer(s), ${activeAssignments.quotes} quote(s), and ${activeAssignments.activities} task(s) before removing this member.`,
         assignments: activeAssignments,
       });
     }
-
-    await app.prisma.tenantUser.update({
-      where: { id: targetMembership.id },
-      data: { deletedAtUtc: new Date() },
-    });
 
     return reply.code(204).send();
   });

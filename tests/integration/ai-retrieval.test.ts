@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest"
 import { buildServer } from "../../src/app";
 import { capabilitiesForRole, type AccessContext } from "../../src/lib/access-policy";
 import {
+  AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
   deterministicEmbedding,
   markAiRetrievalSourceDeleted,
   retrieveAiContextFromIndex,
@@ -156,6 +157,7 @@ describe("AI retrieval index", () => {
         contentHash: "a".repeat(64),
         citationLabel: "Internal pricing note",
         policyVersion: "2026-08-11",
+        chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
       },
     });
     const financialEmbedding = deterministicEmbedding(financialContent);
@@ -175,6 +177,7 @@ describe("AI retrieval index", () => {
         classification: "C3_FINANCIAL_CONFIDENTIAL",
         citationLabel: "Internal pricing note",
         policyVersion: "2026-08-11",
+        chunkerVersion: AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION,
       },
     });
 

@@ -2,22 +2,24 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
   AI_DATA_POLICY_VERSION,
+  AI_RAG_ELIGIBLE_FIELDS,
+  validateAiRagSourceFieldManifest,
   type DataClassification,
 } from "./data-classification";
 
 const REVIEWED_SCHEMA_FIELD_TEXT = {
   TenantBranding: "addressLine1 addressLine2 businessEmail businessPhone city componentColors createdAt deletedAtUtc hideQuoteFlyAttribution id logoPosition logoUrl postalCode primaryColor quoteMessageTemplate state templateId tenantId updatedAt",
   TenantBrandAsset: "byteLength createdAt data id mimeType sha256 tenantId",
-  Tenant: "billingStateEventCreatedAtUtc billingStateEventId createdAt deletedAtUtc id name onboardingCompletedAtUtc primaryTrade slug stripeCheckoutAttemptExpiresAtUtc stripeCheckoutAttemptId stripeCheckoutSessionExpiresAtUtc stripeCheckoutSessionId stripeCustomerId stripeSubscriptionId subscriptionCurrentPeriodEndUtc subscriptionPlanCode subscriptionStatus timezone trialEndsAtUtc trialStartsAtUtc updatedAt",
-  User: "authVersion createdAt deletedAtUtc email fullName id legalAcceptedAtUtc passwordHash privacyPolicyVersion termsVersion updatedAt",
+  Tenant: "billingStateEventCreatedAtUtc billingStateEventId createdAt defaultCustomerLocale deletedAtUtc id name onboardingCompletedAtUtc primaryTrade slug stripeCheckoutAttemptExpiresAtUtc stripeCheckoutAttemptId stripeCheckoutSessionExpiresAtUtc stripeCheckoutSessionId stripeCustomerId stripeSubscriptionId subscriptionCurrentPeriodEndUtc subscriptionPlanCode subscriptionStatus timezone trialEndsAtUtc trialStartsAtUtc updatedAt",
+  User: "authVersion createdAt deletedAtUtc email fullName id legalAcceptedAtUtc passwordHash preferredLocale privacyPolicyVersion termsVersion updatedAt",
   PasswordResetToken: "createdAt expiresAtUtc id tokenHash usedAtUtc userId",
   QuoteDraftRecovery: "createdAt expiresAtUtc id payload savedAtUtc scope tenantId tenantUserId updatedAt",
   TenantUser: "createdAt deletedAtUtc id role tenantId userId",
   TenantPhoneNumber: "createdAt deletedAtUtc e164Number id provider tenantId updatedAt",
-  Customer: "archivedAtUtc assignedTenantUserId createdAt deletedAtUtc email followUpStatus followUpUpdatedAtUtc fullName id notes phone phoneDigits tenantId updatedAt",
+  Customer: "archivedAtUtc assignedTenantUserId createdAt deletedAtUtc email followUpStatus followUpUpdatedAtUtc fullName id notes phone phoneDigits preferredLocale tenantId updatedAt",
   PricingProfile: "createdAt deletedAtUtc id isDefault laborRate materialMarkup serviceType tenantId updatedAt",
   QuoteTemplate: "createdAt deletedAtUtc description id isActive name serviceType tenantId updatedAt",
-  Quote: "afterSaleFollowUpCompletedAtUtc afterSaleFollowUpDueAtUtc afterSaleFollowUpStatus aiGeneratedAtUtc aiModel aiPromptText archivedAtUtc assignedTenantUserId closedAtUtc createdAt customerId customerPriceSubtotal deletedAtUtc id internalCostSubtotal jobCompletedAtUtc jobStatus scopeText sentAt serviceType status taxAmount tenantId title totalAmount updatedAt",
+  Quote: "afterSaleFollowUpCompletedAtUtc afterSaleFollowUpDueAtUtc afterSaleFollowUpStatus aiGeneratedAtUtc aiModel aiPromptText archivedAtUtc assignedTenantUserId closedAtUtc createdAt customerId customerPriceSubtotal deletedAtUtc documentLocale id internalCostSubtotal jobCompletedAtUtc jobStatus scopeText sentAt serviceType status taxAmount tenantId title totalAmount updatedAt",
   AiUsageEvent: "actorEmail actorName actorUserId classification completionTokens confidenceLabel confidenceLevel createdAt creditsConsumed customerId deletedAtUtc estimatedCostUsd eventType id insightReasons insightSourceLabels insightSummary model patchAdded patchRemoved patchUpdated promptHash promptRedacted promptText promptTokens purpose quoteId requestCount retentionExpiresAtUtc retrievalAuditEventId retrievalAuditTenantId riskNote serviceType sourceCount tenantId totalTokens",
   AiAssistantFeedback: "actorUserId aiUsageEventId createdAt deletedAtUtc id note rating tenantId updatedAt",
   AiRetrievalAuditEvent: "actorUserId authorizationDurationMs authorizedCandidateCount candidateCount createdAt deletedAtUtc denialCode embeddingDurationMs filterSummary id inputTokenCount keywordCandidateCount keywordDurationMs maxClassification model outputTokenCount policyVersion purpose queryHash rankingDurationMs rankingMode rankingSummary requestId resultCount retentionExpiresAtUtc semanticCandidateCount sourceRefs sourceTypes status tenantId totalDurationMs",
@@ -29,6 +31,8 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   QuoteLineItem: "createdAt deletedAtUtc description id position quantity quoteId sectionLabel sectionType tenantId unitCost unitPrice updatedAt",
   QuoteRevision: "actorEmail actorName actorUserId changedFields createdAt customerId customerPriceSubtotal deletedAtUtc eventType id quoteId snapshot status tenantId title totalAmount version",
   CustomerActivityEvent: "actorEmail actorName actorUserId createdAt customerId deletedAtUtc detail eventType id metadata tenantId title",
+  ActivityTask: "assignedTenantUserId canceledAtUtc completedAtUtc completedByTenantUserId createdAt createdByTenantUserId customerId deletedAtUtc dueAtUtc id notes priority quoteId sourceKey status tenantId title type updatedAt version",
+  ActivityTaskEvent: "activityTaskId actorTenantUserId commandKeyHash commandPayloadHash createdAt fromStatus id requestId tenantId toStatus type",
   SmsMessage: "body deletedAtUtc direction externalSid fromNumber id receivedAt tenantId toNumber",
   QuoteDecisionSession: "createdAt deletedAtUtc id quoteId requesterPhone status tenantId updatedAt",
   BillingWebhookEvent: "attemptCount createdAt eventType failedAtUtc id lastAttemptAtUtc lastError payload processedAtUtc processingLeaseToken status stripeCreatedAtUtc stripeEventId succeededAtUtc tenantId",
@@ -38,7 +42,7 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   QuickBooksInvoiceSync: "createdAt deletedAtUtc id lastAttemptedAtUtc lastError payloadSnapshot quickBooksConnectionId quickBooksDocNumber quickBooksInvoiceId quoteId requestId status syncedAtUtc tenantId updatedAt",
   QuickBooksWebhookEvent: "entityId eventType id lastError payload processedAtUtc quickBooksConnectionId realmId receivedAtUtc tenantId webhookEventId",
   QuoteOutboundEvent: "actorEmail actorName actorUserId bodyPreview channel createdAt customerId deletedAtUtc destination id idempotencyKey quoteId subject tenantId",
-  WorkPreset: "catalogKey category createdAt defaultQuantity deletedAtUtc description id isDefault name serviceType tenantId unitCost unitPrice unitType updatedAt",
+  WorkPreset: "catalogContentHash catalogCustomizedAtUtc catalogKey catalogVersion category createdAt defaultQuantity deletedAtUtc description id isDefault name serviceType tenantId unitCost unitPrice unitType updatedAt",
 } as const;
 
 type ReviewedModel = keyof typeof REVIEWED_SCHEMA_FIELD_TEXT;
@@ -74,6 +78,8 @@ const MODEL_POLICIES = {
   QuoteLineItem: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote scope, quantity, price, and internal cost lines" },
   QuoteRevision: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Immutable quote history including financial snapshots" },
   CustomerActivityEvent: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Customer workflow timeline" },
+  ActivityTask: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Assignable customer work, due dates, and private operational notes" },
+  ActivityTaskEvent: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "required", purpose: "Content-free immutable activity task transition and idempotency audit" },
   SmsMessage: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant SMS communications" },
   QuoteDecisionSession: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote approval and revision workflow" },
   BillingWebhookEvent: { defaultClassification: "C4_RESTRICTED", tenantScope: "optional", purpose: "Stripe webhook idempotency and processing evidence" },
@@ -91,6 +97,7 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "Tenant.slug": "C1_BUSINESS_INTERNAL",
   "Tenant.timezone": "C1_BUSINESS_INTERNAL",
   "Tenant.primaryTrade": "C1_BUSINESS_INTERNAL",
+  "Tenant.defaultCustomerLocale": "C1_BUSINESS_INTERNAL",
   "Tenant.stripeCustomerId": "C4_RESTRICTED",
   "Tenant.stripeSubscriptionId": "C4_RESTRICTED",
   "Tenant.stripeCheckoutSessionId": "C4_RESTRICTED",
@@ -99,6 +106,7 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "User.id": "C1_BUSINESS_INTERNAL",
   "User.email": "C2_CUSTOMER_CONFIDENTIAL",
   "User.fullName": "C2_CUSTOMER_CONFIDENTIAL",
+  "User.preferredLocale": "C2_CUSTOMER_CONFIDENTIAL",
   "User.createdAt": "C1_BUSINESS_INTERNAL",
   "User.updatedAt": "C1_BUSINESS_INTERNAL",
   "User.deletedAtUtc": "C1_BUSINESS_INTERNAL",
@@ -119,6 +127,7 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "Customer.updatedAt": "C1_BUSINESS_INTERNAL",
   "Customer.archivedAtUtc": "C1_BUSINESS_INTERNAL",
   "Customer.deletedAtUtc": "C1_BUSINESS_INTERNAL",
+  "Customer.preferredLocale": "C2_CUSTOMER_CONFIDENTIAL",
   "Quote.id": "C1_BUSINESS_INTERNAL",
   "Quote.tenantId": "C1_BUSINESS_INTERNAL",
   "Quote.customerId": "C1_BUSINESS_INTERNAL",
@@ -130,18 +139,43 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "Quote.internalCostSubtotal": "C3_FINANCIAL_CONFIDENTIAL",
   "Quote.aiPromptText": "C3_FINANCIAL_CONFIDENTIAL",
   "Quote.aiModel": "C1_BUSINESS_INTERNAL",
+  "Quote.documentLocale": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.id": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.tenantId": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.quoteId": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.position": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.sectionType": "C1_BUSINESS_INTERNAL",
   "QuoteLineItem.unitCost": "C3_FINANCIAL_CONFIDENTIAL",
+  "ActivityTask.id": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.tenantId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.customerId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.quoteId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.assignedTenantUserId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.createdByTenantUserId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.completedByTenantUserId": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.type": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.status": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.priority": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.dueAtUtc": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.completedAtUtc": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.canceledAtUtc": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.sourceKey": "C4_RESTRICTED",
+  "ActivityTask.version": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.createdAt": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.updatedAt": "C1_BUSINESS_INTERNAL",
+  "ActivityTask.deletedAtUtc": "C1_BUSINESS_INTERNAL",
+  "ActivityTaskEvent.commandKeyHash": "C4_RESTRICTED",
+  "ActivityTaskEvent.commandPayloadHash": "C4_RESTRICTED",
+  "ActivityTaskEvent.requestId": "C4_RESTRICTED",
   "WorkPreset.name": "C1_BUSINESS_INTERNAL",
   "WorkPreset.description": "C1_BUSINESS_INTERNAL",
   "WorkPreset.serviceType": "C1_BUSINESS_INTERNAL",
   "WorkPreset.category": "C1_BUSINESS_INTERNAL",
   "WorkPreset.unitType": "C1_BUSINESS_INTERNAL",
   "WorkPreset.catalogKey": "C1_BUSINESS_INTERNAL",
+  "WorkPreset.catalogVersion": "C1_BUSINESS_INTERNAL",
+  "WorkPreset.catalogContentHash": "C3_FINANCIAL_CONFIDENTIAL",
+  "WorkPreset.catalogCustomizedAtUtc": "C1_BUSINESS_INTERNAL",
   "WorkPreset.unitPrice": "C2_CUSTOMER_CONFIDENTIAL",
   "QuoteTemplate.name": "C1_BUSINESS_INTERNAL",
   "QuoteTemplate.description": "C1_BUSINESS_INTERNAL",
@@ -197,18 +231,7 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "AiIndexJob.lastErrorCode": "C1_BUSINESS_INTERNAL",
 } as const satisfies Record<string, DataClassification>;
 
-const RAG_ELIGIBLE_FIELDS = new Set([
-  "Customer.notes",
-  "Quote.title",
-  "Quote.scopeText",
-  "QuoteLineItem.description",
-  "CustomerActivityEvent.title",
-  "CustomerActivityEvent.detail",
-  "QuoteTemplate.name",
-  "QuoteTemplate.description",
-  "WorkPreset.name",
-  "WorkPreset.description",
-]);
+const RAG_ELIGIBLE_FIELDS = new Set<string>(AI_RAG_ELIGIBLE_FIELDS);
 
 const ANALYTICS_ELIGIBLE_FIELDS = new Set([
   "Quote.serviceType",
@@ -239,6 +262,8 @@ export type DataGovernanceIssue = Readonly<{
     | "REMOVED_FIELD"
     | "UNKNOWN_FIELD_OVERRIDE"
     | "UNKNOWN_RAG_FIELD"
+    | "RAG_SOURCE_ADAPTER_MISSING"
+    | "RAG_FIELD_POLICY_MISMATCH"
     | "RAG_CLASSIFICATION_FORBIDDEN";
   model: string;
   field?: string;
@@ -393,6 +418,28 @@ function validateInventory(models: readonly GovernanceInventoryModel[]) {
         message: `${qualifiedField} is ${classification} and cannot be RAG-eligible in the initial policy.`,
       });
     }
+  }
+
+  const ragManifestValidation = validateAiRagSourceFieldManifest();
+  for (const qualifiedField of ragManifestValidation.missingSourceAdapters) {
+    const [model, field] = qualifiedField.split(".");
+    issues.push({
+      severity: "error",
+      code: "RAG_SOURCE_ADAPTER_MISSING",
+      model: model || "unknown",
+      field,
+      message: `RAG field ${qualifiedField} is vector eligible but has no canonical source adapter.`,
+    });
+  }
+  for (const qualifiedField of ragManifestValidation.nonVectorManifestFields) {
+    const [model, field] = qualifiedField.split(".");
+    issues.push({
+      severity: "error",
+      code: "RAG_FIELD_POLICY_MISMATCH",
+      model: model || "unknown",
+      field,
+      message: `RAG source adapter field ${qualifiedField} is not vector eligible under the field policy.`,
+    });
   }
 
   for (const qualifiedField of ANALYTICS_ELIGIBLE_FIELDS) {

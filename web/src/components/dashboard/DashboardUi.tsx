@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import {
   CallIcon,
@@ -67,10 +68,10 @@ function statusClass(status: QuoteStatus): string {
   return "text-slate-600 border-slate-200 bg-slate-50";
 }
 
-function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: string; className: string; icon: ReactNode } {
+function quoteStatusMeta(status: QuoteStatus, label: string): { label: string; shortLabel: string; className: string; icon: ReactNode } {
   if (status === "ACCEPTED") {
     return {
-      label: "Won",
+      label,
       shortLabel: "W",
       className: statusClass(status),
       icon: <CheckIcon size={12} />,
@@ -79,7 +80,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: stri
 
   if (status === "REJECTED") {
     return {
-      label: "Lost",
+      label,
       shortLabel: "L",
       className: statusClass(status),
       icon: <CloseIcon size={12} />,
@@ -88,7 +89,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: stri
 
   if (status === "SENT_TO_CUSTOMER") {
     return {
-      label: "Quoted",
+      label,
       shortLabel: "Q",
       className: statusClass(status),
       icon: <SendIcon size={12} />,
@@ -97,7 +98,7 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: stri
 
   if (status === "READY_FOR_REVIEW") {
     return {
-      label: "Review",
+      label,
       shortLabel: "R",
       className: statusClass(status),
       icon: <ClockIcon size={12} />,
@@ -105,24 +106,17 @@ function quoteStatusMeta(status: QuoteStatus): { label: string; shortLabel: stri
   }
 
   return {
-    label: "Draft",
+    label,
     shortLabel: "D",
     className: statusClass(status),
     icon: <EditIcon size={12} />,
   };
 }
 
-function followUpLabel(status: LeadFollowUpStatus): string {
-  if (status === "NEEDS_FOLLOW_UP") return "Needs Follow Up";
-  if (status === "FOLLOWED_UP") return "Followed Up";
-  if (status === "WON") return "Won";
-  return "Lost";
-}
-
-function followUpMeta(status: LeadFollowUpStatus): { label: string; className: string; icon: ReactNode } {
+function followUpMeta(status: LeadFollowUpStatus, label: string): { label: string; className: string; icon: ReactNode } {
   if (status === "FOLLOWED_UP") {
     return {
-      label: "Followed Up",
+      label,
       className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <MessageIcon size={12} />,
     };
@@ -130,7 +124,7 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
 
   if (status === "WON") {
     return {
-      label: "Won",
+      label,
       className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <CheckIcon size={12} />,
     };
@@ -138,23 +132,23 @@ function followUpMeta(status: LeadFollowUpStatus): { label: string; className: s
 
   if (status === "LOST") {
     return {
-      label: "Lost",
+      label,
       className: "text-red-600 border-red-200 bg-red-50",
       icon: <CloseIcon size={12} />,
     };
   }
 
   return {
-    label: "Needs Follow-Up",
+    label,
     className: "text-[var(--qf-brand-orange-text)] border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)]",
     icon: <ClockIcon size={12} />,
   };
 }
 
-function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; className: string; icon: ReactNode } {
+function eventMeta(eventType: QuoteRevision["eventType"], label: string): { label: string; className: string; icon: ReactNode } {
   if (eventType === "CREATED") {
     return {
-      label: "Created",
+      label,
       className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <QuoteIcon size={12} />,
     };
@@ -162,7 +156,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
 
   if (eventType === "STATUS_CHANGED") {
     return {
-      label: "Status",
+      label,
       className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <CheckIcon size={12} />,
     };
@@ -170,7 +164,7 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
 
   if (eventType === "LINE_ITEM_CHANGED") {
     return {
-      label: "Line Items",
+      label,
       className: "text-[var(--qf-brand-orange-text)] border-[var(--qf-brand-orange-border)] bg-[var(--qf-brand-orange-soft)]",
       icon: <InvoiceIcon size={12} />,
     };
@@ -178,23 +172,23 @@ function eventMeta(eventType: QuoteRevision["eventType"]): { label: string; clas
 
   if (eventType === "DECISION") {
     return {
-      label: "Decision",
+      label,
       className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <SendIcon size={12} />,
     };
   }
 
   return {
-    label: "Updated",
+    label,
     className: "text-slate-600 border-slate-200 bg-slate-50",
     icon: <EditIcon size={12} />,
   };
 }
 
-function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; className: string; icon: ReactNode } {
+function outboundChannelMeta(channel: QuoteOutboundChannel, label: string): { label: string; className: string; icon: ReactNode } {
   if (channel === "EMAIL_APP") {
     return {
-      label: "Email",
+      label,
       className: "text-quotefly-blue border-quotefly-blue/20 bg-quotefly-blue/[0.06]",
       icon: <EmailIcon size={12} />,
     };
@@ -202,7 +196,7 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
   if (channel === "SMS_APP") {
     return {
-      label: "Text",
+      label,
       className: "text-quotefly-accent border-quotefly-accent/20 bg-quotefly-accent/[0.06]",
       icon: <MessageIcon size={12} />,
     };
@@ -210,14 +204,14 @@ function outboundChannelMeta(channel: QuoteOutboundChannel): { label: string; cl
 
   if (channel === "NATIVE_SHARE") {
     return {
-      label: "Share",
+      label,
       className: "text-violet-700 border-violet-200 bg-violet-50",
       icon: <SendIcon size={12} />,
     };
   }
 
   return {
-    label: "Copy",
+    label,
     className: "text-slate-600 border-slate-200 bg-slate-50",
     icon: <CopyIcon size={12} />,
   };
@@ -252,6 +246,7 @@ export function MobileSectionSwitcher({
   quoteCount: number;
   totals: { newLeads: number; quotedLeads: number; closedLeads: number; afterSaleLeads: number };
 }) {
+  const { t } = useTranslation();
   const sections: Array<{
     id: DashboardMobileSection;
     label: string;
@@ -260,18 +255,18 @@ export function MobileSectionSwitcher({
   }> = [
     {
       id: "pipeline",
-      label: "Pipeline",
+      label: t("quoteComponents.dashboard.pipeline"),
       count: totals.newLeads + totals.quotedLeads + totals.closedLeads + totals.afterSaleLeads,
       icon: <CustomerIcon size={14} />,
     },
-    { id: "builder", label: "Build", count: quoteCount, icon: <EditIcon size={14} /> },
-    { id: "quote", label: "Quote Desk", count: selectedQuoteId ? 1 : 0, icon: <QuoteIcon size={14} /> },
+    { id: "builder", label: t("quoteComponents.dashboard.build"), count: quoteCount, icon: <EditIcon size={14} /> },
+    { id: "quote", label: t("quoteComponents.dashboard.quoteDesk"), count: selectedQuoteId ? 1 : 0, icon: <QuoteIcon size={14} /> },
   ];
 
   return (
     <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-2 lg:hidden">
       <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        Mobile Workflow
+        {t("quoteComponents.dashboard.mobileWorkflow")}
       </p>
       <div className="grid grid-cols-3 gap-2">
         {sections.map((section) => {
@@ -311,16 +306,17 @@ export function PipelineFlow({
   closedLeads: number;
   afterSaleLeads: number;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-2.5 sm:p-3">
       <div className="flex min-w-max flex-col gap-2 text-sm font-semibold sm:flex-row sm:items-center sm:gap-3">
-        <PipelineStage icon={<CustomerIcon size={14} />} label="New Leads" count={newLeads} tone="blue" />
+        <PipelineStage icon={<CustomerIcon size={14} />} label={t("quoteComponents.dashboard.newLeads")} count={newLeads} tone="blue" />
         <FlowArrow />
-        <PipelineStage icon={<SendIcon size={14} />} label="Quoted Leads" count={quotedLeads} tone="orange" />
+        <PipelineStage icon={<SendIcon size={14} />} label={t("quoteComponents.dashboard.quotedLeads")} count={quotedLeads} tone="orange" />
         <FlowArrow />
-        <PipelineStage icon={<CheckIcon size={14} />} label="Closed Leads" count={closedLeads} tone="emerald" />
+        <PipelineStage icon={<CheckIcon size={14} />} label={t("quoteComponents.dashboard.closedLeads")} count={closedLeads} tone="emerald" />
         <FlowArrow />
-        <PipelineStage icon={<ClockIcon size={14} />} label="After-Sale" count={afterSaleLeads} tone="slate" />
+        <PipelineStage icon={<ClockIcon size={14} />} label={t("quoteComponents.dashboard.afterSale")} count={afterSaleLeads} tone="slate" />
       </div>
     </div>
   );
@@ -388,6 +384,7 @@ export function PipelineColumn({
   saving: boolean;
   money: (value: string | number) => string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-[26px] border border-slate-200 bg-slate-50 p-3 shadow-sm">
       <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -436,12 +433,12 @@ export function PipelineColumn({
                 <div className="flex items-center justify-between">
                   <FollowUpPill status={lead.followUpStatus} compact />
                   {lead.quoteId ? (
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">Status</span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">{t("quoteComponents.dashboard.status")}</span>
                   ) : null}
                 </div>
                 {lead.quoteId ? (
                   <select
-                    aria-label={`Update follow-up for ${lead.customerName}`}
+                    aria-label={t("quoteComponents.dashboard.updateFollowUp", { name: lead.customerName })}
                     value={lead.followUpStatus}
                     disabled={saving}
                     onClick={(event) => event.stopPropagation()}
@@ -452,13 +449,13 @@ export function PipelineColumn({
                   >
                     {FOLLOW_UP_STATUSES.map((status) => (
                       <option key={`${lead.customerId}-${status}`} value={status}>
-                        {followUpLabel(status)}
+                        {t(`quoteComponents.followUp.${status}`)}
                       </option>
                     ))}
                   </select>
                 ) : null}
               </div>
-              {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">No quote attached yet</p>}
+              {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">{t("quoteComponents.dashboard.noQuote")}</p>}
             </button>
           ))}
         </div>
@@ -474,7 +471,8 @@ export function QuoteStatusPill({
   status: QuoteStatus;
   compact?: boolean;
 }) {
-  const meta = quoteStatusMeta(status);
+  const { t } = useTranslation();
+  const meta = quoteStatusMeta(status, t(`quoteComponents.quoteStatus.${status}`));
 
   return (
     <span
@@ -501,7 +499,8 @@ export function FollowUpPill({
   status: LeadFollowUpStatus;
   compact?: boolean;
 }) {
-  const meta = followUpMeta(status);
+  const { t } = useTranslation();
+  const meta = followUpMeta(status, t(`quoteComponents.followUp.${status}`));
 
   return (
     <span
@@ -516,7 +515,8 @@ export function FollowUpPill({
 }
 
 export function HistoryEventPill({ eventType }: { eventType: QuoteRevision["eventType"] }) {
-  const meta = eventMeta(eventType);
+  const { t } = useTranslation();
+  const meta = eventMeta(eventType, t(`quoteComponents.historyEvent.${eventType}`));
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
@@ -527,7 +527,8 @@ export function HistoryEventPill({ eventType }: { eventType: QuoteRevision["even
 }
 
 export function OutboundChannelPill({ channel }: { channel: QuoteOutboundChannel }) {
-  const meta = outboundChannelMeta(channel);
+  const { t } = useTranslation();
+  const meta = outboundChannelMeta(channel, t(`quoteComponents.outbound.${channel}`));
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
@@ -550,6 +551,7 @@ export function FeatureLockedCard({
   requiredPlanLabel: string;
   showUpgradeHint: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-2">
@@ -562,10 +564,10 @@ export function FeatureLockedCard({
           {requiredPlanLabel}
         </span>
       </div>
-      <p className="mt-2 text-[11px] text-slate-500">Current plan: {currentPlanLabel}</p>
+      <p className="mt-2 text-[11px] text-slate-500">{t("quoteComponents.feature.currentPlan", { plan: currentPlanLabel })}</p>
       {showUpgradeHint && (
         <p className="mt-1 text-[11px] text-slate-500">
-          Upgrade plan to unlock this module for your whole workspace.
+          {t("quoteComponents.feature.upgrade")}
         </p>
       )}
     </div>
@@ -583,19 +585,20 @@ export function QuoteMathSummaryPanel({
   warning?: string;
   money: (value: string | number) => string;
 }) {
+  const { t, i18n } = useTranslation();
   const profitTone = summary.estimatedProfit >= 0 ? "text-emerald-700" : "text-red-600";
   const marginTone = summary.estimatedMarginPercent >= 10 ? "text-emerald-700" : "text-amber-700";
 
   return (
     <div className={`rounded-[18px] border border-slate-200 bg-white shadow-sm ${compact ? "p-3.5" : "p-4"}`}>
-      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Live Quote Math</p>
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{t("quoteComponents.math.title")}</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Metric label="Internal Cost" value={money(summary.internalSubtotal)} />
-        <Metric label="Customer Subtotal" value={money(summary.customerSubtotal)} />
-        <Metric label="Tax" value={money(summary.taxAmount)} />
-        <Metric label="Total" value={money(summary.totalAmount)} />
-        <Metric label="Est. Profit" value={money(summary.estimatedProfit)} valueClassName={profitTone} />
-        <Metric label="Margin" value={`${summary.estimatedMarginPercent.toFixed(1)}%`} valueClassName={marginTone} />
+        <Metric label={t("quoteComponents.math.internalCost")} value={money(summary.internalSubtotal)} />
+        <Metric label={t("quoteComponents.math.customerSubtotal")} value={money(summary.customerSubtotal)} />
+        <Metric label={t("quoteComponents.math.tax")} value={money(summary.taxAmount)} />
+        <Metric label={t("quoteComponents.math.total")} value={money(summary.totalAmount)} />
+        <Metric label={t("quoteComponents.math.estimatedProfit")} value={money(summary.estimatedProfit)} valueClassName={profitTone} />
+        <Metric label={t("quoteComponents.math.margin")} value={new Intl.NumberFormat(i18n.resolvedLanguage ?? "en-US", { style: "percent", maximumFractionDigits: 1 }).format(summary.estimatedMarginPercent / 100)} valueClassName={marginTone} />
       </div>
       {warning && (
         <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700">

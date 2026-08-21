@@ -1,7 +1,9 @@
 import { CheckCircle2, CircleAlert, Info, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Toaster, type ToasterProps } from "sonner";
 
 export function AppNotifications({ theme }: { theme: NonNullable<ToasterProps["theme"]> }) {
+  const { t } = useTranslation();
   return (
     <Toaster
       theme={theme}
@@ -23,7 +25,7 @@ export function AppNotifications({ theme }: { theme: NonNullable<ToasterProps["t
       }}
       toastOptions={{
         duration: 4_500,
-        closeButtonAriaLabel: "Dismiss notification",
+        closeButtonAriaLabel: t("feedback.dismissNotification"),
         classNames: {
           toast:
             "qf-app-toast qf-theme-scope !min-h-[64px] !rounded-2xl !border !border-[var(--qf-border)] !bg-[var(--qf-panel)] !px-4 !py-3 !text-[var(--qf-text)] !shadow-[var(--qf-shadow-md)]",

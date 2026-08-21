@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { ReactNode, FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   api,
@@ -20,6 +21,7 @@ import {
   type TenantBranding,
   type TenantEntitlements,
   type TenantUsageSnapshot,
+  type SupportedLocale,
 } from "../../lib/api";
 import {
   isLikelyMobileRuntime,
@@ -29,6 +31,7 @@ import {
 import { buildQuoteMessageDraft } from "../../lib/quote-message-template";
 import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
 import { notify } from "../../lib/notifications";
+import { localizedApiError } from "../../lib/localized-api-error";
 import { publishKodyOutcome } from "../ai/kody-events";
 
 /* ─────────────── Types ─────────────── */
@@ -42,6 +45,7 @@ export type QuoteForm = {
   internalCostSubtotal: string;
   customerPriceSubtotal: string;
   taxAmount: string;
+  documentLocale: SupportedLocale;
 };
 export type QuoteEditForm = {
   serviceType: ServiceType;
@@ -51,6 +55,7 @@ export type QuoteEditForm = {
   title: string;
   scopeText: string;
   taxAmount: string;
+  documentLocale: SupportedLocale;
 };
 export type LineItemForm = { description: string; quantity: string; unitCost: string; unitPrice: string };
 export type CreateLineItemInput = {
@@ -140,6 +145,7 @@ export const EMPTY_QUOTE: QuoteForm = {
   internalCostSubtotal: "0",
   customerPriceSubtotal: "0",
   taxAmount: "0",
+  documentLocale: "en-US",
 };
 export const EMPTY_EDIT: QuoteEditForm = {
   serviceType: "HVAC",
@@ -149,6 +155,7 @@ export const EMPTY_EDIT: QuoteEditForm = {
   title: "",
   scopeText: "",
   taxAmount: "0",
+  documentLocale: "en-US",
 };
 export const EMPTY_LINE_ITEM: LineItemForm = { description: "", quantity: "1", unitCost: "0", unitPrice: "0" };
 export const CHAT_PROMPT_EXAMPLE =
@@ -162,6 +169,7 @@ const QUOTE_EDIT_FIELDS: Array<keyof QuoteEditForm> = [
   "title",
   "scopeText",
   "taxAmount",
+  "documentLocale",
 ];
 
 const WORKSPACE_COLLECTION_PATHS = new Set([
@@ -177,16 +185,14 @@ function shouldEagerLoadWorkspaceCollections(pathname: string): boolean {
 
 /* ─────────────── Helpers ─────────────── */
 
-const USD_FORMATTER = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-export function money(value: string | number): string {
+export function money(value: string | number, locale = "en-US"): string {
   const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? USD_FORMATTER.format(amount) : "$0.00";
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(amount) ? amount : 0);
 }
 
 export function safeAmount(value: string | number | null | undefined): number {
@@ -240,6 +246,7 @@ function toQuoteEditForm(quote: Quote): QuoteEditForm {
     title: quote.title,
     scopeText: quote.scopeText,
     taxAmount: String(Number(quote.taxAmount)),
+    documentLocale: quote.documentLocale,
   };
 }
 
@@ -281,8 +288,26 @@ export function fileLabel(value: string): string {
   );
 }
 
-export function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString();
+export function formatDateTime(value: string, locale = "en-US", timeZone?: string | null): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...(timeZone?.trim() ? { timeZone: timeZone.trim() } : {}),
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  }
+}
+
+function resolveCustomerDocumentLocale(
+  customerId: string,
+  customers: readonly Customer[],
+  tenantDefault: SupportedLocale,
+): SupportedLocale {
+  return customers.find((customer) => customer.id === customerId)?.preferredLocale ?? tenantDefault;
 }
 
 function mapSendChannelToOutboundChannel(channel: SendChannel): QuoteOutboundChannel {
@@ -305,6 +330,7 @@ export interface DashboardContextValue {
   customers: Customer[];
   quotes: Quote[];
   branding: TenantBranding | null;
+  defaultCustomerLocale: SupportedLocale;
   selectedQuoteId: string | null;
   selectedQuote: Quote | null;
   quoteDetailLoading: boolean;
@@ -449,6 +475,7 @@ export function DashboardProvider({
   onNavigateToQuote?: (quoteId: string) => void;
   onNavigateToBuilder?: () => void;
 }) {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const routeQuoteId = useMemo(() => {
@@ -463,6 +490,7 @@ export function DashboardProvider({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [branding, setBranding] = useState<TenantBranding | null>(null);
+  const [defaultCustomerLocale, setDefaultCustomerLocale] = useState<SupportedLocale>("en-US");
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(() => routeQuoteId);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
   const [quoteDetailLoading, setQuoteDetailLoading] = useState(Boolean(routeQuoteId));
@@ -554,13 +582,19 @@ export function DashboardProvider({
       setCustomers(customerRes.customers);
       setQuotes(quoteRes.quotes);
       setBranding(brandingRes?.branding ?? null);
+      const tenantDefaultLocale = brandingRes?.tenant.defaultCustomerLocale ?? "en-US";
+      setDefaultCustomerLocale(tenantDefaultLocale);
       hasLoadedWorkspaceCollectionsRef.current = true;
       setQuoteForm((prev) => {
         const nextCustomerId =
           prev.customerId && customerRes.customers.some((customer) => customer.id === prev.customerId)
             ? prev.customerId
             : "";
-        return { ...prev, customerId: nextCustomerId };
+        return {
+          ...prev,
+          customerId: nextCustomerId,
+          documentLocale: resolveCustomerDocumentLocale(nextCustomerId, customerRes.customers, tenantDefaultLocale),
+        };
       });
       const currentQuoteId = selectedQuoteIdRef.current;
       const nextQuoteId = routeQuoteIdRef.current
@@ -569,11 +603,11 @@ export function DashboardProvider({
           : null);
       selectQuoteId(nextQuoteId);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading dashboard data.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.dashboard" }));
     } finally {
       setLoading(false);
     }
-  }, [selectQuoteId, session?.tenantId]);
+  }, [selectQuoteId, session?.tenantId, t]);
 
   useEffect(() => {
     if (!shouldLoadWorkspaceCollections) {
@@ -599,9 +633,9 @@ export function DashboardProvider({
           : null);
       selectQuoteId(nextQuoteId);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading quotes.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.quotes" }));
     }
-  }, [search, selectQuoteId, statusFilter]);
+  }, [search, selectQuoteId, statusFilter, t]);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -612,12 +646,16 @@ export function DashboardProvider({
           prev.customerId && res.customers.some((customer) => customer.id === prev.customerId)
             ? prev.customerId
             : "";
-        return { ...prev, customerId: nextCustomerId };
+        return {
+          ...prev,
+          customerId: nextCustomerId,
+          documentLocale: resolveCustomerDocumentLocale(nextCustomerId, res.customers, defaultCustomerLocale),
+        };
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading customers.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.customers" }));
     }
-  }, []);
+  }, [defaultCustomerLocale, t]);
 
   const loadOutboundEvents = useCallback(async (quoteId: string) => {
     if (!canViewCommunicationLog) { setOutboundEvents([]); return; }
@@ -630,11 +668,11 @@ export function DashboardProvider({
     } catch (err) {
       if (requestId !== outboundRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
       setOutboundEvents([]);
-      setError(err instanceof ApiError ? err.message : "Failed loading send activity.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.sendActivity" }));
     } finally {
       if (requestId === outboundRequestIdRef.current) setOutboundEventsLoading(false);
     }
-  }, [canViewCommunicationLog]);
+  }, [canViewCommunicationLog, t]);
 
   const loadQuoteDetail = useCallback(async (
     quoteId: string,
@@ -668,13 +706,13 @@ export function DashboardProvider({
       setOutboundEvents([]);
       setQuoteDetailError(
         err instanceof ApiError && err.status === 404
-          ? { kind: "not-found", message: "This quote could not be found. It may have been archived, deleted, or you may no longer have access." }
-          : { kind: "load", message: "Quote details could not be loaded. Check your connection and try again." },
+          ? { kind: "not-found", message: t("quoteFeedback.quoteDetail.notFound") }
+          : { kind: "load", message: localizedApiError(err, t, { fallbackKey: "quoteFeedback.quoteDetail.load" }) },
       );
     } finally {
       if (requestId === quoteDetailRequestIdRef.current) setQuoteDetailLoading(false);
     }
-  }, [canViewCommunicationLog, loadOutboundEvents]);
+  }, [canViewCommunicationLog, loadOutboundEvents, t]);
 
   const loadQuoteHistory = useCallback(async () => {
     if (!canViewQuoteHistory) { setQuoteHistory([]); return; }
@@ -696,11 +734,11 @@ export function DashboardProvider({
       const { revisions } = await api.quotes.history({ limit: 30 });
       setQuoteHistory(revisions);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading quote history.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.history" }));
     } finally {
       setHistoryLoading(false);
     }
-  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId]);
+  }, [canViewQuoteHistory, historyMode, historyCustomerId, selectedQuoteId, t]);
 
   useEffect(() => {
     if (!selectedQuoteId) {
@@ -736,15 +774,23 @@ export function DashboardProvider({
   }, [onNavigateToQuote, selectQuoteId]);
 
   const selectQuoteCustomer = useCallback((customerId: string) => {
-    setQuoteForm((prev) => ({ ...prev, customerId }));
-  }, []);
+    setQuoteForm((prev) => ({
+      ...prev,
+      customerId,
+      documentLocale: resolveCustomerDocumentLocale(customerId, customers, defaultCustomerLocale),
+    }));
+  }, [customers, defaultCustomerLocale]);
 
   const navigateToBuilder = useCallback((customerId?: string | null) => {
     if (customerId) {
-      setQuoteForm((prev) => ({ ...prev, customerId }));
+      setQuoteForm((prev) => ({
+        ...prev,
+        customerId,
+        documentLocale: resolveCustomerDocumentLocale(customerId, customers, defaultCustomerLocale),
+      }));
     }
     onNavigateToBuilder?.();
-  }, [onNavigateToBuilder]);
+  }, [customers, defaultCustomerLocale, onNavigateToBuilder]);
 
   /* ─── Customer actions ─── */
 
@@ -761,18 +807,18 @@ export function DashboardProvider({
     setDuplicateModal(null);
     setNotice(
       result.reusedExisting
-        ? "Using existing customer record."
+        ? t("quoteFeedback.customer.existing")
         : result.merged
-        ? result.restored ? "Duplicate merged and archived customer restored." : "Duplicate merged into existing customer."
-        : result.restored ? "Customer restored." : "Customer created.",
+        ? result.restored ? t("quoteFeedback.customer.mergedRestored") : t("quoteFeedback.customer.merged")
+        : result.restored ? t("quoteFeedback.customer.restored") : t("quoteFeedback.customer.created"),
     );
     void loadCustomers();
-  }, [loadCustomers]);
+  }, [loadCustomers, t]);
 
   const createCustomer = useCallback(async (event: FormEvent) => {
     event.preventDefault();
     const payload = normalizeCustomerPayload(customerForm);
-    if (!payload.fullName || !payload.phone) { setError("Full name and phone are required."); return; }
+    if (!payload.fullName || !payload.phone) { setError(t("quoteFeedback.customer.required")); return; }
     setSaving(true); setError(null);
     try {
       await submitCustomerPayload(payload);
@@ -783,39 +829,39 @@ export function DashboardProvider({
           setDuplicateModal({ payload, matches: details.matches, selectedMatchId: details.matches[0].id });
           return;
         }
-        setError(err.message); return;
+        setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.customer.createError" })); return;
       }
-      setError("Failed creating customer.");
+      setError(t("quoteFeedback.customer.createError"));
     } finally { setSaving(false); }
-  }, [customerForm, submitCustomerPayload]);
+  }, [customerForm, submitCustomerPayload, t]);
 
   const mergeDuplicateCustomer = useCallback(async () => {
     if (!duplicateModal) return;
     setSaving(true); setError(null);
     try {
       await submitCustomerPayload(duplicateModal.payload, { duplicateAction: "merge", duplicateCustomerId: duplicateModal.selectedMatchId });
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed merging duplicate customer."); } finally { setSaving(false); }
-  }, [duplicateModal, submitCustomerPayload]);
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.customer.mergeError" })); } finally { setSaving(false); }
+  }, [duplicateModal, submitCustomerPayload, t]);
 
   const createDuplicateAsNew = useCallback(async () => {
     if (!duplicateModal) return;
     setSaving(true); setError(null);
     try {
       await submitCustomerPayload(duplicateModal.payload, { duplicateAction: "create_new" });
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed creating new customer record."); } finally { setSaving(false); }
-  }, [duplicateModal, submitCustomerPayload]);
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.customer.duplicateCreateError" })); } finally { setSaving(false); }
+  }, [duplicateModal, submitCustomerPayload, t]);
 
   /* ─── Quote actions ─── */
 
   const createQuoteFromChatPrompt = useCallback(async (event: FormEvent) => {
     event.preventDefault();
-    if (!canUseChatToQuote) { setError("Chat to Quote is not available on your current plan."); return; }
+    if (!canUseChatToQuote) { setError(t("quoteFeedback.chat.unavailable")); return; }
     const prompt = chatPrompt.trim();
-    if (!prompt) { setError("Enter a prompt before generating a quote."); return; }
+    if (!prompt) { setError(t("quoteFeedback.chat.promptRequired")); return; }
     setError(null);
     setChatParsed(null);
     setChatPrompt("");
-    setNotice("Opening the quote builder. Generate and review the AI draft there before creating anything.");
+    setNotice(t("quoteFeedback.chat.opening"));
     navigate("/app/build", {
       state: {
         kodyQuoteDraft: {
@@ -823,7 +869,7 @@ export function DashboardProvider({
         },
       },
     });
-  }, [canUseChatToQuote, chatPrompt, navigate]);
+  }, [canUseChatToQuote, chatPrompt, navigate, t]);
 
   const applyTradeSetup = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -835,9 +881,9 @@ export function DashboardProvider({
         sqFtUnitCost: setupSqFtMode && setupSqFtUnitCost ? Number(setupSqFtUnitCost) : undefined,
         sqFtUnitPrice: setupSqFtMode && setupSqFtUnitPrice ? Number(setupSqFtUnitPrice) : undefined,
       });
-      setNotice(`Trade setup saved for ${setupTrade}. Presets and pricing defaults are ready.`);
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed saving trade setup."); } finally { setSaving(false); }
-  }, [setupTrade, setupSqFtMode, setupSqFtUnitCost, setupSqFtUnitPrice]);
+      setNotice(t("quoteFeedback.setup.saved", { trade: t(`domain.trade.${setupTrade}`) }));
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.setup.error" })); } finally { setSaving(false); }
+  }, [setupTrade, setupSqFtMode, setupSqFtUnitCost, setupSqFtUnitPrice, t]);
 
   const createQuoteDraftFromForm = useCallback(async (options?: {
     initialLineItems?: CreateLineItemInput[];
@@ -859,6 +905,7 @@ export function DashboardProvider({
         internalCostSubtotal: Number(mergedQuoteForm.internalCostSubtotal),
         customerPriceSubtotal: Number(mergedQuoteForm.customerPriceSubtotal),
         taxAmount: Number(mergedQuoteForm.taxAmount),
+        documentLocale: mergedQuoteForm.documentLocale,
         aiUsageEventId: options?.aiUsageEventId,
         lineItems: options?.initialLineItems?.map((lineItem) => ({
           description: lineItem.description,
@@ -869,17 +916,17 @@ export function DashboardProvider({
           unitPrice: lineItem.unitPrice,
         })),
       });
-      setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId }));
+      setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId, documentLocale: prev.documentLocale }));
       focusQuoteDesk(quote.id);
-      setNotice(options?.successNotice ?? "Quote created.");
+      setNotice(options?.successNotice ?? t("quoteFeedback.quote.created"));
       navigateToQuote(quote.id);
       void loadQuotes();
       return quote;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed creating quote.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.createError" }));
       return null;
     } finally { setSaving(false); }
-  }, [focusQuoteDesk, quoteForm, loadQuotes, navigateToQuote]);
+  }, [focusQuoteDesk, quoteForm, loadQuotes, navigateToQuote, t]);
 
   const createQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -898,19 +945,20 @@ export function DashboardProvider({
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
         taxAmount: Number(quoteEditForm.taxAmount),
+        documentLocale: quoteEditForm.documentLocale,
       });
       await Promise.all([
         loadQuotes(),
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice("Quote updated.");
+      setNotice(t("quoteFeedback.quote.updated"));
       return true;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Quote changes could not be saved. Try again.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.saveError" }));
       return false;
     } finally { setSaving(false); }
-  }, [selectedQuote, quoteEditForm, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [selectedQuote, quoteEditForm, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const saveQuoteSheet = useCallback(async (input: SaveQuoteSheetInput) => {
     if (!selectedQuote) return null;
@@ -922,13 +970,13 @@ export function DashboardProvider({
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice("Quote updated.");
+      setNotice(t("quoteFeedback.quote.updated"));
       return result.quote;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Quote changes could not be saved. Try again.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.saveError" }));
       return null;
     } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
     status?: QuoteStatus;
@@ -944,13 +992,13 @@ export function DashboardProvider({
         loadQuoteDetail(quoteId, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice("Quote lifecycle updated.");
+      setNotice(t("quoteFeedback.quote.lifecycleUpdated"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed updating quote lifecycle.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.lifecycleError" }));
     } finally {
       setSaving(false);
     }
-  }, [canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const saveQuote = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -961,29 +1009,30 @@ export function DashboardProvider({
     if (!selectedQuote) return;
     setSaving(true); setError(null);
     try {
-      const result = await api.quotes.decision(selectedQuote.id, decision);
+      await api.quotes.decision(selectedQuote.id, decision);
       await Promise.all([
         loadQuotes(),
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice(result.message);
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating decision."); } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+      setNotice(decision === "send" ? t("quoteFeedback.quote.markedSent") : t("quoteFeedback.quote.reviseReady"));
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.decisionError" })); } finally { setSaving(false); }
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const openSendComposer = useCallback((channel: SendChannel, quoteOverride?: Quote, options?: { origin?: "kody" }) => {
     const quoteForSend = quoteOverride ?? selectedQuote;
     if (!quoteForSend) return;
     setError(null);
     const customerRecord = quoteForSend.customer ?? customers.find((c) => c.id === quoteForSend.customerId);
-    if (!customerRecord) { setError("Customer details are not loaded yet. Try selecting the quote again."); return; }
-    if (channel === "email" && !customerRecord.email) { setError("Customer does not have an email address yet."); return; }
+    if (!customerRecord) { setError(t("quoteFeedback.customer.detailsUnavailable")); return; }
+    if (channel === "email" && !customerRecord.email) { setError(t("quoteFeedback.customer.emailMissing")); return; }
     const draft = buildQuoteMessageDraft({
       customerName: customerRecord.fullName,
       quoteTitle: quoteForSend.title,
       quoteTotalAmount: quoteForSend.totalAmount,
       scopeText: quoteForSend.scopeText,
       branding,
+      documentLocale: quoteForSend.documentLocale,
     });
     setSendComposer({
       channel, quoteId: quoteForSend.id,
@@ -993,7 +1042,7 @@ export function DashboardProvider({
       subject: draft.subject, body: draft.body,
       origin: options?.origin,
     });
-  }, [selectedQuote, customers, branding]);
+  }, [selectedQuote, customers, branding, t]);
 
   const confirmSendComposer = useCallback(async () => {
     if (!sendComposer) return;
@@ -1020,7 +1069,7 @@ export function DashboardProvider({
           canViewCommunicationLog ? loadOutboundEvents(sendComposer.quoteId) : Promise.resolve(),
         ]);
         if (canViewQuoteHistory) void loadQuoteHistory();
-        setNotice(canViewCommunicationLog ? "Quote marked sent and the communication was logged." : "Quote marked sent.");
+        setNotice(canViewCommunicationLog ? t("quoteFeedback.quote.markedSentLogged") : t("quoteFeedback.quote.markedSent"));
         if (sendComposer.origin === "kody") {
           publishKodyOutcome({
             type: "QUOTE_MARKED_SENT",
@@ -1046,9 +1095,9 @@ export function DashboardProvider({
 
         if (shared) {
           setSendComposer((current) => current ? { ...current, confirmedChannel: "NATIVE_SHARE", handoffComplete: true } : current);
-          setNotice(
-            `Share sheet completed. Confirm here after you send the quote through ${sendComposer.channel === "email" ? "Mail" : "Messages"}.`,
-          );
+          setNotice(t("quoteFeedback.send.shareComplete", {
+            app: sendComposer.channel === "email" ? t("quoteDesk.send.emailApp") : t("quoteDesk.send.textApp"),
+          }));
           return;
         }
       }
@@ -1057,24 +1106,27 @@ export function DashboardProvider({
         setSendComposer((current) => current ? { ...current, confirmedChannel: "EMAIL_APP", handoffComplete: true } : current);
         const mailto = `mailto:${sendComposer.customerEmail ?? ""}?subject=${encodeURIComponent(sendComposer.subject)}&body=${encodeURIComponent(sendComposer.body)}`;
         window.location.assign(mailto);
-        setNotice("Email app opened. Return here after sending to mark the quote sent.");
+        setNotice(t("quoteFeedback.send.emailOpened"));
       } else if (sendComposer.channel === "sms") {
         setSendComposer((current) => current ? { ...current, confirmedChannel: "SMS_APP", handoffComplete: true } : current);
         window.location.assign(`sms:${toPhoneHrefValue(sendComposer.customerPhone)}?&body=${encodeURIComponent(sendComposer.body)}`);
-        setNotice(`Text app opened for ${formatUsPhoneDisplay(sendComposer.customerPhone)}. Return here after sending to mark the quote sent.`);
+        setNotice(t("quoteFeedback.send.textOpened", { phone: formatUsPhoneDisplay(sendComposer.customerPhone) }));
       } else {
-        if (!navigator.clipboard) throw new Error("Clipboard API is not available in this browser.");
+        if (!navigator.clipboard) {
+          setError(t("quoteFeedback.send.clipboardUnavailable"));
+          return;
+        }
         await navigator.clipboard.writeText(sendComposer.body);
         setSendComposer((current) => current ? { ...current, confirmedChannel: "COPY", handoffComplete: true } : current);
-        setNotice("Message copied. Return here after sending to mark the quote sent.");
+        setNotice(t("quoteFeedback.send.copied"));
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
       }
-      setError(err instanceof ApiError ? err.message : "Failed preparing outbound message.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.send.error" }));
     } finally { setSaving(false); }
-  }, [sendComposer, canViewCommunicationLog, canViewQuoteHistory, selectedQuote, quotes, loadQuotes, loadQuoteDetail, loadOutboundEvents, loadQuoteHistory]);
+  }, [sendComposer, canViewCommunicationLog, canViewQuoteHistory, selectedQuote, quotes, loadQuotes, loadQuoteDetail, loadOutboundEvents, loadQuoteHistory, t]);
 
   const downloadQuotePdf = useCallback(async (options?: { inline?: boolean; quoteOverride?: Quote }) => {
     const quoteForDownload = options?.quoteOverride ?? selectedQuote;
@@ -1096,15 +1148,15 @@ export function DashboardProvider({
         loadQuotes(),
         loadQuoteDetail(quoteForDownload.id, { includeOutboundEvents: false }),
       ]);
-      setNotice(options?.inline ? "PDF preview opened." : "PDF downloaded.");
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed generating PDF."); } finally { setSaving(false); }
-  }, [selectedQuote, loadQuotes, loadQuoteDetail]);
+      setNotice(options?.inline ? t("quoteFeedback.pdf.previewOpened") : t("quoteFeedback.pdf.downloaded"));
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.pdf.error" })); } finally { setSaving(false); }
+  }, [selectedQuote, loadQuotes, loadQuoteDetail, t]);
 
   const exportQuotesAsInvoicesCsv = useCallback(
     async (quoteIds: string[], options?: { dueInDays?: number }) => {
       const uniqueQuoteIds = Array.from(new Set(quoteIds.filter((quoteId) => quoteId.trim().length > 0)));
       if (uniqueQuoteIds.length === 0) {
-        setError("Select at least one quote to export.");
+        setError(t("quoteFeedback.export.select"));
         return;
       }
 
@@ -1127,16 +1179,14 @@ export function DashboardProvider({
         anchor.remove();
         URL.revokeObjectURL(objectUrl);
 
-        setNotice(
-          `Exported ${uniqueQuoteIds.length} quote${uniqueQuoteIds.length === 1 ? "" : "s"} to QuickBooks CSV.`,
-        );
+        setNotice(t("quoteFeedback.export.completed", { count: uniqueQuoteIds.length }));
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : "Failed exporting QuickBooks CSV.");
+        setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.export.error" }));
       } finally {
         setSaving(false);
       }
     },
-    [],
+    [t],
   );
 
   const addLineItemDraft = useCallback(async (
@@ -1162,13 +1212,13 @@ export function DashboardProvider({
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice(options?.notice ?? "Line item added.");
+      setNotice(options?.notice ?? t("quoteFeedback.line.added"));
       return true;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "The line could not be added. Check the fields and try again.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.line.addError" }));
       return false;
     } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const addLineItem = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -1196,15 +1246,15 @@ export function DashboardProvider({
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice(options?.notice ?? "Line item updated.");
+      setNotice(options?.notice ?? t("quoteFeedback.line.updated"));
       return true;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "The line could not be saved. Review it and try again.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.line.updateError" }));
       return false;
     } finally {
       setSaving(false);
     }
-  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const deleteLineItem = useCallback(async (lineItemId: string) => {
     if (!selectedQuote) return;
@@ -1216,13 +1266,13 @@ export function DashboardProvider({
         loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      notify.success("Line item deleted", { description: "Quote totals were recalculated." });
+      notify.success(t("quoteFeedback.line.deletedTitle"), { description: t("quoteFeedback.line.deletedDescription") });
     } catch (err) {
-      notify.error("Line item could not be deleted", {
-        description: err instanceof ApiError ? err.message : "Please try again. The quote was not changed.",
+      notify.error(t("quoteFeedback.line.deleteErrorTitle"), {
+        description: localizedApiError(err, t, { fallbackKey: "quoteFeedback.line.deleteErrorDescription" }),
       });
     } finally { setSaving(false); }
-  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory]);
+  }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const updateLeadFollowUpStatus = useCallback(async (customerId: string, followUpStatus: LeadFollowUpStatus) => {
     setSaving(true); setError(null);
@@ -1230,9 +1280,9 @@ export function DashboardProvider({
       await api.customers.update(customerId, { followUpStatus });
       await Promise.all([loadCustomers(), loadQuotes()]);
       if (selectedQuote) await loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false });
-      setNotice(`Follow-up status updated to ${followUpLabel(followUpStatus)}.`);
-    } catch (err) { setError(err instanceof ApiError ? err.message : "Failed updating follow-up status."); } finally { setSaving(false); }
-  }, [selectedQuote, loadCustomers, loadQuotes, loadQuoteDetail]);
+      setNotice(t("quoteFeedback.followUp.updated", { status: t(`domain.followUp.${followUpStatus}`) }));
+    } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.followUp.error" })); } finally { setSaving(false); }
+  }, [selectedQuote, loadCustomers, loadQuotes, loadQuoteDetail, t]);
 
   /* ─── Computed ─── */
 
@@ -1370,7 +1420,7 @@ export function DashboardProvider({
   }, [lineItemForm.quantity, lineItemForm.unitCost, lineItemForm.unitPrice]);
 
   const value: DashboardContextValue = {
-    session, customers, quotes, branding, selectedQuoteId, selectedQuote, quoteDetailLoading, quoteDetailError, quoteHistory, outboundEvents,
+    session, customers, quotes, branding, defaultCustomerLocale, selectedQuoteId, selectedQuote, quoteDetailLoading, quoteDetailError, quoteHistory, outboundEvents,
     search, statusFilter, loading, saving, error, notice,
     historyMode, historyCustomerId, historyLoading, outboundEventsLoading,
     customerForm, quoteForm, quoteEditForm, lineItemForm,

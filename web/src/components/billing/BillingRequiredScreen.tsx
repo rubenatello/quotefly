@@ -1,13 +1,16 @@
 import { useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { useLocation } from "react-router-dom";
 import { CheckIcon, LockIcon, PriceIcon } from "../Icons";
 import { Alert, Badge, Button, Card } from "../ui";
 import {
   api,
-  ApiError,
   type TenantEntitlements,
 } from "../../lib/api";
-import { BASIC_PLAN, basicFirstPaidMonthPriceLabel, basicMonthlyPriceLabel } from "../../lib/plans";
+import { useLocale } from "../../i18n";
+import { localizedApiError } from "../../lib/localized-api-error";
+import { BASIC_PLAN } from "../../lib/plans";
 
 type BillingAction = "checkout" | "portal" | "refresh" | null;
 
@@ -25,13 +28,6 @@ type BillingRequiredScreenProps = {
 };
 
 const PAID_STATUS_WITH_PORTAL = new Set(["active", "past_due", "unpaid", "canceled", "incomplete", "paused"]);
-const BASIC_FEATURES = ["Draft AI-assisted quotes", "Manage customer records", "Export customer-ready PDFs"];
-const BASIC_LIMITS = [
-  `${BASIC_PLAN.quotesPerMonth} quotes per month`,
-  "AI assistance with in-app usage tracking",
-  `Up to ${BASIC_PLAN.teamMembers} team members`,
-  `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
-];
 
 function normalizeSessionRole(role: string): "owner" | "admin" | "member" {
   const normalized = role.trim().toLowerCase();
@@ -39,14 +35,38 @@ function normalizeSessionRole(role: string): "owner" | "admin" | "member" {
   return "member";
 }
 
-function billingReasonText(session: BillingRequiredSession): string {
+function billingReasonText(session: BillingRequiredSession, t: TFunction): string {
   const reason = session.entitlements?.accessReason;
-  if (reason === "past_due") return "Update payment details to restore quote and customer actions.";
+  if (reason === "past_due") return t("billing.reasonPastDue");
   if (PAID_STATUS_WITH_PORTAL.has((session.subscriptionStatus ?? "").toLowerCase())) {
-    return "Open billing management to restore this workspace subscription.";
+    return t("billing.reasonPortal");
   }
-  if (reason === "inactive") return "The previous subscription is no longer active. Start Basic to restore workspace actions.";
-  return "Start Basic to keep drafting quotes, managing customers, and sending PDFs.";
+  if (reason === "inactive") return t("billing.reasonInactive");
+  return t("billing.reasonDefault");
+}
+
+function billingStatusText(value: string | null | undefined, t: TFunction): string {
+  const normalized = (value ?? "not_started").toLowerCase().replace(/-/g, "_");
+  if (normalized === "active") return t("billing.status.active");
+  if (normalized === "trialing") return t("billing.status.trialing");
+  if (normalized === "past_due") return t("billing.status.pastDue");
+  if (normalized === "unpaid") return t("billing.status.unpaid");
+  if (normalized === "canceled") return t("billing.status.canceled");
+  if (normalized === "incomplete") return t("billing.status.incomplete");
+  if (normalized === "paused") return t("billing.status.paused");
+  if (normalized === "inactive") return t("billing.status.inactive");
+  if (normalized === "not_started") return t("billing.status.notStarted");
+  return t("billing.status.unknown");
+}
+
+function formatUsd(locale: string, amount: number): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 export function BillingRequiredScreen({
@@ -54,12 +74,23 @@ export function BillingRequiredScreen({
   onLogout,
   onRefreshSession,
 }: BillingRequiredScreenProps) {
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
   const location = useLocation();
   const confirmingCheckout = new URLSearchParams(location.search).get("billing") === "success";
   const ownerView = normalizeSessionRole(session.role) === "owner";
-  const status = (session.subscriptionStatus ?? "not_started").replace(/[_-]/g, " ");
+  const status = billingStatusText(session.subscriptionStatus, t);
+  const firstPaidPrice = formatUsd(locale, BASIC_PLAN.firstPaidMonthPriceUsd);
+  const monthlyPrice = t("billing.monthlyPrice", { price: formatUsd(locale, BASIC_PLAN.monthlyPriceUsd) });
+  const basicFeatures = [t("billing.featureAiQuotes"), t("billing.featureCustomers"), t("billing.featurePdfs")];
+  const basicLimits = [
+    t("billing.quotesPerMonth", { count: BASIC_PLAN.quotesPerMonth }),
+    t("billing.trackedAi"),
+    t("billing.teamMembers", { count: BASIC_PLAN.teamMembers }),
+    t("billing.historyDays", { count: BASIC_PLAN.quoteHistoryDays }),
+  ];
   const canOpenPortal =
     ownerView && PAID_STATUS_WITH_PORTAL.has((session.subscriptionStatus ?? "").toLowerCase());
 
@@ -71,11 +102,14 @@ export function BillingRequiredScreen({
     try {
       const result = await api.billing.createCheckoutSession({ planCode: "starter" });
       if (!result.checkoutUrl) {
-        throw new Error("Stripe checkout session did not return a redirect URL.");
+        throw new Error("Missing Stripe checkout redirect URL");
       }
       window.location.assign(result.checkoutUrl);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed starting Stripe checkout.");
+      setError(localizedApiError(err, t, {
+        fallbackKey: "billing.checkoutFailed",
+        statusKeys: { 409: "apiErrors.subscriptionExists" },
+      }));
       setBillingAction(null);
     }
   }
@@ -89,7 +123,7 @@ export function BillingRequiredScreen({
       const result = await api.billing.createPortalSession();
       window.location.assign(result.url);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed opening billing portal.");
+      setError(localizedApiError(err, t, { fallbackKey: "billing.portalFailed" }));
       setBillingAction(null);
     }
   }
@@ -100,7 +134,7 @@ export function BillingRequiredScreen({
     try {
       await onRefreshSession();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed refreshing billing status.");
+      setError(localizedApiError(err, t, { fallbackKey: "billing.refreshFailed" }));
     } finally {
       setBillingAction(null);
     }
@@ -115,7 +149,7 @@ export function BillingRequiredScreen({
             <h1 className="mt-1 truncate text-xl font-semibold text-slate-950 sm:text-2xl">{session.tenantName}</h1>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={onLogout}>
-            Sign Out
+            {t("billing.signOut")}
           </Button>
         </header>
 
@@ -126,7 +160,7 @@ export function BillingRequiredScreen({
         ) : null}
         {confirmingCheckout ? (
           <Alert tone="info">
-            Checkout completed. QuoteFly is confirming the subscription with Stripe; this screen refreshes automatically.
+            {t("billing.checkoutConfirming")}
           </Alert>
         ) : null}
 
@@ -138,17 +172,17 @@ export function BillingRequiredScreen({
                   <LockIcon size={22} />
                 </span>
                 <div className="min-w-0">
-                  <Badge tone="amber">Billing required</Badge>
+                  <Badge tone="amber">{t("billing.required")}</Badge>
                   <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
-                    {canOpenPortal ? "Update billing to unlock your workspace." : "Start Basic to unlock your workspace."}
+                    {canOpenPortal ? t("billing.updateToUnlock") : t("billing.startToUnlock")}
                   </h2>
-                  <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">{billingReasonText(session)}</p>
+                  <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">{billingReasonText(session, t)}</p>
                 </div>
               </div>
             </Card>
 
             <div className="grid gap-3 sm:grid-cols-3">
-              {BASIC_FEATURES.map((feature) => (
+              {basicFeatures.map((feature) => (
                 <Card key={feature} variant="default" padding="md" className="bg-white">
                   <CheckIcon size={18} className="text-quotefly-blue" />
                   <p className="mt-3 text-sm font-semibold leading-5 text-slate-900">{feature}</p>
@@ -161,11 +195,11 @@ export function BillingRequiredScreen({
             <Card variant="blue" padding="lg">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Basic</p>
-                  <p className="mt-2 text-3xl font-bold text-slate-950">{basicMonthlyPriceLabel()}</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("billing.basic")}</p>
+                  <p className="mt-2 text-3xl font-bold text-slate-950">{monthlyPrice}</p>
                   {!canOpenPortal ? (
                     <p className="mt-1 text-sm font-semibold text-emerald-700">
-                      First paid month {basicFirstPaidMonthPriceLabel()} for eligible workspaces
+                      {t("billing.firstPaidEligible", { price: firstPaidPrice })}
                     </p>
                   ) : null}
                 </div>
@@ -175,7 +209,7 @@ export function BillingRequiredScreen({
               </div>
 
               <div className="mt-5 grid gap-2 text-sm text-slate-700">
-                {BASIC_LIMITS.map((limit) => (
+                {basicLimits.map((limit) => (
                   <p key={limit}>{limit}</p>
                 ))}
               </div>
@@ -189,7 +223,7 @@ export function BillingRequiredScreen({
                     disabled={billingAction !== null}
                     loading={billingAction === "portal"}
                   >
-                    Update Billing
+                    {t("billing.updateBilling")}
                   </Button>
                 ) : (
                   <Button
@@ -199,7 +233,7 @@ export function BillingRequiredScreen({
                     disabled={!ownerView || billingAction !== null}
                     loading={billingAction === "checkout"}
                   >
-                    Start Basic — {basicFirstPaidMonthPriceLabel()} first month
+                    {t("billing.startBasicFirstMonth", { price: firstPaidPrice })}
                   </Button>
                 )}
                 <Button
@@ -210,16 +244,16 @@ export function BillingRequiredScreen({
                   disabled={billingAction !== null}
                   loading={billingAction === "refresh"}
                 >
-                  Refresh Status
+                  {t("billing.refreshStatus")}
                 </Button>
               </div>
             </Card>
 
             <Card variant="default" padding="md" className="bg-white text-sm text-slate-600">
-              <p className="font-semibold text-slate-900">Workspace status</p>
-              <p className="mt-2 capitalize">{status}</p>
+              <p className="font-semibold text-slate-900">{t("billing.workspaceStatus")}</p>
+              <p className="mt-2">{status}</p>
               {!ownerView ? (
-                <p className="mt-3 text-amber-700">Ask the workspace owner to start or update the Basic subscription.</p>
+                <p className="mt-3 text-amber-700">{t("billing.ownerHelp")}</p>
               ) : null}
             </Card>
           </aside>
@@ -236,7 +270,7 @@ export function BillingRequiredScreen({
               disabled={billingAction !== null}
               loading={billingAction === "portal"}
             >
-              Update Billing
+              {t("billing.updateBilling")}
             </Button>
           ) : (
             <Button
@@ -246,7 +280,7 @@ export function BillingRequiredScreen({
               disabled={!ownerView || billingAction !== null}
               loading={billingAction === "checkout"}
             >
-              Start Basic — {basicFirstPaidMonthPriceLabel()} first month
+              {t("billing.trial.chooseShort", { price: firstPaidPrice })}
             </Button>
           )}
           <Button
@@ -257,7 +291,7 @@ export function BillingRequiredScreen({
             disabled={billingAction !== null}
             loading={billingAction === "refresh"}
           >
-            Refresh Status
+            {t("billing.refreshStatus")}
           </Button>
         </div>
       </div>

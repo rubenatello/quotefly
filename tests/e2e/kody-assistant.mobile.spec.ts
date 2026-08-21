@@ -9,6 +9,10 @@ import {
   signUpViaApi,
 } from "./helpers";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+});
+
 async function revealKodyQuickPrompts(panel: Locator) {
   const prompts = panel.getByTestId("kody-quick-prompts");
   const open = await prompts.evaluate((element) => (element as HTMLDetailsElement).open);
@@ -82,7 +86,7 @@ test("Kody navigates on mobile while keeping the conversation open", async ({ co
   await kody.getByTestId("kody-prompt").fill("Take me to products");
   await kody.getByRole("button", { name: "Send", exact: true }).click();
   await expect(kody.getByText("I can take you to Products.", { exact: false })).toBeVisible();
-  await kody.getByRole("button", { name: "Open Products" }).click();
+  await kody.getByRole("button", { name: "Open page", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/products$/);
   await expect(page.getByRole("heading", { level: 1, name: "Products & services", exact: true })).toBeVisible();
   await expect(kody).toBeVisible();
@@ -268,10 +272,10 @@ test("Kody turns a product request into a review-only mobile catalog draft", asy
   await confirm.getByRole("button", { name: "Open product review" }).click();
 
   await expect(page).toHaveURL(/\/app\/products$/);
-  const productDialog = page.getByRole("dialog", { name: "Add product" });
+  const productDialog = page.getByRole("dialog", { name: "Add product or service" });
   await expect(productDialog).toBeVisible();
-  await expect(productDialog.getByLabel("Product or service name")).toHaveValue("Labor Hours");
-  await expect(productDialog.getByLabel("Pricing unit")).toHaveValue("HOUR");
+  await expect(productDialog.getByLabel("Name", { exact: true })).toHaveValue("Labor Hours");
+  await expect(productDialog.getByLabel("Billing unit", { exact: true })).toHaveValue("HOUR");
   await expect(productDialog.getByLabel("Internal unit cost")).toHaveValue("30");
   await expect(productDialog.getByLabel("Customer unit price")).toHaveValue("75");
   await expect(kody).toBeHidden();
@@ -388,8 +392,8 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
   await expect(kody.getByText("I prepared Maria Kody for review.", { exact: false })).toBeVisible();
   await kody.getByTestId("kody-prompt").fill(`Send ${quote.title} to ${customer.fullName}`);
   await kody.getByRole("button", { name: "Send", exact: true }).click();
-  const sendActionName = new RegExp(`^Review send.*${escapeRegExp(customer.fullName)}$`);
-  await kody.getByRole("button", { name: sendActionName }).click();
+  const sendAction = kody.getByRole("button", { name: "Review quote delivery", exact: true });
+  await sendAction.click();
   const sendConfirm = page.getByRole("dialog", { name: `Review copy for ${customer.fullName}?` });
   await expect(sendConfirm).toContainText("will not contact the customer or mark the quote sent automatically");
   await sendConfirm.getByRole("button", { name: "Open send review" }).click();
@@ -408,7 +412,9 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
   expect((await getQuoteViaApi(request, account, quote.id)).status).not.toBe("SENT_TO_CUSTOMER");
 
   await sendComposer.getByRole("button", { name: "Yes, Mark Sent" }).click();
-  await expect(sendComposer.getByText("Unexpected send confirmation.")).toBeVisible();
+  await expect(
+    sendComposer.getByText("QuoteFly could not complete this action right now. Try again in a moment.", { exact: true }),
+  ).toBeVisible();
   await expect(sendComposer).toBeVisible();
   expect(confirmedSendRequests).toHaveLength(1);
   expect((await getQuoteViaApi(request, account, quote.id)).status).not.toBe("SENT_TO_CUSTOMER");
@@ -422,7 +428,7 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
   kody = page.getByTestId("kody-chat-panel");
   await kody.getByTestId("kody-prompt").fill(`Send ${quote.title} to ${customer.fullName}`);
   await kody.getByRole("button", { name: "Send", exact: true }).click();
-  await kody.getByRole("button", { name: sendActionName }).last().click();
+  await kody.getByRole("button", { name: "Review quote delivery", exact: true }).last().click();
   const repeatedSendConfirm = page.getByRole("dialog", { name: `Review copy for ${customer.fullName}?` });
   await repeatedSendConfirm.getByRole("button", { name: "Open send review" }).click();
   const reopenedSendComposer = page.getByRole("dialog", { name: "Send quote confirmation" });
@@ -638,8 +644,8 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyDialog.getByText(`Found ${customer.fullName} in this workspace.`)).toBeVisible();
   const resultDetails = kodyDialog.getByTestId("kody-results");
   await resultDetails.locator("summary").click();
-  await expect(resultDetails).toContainText("Sent Quote");
-  await expect(resultDetails).toContainText("Sent to Customer");
+  await expect(resultDetails).toContainText("Sent quote");
+  await expect(resultDetails).toContainText("Sent to customer");
   await expect(resultDetails).toContainText("Aug 14, 2026");
   await expect(resultDetails).not.toContainText("SENT_QUOTE");
   await expect(resultDetails).not.toContainText("SENT_TO_CUSTOMER");
@@ -654,13 +660,13 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(guardrails).toContainText("archived records");
   await expect(kodyDialog.getByText("Policy class C2_CUSTOMER_CONFIDENTIAL")).toHaveClass(/sr-only/);
 
-  await kodyDialog.getByRole("button", { name: `Open ${customer.fullName}` }).click();
-  const customerDialog = page.getByRole("dialog", { name: "Customer details and activity" });
-  await expect(customerDialog.getByRole("heading", { name: `${customer.fullName} activity` })).toBeVisible();
+  await kodyDialog.getByRole("button", { name: "Open customer", exact: true }).click();
+  const customerDialog = page.getByRole("dialog", { name: "Customer details" });
+  await expect(customerDialog.getByRole("heading", { name: `${customer.fullName} · Customer activity` })).toBeVisible();
   await expect(kodyDialog).toBeHidden();
   await expect(kodyLauncher).toBeHidden();
   await expect(page.locator("[data-radix-dialog-overlay]")).toHaveCount(0);
-  const customerKodyAction = customerDialog.getByRole("button", { name: "Ask Kody" });
+  const customerKodyAction = customerDialog.getByRole("button", { name: "Kody", exact: true });
   await expect(customerKodyAction).toBeVisible();
   await expect(customerKodyAction).toHaveClass(/bg-\[var\(--qf-kody-trigger\)\]/);
   await customerKodyAction.click();
@@ -681,7 +687,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
 
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("textbox", { name: /find customer by name/i }).fill(customer.fullName);
+  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customer.fullName);
   await page.getByRole("button", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") }).click();
   await page.getByLabel("Quote title").fill("Existing mobile draft should stay");
   await expect(page.locator(".qf-mobile-action-dock")).toBeVisible();

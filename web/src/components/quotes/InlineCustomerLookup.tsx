@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Mail, Phone, Search, UserRoundPlus } from "lucide-react";
-import { api, ApiError, type Customer } from "../../lib/api";
+import { api, type Customer } from "../../lib/api";
 import { formatUsPhoneDisplay } from "../../lib/phone";
+import { localizedApiError } from "../../lib/localized-api-error";
 import { Button } from "../ui";
 
 interface InlineCustomerLookupProps {
@@ -15,6 +17,7 @@ export function InlineCustomerLookup({
   onSelectCustomer,
   onAddCustomer,
 }: InlineCustomerLookupProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,7 +50,7 @@ export function InlineCustomerLookup({
       } catch (lookupError) {
         if (cancelled) return;
         setResults([]);
-        setError(lookupError instanceof ApiError ? lookupError.message : "Customer lookup failed.");
+        setError(localizedApiError(lookupError, t, { fallbackKey: "quoteComponents.lookup.error" }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -57,7 +60,7 @@ export function InlineCustomerLookup({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, selectedCustomer]);
+  }, [query, selectedCustomer, t]);
 
   return (
     <div className="w-full max-w-[560px]">
@@ -66,13 +69,13 @@ export function InlineCustomerLookup({
           <div className="relative flex-1">
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--qf-text-muted)]" />
             <input
-              aria-label="Find customer by name, phone, or email"
+              aria-label={t("quoteComponents.lookup.label")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={
                 selectedCustomer
-                  ? "Find another customer by name, phone, or email"
-                  : "Find customer by name, phone, or email"
+                  ? t("quoteComponents.lookup.anotherPlaceholder")
+                  : t("quoteComponents.lookup.placeholder")
               }
               className="min-h-[44px] w-full rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] pl-10 pr-3 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:outline-none focus:ring-4 focus:ring-[var(--qf-focus-ring)] sm:min-h-[40px]"
             />
@@ -81,19 +84,19 @@ export function InlineCustomerLookup({
             type="button"
             variant="outline"
             onClick={onAddCustomer}
-            aria-label="Add Customer"
+            aria-label={t("quoteComponents.lookup.addCustomer")}
             icon={<UserRoundPlus size={15} />}
             className="shrink-0 sm:min-h-10"
           >
-            <span className="sm:hidden">Add</span>
-            <span className="hidden sm:inline">Add customer</span>
+            <span className="sm:hidden">{t("quoteComponents.lookup.add")}</span>
+            <span className="hidden sm:inline">{t("quoteComponents.lookup.addCustomer")}</span>
           </Button>
         </div>
 
         {query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase() ? (
           <div id="inline-customer-results" className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
             {loading ? (
-              <p role="status" className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">Searching customers...</p>
+              <p role="status" className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">{t("quoteComponents.lookup.searching")}</p>
             ) : error ? (
               <p role="alert" className="px-3 py-3 text-sm text-[var(--qf-danger-text)]">{error}</p>
             ) : results.length ? (
@@ -125,13 +128,13 @@ export function InlineCustomerLookup({
                       </div>
                     </div>
                     <span className="rounded-full border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-2 py-1 text-[11px] font-semibold text-[var(--qf-text-soft)]">
-                      Use
+                      {t("quoteComponents.lookup.use")}
                     </span>
                   </button>
                 ))}
               </div>
             ) : (
-              <p className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">No customers matched that search.</p>
+              <p className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">{t("quoteComponents.lookup.empty")}</p>
             )}
           </div>
         ) : null}

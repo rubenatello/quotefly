@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { PresetCategory, PresetUnitType, PrismaClient, ServiceCategory } from "@prisma/client";
+import { PresetCategory, PresetUnitType, Prisma, ServiceCategory } from "@prisma/client";
 import { applyOnboardingSetup, type OnboardingSetupInput } from "../../src/services/onboarding";
 
 interface BrandingState {
@@ -25,8 +25,15 @@ function createPrismaHarness(initialBranding: BrandingState | null, initialPrese
   const presets = initialPresets.map((preset) => ({ ...preset }));
   let nextPresetId = 1;
   let lastBrandingUpdate: Record<string, unknown> | null = null;
+  let queryRawCalls = 0;
 
   const prisma = {
+    $queryRaw: async () => {
+      queryRawCalls += 1;
+      return queryRawCalls % 2 === 1
+        ? [{ id: "tenant-branding-preservation" }]
+        : presets.map((preset) => ({ catalogKey: preset.catalogKey, name: preset.name }));
+    },
     tenant: {
       update: async () => ({}),
     },
@@ -44,7 +51,25 @@ function createPrismaHarness(initialBranding: BrandingState | null, initialPrese
       create: async () => ({}),
     },
     workPreset: {
-      findMany: async () => presets.filter((preset) => !preset.deletedAtUtc || preset.catalogKey !== null),
+      findMany: async () => presets,
+      count: async () => presets.filter((preset) => !preset.deletedAtUtc).length,
+      createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
+        let count = 0;
+        for (const item of data) {
+          const catalogKey = typeof item.catalogKey === "string" ? item.catalogKey : null;
+          if (catalogKey && presets.some((preset) => preset.catalogKey === catalogKey)) continue;
+          presets.push({
+            id: `preset-${nextPresetId++}`,
+            name: String(item.name),
+            catalogKey,
+            unitCost: Number(item.unitCost),
+            unitPrice: Number(item.unitPrice),
+            deletedAtUtc: null,
+          });
+          count += 1;
+        }
+        return { count };
+      },
       create: async ({ data }: { data: Record<string, unknown> }) => {
         const preset = {
           id: `preset-${nextPresetId++}`,
@@ -63,18 +88,21 @@ function createPrismaHarness(initialBranding: BrandingState | null, initialPrese
         Object.assign(preset, data);
         return { id: preset.id };
       },
-      updateMany: async ({ where, data }: { where: { id?: { in?: string[] } }; data: Record<string, unknown> }) => {
+      updateMany: async ({ where, data }: { where: { id?: { in?: string[] }; catalogKey?: string; deletedAtUtc?: null }; data: Record<string, unknown> }) => {
         const ids = new Set(where.id?.in ?? []);
         let count = 0;
         for (const preset of presets) {
-          if (!ids.has(preset.id)) continue;
+          const matchesIds = ids.size === 0 || ids.has(preset.id);
+          const matchesCatalog = where.catalogKey === undefined || preset.catalogKey === where.catalogKey;
+          const matchesActive = where.deletedAtUtc === undefined || preset.deletedAtUtc === where.deletedAtUtc;
+          if (!matchesIds || !matchesCatalog || !matchesActive) continue;
           Object.assign(preset, data);
           count += 1;
         }
         return { count };
       },
     },
-  } as unknown as PrismaClient;
+  } as unknown as Prisma.TransactionClient;
 
   return {
     prisma,
@@ -171,14 +199,14 @@ test("saving setup without presets preserves custom products and existing canoni
   assert.equal(savedCustomProduct?.unitPrice, 275);
   assert.equal(savedCanonicalPreset?.deletedAtUtc, null);
   assert.equal(savedCanonicalPreset?.unitPrice, 987.65);
-  assert.ok(savedSquareFootPreset?.deletedAtUtc instanceof Date);
+  assert.equal(savedSquareFootPreset?.deletedAtUtc, null);
   assert.equal(
     harness.getPresets().filter((preset) => preset.catalogKey === customizedCanonicalPreset.catalogKey).length,
     1,
   );
 });
 
-test("an explicit preset array reconciles custom products and keeps canonical catalog keys managed", async () => {
+test("an explicit preset array updates submitted products without pruning omitted tenant products", async () => {
   const harness = createPrismaHarness(null, [
     {
       id: "canonical-product",
@@ -240,7 +268,8 @@ test("an explicit preset array reconciles custom products and keeps canonical ca
   assert.equal(canonical?.unitPrice, 295);
   assert.equal(keptCustom?.unitPrice, 350);
   assert.equal(keptCustom?.deletedAtUtc, null);
-  assert.ok(omittedCustom?.deletedAtUtc instanceof Date);
+  assert.equal(omittedCustom?.deletedAtUtc, null);
+  assert.equal(omittedCustom?.unitPrice, 425);
 });
 
 test("explicit square-foot pricing updates an existing baseline when presets are omitted", async () => {

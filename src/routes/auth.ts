@@ -10,6 +10,7 @@ import { BASIC_TRIAL_DAYS } from "../lib/billing-offer";
 import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
 import { isSuperuserEmail } from "../lib/superuser";
+import { SupportedLocaleSchema } from "../lib/supported-locale";
 import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
 import {
@@ -37,6 +38,7 @@ const SignUpSchema = z.object({
   fullName: z.string().trim().min(2),
   companyName: z.string().trim().min(2),
   primaryTrade: z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]),
+  preferredLocale: SupportedLocaleSchema.optional().default("en-US"),
   logoUrl: BrandLogoDataUrlSchema.optional(),
   acceptedLegalTerms: z.literal(true),
   termsVersion: z.literal(CURRENT_TERMS_VERSION),
@@ -56,6 +58,10 @@ const ResetPasswordSchema = z.object({
   token: z.string().trim().min(43).max(200).regex(/^[A-Za-z0-9_-]+$/),
   password: z.string().min(8).max(120),
 });
+
+const AuthPreferencesSchema = z.object({
+  preferredLocale: SupportedLocaleSchema,
+}).strict();
 
 class PasswordResetRejectedError extends Error {}
 
@@ -170,6 +176,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             data: {
               email,
               fullName: payload.fullName,
+              preferredLocale: payload.preferredLocale,
               passwordHash,
               legalAcceptedAtUtc: new Date(),
               termsVersion: payload.termsVersion,
@@ -216,7 +223,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         setSessionCookie(app, reply, token);
 
         return reply.code(201).send({
-          user: { id: user.id, email: user.email, fullName: user.fullName },
+          user: {
+            id: user.id,
+            email: user.email,
+            fullName: user.fullName,
+            preferredLocale: user.preferredLocale,
+          },
           tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
         });
       } catch (error) {
@@ -250,6 +262,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         id: true,
         email: true,
         fullName: true,
+        preferredLocale: true,
         passwordHash: true,
         authVersion: true,
         deletedAtUtc: true,
@@ -298,7 +311,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     setSessionCookie(app, reply, token);
 
     return reply.send({
-      user: { id: user.id, email: user.email, fullName: user.fullName },
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        preferredLocale: user.preferredLocale,
+      },
       tenant: { id: tenantLink.tenant.id, name: tenantLink.tenant.name, slug: tenantLink.tenant.slug },
     });
   });
@@ -564,5 +582,36 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       isSuperuser: isSuperuserEmail(membership.user.email),
     };
   });
+
+  // PATCH /v1/auth/me/preferences (protected, current user only)
+  app.patch(
+    "/auth/me/preferences",
+    { ...AuthMeRateLimit, preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const parsed = AuthPreferencesSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          code: "INVALID_AUTH_PREFERENCES",
+          error: "Preferred locale must be en-US or es-US.",
+        });
+      }
+
+      const membership = request.liveAuthMembership;
+      if (!membership) {
+        return reply.code(401).send({ error: "Session is no longer valid." });
+      }
+
+      const updated = await app.prisma.user.updateMany({
+        where: { id: membership.user.id, deletedAtUtc: null },
+        data: { preferredLocale: parsed.data.preferredLocale },
+      });
+
+      if (updated.count !== 1) {
+        return reply.code(401).send({ error: "Session is no longer valid." });
+      }
+
+      return reply.send({ preferences: { preferredLocale: parsed.data.preferredLocale } });
+    },
+  );
 };
 

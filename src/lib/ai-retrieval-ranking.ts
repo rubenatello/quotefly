@@ -10,9 +10,9 @@ const MAX_RERANK_CANDIDATES = 20;
 const MAX_PRIMARY_CHUNKS_PER_SOURCE = 2;
 
 const VAGUE_FOLLOW_UP_PATTERN =
-  /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|it|them|those)\b|how\s+do\s+i\s+(?:fix|change|update)\s+(?:it|that|this)\b)/i;
+  /^[¿¡]?(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|it|them|those)\b|how\s+do\s+i\s+(?:fix|change|update)\s+(?:it|that|this)\b|y\b|ademas\b|ahora\b|que\s+tal\b|lo\s+mismo\b|muestrame\s+mas\b|cual(?:es)?\b|explica(?:me)?\s+eso\b|compara\s+(?:eso|esto|esos|esas)\b|como\s+(?:lo|la)\s+(?:arreglo|cambio|actualizo)\b)/i;
 const UNSAFE_CONTEXT_PATTERN =
-  /\b(?:ignore|disregard|override|forget|bypass|jailbreak|system\s+prompt|developer\s+message|hidden\s+prompt|api\s+key|secret\s+token|cross[-\s]*tenant|another\s+tenant|other\s+tenant)\b/i;
+  /\b(?:ignore|disregard|override|forget|bypass|jailbreak|system\s+prompt|developer\s+message|hidden\s+prompt|api\s+key|secret\s+token|cross[-\s]*tenant|another\s+tenant|other\s+tenant|ignora|omite|anula|olvida|prompt\s+del\s+sistema|mensaje\s+del\s+desarrollador|prompt\s+oculto|clave\s+(?:de\s+)?api|token\s+secreto|otro\s+(?:tenant|inquilino|espacio\s+de\s+trabajo)|otra\s+(?:cuenta|empresa))\b/i;
 
 const RETRIEVAL_STOP_WORDS = new Set([
   "a",
@@ -48,6 +48,43 @@ const RETRIEVAL_STOP_WORDS = new Set([
   "which",
   "with",
   "you",
+  "al",
+  "como",
+  "cómo",
+  "con",
+  "cual",
+  "cuales",
+  "cuál",
+  "cuáles",
+  "de",
+  "del",
+  "el",
+  "ella",
+  "en",
+  "eso",
+  "esta",
+  "este",
+  "la",
+  "las",
+  "lo",
+  "los",
+  "me",
+  "mi",
+  "mis",
+  "nos",
+  "nuestro",
+  "para",
+  "por",
+  "que",
+  "qué",
+  "se",
+  "sin",
+  "su",
+  "sus",
+  "un",
+  "una",
+  "y",
+  "yo",
 ]);
 
 function normalizeQuery(value: string, maxLength = MAX_REWRITE_QUERY_CHARS) {
@@ -57,7 +94,7 @@ function normalizeQuery(value: string, maxLength = MAX_REWRITE_QUERY_CHARS) {
 export function aiRetrievalLexicalTokens(value: string, maxTokens = 32) {
   return Array.from(new Set(
     normalizeQuery(value)
-      .toLocaleLowerCase("en-US")
+      .toLocaleLowerCase("und")
       .match(/[\p{L}\p{N}]+/gu)
       ?.filter((token) => token.length >= 2 && !RETRIEVAL_STOP_WORDS.has(token))
       .slice(0, Math.max(1, Math.min(Math.trunc(maxTokens), 512))) ?? [],
@@ -125,7 +162,7 @@ export type AiHybridRankedCandidate<T> = AiHybridRankCandidate<T> & Readonly<{
 }>;
 
 function candidateSearchText(candidate: AiHybridRankCandidate<unknown>) {
-  return normalizeQuery(`${candidate.citationLabel} ${candidate.content}`).toLocaleLowerCase("en-US");
+  return normalizeQuery(`${candidate.citationLabel} ${candidate.content}`).toLocaleLowerCase("und");
 }
 
 /**
@@ -139,7 +176,7 @@ export function rerankAiRetrievalCandidates<T>(params: {
   candidates: readonly AiHybridRankCandidate<T>[];
   limit: number;
 }): AiHybridRankedCandidate<T>[] {
-  const query = normalizeQuery(params.query).toLocaleLowerCase("en-US");
+  const query = normalizeQuery(params.query).toLocaleLowerCase("und");
   const queryTokens = aiRetrievalLexicalTokens(query);
   const limit = Math.max(1, Math.min(Math.trunc(params.limit), 20));
   const scored = params.candidates

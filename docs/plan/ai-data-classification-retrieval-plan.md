@@ -391,6 +391,35 @@ The final migration must be rehearsed against a production-like Neon branch. Pos
 
 Status values: `Not started`, `In progress`, `Blocked`, `Ready for review`, `Completed`.
 
+### Current Kody methodology and quality gate (2026-08-20)
+
+Kody uses four deliberately separate layers. This separation is a security and
+accuracy control, not an implementation limitation:
+
+1. Deterministic tools query exact tenant records for customers, products,
+   follow-up, pipeline math, profitability, and workflow targets.
+2. RAG retrieves only approved narrative context such as notes, scope, activity,
+   line descriptions, and saved-job descriptions.
+3. The LLM may rewrite a vague query and compose concise language from the
+   authorized tool/RAG envelope, but it does not select the tenant, role,
+   classification, record IDs, prices, or action payloads.
+4. Server-created actions open normal QuoteFly review surfaces. Creating,
+   changing, sending, archiving, or deleting data still requires the product's
+   authorized confirmation flow.
+
+| Gate | Current state | Next acceptance evidence |
+|---|---|---|
+| Tenant boundary | Application tenant scopes plus forced RLS on retrieval documents, chunks, audits, and index jobs | Keep adversarial two-tenant integration coverage green; stage RLS expansion for AI usage/feedback and core tenant tables |
+| Classification | Exhaustive field policy, reviewed Prisma inventory, and authoritative source-to-field manifest; validation fails when a vector field has no canonical loader | Keep the manifest/catalog equality test mandatory as models and fields are added |
+| Content governance | Free-text values are inspected before hashing, persistence, and embedding; contact data is redacted and credential-like C4 content is quarantined | Add content-free quarantine-rate monitoring and an operator cleanup/reindex workflow |
+| Metadata | Typed entity, lifecycle, assignment, service, status, section, page, and freshness filters; unsupported source/field pairs and arbitrary JSON metadata are rejected | Define a separate size-limited typed schema before adding file/page ingestion metadata |
+| Retrieval | Token-aware overlap, tenant-scoped embedding reuse, hybrid ranking, current-source hash revalidation, citations | Benchmark recall beyond the newest candidate window and move vector search into PostgreSQL/pgvector when representative data justifies it |
+| Grounding | Structured JSON output, explicit authorized citation markers, deterministic fallback, and rejection of unsupported numeric/date claims | Expand the adversarial corpus and measure grounded-answer fallback/acceptance rates |
+| Workflow routing | Typed review-only tools for customers, product search, quotes, send preparation, follow-up, and analytics | Add bounded server-revalidated entity anchors for multi-turn references such as "her" and "send it" |
+| Cost control | Tenant monthly accounting and request limits | Add atomic tenant-month provider-cost reservation/settlement before claiming a strict hard cap under concurrency |
+| Retention | Expiry timestamps and immediate logical exclusion | Add idempotent scheduled purge with dry-run/apply evidence and documented backup expiry |
+| Rollout | Async index queue/worker exists; inline refresh remains the safe default | Run production-like Neon worker/backfill/rollback rehearsal, then enable async indexing with queue-age alerts |
+
 ### Phase 0 — Policy and threat-model freeze
 
 | ID | Work item | Owner | Status | Acceptance evidence |

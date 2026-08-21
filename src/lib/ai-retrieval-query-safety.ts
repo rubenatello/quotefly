@@ -4,7 +4,7 @@ const MAX_EMBEDDING_QUERY_CHARS = 800;
 import { redactAiPrompt } from "./ai-data-governance";
 
 const REDACTION_MARKER_PATTERN = /\[(?:REDACTED(?:_[A-Z]+)?|TRUNCATED)\]/gu;
-const REDACTION_LABEL_PATTERN = /\b(?:bearer|password|passcode|secret|authorization|token|api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token)\b\s*[:=]?/giu;
+const REDACTION_LABEL_PATTERN = /\b(?:bearer|password|passcode|secret|authorization|token|api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token|contrase(?:ñ|n)a|clave|secreto|autorizaci(?:ó|o)n|clave[\s_-]?(?:de[\s_-]?)?api|token[\s_-]?(?:de[\s_-]?)?acceso|token[\s_-]?(?:de[\s_-]?)?actualizaci(?:ó|o)n)\b\s*[:=]?/giu;
 const SCHEME_URI_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/giu;
 
 export type AiEmbeddingQueryPreparation = Readonly<{
@@ -41,7 +41,7 @@ export function prepareAiEmbeddingQuery(value: string): AiEmbeddingQueryPreparat
     const providerSafe = governed
       .replace(REDACTION_MARKER_PATTERN, " ")
       .replace(REDACTION_LABEL_PATTERN, " ")
-      .replace(/[?&](?:token|key|secret|signature|code)=/giu, " ");
+      .replace(/[?&](?:token|key|secret|signature|code|clave|secreto|firma|codigo)=/giu, " ");
     const embeddingQuery = normalizeQuery(providerSafe, MAX_EMBEDDING_QUERY_CHARS);
     return {
       lexicalQuery,

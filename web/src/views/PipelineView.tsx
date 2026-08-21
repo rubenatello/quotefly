@@ -1,41 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ChevronDown, Search } from "lucide-react";
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, QuoteIcon } from "../components/Icons";
+import { ActivityTaskPanel } from "../components/activity/ActivityTaskPanel";
 import { Alert, Badge, Button, Card, EmptyState, Input, LoadingState, PageHeader, PaginationControls, Select, type PageSize } from "../components/ui";
 import { FollowUpPill, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { api, type AfterSaleFollowUpStatus, type LeadFollowUpStatus, type QuoteJobStatus, type WorkspaceFollowUpItem } from "../lib/api";
 import { usePageView } from "../lib/analytics";
 import { resolveActivityTiming } from "../lib/display-format";
+import { validTimeZone } from "../lib/tenant-time";
 
 type PipelineLead = WorkspaceFollowUpItem;
 type QueueTab = "new" | "quoted" | "closed" | "afterSale" | "recent";
+type ActivitySurface = "mine" | "team" | "leads";
 
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON", "LOST"];
 const JOB_STATUSES: QuoteJobStatus[] = ["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"];
 const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = ["NOT_READY", "DUE", "COMPLETED"];
 
-const FOLLOW_UP_OPTIONS = FOLLOW_UP_STATUSES.map((status) => ({ value: status, label: followUpLabel(status) }));
-const JOB_STATUS_OPTIONS = JOB_STATUSES.map((status) => ({ value: status, label: jobStatusLabel(status) }));
-const AFTER_SALE_OPTIONS = AFTER_SALE_STATUSES.map((status) => ({ value: status, label: afterSaleLabel(status) }));
-
-function followUpLabel(status: LeadFollowUpStatus): string {
-  if (status === "NEEDS_FOLLOW_UP") return "Needs Follow Up";
-  if (status === "FOLLOWED_UP") return "Followed Up";
-  if (status === "WON") return "Won";
-  return "Lost";
+function followUpLabel(status: LeadFollowUpStatus, t: TFunction): string {
+  if (status === "NEEDS_FOLLOW_UP") return t("activity.status.needsFollowUp");
+  if (status === "FOLLOWED_UP") return t("activity.status.followedUp");
+  if (status === "WON") return t("activity.status.won");
+  return t("activity.status.lost");
 }
 
-function jobStatusLabel(status: QuoteJobStatus): string {
-  if (status === "NOT_STARTED") return "Not Started";
-  if (status === "IN_PROGRESS") return "In Progress";
-  return status.charAt(0) + status.slice(1).toLowerCase().replace("_", " ");
+function jobStatusLabel(status: QuoteJobStatus, t: TFunction): string {
+  if (status === "NOT_STARTED") return t("activity.status.notStarted");
+  if (status === "SCHEDULED") return t("activity.status.scheduled");
+  if (status === "IN_PROGRESS") return t("activity.status.inProgress");
+  return t("activity.status.completed");
 }
 
-function afterSaleLabel(status: AfterSaleFollowUpStatus): string {
-  if (status === "NOT_READY") return "Not Ready";
-  return status.charAt(0) + status.slice(1).toLowerCase();
+function afterSaleLabel(status: AfterSaleFollowUpStatus, t: TFunction): string {
+  if (status === "NOT_READY") return t("activity.status.notReady");
+  if (status === "DUE") return t("activity.status.due");
+  return t("activity.status.completed");
 }
 
 function customerInitials(fullName: string) {
@@ -47,24 +51,42 @@ function customerInitials(fullName: string) {
     .toUpperCase();
 }
 
-function compactDateTime(value: string) {
-  const date = new Date(value);
-  const today = new Date();
-  const sameDay =
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate();
-  if (sameDay) {
-    return `Today, ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function tenantDateKey(value: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: validTimeZone(timeZone),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
 }
 
-function nextActionLabel(lead: PipelineLead, actionKind: QueueActionKind) {
-  if (actionKind === "job_status") return "Move work forward";
-  if (actionKind === "after_sale") return "Ask for review or referral";
-  if (!lead.quoteId) return "Draft first quote";
-  return "Follow up with customer";
+function compactDateTime(value: string, t: TFunction, locale: string, timeZone: string) {
+  const date = new Date(value);
+  const today = new Date();
+  if (Number.isNaN(date.getTime())) return t("home.time.recently");
+  const resolvedTimeZone = validTimeZone(timeZone);
+  const sameDay = tenantDateKey(date, resolvedTimeZone) === tenantDateKey(today, resolvedTimeZone);
+  if (sameDay) {
+    return t("activity.todayAt", {
+      time: new Intl.DateTimeFormat(locale, {
+        timeZone: resolvedTimeZone,
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date),
+    });
+  }
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: resolvedTimeZone,
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+function nextActionLabel(lead: PipelineLead, actionKind: QueueActionKind, t: TFunction) {
+  if (actionKind === "job_status") return t("activity.action.moveWork");
+  if (actionKind === "after_sale") return t("activity.action.askReview");
+  if (!lead.quoteId) return t("activity.action.draftFirst");
+  return t("activity.action.followUp");
 }
 
 function sectionToneBadge(tone: "blue" | "orange" | "emerald" | "slate") {
@@ -198,7 +220,11 @@ function QueueActions({
   ) => void;
   includePrimary?: boolean;
 }) {
+  const { t } = useTranslation();
   const selectClassName = mobile ? "min-w-0 w-full" : "w-full min-w-[150px] sm:w-auto";
+  const followUpOptions = FOLLOW_UP_STATUSES.map((status) => ({ value: status, label: followUpLabel(status, t) }));
+  const jobStatusOptions = JOB_STATUSES.map((status) => ({ value: status, label: jobStatusLabel(status, t) }));
+  const afterSaleOptions = AFTER_SALE_STATUSES.map((status) => ({ value: status, label: afterSaleLabel(status, t) }));
 
   return (
     <div className={mobile ? "grid grid-cols-1 gap-2 min-[420px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
@@ -209,39 +235,39 @@ function QueueActions({
           className="w-full sm:w-auto"
           onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
         >
-          {lead.quoteId ? "Open quote" : "Draft quote"}
+          {lead.quoteId ? t("activity.openQuote") : t("activity.draftQuote")}
         </Button>
       ) : null}
 
       {actionKind === "follow_up" ? (
         <Select
-          aria-label={`Update follow-up for ${lead.customerName}`}
+          aria-label={t("activity.updateFollowUp", { name: lead.customerName })}
           value={lead.followUpStatus}
           disabled={saving}
           onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
-          options={FOLLOW_UP_OPTIONS}
+          options={followUpOptions}
           className={selectClassName}
         />
       ) : actionKind === "job_status" ? (
         <Select
-          aria-label={`Update job stage for ${lead.customerName}`}
+          aria-label={t("activity.updateJob", { name: lead.customerName })}
           value={lead.jobStatus ?? "NOT_STARTED"}
           disabled={saving || !lead.quoteId}
           onChange={(event) =>
             lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { jobStatus: event.target.value as QuoteJobStatus })
           }
-          options={JOB_STATUS_OPTIONS}
+          options={jobStatusOptions}
           className={selectClassName}
         />
       ) : actionKind === "after_sale" ? (
         <Select
-          aria-label={`Update after-sale for ${lead.customerName}`}
+          aria-label={t("activity.updateAfterSale", { name: lead.customerName })}
           value={lead.afterSaleFollowUpStatus ?? "DUE"}
           disabled={saving || !lead.quoteId}
           onChange={(event) =>
             lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { afterSaleFollowUpStatus: event.target.value as AfterSaleFollowUpStatus })
           }
-          options={AFTER_SALE_OPTIONS}
+          options={afterSaleOptions}
           className={selectClassName}
         />
       ) : null}
@@ -273,19 +299,23 @@ function QueueRow({
     patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
   ) => void;
 }) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const { session } = useDashboard();
+  const timeZone = session?.timezone ?? "UTC";
   const { kind: activityKind, atUtc: activityAtUtc } = resolveActivityTiming(lead);
   const timingLabel = lead.afterSaleFollowUpDueAtUtc
-    ? `Due ${compactDateTime(lead.afterSaleFollowUpDueAtUtc)}`
-    : `${activityKind === "ADDED" ? "Added" : "Updated"} ${compactDateTime(activityAtUtc)}`;
+    ? t("activity.dueAt", { date: compactDateTime(lead.afterSaleFollowUpDueAtUtc, t, locale, timeZone) })
+    : t(activityKind === "ADDED" ? "activity.addedAt" : "activity.updatedAt", { date: compactDateTime(activityAtUtc, t, locale, timeZone) });
   const renderStatusPills = () => (
     <>
       <FollowUpPill status={lead.followUpStatus} compact />
-      {lead.status ? <QuoteStatusPill status={lead.status} compact /> : <LifecyclePill label="No quote" tone="slate" />}
+      {lead.status ? <QuoteStatusPill status={lead.status} compact /> : <LifecyclePill label={t("activity.noQuotePill")} tone="slate" />}
       {actionKind === "job_status" && lead.jobStatus ? (
-        <LifecyclePill label={jobStatusLabel(lead.jobStatus)} tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"} />
+        <LifecyclePill label={jobStatusLabel(lead.jobStatus, t)} tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"} />
       ) : null}
       {actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
-        <LifecyclePill label={afterSaleLabel(lead.afterSaleFollowUpStatus)} tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"} />
+        <LifecyclePill label={afterSaleLabel(lead.afterSaleFollowUpStatus, t)} tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"} />
       ) : null}
     </>
   );
@@ -303,7 +333,7 @@ function QueueRow({
               <span className="shrink-0 rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold text-[var(--qf-text-muted)]">#{index + 1}</span>
             </div>
             <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">
-              {lead.quoteTitle ?? nextActionLabel(lead, actionKind)}
+              {lead.quoteTitle ?? nextActionLabel(lead, actionKind, t)}
             </p>
             <p className="mt-1 text-[11px] font-medium text-[var(--qf-text-soft)] sm:hidden">{timingLabel}</p>
           </div>
@@ -313,8 +343,8 @@ function QueueRow({
         <div className="mt-3 flex items-center gap-2">
           <a
             href={`tel:${lead.phone}`}
-            aria-label={`Call ${lead.customerName}`}
-            title={`Call ${lead.phone}`}
+            aria-label={t("activity.call", { name: lead.customerName })}
+            title={t("activity.call", { name: lead.phone })}
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
           >
             <CallIcon size={15} />
@@ -322,8 +352,8 @@ function QueueRow({
           {lead.email ? (
             <a
               href={`mailto:${lead.email}`}
-              aria-label={`Email ${lead.customerName}`}
-              title={`Email ${lead.email}`}
+              aria-label={t("activity.email", { name: lead.customerName })}
+              title={t("activity.email", { name: lead.email })}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)] hover:border-[var(--qf-border-strong)] hover:text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
             >
               <EmailIcon size={15} />
@@ -333,16 +363,16 @@ function QueueRow({
             size="sm"
             variant={lead.quoteId ? "outline" : "primary"}
             className="min-w-0 flex-1"
-            aria-label={lead.quoteId ? "Open quote" : "Draft first quote"}
+            aria-label={lead.quoteId ? t("activity.openQuote") : t("activity.action.draftFirst")}
             onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
           >
-            {lead.quoteId ? `Open quote${lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}` : "Draft first quote"}
+            {lead.quoteId ? `${t("activity.openQuote")}${lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}` : t("activity.action.draftFirst")}
           </Button>
         </div>
 
         <details className="group mt-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 text-xs font-semibold text-[var(--qf-text-soft)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
-            <span>Details and status</span>
+            <span>{t("activity.detailsStatus")}</span>
             <ChevronDown size={16} className="motion-safe:transition-transform motion-safe:group-open:rotate-180" aria-hidden="true" />
           </summary>
           <div className="border-t border-[var(--qf-border)] p-3">
@@ -366,7 +396,7 @@ function QueueRow({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-[var(--qf-panel-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{index + 1}</span>
-            <span className="text-xs text-[var(--qf-text-muted)]">Created {formatDateTime(lead.createdAt)}</span>
+            <span className="text-xs text-[var(--qf-text-muted)]">{t("activity.created", { date: formatDateTime(lead.createdAt, locale, timeZone) })}</span>
           </div>
           <div className="mt-1.5 flex items-start gap-3">
             <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">{customerInitials(lead.customerName)}</span>
@@ -384,10 +414,10 @@ function QueueRow({
           {lead.quoteTitle ? (
             <>
               <p className="truncate text-sm font-medium text-[var(--qf-text)]">{lead.quoteTitle}</p>
-              <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{lead.totalAmount !== undefined ? money(lead.totalAmount) : "No total yet"}</p>
+              <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{lead.totalAmount !== undefined ? money(lead.totalAmount) : t("activity.noTotal")}</p>
             </>
           ) : (
-            <p className="text-sm text-[var(--qf-text-muted)]">No quote drafted yet.</p>
+            <p className="text-sm text-[var(--qf-text-muted)]">{t("activity.noQuote")}</p>
           )}
         </div>
 
@@ -395,7 +425,7 @@ function QueueRow({
 
         <div className="space-y-1 text-xs text-[var(--qf-text-muted)]">
           <p>{timingLabel}</p>
-          <p className="font-medium text-[var(--qf-text-soft)]">{nextActionLabel(lead, actionKind)}</p>
+          <p className="font-medium text-[var(--qf-text-soft)]">{nextActionLabel(lead, actionKind, t)}</p>
         </div>
 
         <QueueActions
@@ -414,7 +444,10 @@ function QueueRow({
 
 export function PipelineView() {
   usePageView("pipeline");
+  const { t } = useTranslation();
+  const location = useLocation();
   const {
+    session,
     saving,
     error,
     notice,
@@ -426,6 +459,8 @@ export function PipelineView() {
     navigateToBuilder,
     selectedQuoteId,
   } = useDashboard();
+  const canManageAssignments = session?.role === "owner" || session?.role === "admin";
+  const [activitySurface, setActivitySurface] = useState<ActivitySurface>("mine");
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [queueItems, setQueueItems] = useState<PipelineLead[]>([]);
   const [recentLeads, setRecentLeads] = useState<PipelineLead[]>([]);
@@ -470,13 +505,13 @@ export function PipelineView() {
       setQueueTotals(result.totals);
       setQueueMetrics(result.metrics);
       setRecentLeads(recentResult?.items ?? (activeTab === "recent" ? result.items.slice(0, 4) : []));
-    } catch (err) {
+    } catch {
       if (requestId !== queueRequestIdRef.current) return;
-      setQueueLoadError(err instanceof Error ? err.message : "Activity queue could not be loaded.");
+      setQueueLoadError(t("activity.unavailableDescription"));
     } finally {
       if (requestId === queueRequestIdRef.current) setQueueLoading(false);
     }
-  }, [activeTab, debouncedQueueSearch, queuePage, queuePageSize]);
+  }, [activeTab, debouncedQueueSearch, queuePage, queuePageSize, t]);
 
   useEffect(() => {
     void loadQueuePage();
@@ -492,60 +527,60 @@ export function PipelineView() {
   const queueTabs = useMemo<QueueConfig[]>(() => [
     {
       key: "new",
-      label: "New",
-      title: `New Leads (${queueTotals.newLeads})`,
-      subtitle: "Untouched leads first, oldest to newest.",
+      label: t("activity.tabs.new"),
+      title: t("activity.tabs.newTitle", { count: queueTotals.newLeads }),
+      subtitle: t("activity.tabs.newSubtitle"),
       count: queueTotals.newLeads,
       actionKind: "follow_up",
       tone: "blue",
-      emptyTitle: "No new leads",
-      emptyDescription: "No leads waiting for first quote.",
+      emptyTitle: t("activity.empty.newTitle"),
+      emptyDescription: t("activity.empty.newDescription"),
     },
     {
       key: "quoted",
-      label: "Quoted",
-      title: `Quoted Leads (${queueTotals.quotedLeads})`,
-      subtitle: "Quoted jobs that still need follow-up.",
+      label: t("activity.tabs.quoted"),
+      title: t("activity.tabs.quotedTitle", { count: queueTotals.quotedLeads }),
+      subtitle: t("activity.tabs.quotedSubtitle"),
       count: queueTotals.quotedLeads,
       actionKind: "follow_up",
       tone: "orange",
-      emptyTitle: "No quoted leads",
-      emptyDescription: "Quoted jobs will appear here.",
+      emptyTitle: t("activity.empty.quotedTitle"),
+      emptyDescription: t("activity.empty.quotedDescription"),
     },
     {
       key: "closed",
-      label: "Closed",
-      title: `Closed Leads (${queueTotals.closedLeads})`,
-      subtitle: "Accepted jobs that are scheduled or in progress.",
+      label: t("activity.tabs.closed"),
+      title: t("activity.tabs.closedTitle", { count: queueTotals.closedLeads }),
+      subtitle: t("activity.tabs.closedSubtitle"),
       count: queueTotals.closedLeads,
       actionKind: "job_status",
       tone: "emerald",
-      emptyTitle: "No closed leads",
-      emptyDescription: "Accepted jobs will appear here once marked as won.",
+      emptyTitle: t("activity.empty.closedTitle"),
+      emptyDescription: t("activity.empty.closedDescription"),
     },
     {
       key: "afterSale",
-      label: "Post-job",
-      title: `After-Sale Follow-Up (${queueTotals.afterSaleLeads})`,
-      subtitle: "Completed jobs waiting on review, referral, or post-job check-in.",
+      label: t("activity.tabs.postJob"),
+      title: t("activity.tabs.postJobTitle", { count: queueTotals.afterSaleLeads }),
+      subtitle: t("activity.tabs.postJobSubtitle"),
       count: queueTotals.afterSaleLeads,
       actionKind: "after_sale",
       tone: "slate",
-      emptyTitle: "No after-sale follow-up due",
-      emptyDescription: "Completed jobs will appear here when follow-up is due.",
+      emptyTitle: t("activity.empty.postJobTitle"),
+      emptyDescription: t("activity.empty.postJobDescription"),
     },
     {
       key: "recent",
-      label: "Recent",
-      title: `Recently Added Leads (${queueTotals.recentLeads})`,
-      subtitle: "Newest customer records, regardless of quote status.",
+      label: t("activity.tabs.recent"),
+      title: t("activity.tabs.recentTitle", { count: queueTotals.recentLeads }),
+      subtitle: t("activity.tabs.recentSubtitle"),
       count: queueTotals.recentLeads,
       actionKind: "follow_up",
       tone: "blue",
-      emptyTitle: "No recent leads",
-      emptyDescription: "Customer records will show here once created.",
+      emptyTitle: t("activity.empty.recentTitle"),
+      emptyDescription: t("activity.empty.recentDescription"),
     },
-  ], [queueTotals]);
+  ], [queueTotals, t]);
 
   const activeQueue = queueTabs.find((tab) => tab.key === activeTab) ?? queueTabs[0];
   const totalQueuePages = Math.max(1, Math.ceil(queueTotal / queuePageSize));
@@ -570,38 +605,69 @@ export function PipelineView() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Activity center"
-        subtitle="Work assigned leads, quotes, active jobs, and customer check-ins in priority order."
+        title={t("activity.title")}
+        subtitle={t("activity.subtitle")}
         mode="actions-only"
-        actions={selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>Open Active Quote</Button> : undefined}
+        actions={selectedQuoteId ? <Button onClick={() => navigateToQuote(selectedQuoteId)}>{t("activity.openActiveQuote")}</Button> : undefined}
       />
 
-      {error && <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>}
-      {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert>}
+      {error && <Alert tone="error" onDismiss={() => setError(null)}>{t("activity.actionError")}</Alert>}
+      {notice && <Alert tone="success" onDismiss={() => setNotice(null)}>{t("activity.actionSaved")}</Alert>}
 
-      <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_320px]">
+      <div
+        role="group"
+        aria-label={t("activity.views")}
+        className={`grid gap-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1.5 shadow-[var(--qf-shadow-sm)] ${canManageAssignments ? "grid-cols-3" : "grid-cols-2"}`}
+      >
+        {([
+          { key: "mine", label: t("activity.myWork") },
+          ...(canManageAssignments ? [{ key: "team", label: t("activity.team") } as const] : []),
+          { key: "leads", label: t("activity.leadQueue") },
+        ] as Array<{ key: ActivitySurface; label: string }>).map((surface) => (
+          <button
+            key={surface.key}
+            type="button"
+            aria-pressed={activitySurface === surface.key}
+            onClick={() => setActivitySurface(surface.key)}
+            className={`min-h-11 rounded-lg px-3 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] ${activitySurface === surface.key ? "bg-[var(--qf-selected)] text-[var(--qf-link)]" : "text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)]"}`}
+          >
+            {surface.label}
+          </button>
+        ))}
+      </div>
+
+      {activitySurface !== "leads" ? (
+        <ActivityTaskPanel
+          mine={activitySurface === "mine"}
+          canManage={canManageAssignments}
+          currentUserId={session?.userId ?? ""}
+          timezone={session?.timezone ?? "UTC"}
+          navigateToQuote={navigateToQuote}
+          initialTaskId={(location.state as { activityTaskId?: string } | null)?.activityTaskId}
+        />
+      ) : <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_320px]">
         <div className="space-y-4">
           <div data-testid="follow-up-metrics" className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
-            <MetricTile label="Needs attention" value={queueLoading ? "—" : nextAttentionCount} tone="orange" />
-            <MetricTile label="New leads" value={queueLoading ? "—" : queueTotals.newLeads} tone="blue" />
-            <MetricTile label="Active work" value={queueLoading ? "—" : queueTotals.closedLeads} tone="emerald" />
-            <MetricTile label="Revenue" value={queueLoading ? "—" : queueMetrics.acceptedRevenue} tone="slate" currency />
+            <MetricTile label={t("activity.metrics.attention")} value={queueLoading ? "—" : nextAttentionCount} tone="orange" />
+            <MetricTile label={t("activity.metrics.newLeads")} value={queueLoading ? "—" : queueTotals.newLeads} tone="blue" />
+            <MetricTile label={t("activity.metrics.activeWork")} value={queueLoading ? "—" : queueTotals.closedLeads} tone="emerald" />
+            <MetricTile label={t("activity.metrics.revenue")} value={queueLoading ? "—" : queueMetrics.acceptedRevenue} tone="slate" currency />
           </div>
 
           <Card variant="default" padding="md" className="overflow-hidden p-0 sm:p-5">
             <div className="flex flex-col gap-3 border-b border-[var(--qf-border)] p-4 sm:mb-4 sm:p-0 sm:pb-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Activity queue</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("activity.queue")}</p>
                 <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-[var(--qf-text)]">{activeQueue.title}</h2>
                 <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{activeQueue.subtitle}</p>
               </div>
               <div className="min-w-0 max-w-full space-y-3 lg:w-auto">
                 <Input
-                  aria-label="Search activity queue"
+                  aria-label={t("activity.searchLabel")}
                   icon={<Search size={16} aria-hidden="true" />}
                   value={queueSearch}
                   onChange={(event) => setQueueSearch(event.target.value)}
-                  placeholder="Search customer, phone, email, or quote"
+                  placeholder={t("activity.searchPlaceholder")}
                 />
                 <QueueTabs
                   tabs={queueTabs}
@@ -618,8 +684,8 @@ export function PipelineView() {
               {queueLoading ? (
                 <div className="p-4">
                   <LoadingState
-                    title="Loading activity queue"
-                    description="Finding the next tenant-scoped customers and jobs that need attention."
+                    title={t("activity.loadingTitle")}
+                    description={t("activity.loadingDescription")}
                     variant="cards"
                     rows={5}
                   />
@@ -627,26 +693,26 @@ export function PipelineView() {
               ) : queueLoadError ? (
                 <div className="p-4">
                   <EmptyState
-                    title="Activity is temporarily unavailable"
-                    description={`${queueLoadError} No customer or quote records were changed.`}
-                    action={<Button variant="outline" onClick={() => void loadQueuePage()}>Try again</Button>}
+                    title={t("activity.unavailableTitle")}
+                    description={`${queueLoadError} ${t("activity.unchanged")}`}
+                    action={<Button variant="outline" onClick={() => void loadQueuePage()}>{t("home.tryAgain")}</Button>}
                   />
                 </div>
               ) : queueItems.length === 0 ? (
                 <div className="p-4">
                   <EmptyState
-                    title={debouncedQueueSearch ? "No matching activity" : activeQueue.emptyTitle}
-                    description={debouncedQueueSearch ? `No activity matches “${debouncedQueueSearch}”. Try a broader search or another queue.` : activeQueue.emptyDescription}
+                    title={debouncedQueueSearch ? t("activity.noMatches") : activeQueue.emptyTitle}
+                    description={debouncedQueueSearch ? t("activity.noMatchesDescription", { search: debouncedQueueSearch }) : activeQueue.emptyDescription}
                   />
                 </div>
               ) : (
                 <>
                   <div className="hidden grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)_190px_140px_160px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] 2xl:grid">
-                    <span>Lead</span>
-                    <span>Quote</span>
-                    <span>Status</span>
-                    <span>Due / updated</span>
-                    <span>Action</span>
+                    <span>{t("activity.columns.lead")}</span>
+                    <span>{t("activity.columns.quote")}</span>
+                    <span>{t("activity.columns.status")}</span>
+                    <span>{t("activity.columns.due")}</span>
+                    <span>{t("activity.columns.action")}</span>
                   </div>
                   <div className="divide-y divide-[var(--qf-border)]">
                     {queueItems.map((lead, index) => (
@@ -673,7 +739,7 @@ export function PipelineView() {
                 offset={(queuePage - 1) * queuePageSize}
                 total={queueTotal}
                 loading={queueLoading}
-                itemLabel="activity records"
+                itemLabel={t("activity.records")}
                 onLimitChange={(nextLimit) => {
                   setQueuePageSize(nextLimit);
                   setQueuePage(1);
@@ -688,30 +754,30 @@ export function PipelineView() {
           <Card variant="default" padding="md">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Queue focus</p>
-                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Keep one list moving at a time.</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("activity.focus")}</p>
+                <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("activity.focusDescription")}</p>
               </div>
-              <Badge tone={sectionToneBadge(activeQueue.tone)}>{activeQueue.count} active</Badge>
+              <Badge tone={sectionToneBadge(activeQueue.tone)}>{t("activity.activeCount", { count: activeQueue.count })}</Badge>
             </div>
             <div className="mt-3 space-y-2.5">
-              <UtilityRow icon={<ClockIcon size={14} />} label="Needs touch today" value={String(nextAttentionCount)} />
-              <UtilityRow icon={<CustomerIcon size={14} />} label="Active customers" value={String(activeCustomerCount)} />
-              <UtilityRow icon={<QuoteIcon size={14} />} label="Quotes this month" value={String(queueMetrics.monthlyQuotes)} />
+              <UtilityRow icon={<ClockIcon size={14} />} label={t("activity.needsTouch")} value={String(nextAttentionCount)} />
+              <UtilityRow icon={<CustomerIcon size={14} />} label={t("activity.activeCustomers")} value={String(activeCustomerCount)} />
+              <UtilityRow icon={<QuoteIcon size={14} />} label={t("activity.quotesThisMonth")} value={String(queueMetrics.monthlyQuotes)} />
             </div>
             <div className="mt-4 grid gap-2">
               <Button fullWidth variant="outline" onClick={() => navigateToBuilder()}>
-                Start New Quote
+                {t("activity.startQuote")}
               </Button>
               {selectedQuoteId ? (
                 <Button fullWidth onClick={() => navigateToQuote(selectedQuoteId)}>
-                  Open Active Quote
+                  {t("activity.openActiveQuote")}
                 </Button>
               ) : null}
             </div>
           </Card>
 
           <Card variant="default" padding="md">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Recent leads</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("activity.recentLeads")}</p>
             <div className="mt-3 space-y-2.5">
               {recentLeads.length > 0 ? (
                 recentLeads.map((lead) => (
@@ -726,19 +792,19 @@ export function PipelineView() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</span>
-                      <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{lead.quoteTitle ?? "No quote yet"}</span>
+                      <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{lead.quoteTitle ?? t("activity.noQuoteYet")}</span>
                     </span>
                   </button>
                 ))
               ) : (
                 <p className="rounded-[14px] border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel-muted)] px-3 py-3 text-sm text-[var(--qf-text-muted)]">
-                  New leads will appear here.
+                  {t("activity.recentLeadsEmpty")}
                 </p>
               )}
             </div>
           </Card>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { AiUsageSummary } from "./api";
+import i18n from "../i18n/i18n";
 
 export const AI_USAGE_WARNING_THRESHOLDS = [25, 50, 75, 85, 95, 100] as const;
 export type AiUsageWarningThreshold = (typeof AI_USAGE_WARNING_THRESHOLDS)[number];
@@ -14,13 +15,19 @@ export function publishAiUsageUpdate(usage: AiUsageUpdateDetail) {
   window.dispatchEvent(new CustomEvent<AiUsageUpdateDetail>(AI_USAGE_UPDATED_EVENT, { detail: usage }));
 }
 
-export function formatAiRenewalDate(value?: string | null) {
+function activeLocale(locale?: string): string {
+  return locale ?? i18n.resolvedLanguage ?? i18n.language ?? "en-US";
+}
+
+export function formatAiRenewalDate(value?: string | null, locale?: string) {
   if (!value) return null;
-  return new Date(value).toLocaleDateString(undefined, {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat(activeLocale(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
-  });
+  }).format(date);
 }
 
 function normalizeUsagePercent(usedUsd: number, limitUsd: number) {
@@ -48,28 +55,31 @@ export function aiUsageProgressTone(usagePercent: number): "default" | "warning"
 export function aiUsageWarningCopy(
   threshold: AiUsageWarningThreshold,
   renewsAtUtc?: string | null,
+  locale?: string,
 ) {
-  const renewalLabel = formatAiRenewalDate(renewsAtUtc);
-  const renewalText = renewalLabel ? ` Resets ${renewalLabel}.` : "";
+  const t = i18n.getFixedT(activeLocale(locale));
+  const renewalLabel = formatAiRenewalDate(renewsAtUtc, locale);
+  const renewalText = renewalLabel ? t("billing.aiUsage.resets", { date: renewalLabel }) : null;
 
   if (threshold === 100) {
     return {
-      title: "Monthly AI limit reached",
-      description: `Kody and AI tools are paused for this workspace.${renewalText}`.trim(),
+      title: t("billing.aiUsage.limitTitle"),
+      description: [t("billing.aiUsage.limitDescription"), renewalText].filter(Boolean).join(" "),
       severity: "error" as const,
     };
   }
 
   const remainingPercent = 100 - threshold;
   return {
-    title: `AI usage is at ${threshold}%`,
-    description: `${remainingPercent}% of this workspace's monthly AI budget remains.${renewalText}`.trim(),
+    title: t("billing.aiUsage.usageTitle", { percent: threshold }),
+    description: [t("billing.aiUsage.remaining", { percent: remainingPercent }), renewalText].filter(Boolean).join(" "),
     severity: threshold >= 75 ? "warning" as const : "info" as const,
   };
 }
 
-export function formatAiUsageNotice(usage: AiUsageSummary) {
-  const renewalLabel = formatAiRenewalDate(usage.renewsAtUtc);
+export function formatAiUsageNotice(usage: AiUsageSummary, locale?: string) {
+  const t = i18n.getFixedT(activeLocale(locale));
+  const renewalLabel = formatAiRenewalDate(usage.renewsAtUtc, locale);
   const usagePercent =
     usage.monthlySpendUsagePercent ??
     (usage.monthlySpendLimitUsd !== null
@@ -77,23 +87,24 @@ export function formatAiUsageNotice(usage: AiUsageSummary) {
       : null);
   const usagePercentText =
     usagePercent === null || usagePercent === undefined
-      ? "AI usage updated."
-      : `${Math.round(usagePercent)}% used this month.`;
-  const renewalText = renewalLabel ? ` Renews ${renewalLabel}.` : "";
-  return `${usagePercentText}${renewalText}`.trim();
+      ? t("billing.aiUsage.updated")
+      : t("billing.aiUsage.usedThisMonth", { percent: Math.round(usagePercent) });
+  const renewalText = renewalLabel ? t("billing.aiUsage.renews", { date: renewalLabel }) : null;
+  return [usagePercentText, renewalText].filter(Boolean).join(" ");
 }
 
 export function formatAiUsageAvailability(params: {
   usedUsd?: number | null;
   limitUsd?: number | null;
   renewsAtUtc?: string | null;
-}) {
+}, locale?: string) {
   if (params.limitUsd === null || params.limitUsd === undefined) return null;
+  const t = i18n.getFixedT(activeLocale(locale));
   const usedUsd = params.usedUsd ?? 0;
   const percent = normalizeUsagePercent(usedUsd, params.limitUsd);
-  const renewalLabel = formatAiRenewalDate(params.renewsAtUtc);
-  const usageText = `AI usage ${Math.round(percent)}% used`;
+  const roundedPercent = Math.round(percent);
+  const renewalLabel = formatAiRenewalDate(params.renewsAtUtc, locale);
   return renewalLabel
-    ? `${usageText} | renews ${renewalLabel}`
-    : usageText;
+    ? t("billing.aiUsage.availabilityRenews", { percent: roundedPercent, date: renewalLabel })
+    : t("billing.aiUsage.availability", { percent: roundedPercent });
 }

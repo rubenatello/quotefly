@@ -14,6 +14,7 @@ import { getJwtClaims } from "../lib/auth";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { loadTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { normalizeSupportedLocale } from "../lib/supported-locale";
 
 const AssistantFeedbackParamsSchema = z.object({
   auditEventId: z.string().trim().min(1).max(191),
@@ -65,6 +66,7 @@ export const aiAssistantRoutes: FastifyPluginAsync = async (app) => {
       context,
       conversation,
       usageSnapshot: snapshot,
+      preferredLocale: normalizeSupportedLocale(request.liveAuthMembership?.user.preferredLocale),
     }));
 
     return {

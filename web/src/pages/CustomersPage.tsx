@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ArchiveRestore, BadgeCheck, CircleDot, ClipboardList, FilePlus2, FileText, Mail, MessageSquare, Phone, PhoneCall, Search, Send, Wrench, XCircle } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, ConfirmModal, EmptyState, Input, LoadingState, Modal, ModalBody, ModalFooter, ModalHeader, PageHeader, PaginationControls, Select, Textarea, type PageSize } from "../components/ui";
@@ -6,10 +8,13 @@ import { useDashboard, formatDateTime } from "../components/dashboard/DashboardC
 import { KodyButton } from "../components/ai/KodyButton";
 import { publishKodyOutcome } from "../components/ai/kody-events";
 import { usePageView } from "../lib/analytics";
-import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser } from "../lib/api";
+import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser, type SupportedLocale } from "../lib/api";
+import { localizedApiError } from "../lib/localized-api-error";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { notify } from "../lib/notifications";
+import i18n from "../i18n/i18n";
+import { useLocale } from "../i18n";
 
 type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
 
@@ -24,21 +29,14 @@ type CustomerRetentionAction =
   | null;
 
 function roleLabelForAssignment(role: OrganizationUser["role"]): string {
-  if (role === "owner") return "Owner";
-  if (role === "admin") return "Admin";
-  return "Member";
+  return i18n.t(`domain.role.${role}`);
 }
 
 const CUSTOMER_STAGE_ORDER: CustomerStage[] = ["NEW", "CONTACTED", "READY", "SENT", "WON", "LOST"];
 const ACTIVITY_PAGE_SIZE = 5;
 
 function stageLabel(stage: CustomerStage) {
-  if (stage === "NEW") return "New";
-  if (stage === "CONTACTED") return "Contacted";
-  if (stage === "READY") return "Ready";
-  if (stage === "SENT") return "Sent";
-  if (stage === "WON") return "Won";
-  return "Lost";
+  return i18n.t(`domain.customerStage.${stage}`);
 }
 
 function stageDarkClass(stage: CustomerStage) {
@@ -82,31 +80,46 @@ function quoteNumber(quoteId: string) {
 }
 
 function formatQuoteTotal(value: number | string) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(value));
+  return new Intl.NumberFormat(i18n.resolvedLanguage, { style: "currency", currency: "USD" }).format(Number(value));
 }
 
 function formatQuoteStatus(status: CustomerQuoteSummary["status"]) {
-  return status.replaceAll("_", " ").toLowerCase().replace(/^./, (character) => character.toUpperCase());
+  return i18n.t(`domain.quoteStatus.${status}`);
 }
 
-function customerUpdatedLabel(updatedAt: string) {
-  const date = new Date(updatedAt);
-  if (Number.isNaN(date.getTime())) return formatDateTime(updatedAt);
+function yearInTimeZone(date: Date, locale: SupportedLocale, timeZone?: string | null): string {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
 
-  return `Updated ${new Intl.DateTimeFormat(undefined, {
+function customerUpdatedLabel(
+  updatedAt: string,
+  locale: SupportedLocale,
+  timeZone?: string | null,
+  now = new Date(),
+) {
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return formatDateTime(updatedAt, locale, timeZone);
+
+  const includeYear = yearInTimeZone(date, locale, timeZone) !== yearInTimeZone(now, locale, timeZone);
+
+  return i18n.getFixedT(locale)("customers.updated", { date: new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
-  }).format(date)}`;
+    year: includeYear ? "numeric" : undefined,
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date) });
 }
 
 function stageGuidance(stage: CustomerStage, hasQuote: boolean) {
-  if (stage === "NEW") return hasQuote ? "Quote started" : "Needs first quote";
-  if (stage === "CONTACTED") return "Follow-up in progress";
-  if (stage === "READY") return "Ready to review";
-  if (stage === "SENT") return "Waiting on customer";
-  if (stage === "WON") return "Work won";
-  return "Closed lost";
+  if (stage === "NEW") return hasQuote ? i18n.t("customers.guidance.newStarted") : i18n.t("customers.guidance.newNeeds");
+  if (stage === "CONTACTED") return i18n.t("customers.guidance.contacted");
+  if (stage === "READY") return i18n.t("customers.guidance.ready");
+  if (stage === "SENT") return i18n.t("customers.guidance.sent");
+  if (stage === "WON") return i18n.t("customers.guidance.won");
+  return i18n.t("customers.guidance.lost");
 }
 
 function customerInitials(fullName: string) {
@@ -158,7 +171,7 @@ function StageFilterButton({
   active: boolean;
   onClick: () => void;
 }) {
-  const label = stage === "ALL" ? "All customers" : stageLabel(stage);
+  const label = stage === "ALL" ? i18n.t("domain.customerStage.ALL") : stageLabel(stage);
 
   return (
     <button
@@ -170,7 +183,7 @@ function StageFilterButton({
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
       }`}
       aria-pressed={active}
-      aria-label={`Filter customers: ${label} (${count})`}
+      aria-label={i18n.t("customers.filterButtonAria", { label, count })}
     >
       <span
         className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${
@@ -206,19 +219,21 @@ function CustomerPipelineFilterStrip({
 }) {
   return (
     <div className="space-y-2">
-      <div className="qf-horizontal-filter-strip flex snap-x snap-mandatory items-center gap-2 overflow-x-auto pb-2" role="group" aria-label="Customer stage filters">
+      <div className="qf-horizontal-filter-strip flex snap-x snap-mandatory items-center gap-2 overflow-x-auto pb-2" role="group" aria-label={i18n.t("customers.filterAria")}>
         <StageFilterButton stage="ALL" count={totalCount} active={stageFilter === "ALL"} onClick={() => onChange("ALL")} />
         {CUSTOMER_STAGE_ORDER.map((stage) => (
           <StageFilterButton key={stage} stage={stage} count={stageCounts[stage]} active={stageFilter === stage} onClick={() => onChange(stage)} />
         ))}
       </div>
-      <p className="px-1 text-xs text-[var(--qf-text-muted)]">Filter the customer list by the next stage in the quoting workflow.</p>
+      <p className="px-1 text-xs text-[var(--qf-text-muted)]">{i18n.t("customers.filterHint")}</p>
     </div>
   );
 }
 
 function CustomerDesktopRow({
   row,
+  locale,
+  timeZone,
   onOpenQuote,
   onStartQuote,
   onCallCustomer,
@@ -226,6 +241,8 @@ function CustomerDesktopRow({
   onOpenActivity,
 }: {
   row: CustomerRow;
+  locale: SupportedLocale;
+  timeZone?: string | null;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
   onCallCustomer: (phone: string) => void;
@@ -241,7 +258,7 @@ function CustomerDesktopRow({
         type="button"
         onClick={() => onOpenActivity(customer.id)}
         className="group/customer min-w-0 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
-        aria-label={`Open ${customer.fullName} details`}
+        aria-label={i18n.t("customers.openDetails", { name: customer.fullName })}
       >
         <div className="flex items-center gap-3">
           <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-bold text-slate-700 ring-1 ring-slate-200 transition group-hover/customer:bg-white group-hover/customer:text-quotefly-blue">
@@ -249,7 +266,7 @@ function CustomerDesktopRow({
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-950 group-hover/customer:text-quotefly-blue">{customer.fullName}</p>
-            <p className="mt-1 truncate text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt)} · View details</p>
+            <p className="mt-1 truncate text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt, locale, timeZone)} · {i18n.t("customers.viewDetails")}</p>
           </div>
         </div>
       </button>
@@ -261,7 +278,7 @@ function CustomerDesktopRow({
         </div>
         <div className="flex min-w-0 items-center gap-2 text-slate-600">
           <Mail size={14} className="shrink-0 text-slate-400" aria-hidden="true" />
-          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? "No email added"}</span>
+          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? i18n.t("customers.noEmail")}</span>
         </div>
       </div>
 
@@ -271,15 +288,15 @@ function CustomerDesktopRow({
             type="button"
             onClick={() => onOpenQuote(latestQuote.id)}
             className="block min-w-0 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
-            aria-label={`Open quote ${latestQuote.title}`}
+            aria-label={i18n.t("customers.openQuote", { title: latestQuote.title })}
           >
             <span className="block truncate text-sm font-semibold text-slate-900 hover:text-quotefly-blue">{latestQuote.title}</span>
             <span className="mt-1 block truncate text-xs font-medium text-slate-500">{quoteNumber(latestQuote.id)}</span>
           </button>
         ) : (
           <div>
-            <p className="text-sm font-semibold text-slate-700">No quote yet</p>
-            <p className="mt-1 text-xs text-slate-500">Ready for a first estimate</p>
+            <p className="text-sm font-semibold text-slate-700">{i18n.t("customers.noQuote")}</p>
+            <p className="mt-1 text-xs text-slate-500">{i18n.t("customers.readyEstimate")}</p>
           </div>
         )}
       </div>
@@ -293,8 +310,8 @@ function CustomerDesktopRow({
       </div>
 
       <div className="flex justify-end gap-1.5">
-        <Button size="sm" variant="ghost" icon={<Phone size={15} />} onClick={() => onCallCustomer(customer.phone)} aria-label={`Call ${customer.fullName}`} title={`Call ${customer.fullName}`} />
-        <Button size="sm" variant="ghost" icon={<MessageSquare size={15} />} onClick={() => onTextCustomer(customer.phone)} aria-label={`Text ${customer.fullName}`} title={`Text ${customer.fullName}`} />
+        <Button size="sm" variant="ghost" icon={<Phone size={15} />} onClick={() => onCallCustomer(customer.phone)} aria-label={i18n.t("customers.callName", { name: customer.fullName })} title={i18n.t("customers.callName", { name: customer.fullName })} />
+        <Button size="sm" variant="ghost" icon={<MessageSquare size={15} />} onClick={() => onTextCustomer(customer.phone)} aria-label={i18n.t("customers.textName", { name: customer.fullName })} title={i18n.t("customers.textName", { name: customer.fullName })} />
         <Button
           size="sm"
           variant="primary"
@@ -302,9 +319,9 @@ function CustomerDesktopRow({
           className="whitespace-nowrap"
           onClick={() => onStartQuote(customer.id)}
           disabled={!canQuote}
-          title={canQuote ? `Start a new quote for ${customer.fullName}` : "Restore this customer before starting a quote"}
+          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : i18n.t("customers.restoreBeforeQuote")}
         >
-          New quote
+          {i18n.t("customers.newQuote")}
         </Button>
       </div>
     </div>
@@ -313,6 +330,8 @@ function CustomerDesktopRow({
 
 function CustomerMobileCard({
   row,
+  locale,
+  timeZone,
   onOpenQuote,
   onStartQuote,
   onCallCustomer,
@@ -320,6 +339,8 @@ function CustomerMobileCard({
   onOpenActivity,
 }: {
   row: CustomerRow;
+  locale: SupportedLocale;
+  timeZone?: string | null;
   onOpenQuote: (quoteId: string) => void;
   onStartQuote: (customerId: string) => void;
   onCallCustomer: (phone: string) => void;
@@ -336,14 +357,14 @@ function CustomerMobileCard({
           type="button"
           onClick={() => onOpenActivity(customer.id)}
           className="flex min-h-[44px] min-w-0 items-center gap-3 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-quotefly-blue"
-          aria-label={`Open ${customer.fullName} details`}
+          aria-label={i18n.t("customers.openDetails", { name: customer.fullName })}
         >
           <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-sm font-bold text-slate-700 ring-1 ring-slate-200">
             {customerInitials(customer.fullName)}
           </span>
           <div className="min-w-0">
             <p className="truncate text-base font-bold text-slate-950">{customer.fullName}</p>
-            <p className="mt-1 text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt)} · View details</p>
+            <p className="mt-1 text-xs text-slate-500">{customerUpdatedLabel(customer.updatedAt, locale, timeZone)} · {i18n.t("customers.viewDetails")}</p>
           </div>
         </button>
         <div className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${stageSoftClass(stage)}`}>
@@ -359,13 +380,13 @@ function CustomerMobileCard({
         </div>
         <div className="flex min-w-0 items-center gap-2.5 text-slate-600">
           <Mail size={15} className="shrink-0 text-slate-400" aria-hidden="true" />
-          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? "No email added"}</span>
+          <span className={`truncate ${customer.email ? "" : "text-slate-400"}`}>{customer.email ?? i18n.t("customers.noEmail")}</span>
         </div>
       </div>
 
       <div className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-700">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Latest quote</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{i18n.t("customers.latestQuote")}</p>
           {latestQuote ? (
             <button
               type="button"
@@ -375,19 +396,19 @@ function CustomerMobileCard({
               {latestQuote.title}
             </button>
           ) : (
-            <p className="mt-1 truncate font-semibold text-slate-900">No quote yet</p>
+            <p className="mt-1 truncate font-semibold text-slate-900">{i18n.t("customers.noQuote")}</p>
           )}
           <p className="mt-1 text-xs text-slate-500">{stageGuidance(stage, Boolean(latestQuote))}</p>
         </div>
-        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : "Ready to start"}</span>
+        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-500">{latestQuote ? quoteNumber(latestQuote.id) : i18n.t("customers.readyStart")}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
         <Button fullWidth size="sm" variant="outline" icon={<Phone size={14} />} onClick={() => onCallCustomer(customer.phone)}>
-          Call
+          {i18n.t("customers.call")}
         </Button>
         <Button fullWidth size="sm" variant="outline" icon={<MessageSquare size={14} />} onClick={() => onTextCustomer(customer.phone)}>
-          Text
+          {i18n.t("customers.text")}
         </Button>
         <Button
           fullWidth
@@ -396,9 +417,9 @@ function CustomerMobileCard({
           icon={<FilePlus2 size={14} />}
           onClick={() => onStartQuote(customer.id)}
           disabled={!canQuote}
-          title={canQuote ? `Start a new quote for ${customer.fullName}` : "Restore this customer before starting a quote"}
+          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : i18n.t("customers.restoreBeforeQuote")}
         >
-          New quote
+          {i18n.t("customers.newQuote")}
         </Button>
       </div>
     </article>
@@ -407,15 +428,7 @@ function CustomerMobileCard({
 
 function activityTone(item: CustomerActivityEvent): "slate" | "blue" | "orange" | "emerald" {
   if (item.sourceType === "quote_outbound") return "orange";
-  if (
-    item.eventType === "ACCEPTED" ||
-    item.eventType === "WON" ||
-    item.eventType === "RESTORED" ||
-    item.title.toLowerCase().includes("accepted") ||
-    item.title.toLowerCase().includes("completed")
-  ) {
-    return "emerald";
-  }
+  if (item.eventType === "ACCEPTED" || item.eventType === "WON" || item.eventType === "RESTORED") return "emerald";
   if (item.eventType === "ARCHIVED" || item.eventType === "REJECTED") return "slate";
   return "blue";
 }
@@ -427,11 +440,12 @@ function activityIcon(item: CustomerActivityEvent): ReactNode {
     return <Send size={14} strokeWidth={2.2} />;
   }
 
-  const title = item.title.toLowerCase();
-  if (title.includes("quote drafted")) return <FilePlus2 size={14} strokeWidth={2.2} />;
-  if (title.includes("quote sent")) return <Send size={14} strokeWidth={2.2} />;
-  if (title.includes("accepted")) return <BadgeCheck size={14} strokeWidth={2.2} />;
-  if (title.includes("completed")) return <Wrench size={14} strokeWidth={2.2} />;
+  if (item.sourceType === "quote_revision") {
+    if (item.eventType === "CREATED") return <FilePlus2 size={14} strokeWidth={2.2} />;
+    if (item.eventType === "STATUS_CHANGED" || item.eventType === "DECISION") return <Send size={14} strokeWidth={2.2} />;
+    if (item.eventType === "LINE_ITEM_CHANGED") return <Wrench size={14} strokeWidth={2.2} />;
+    return <ClipboardList size={14} strokeWidth={2.2} />;
+  }
   if (item.eventType === "STATUS_CHANGED") return <PhoneCall size={14} strokeWidth={2.2} />;
   if (item.eventType === "NOTES_ADDED" || item.eventType === "NOTES_UPDATED" || item.eventType === "NOTES_CLEARED") {
     return <FileText size={14} strokeWidth={2.2} />;
@@ -441,10 +455,100 @@ function activityIcon(item: CustomerActivityEvent): ReactNode {
 }
 
 function activityActorLabel(item: CustomerActivityEvent): string {
-  return item.actorName?.trim() || item.actorEmail?.trim() || "Unknown";
+  return item.actorName?.trim() || item.actorEmail?.trim() || i18n.t("customers.unassigned");
+}
+
+function activityDisplay(
+  item: CustomerActivityEvent,
+  customerName: string,
+  t: TFunction,
+): { title: string; detail: string } {
+  if (item.sourceType === "quote_outbound") {
+    const titleKey = item.channel === "EMAIL_APP"
+      ? "customers.activity.event.outboundEmail"
+      : item.channel === "SMS_APP"
+        ? "customers.activity.event.outboundText"
+        : item.channel === "NATIVE_SHARE"
+          ? "customers.activity.event.outboundShare"
+          : "customers.activity.event.outboundCopy";
+    return {
+      title: t(titleKey),
+      detail: item.quoteId && item.quoteTitle
+        ? t("customers.activity.quoteReference", { number: quoteNumber(item.quoteId), title: item.quoteTitle })
+        : t("customers.activity.recorded"),
+    };
+  }
+
+  if (item.sourceType === "quote_revision") {
+    const titleKey = item.eventType === "CREATED"
+      ? "customers.activity.event.quoteDrafted"
+      : item.eventType === "LINE_ITEM_CHANGED"
+        ? "customers.activity.event.quoteLinesUpdated"
+        : item.eventType === "DECISION"
+          ? "customers.activity.event.quoteDecisionUpdated"
+          : item.eventType === "STATUS_CHANGED"
+            ? "customers.activity.event.quoteStatusUpdated"
+            : "customers.activity.event.quoteUpdated";
+    return {
+      title: t(titleKey),
+      detail: item.quoteId && item.quoteTitle
+        ? t("customers.activity.quoteReference", { number: quoteNumber(item.quoteId), title: item.quoteTitle })
+        : t("customers.activity.recorded"),
+    };
+  }
+
+  const eventTitleKey: Record<string, string> = {
+    CREATED: "customers.activity.event.customerAdded",
+    UPDATED: "customers.activity.event.customerUpdated",
+    STATUS_CHANGED: "customers.activity.event.statusUpdated",
+    NOTES_ADDED: "customers.activity.event.notesAdded",
+    NOTES_UPDATED: "customers.activity.event.notesUpdated",
+    NOTES_CLEARED: "customers.activity.event.notesCleared",
+    DOCUMENT_LANGUAGE_UPDATED: "customers.activity.event.documentLanguageUpdated",
+    ARCHIVED: "customers.activity.event.customerArchived",
+    DELETED: "customers.activity.event.customerDeleted",
+    RESTORED: "customers.activity.event.customerRestored",
+    MERGED: "customers.activity.event.customerMerged",
+  };
+  const detailKey: Record<string, string> = {
+    CREATED: "customers.activity.detail.customerAdded",
+    UPDATED: "customers.activity.detail.customerUpdated",
+    STATUS_CHANGED: "customers.activity.detail.statusUpdated",
+    NOTES_CLEARED: "customers.activity.detail.notesCleared",
+    DOCUMENT_LANGUAGE_UPDATED: "customers.activity.detail.documentLanguageUpdated",
+    ARCHIVED: "customers.activity.detail.customerArchived",
+    DELETED: "customers.activity.detail.customerDeleted",
+    RESTORED: "customers.activity.detail.customerRestored",
+    MERGED: "customers.activity.detail.customerMerged",
+  };
+
+  const isUserAuthoredNote = item.eventType === "NOTES_ADDED" || item.eventType === "NOTES_UPDATED";
+  return {
+    title: t(eventTitleKey[item.eventType] ?? "customers.activity.event.recorded"),
+    // Customer notes are tenant-authored content and must remain verbatim. All
+    // other known event prose is generated from stable codes, never translated
+    // by guessing at stored English sentences.
+    detail: isUserAuthoredNote
+      ? (item.detail || t("customers.activity.recorded"))
+      : detailKey[item.eventType]
+        ? t(detailKey[item.eventType], { name: customerName })
+        : t("customers.activity.recorded"),
+  };
+}
+
+function localizedCustomerError(error: unknown, t: TFunction, fallbackKey: string): string {
+  return localizedApiError(error, t, {
+    fallbackKey,
+    codeKeys: {
+      ASSIGNEE_INACTIVE: "customers.errors.assigneeInactive",
+      ACTIVE_ACTIVITY_TASKS: "customers.errors.activeTasks",
+    },
+  });
 }
 
 export function CustomersPage() {
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   usePageView("customers");
   const location = useLocation();
   const navigate = useNavigate();
@@ -459,6 +563,7 @@ export function CustomersPage() {
     navigateToBuilder,
     canManageAssignments,
     canManageRecordRetention,
+    session,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
@@ -478,11 +583,18 @@ export function CustomersPage() {
   const [activityCustomerId, setActivityCustomerId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<CustomerActivityEvent[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const [activityPage, setActivityPage] = useState(1);
   const [activityTotal, setActivityTotal] = useState(0);
   const [customerNotesDraft, setCustomerNotesDraft] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
-  const [customerDetailsDraft, setCustomerDetailsDraft] = useState({ fullName: "", phone: "", email: "", assignedTenantUserId: "" });
+  const [customerDetailsDraft, setCustomerDetailsDraft] = useState({
+    fullName: "",
+    phone: "",
+    email: "",
+    assignedTenantUserId: "",
+    preferredLocale: "" as SupportedLocale | "",
+  });
   const [workspaceMembers, setWorkspaceMembers] = useState<OrganizationUser[]>([]);
   const [detailsSaving, setDetailsSaving] = useState(false);
   const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
@@ -496,6 +608,15 @@ export function CustomersPage() {
   const customerRequestIdRef = useRef(0);
   const activityRequestIdRef = useRef(0);
   const detailRequestIdRef = useRef(0);
+  const formatLocalDateTime = useCallback((value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...(session?.timezone ? { timeZone: session.timezone } : {}),
+    }).format(date);
+  }, [locale, session?.timezone]);
 
   useEffect(() => {
     if (!canManageAssignments) return;
@@ -557,11 +678,11 @@ export function CustomersPage() {
       setCustomerLoadError(null);
     } catch (err) {
       if (requestId !== customerRequestIdRef.current) return;
-      setCustomerLoadError(err instanceof Error ? err.message : "Failed loading customers.");
+      setCustomerLoadError(localizedCustomerError(err, t, "customers.loadError"));
     } finally {
       if (requestId === customerRequestIdRef.current) setCustomerLoading(false);
     }
-  }, [customerPage, customerPageSize, debouncedSearchTerm, lifecycleFilter, stageFilter]);
+  }, [customerPage, customerPageSize, debouncedSearchTerm, lifecycleFilter, stageFilter, t]);
 
   useEffect(() => {
     void loadCustomerPage();
@@ -571,6 +692,9 @@ export function CustomersPage() {
     async (customerId: string, page: number) => {
       const requestId = ++activityRequestIdRef.current;
       setActivityLoading(true);
+      setActivityError(null);
+      setActivityItems([]);
+      setActivityTotal(0);
       try {
         const result = await api.customers.activity(customerId, {
           limit: ACTIVITY_PAGE_SIZE,
@@ -581,12 +705,12 @@ export function CustomersPage() {
         setActivityTotal(result.pagination.total);
       } catch (err) {
         if (requestId !== activityRequestIdRef.current) return;
-        setError(err instanceof Error ? err.message : "Failed loading customer activity.");
+        setActivityError(localizedCustomerError(err, t, "customers.errors.activityLoad"));
       } finally {
         if (requestId === activityRequestIdRef.current) setActivityLoading(false);
       }
     },
-    [setError],
+    [t],
   );
 
   useEffect(() => {
@@ -595,6 +719,7 @@ export function CustomersPage() {
       detailRequestIdRef.current += 1;
       setActivityItems([]);
       setActivityLoading(false);
+      setActivityError(null);
       setActivityTotal(0);
       setSelectedCustomerDetail(null);
       setSelectedActivityQuotes([]);
@@ -613,9 +738,9 @@ export function CustomersPage() {
       setSelectedActivityQuotes(result.quotes);
     } catch (err) {
       if (requestId !== detailRequestIdRef.current) return;
-      setError(err instanceof Error ? err.message : "Failed loading customer details.");
+      setError(localizedCustomerError(err, t, "customers.errors.detailsLoad"));
     }
-  }, [setError]);
+  }, [setError, t]);
 
   useEffect(() => {
     if (activityCustomerId) void loadCustomerDetail(activityCustomerId);
@@ -663,6 +788,9 @@ export function CustomersPage() {
     detailRequestIdRef.current += 1;
     setSelectedCustomerDetail(snapshot);
     setSelectedActivityQuotes([]);
+    setActivityItems([]);
+    setActivityTotal(0);
+    setActivityError(null);
     setActivityCustomerId(customerId);
   }, [customerItems]);
 
@@ -685,7 +813,8 @@ export function CustomersPage() {
     selectedActivityRow?.customer.fullName !== customerDetailsDraft.fullName.trim() ||
     selectedActivityRow?.customer.phone !== customerDetailsDraft.phone.trim() ||
     (selectedActivityRow?.customer.email ?? "") !== customerDetailsDraft.email.trim() ||
-    (selectedActivityRow?.customer.assignedTenantUserId ?? "") !== customerDetailsDraft.assignedTenantUserId
+    (selectedActivityRow?.customer.assignedTenantUserId ?? "") !== customerDetailsDraft.assignedTenantUserId ||
+    (selectedActivityRow?.customer.preferredLocale ?? "") !== customerDetailsDraft.preferredLocale
   );
 
   useEffect(() => {
@@ -698,8 +827,9 @@ export function CustomersPage() {
       phone: selectedActivityRow?.customer.phone ?? "",
       email: selectedActivityRow?.customer.email ?? "",
       assignedTenantUserId: selectedActivityRow?.customer.assignedTenantUserId ?? "",
+      preferredLocale: selectedActivityRow?.customer.preferredLocale ?? "",
     });
-  }, [selectedActivityRow?.customer.assignedTenantUserId, selectedActivityRow?.customer.email, selectedActivityRow?.customer.fullName, selectedActivityRow?.customer.id, selectedActivityRow?.customer.phone]);
+  }, [selectedActivityRow?.customer.assignedTenantUserId, selectedActivityRow?.customer.email, selectedActivityRow?.customer.fullName, selectedActivityRow?.customer.id, selectedActivityRow?.customer.phone, selectedActivityRow?.customer.preferredLocale]);
 
   useEffect(() => {
     setDetailsFeedback(null);
@@ -711,11 +841,11 @@ export function CustomersPage() {
     const fullName = customerDetailsDraft.fullName.trim();
     const phone = customerDetailsDraft.phone.trim();
     if (!fullName || !phone) {
-      setDetailsFeedback({ tone: "error", message: "Customer name and phone are required." });
+      setDetailsFeedback({ tone: "error", message: t("customers.quick.required") });
       return;
     }
     if (!normalizeUsPhoneDigits(phone)) {
-      setDetailsFeedback({ tone: "error", message: "Enter a valid 10-digit US phone number." });
+      setDetailsFeedback({ tone: "error", message: t("customers.quick.invalidPhone") });
       return;
     }
 
@@ -726,13 +856,14 @@ export function CustomersPage() {
         fullName,
         phone,
         email: customerDetailsDraft.email.trim() || null,
+        preferredLocale: customerDetailsDraft.preferredLocale || null,
         ...(canManageAssignments ? { assignedTenantUserId: customerDetailsDraft.assignedTenantUserId || null } : {}),
       });
       await Promise.all([loadCustomerPage(), loadCustomers(), loadCustomerDetail(selectedActivityRow.customer.id)]);
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
-      setDetailsFeedback({ tone: "success", message: "Customer details saved." });
+      setDetailsFeedback({ tone: "success", message: t("customers.saved") });
     } catch (err) {
-      setDetailsFeedback({ tone: "error", message: err instanceof Error ? err.message : "Failed saving customer details." });
+      setDetailsFeedback({ tone: "error", message: localizedCustomerError(err, t, "customers.errors.save") });
     } finally {
       setDetailsSaving(false);
     }
@@ -749,9 +880,9 @@ export function CustomersPage() {
       });
       await Promise.all([loadCustomerPage(), loadCustomers(), loadCustomerDetail(selectedActivityRow.customer.id)]);
       await loadCustomerActivity(selectedActivityRow.customer.id, activityPage);
-      setNotice(nextNotes ? "Customer notes saved." : "Customer notes cleared.");
+      setNotice(t("customers.saved"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed saving customer notes.");
+      setError(localizedCustomerError(err, t, "customers.errors.notesSave"));
     } finally {
       setNotesSaving(false);
     }
@@ -766,18 +897,18 @@ export function CustomersPage() {
     try {
       if (action.type === "archive") {
         await api.customers.archive(action.row.customer.id);
-        notify.success("Customer archived", {
-          description: `${action.row.customer.fullName} and related active quotes left the active workspace. History remains retained.`,
+        notify.success(t("customers.archivedNotice"), {
+          description: t("customers.retention.archiveDescription"),
         });
       } else if (action.type === "delete") {
         await api.customers.delete(action.row.customer.id);
-        notify.success("Customer removed from the workspace", {
-          description: `${action.row.customer.fullName} and related active quotes remain retained for audit history.`,
+        notify.success(t("customers.deletedNotice"), {
+          description: t("customers.retention.deleteDescription"),
         });
       } else {
         await api.customers.restore(action.row.customer.id);
-        notify.success("Customer restored", {
-          description: `${action.row.customer.fullName} is active again. Retained quotes were not restored automatically.`,
+        notify.success(t("customers.restoredNotice"), {
+          description: t("customers.retention.restoreDescription"),
         });
       }
       await Promise.all([loadCustomerPage(), loadCustomers(), loadQuotes()]);
@@ -786,8 +917,8 @@ export function CustomersPage() {
       setActivityCustomerId(null);
       setCustomerRetentionAction(null);
     } catch (err) {
-      notify.error(`Could not ${action.type} customer`, {
-        description: err instanceof Error ? err.message : "Please try again. Your customer record was not changed.",
+      notify.error(t("customers.errors.retention"), {
+        description: localizedCustomerError(err, t, "customers.errors.retention"),
       });
     } finally {
       setCustomerRetentionSaving(false);
@@ -821,18 +952,18 @@ export function CustomersPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Customers"
-        subtitle="Track customers through a simple sales pipeline, then jump into quoting when they are ready."
+        title={t("customers.title")}
+        subtitle={t("customers.subtitle")}
         mode="actions-only"
         actions={
-          <Button onClick={() => setQuickCustomerOpen(true)} disabled={Boolean(customerLoadError)}>Add customer</Button>
+          <Button onClick={() => setQuickCustomerOpen(true)} disabled={Boolean(customerLoadError)}>{t("customers.add")}</Button>
         }
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
-      {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{t("customers.saved")}</Alert> : null}
 
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Customer lifecycle filters">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t("customers.filterAria")}>
         {(["active", "archived", "deleted"] as const).map((lifecycle) => (
           <Button
             key={lifecycle}
@@ -844,7 +975,7 @@ export function CustomersPage() {
               setStageFilter("ALL");
             }}
           >
-            {lifecycle === "active" ? "Active" : lifecycle === "archived" ? "Archived" : "Deleted"} ({lifecycleCounts[lifecycle]})
+            {lifecycle === "active" ? t("customers.status.active") : lifecycle === "archived" ? t("customers.status.archived") : t("customers.status.deleted")} ({lifecycleCounts[lifecycle]})
           </Button>
         ))}
       </div>
@@ -863,20 +994,20 @@ export function CustomersPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Customer workspace</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{t("customers.workspace")}</p>
               <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                {customerTotal} {customerTotal === 1 ? "customer" : "customers"}
+                {t("customers.count", { count: customerTotal })}
               </span>
             </div>
-            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">Customer list</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-600">Contact a customer, review their latest quote, or open the full relationship history.</p>
+            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">{t("customers.list")}</h2>
+            <p className="mt-1 max-w-3xl text-sm text-slate-600">{t("customers.listDescription")}</p>
           </div>
           <div className="w-full lg:w-[360px]">
-            <label htmlFor="customer-search" className="sr-only">Search customers</label>
+            <label htmlFor="customer-search" className="sr-only">{t("customers.searchLabel")}</label>
             <Input
               id="customer-search"
               icon={<Search size={16} aria-hidden="true" />}
-              placeholder="Search name, phone, email, or quote"
+              placeholder={t("customers.searchPlaceholder")}
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
             />
@@ -887,8 +1018,8 @@ export function CustomersPage() {
           {customerLoading ? (
             <div className="p-4">
               <LoadingState
-                title="Loading customers"
-                description="Getting the latest tenant-scoped customer list, quote stage, and contact summary."
+                title={t("customers.loading")}
+                description={t("customers.loadingDescription")}
                 variant="table"
                 rows={5}
               />
@@ -896,33 +1027,35 @@ export function CustomersPage() {
           ) : customerLoadError ? (
             <div className="p-5">
               <EmptyState
-                title="Customers are temporarily unavailable"
-                description={`${customerLoadError} No customer records were changed.`}
-                action={<Button variant="outline" onClick={() => void loadCustomerPage()}>Try again</Button>}
+                title={t("customers.loadError")}
+                description={customerLoadError}
+                action={<Button variant="outline" onClick={() => void loadCustomerPage()}>{t("customers.retry")}</Button>}
               />
             </div>
           ) : customerRows.length === 0 ? (
             <div className="p-5">
               <EmptyState
-                title={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? "No matching customers" : "Add your first customer"}
-                description={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? "Clear the search or choose another stage or lifecycle." : "Create a customer here, then start their first quote."}
-                action={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStageFilter("ALL"); setLifecycleFilter("active"); setCustomerPage(1); }}>Clear filters</Button> : <Button onClick={() => setQuickCustomerOpen(true)}>Add customer</Button>}
+                title={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? t("customers.noMatches") : t("customers.empty")}
+                description={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? t("customers.noMatchesDescription") : t("customers.emptyDescription")}
+                action={debouncedSearchTerm || stageFilter !== "ALL" || lifecycleFilter !== "active" ? <Button variant="outline" onClick={() => { setSearchTerm(""); setStageFilter("ALL"); setLifecycleFilter("active"); setCustomerPage(1); }}>{t("products.clearFilters")}</Button> : <Button onClick={() => setQuickCustomerOpen(true)}>{t("customers.add")}</Button>}
               />
             </div>
           ) : (
             <>
               <div className="hidden grid-cols-[minmax(220px,1.25fr)_minmax(220px,1fr)_minmax(190px,0.9fr)_150px_190px] gap-5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500 xl:grid 2xl:grid-cols-[minmax(260px,1.35fr)_minmax(250px,1fr)_minmax(220px,0.9fr)_160px_200px]">
-                <span>Customer</span>
-                <span>Contact</span>
-                <span>Latest quote</span>
-                <span>Stage</span>
-                <span className="text-right">Actions</span>
+                <span>{t("customers.columns.customer")}</span>
+                <span>{t("customers.columns.contact")}</span>
+                <span>{t("customers.columns.latestQuote")}</span>
+                <span>{t("customers.columns.stage")}</span>
+                <span className="text-right">{t("customers.columns.actions")}</span>
               </div>
               <div className="grid gap-3 bg-slate-50/70 p-3 md:grid-cols-2 xl:block xl:bg-white xl:p-0">
                 {customerRows.map((row) => (
                   <div key={row.customer.id} className="xl:border-b xl:border-slate-200 xl:last:border-b-0">
                     <CustomerDesktopRow
                       row={row}
+                      locale={locale}
+                      timeZone={session?.timezone}
                       onOpenQuote={navigateToQuote}
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
@@ -931,6 +1064,8 @@ export function CustomersPage() {
                     />
                     <CustomerMobileCard
                       row={row}
+                      locale={locale}
+                      timeZone={session?.timezone}
                       onOpenQuote={navigateToQuote}
                       onStartQuote={navigateToBuilder}
                       onCallCustomer={openDialer}
@@ -950,7 +1085,7 @@ export function CustomersPage() {
         offset={(customerPage - 1) * customerPageSize}
         total={customerTotal}
         loading={customerLoading}
-        itemLabel="customers"
+        itemLabel={t("navigation.customers").toLocaleLowerCase(locale)}
         onLimitChange={(nextLimit) => {
           setCustomerPageSize(nextLimit);
           setCustomerPage(1);
@@ -965,16 +1100,10 @@ export function CustomersPage() {
         onDraftChange={setQuickCustomerDraft}
         onCreated={async ({ customer, merged, restored, reusedExisting, intent }) => {
           void Promise.all([loadCustomerPage(), loadCustomers()]);
-          const message = reusedExisting
-              ? "Using existing customer record."
-              : merged
-                ? restored
-                  ? "Customer merged and restored."
-                  : "Customer merged into existing record."
-                : restored
-                  ? "Customer restored."
-                  : "Customer created.";
-          notify.success(message, { description: `${customer.fullName} is ready in your workspace.` });
+          const message = restored ? t("customers.restoredNotice") : t("customers.saved");
+          void merged;
+          void reusedExisting;
+          notify.success(message, { description: customer.fullName });
           if (quickCustomerFromKody) {
             publishKodyOutcome({ type: "CUSTOMER_CREATED", customerName: customer.fullName });
           }
@@ -991,11 +1120,11 @@ export function CustomersPage() {
         modal={false}
         closeOnBackdrop={false}
         panelClassName="qf-kody-underlay z-[60]"
-        ariaLabel="Customer details and activity"
+        ariaLabel={t("customers.detailsTitle")}
       >
         <ModalHeader
-          title={selectedActivityRow ? `${selectedActivityRow.customer.fullName} activity` : "Customer activity"}
-          description={selectedActivityRow ? "Timeline of customer entry, contact, quotes, and work progress." : undefined}
+          title={selectedActivityRow ? `${selectedActivityRow.customer.fullName} · ${t("customers.activityTitle")}` : t("customers.activityTitle")}
+          description={selectedActivityRow ? t("customers.listDescription") : undefined}
           onClose={closeActivityModal}
         />
         <ModalBody className="space-y-5">
@@ -1003,11 +1132,11 @@ export function CustomersPage() {
             <>
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer since</p>
-                  <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{formatDateTime(selectedActivityRow.customer.createdAt)}</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("customers.customerSince", { date: "" }).replace(/\s+$/, "")}</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{formatLocalDateTime(selectedActivityRow.customer.createdAt)}</p>
                 </div>
                 <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Current status</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("customers.columns.stage")}</p>
                   <div className="mt-1 flex items-center gap-2">
                     <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold ${stageDarkClass(selectedActivityRow.stage)}`}>
                       {stageInitial(selectedActivityRow.stage)}
@@ -1016,30 +1145,30 @@ export function CustomersPage() {
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quotes on record</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("navigation.quotes")}</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{selectedActivityQuotes.length}</p>
                 </div>
               </div>
 
               {selectedCustomerInactive ? (
                 <Alert tone="info">
-                  This customer is inactive. Restore the customer to edit details or start a new quote. Retained archived or deleted quotes will not be restored automatically.
+                  {t("customers.retention.restoreDescription")}
                 </Alert>
               ) : null}
 
               <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer details</p>
-                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Keep contact information current for calls, texts, and quote delivery.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("customers.detailsTitle")}</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("customers.listDescription")}</p>
                   </div>
                   <Button size="sm" onClick={() => void saveCustomerDetails()} disabled={!detailsChanged || detailsSaving || selectedCustomerInactive} loading={detailsSaving}>
-                    Save details
+                    {t("customers.save")}
                   </Button>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <label className="space-y-1.5 sm:col-span-2">
-                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Name</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">{t("customers.fullName")}</span>
                     <Input
                       value={customerDetailsDraft.fullName}
                       onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, fullName: event.target.value }))}
@@ -1049,24 +1178,24 @@ export function CustomersPage() {
                   {canManageAssignments ? (
                     <div className="sm:col-span-2">
                       <Select
-                        label="Assigned to"
+                        label={t("customers.assignment")}
                         value={customerDetailsDraft.assignedTenantUserId}
                         onChange={(event) => setCustomerDetailsDraft((current) => ({ ...current, assignedTenantUserId: event.target.value }))}
                         disabled={detailsSaving || selectedCustomerInactive}
                         options={[
-                          { value: "", label: "Unassigned" },
+                          { value: "", label: t("customers.unassigned") },
                           ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${roleLabelForAssignment(member.role)}` })),
                         ]}
                       />
-                      <p className="mt-1.5 text-xs text-[var(--qf-text-muted)]">Members see only customers and work assigned to them. Owners and admins see the full workspace.</p>
+                      <p className="mt-1.5 text-xs text-[var(--qf-text-muted)]">{t("pages.team.hint")}</p>
                     </div>
                   ) : selectedActivityRow.customer.assignedTenantUser ? (
                     <div className="sm:col-span-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-800">
-                      Assigned to {selectedActivityRow.customer.assignedTenantUser.user.fullName}
+                      {t("customers.assignment")}: {selectedActivityRow.customer.assignedTenantUser.user.fullName}
                     </div>
                   ) : null}
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Phone</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">{t("customers.phone")}</span>
                     <Input
                       type="tel"
                       value={customerDetailsDraft.phone}
@@ -1075,7 +1204,7 @@ export function CustomersPage() {
                     />
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">Email</span>
+                    <span className="text-xs font-medium text-[var(--qf-text-soft)]">{t("customers.email")}</span>
                     <Input
                       type="email"
                       value={customerDetailsDraft.email}
@@ -1083,6 +1212,27 @@ export function CustomersPage() {
                       disabled={detailsSaving || selectedCustomerInactive}
                     />
                   </label>
+                  <div className="sm:col-span-2">
+                    <Select
+                      label={t("language.label")}
+                      value={customerDetailsDraft.preferredLocale}
+                      onChange={(event) =>
+                        setCustomerDetailsDraft((current) => ({
+                          ...current,
+                          preferredLocale: event.target.value as SupportedLocale | "",
+                        }))
+                      }
+                      disabled={detailsSaving || selectedCustomerInactive}
+                      options={[
+                        { value: "", label: t("setup.defaults") },
+                        { value: "en-US", label: t("language.english") },
+                        { value: "es-US", label: t("language.spanish") },
+                      ]}
+                    />
+                    <p className="mt-1.5 text-xs text-[var(--qf-text-muted)]">
+                      {t("customers.documentLanguageDescription")}
+                    </p>
+                  </div>
                 </div>
                 {detailsFeedback ? (
                   <div className="mt-3">
@@ -1094,9 +1244,9 @@ export function CustomersPage() {
               <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Customer notes</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("customers.notes")}</p>
                     <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-                      Keep property details, objections, promises, and follow-up context here for your team and future AI follow-up drafts.
+                      {t("customers.notesDescription")}
                     </p>
                   </div>
                   <Button
@@ -1105,13 +1255,13 @@ export function CustomersPage() {
                     disabled={!notesChanged || notesSaving || selectedCustomerInactive}
                     loading={notesSaving}
                   >
-                    Save Notes
+                    {t("common.save")}
                   </Button>
                 </div>
                 <div className="mt-3">
                   <Textarea
                     rows={5}
-                    placeholder="Add customer notes, callback context, property details, or anything your team and AI should know."
+                    placeholder={t("customers.quick.notesPlaceholder")}
                     value={customerNotesDraft}
                     onChange={(event) => setCustomerNotesDraft(event.target.value)}
                     disabled={notesSaving || selectedCustomerInactive}
@@ -1122,8 +1272,8 @@ export function CustomersPage() {
               <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
                 <div className="flex items-start justify-between gap-3 border-b border-[var(--qf-border)] px-4 py-4">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Quotes</p>
-                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Open any active quote for this customer or start another.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("navigation.quotes")}</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quotes.boardDescription")}</p>
                   </div>
                   <Button
                     size="sm"
@@ -1131,7 +1281,7 @@ export function CustomersPage() {
                     disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
                     onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                   >
-                    New Quote
+                    {t("customers.newQuote")}
                   </Button>
                 </div>
                 {selectedActivityQuotes.length ? (
@@ -1144,31 +1294,42 @@ export function CustomersPage() {
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-semibold text-[var(--qf-text)]">{quote.title}</span>
-                        <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{quoteNumber(quote.id)} · {formatQuoteStatus(quote.status)} · Updated {formatDateTime(quote.updatedAt)}</span>
+                        <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{quoteNumber(quote.id)} · {formatQuoteStatus(quote.status)} · {t("customers.updated", { date: formatLocalDateTime(quote.updatedAt) })}</span>
                       </span>
                       <span className="shrink-0 text-sm font-semibold text-[var(--qf-text)]">{formatQuoteTotal(quote.totalAmount)}</span>
                     </button>
                   ))
                 ) : (
                   <div className="px-4 py-5 text-sm text-[var(--qf-text-soft)]">
-                    No active quotes. Archived or deleted quotes remain retained but are not reopened automatically when a customer is restored.
+                    {t("quotes.emptyDescription")}
                   </div>
                 )}
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
+              <div data-testid="customer-activity-feed" className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
                 {activityLoading ? (
                   <div className="p-4">
                     <LoadingState
-                      title="Loading activity"
-                      description="Pulling recent customer notes, contact events, and quote movement."
+                      title={t("customers.activity.loading")}
+                      description={t("customers.activity.loadingDescription")}
                       variant="list"
                       rows={4}
                     />
                   </div>
+                ) : activityError ? (
+                  <div className="space-y-3 p-4">
+                    <Alert tone="error">{activityError}</Alert>
+                    <Button
+                      variant="outline"
+                      onClick={() => void loadCustomerActivity(selectedActivityRow.customer.id, activityPage)}
+                    >
+                      {t("customers.retry")}
+                    </Button>
+                  </div>
                 ) : activityItems.length ? (
                   activityItems.map((item, index) => {
                     const tone = activityTone(item);
+                    const display = activityDisplay(item, selectedActivityRow.customer.fullName, t);
                     return (
                     <div
                       key={item.id}
@@ -1195,14 +1356,14 @@ export function CustomersPage() {
                               className="rounded text-left text-sm font-semibold text-[var(--qf-text)] hover:text-quotefly-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
                               onClick={() => closeActivityModal(() => navigateToQuote(item.quoteId!))}
                             >
-                              {item.title}
+                              {display.title}
                             </button>
                           ) : (
-                            <p className="text-sm font-semibold text-[var(--qf-text)]">{item.title}</p>
+                            <p className="text-sm font-semibold text-[var(--qf-text)]">{display.title}</p>
                           )}
-                          <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(item.occurredAt)}</span>
+                          <span className="text-xs text-[var(--qf-text-muted)]">{formatLocalDateTime(item.occurredAt)}</span>
                         </div>
-                        <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{item.detail || "No additional detail captured."}</p>
+                        <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{display.detail}</p>
                         <div className="mt-2 flex items-center justify-between gap-3">
                           {item.quoteId ? (
                             <button
@@ -1210,10 +1371,10 @@ export function CustomersPage() {
                               className="text-xs font-semibold text-quotefly-blue hover:underline"
                               onClick={() => closeActivityModal(() => navigateToQuote(item.quoteId!))}
                             >
-                              Open quote
+                              {t("customers.activity.openQuote")}
                             </button>
                           ) : <span />}
-                          <span className="text-[11px] font-medium text-[var(--qf-text-muted)]">By {activityActorLabel(item)}</span>
+                          <span className="text-[11px] font-medium text-[var(--qf-text-muted)]">{t("customers.activity.by", { name: activityActorLabel(item) })}</span>
                         </div>
                       </div>
                     </div>
@@ -1221,7 +1382,7 @@ export function CustomersPage() {
                   })
                 ) : (
                   <div className="p-4">
-                    <EmptyState title="No activity yet" description="Customer events will appear here as work moves from entry to sold." />
+                    <EmptyState title={t("customers.activity.empty")} description={t("customers.activity.emptyDescription")} />
                   </div>
                 )}
               </div>
@@ -1229,8 +1390,7 @@ export function CustomersPage() {
               {activityTotal > ACTIVITY_PAGE_SIZE ? (
                 <div className="flex flex-col gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-[var(--qf-text-muted)]">
-                    Showing {Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal)}-
-                    {Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal)} of {activityTotal} events
+                    {t("customers.activity.showing", { from: Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal), to: Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal), total: activityTotal })}
                   </p>
                   <div className="flex items-center gap-2">
                     <Button
@@ -1239,10 +1399,10 @@ export function CustomersPage() {
                       onClick={() => setActivityPage((current) => Math.max(1, current - 1))}
                       disabled={activityPage === 1 || activityLoading}
                     >
-                      Previous
+                      {t("common.previous")}
                     </Button>
                     <span className="text-xs font-medium text-[var(--qf-text-soft)]">
-                      Page {activityPage} of {totalActivityPages}
+                      {t("common.pageOf", { page: activityPage, total: totalActivityPages })}
                     </span>
                     <Button
                       size="sm"
@@ -1250,7 +1410,7 @@ export function CustomersPage() {
                       onClick={() => setActivityPage((current) => Math.min(totalActivityPages, current + 1))}
                       disabled={activityPage >= totalActivityPages || activityLoading}
                     >
-                      Next
+                      {t("common.next")}
                     </Button>
                   </div>
                 </div>
@@ -1267,23 +1427,23 @@ export function CustomersPage() {
                   icon={<ArchiveRestore size={15} />}
                   onClick={() => setCustomerRetentionAction({ type: "restore", row: selectedActivityRow })}
                 >
-                  Restore customer
+                  {t("customers.retention.restore")}
                 </Button>
               ) : (
                 <>
                   <Button variant="outline" onClick={() => setCustomerRetentionAction({ type: "archive", row: selectedActivityRow })}>
-                    Archive
+                    {t("customers.retention.archive")}
                   </Button>
                   <Button variant="danger" onClick={() => setCustomerRetentionAction({ type: "delete", row: selectedActivityRow })}>
-                    Delete
+                    {t("customers.retention.delete")}
                   </Button>
                 </>
               )}
             </div> : <div />}
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               <KodyButton
-                label="Ask Kody"
-                prompt={`Summarize customer ${selectedActivityRow.customer.fullName}. Show quote status, next follow-up, and anything that helps me move this customer toward a sent or accepted quote.`}
+                label="Kody"
+                prompt={`${t("customers.activityTitle")}: ${selectedActivityRow.customer.fullName}. ${t("customers.listDescription")}`}
                 tool="SEARCH_CUSTOMERS"
                 context={{
                   currentPage: "customers",
@@ -1293,15 +1453,15 @@ export function CustomersPage() {
                 }}
               />
               <Button className="min-w-0 flex-1 sm:flex-none" variant="outline" onClick={() => closeActivityModal()}>
-                Close
+                {t("common.close")}
               </Button>
               <Button
                 className="min-w-0 flex-1 sm:flex-none"
                 onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                 disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
-                title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? "Restore this customer before starting a quote" : undefined}
+                title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? t("customers.restoreBeforeQuote") : undefined}
               >
-                New Quote
+                {t("customers.newQuote")}
               </Button>
             </div>
           </ModalFooter>
@@ -1315,9 +1475,9 @@ export function CustomersPage() {
           setDiscardCustomerChangesOpen(false);
         }}
         onConfirm={discardCustomerChangesAndClose}
-        title="Discard unsaved customer changes?"
-        description="Contact details or notes changed in this window will be lost."
-        confirmLabel="Discard changes"
+        title={t("customers.discardTitle")}
+        description={t("customers.discardDescription")}
+        confirmLabel={t("customers.discard")}
         confirmVariant="warning"
       />
 
@@ -1329,19 +1489,19 @@ export function CustomersPage() {
         onConfirm={() => void confirmCustomerRetentionAction()}
         title={
           customerRetentionAction?.type === "archive"
-            ? "Archive customer?"
+            ? t("customers.retention.archiveTitle")
             : customerRetentionAction?.type === "delete"
-              ? "Delete customer?"
-              : "Restore customer?"
+              ? t("customers.retention.deleteTitle")
+              : t("customers.retention.restoreTitle")
         }
         description={
           customerRetentionAction?.type === "archive"
-            ? "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be archived too."
+            ? t("customers.retention.archiveDescription")
             : customerRetentionAction?.type === "delete"
-              ? "This customer will leave the active workspace but remain retained in the database and audit history. Related active quotes will be deleted too."
-              : "The customer will return to the active workspace. Retained archived or deleted quotes will remain inactive and will not be restored automatically."
+              ? t("customers.retention.deleteDescription")
+              : t("customers.retention.restoreDescription")
         }
-        confirmLabel={customerRetentionAction?.type === "archive" ? "Archive customer" : customerRetentionAction?.type === "delete" ? "Delete customer" : "Restore customer"}
+        confirmLabel={customerRetentionAction?.type === "archive" ? t("customers.retention.archiveConfirm") : customerRetentionAction?.type === "delete" ? t("customers.retention.deleteConfirm") : t("customers.retention.restoreConfirm")}
         loading={customerRetentionSaving}
         confirmVariant={customerRetentionAction?.type === "delete" ? "danger" : customerRetentionAction?.type === "archive" ? "warning" : "primary"}
       />

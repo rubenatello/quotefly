@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
-  ApiError,
   api,
   type OrganizationUser,
   type OrgUserRole,
@@ -12,13 +13,15 @@ import {
   type TenantUsageSnapshot,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
-import { BASIC_PLAN, basicFirstPaidMonthPriceLabel, basicMonthlyPriceLabel } from "../lib/plans";
+import { BASIC_PLAN } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, PaginationControls, ProgressBar, Select, type PageSize } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import { ThemeSelector } from "../components/settings/ThemeSelector";
+import { LanguageSelector } from "../components/settings/LanguageSelector";
 import { notify } from "../lib/notifications";
 import { aiUsageProgressTone } from "../lib/ai-credits";
+import { localizedApiError } from "../lib/localized-api-error";
 
 interface AdminPageProps {
   session?: {
@@ -67,84 +70,71 @@ const EMPTY_NEW_USER: NewUserForm = {
   role: "member",
 };
 
-const PLAN_CARDS: readonly PlanCard[] = [
+function formatUsd(value: number, locale: string): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function buildPlanCards(t: TFunction, locale: string): readonly PlanCard[] {
+  return [
   {
     code: "starter",
-    name: "Basic",
-    price: basicMonthlyPriceLabel(),
+    name: t("admin.plan.basic"),
+    price: t("billing.monthlyPrice", { price: formatUsd(BASIC_PLAN.monthlyPriceUsd, locale) }),
     launchState: "available",
-    summary: "For solo operators and small crews that need clean quoting fast.",
-    seatText: `Up to ${BASIC_PLAN.teamMembers} users`,
-    aiQuoteText: "Monthly AI usage included",
-    historyText: `${BASIC_PLAN.quoteHistoryDays}-day quote history`,
+    summary: t("admin.plan.basicSummary"),
+    seatText: t("admin.plan.upToUsers", { count: BASIC_PLAN.teamMembers }),
+    aiQuoteText: t("admin.plan.aiIncluded"),
+    historyText: t("admin.plan.historyDays", { count: BASIC_PLAN.quoteHistoryDays }),
     accentClassName: "border-blue-200 bg-blue-50/70",
     features: [
-      `${BASIC_PLAN.trialDays}-day free trial; eligible first paid month ${basicFirstPaidMonthPriceLabel()}`,
-      `${BASIC_PLAN.quotesPerMonth} quotes per month`,
-      "Quick customer intake and pipeline tracking",
-      "PDF quote generation",
-      "Fast customer and quote tracking",
+      t("admin.plan.trialOffer", { days: BASIC_PLAN.trialDays, price: formatUsd(BASIC_PLAN.firstPaidMonthPriceUsd, locale) }),
+      t("admin.plan.quotesMonthly", { count: BASIC_PLAN.quotesPerMonth }),
+      t("admin.plan.basicFeatures.intake"),
+      t("admin.plan.basicFeatures.pdf"),
+      t("admin.plan.basicFeatures.tracking"),
     ],
   },
   {
     code: "professional",
-    name: "Professional",
-    price: "$59/mo",
+    name: t("admin.plan.professional"),
+    price: t("billing.monthlyPrice", { price: formatUsd(59, locale) }),
     launchState: "coming-soon",
-    summary: "Staged after launch for stronger visibility, revisions, and accounting workflows.",
-    seatText: "Up to 15 users",
-    aiQuoteText: "Higher monthly AI allowance",
-    historyText: "180-day quote history",
+    summary: t("admin.plan.professionalSummary"),
+    seatText: t("admin.plan.upToUsers", { count: 15 }),
+    aiQuoteText: t("admin.plan.aiHigher"),
+    historyText: t("admin.plan.historyDays", { count: 180 }),
     accentClassName: "border-orange-200 bg-orange-50/70",
     features: [
-      "Quote version history",
-      "Communication log and advanced analytics",
-      "Multi-trade workspace support",
-      "Accounting workflow upgrades",
+      t("admin.plan.professionalFeatures.history"),
+      t("admin.plan.professionalFeatures.analytics"),
+      t("admin.plan.professionalFeatures.multiTrade"),
+      t("admin.plan.professionalFeatures.accounting"),
     ],
   },
   {
     code: "enterprise",
-    name: "Enterprise",
-    price: "$249/mo",
+    name: t("admin.plan.enterprise"),
+    price: t("billing.monthlyPrice", { price: formatUsd(249, locale) }),
     launchState: "coming-soon",
-    summary: "Staged after Professional for larger operations that need governance and automation.",
-    seatText: "Unlimited users",
-    aiQuoteText: "Expanded AI usage and automation",
-    historyText: "Unlimited quote history",
+    summary: t("admin.plan.enterpriseSummary"),
+    seatText: t("admin.plan.unlimitedUsers"),
+    aiQuoteText: t("admin.plan.aiExpanded"),
+    historyText: t("admin.plan.historyUnlimited"),
     accentClassName: "border-slate-300 bg-slate-100",
     features: [
-      "Unlimited quotes",
-      "API access and audit logs",
-      "Advanced AI automation layer",
-      "Custom integrations and priority support",
+      t("admin.plan.enterpriseFeatures.quotes"),
+      t("admin.plan.enterpriseFeatures.api"),
+      t("admin.plan.enterpriseFeatures.ai"),
+      t("admin.plan.enterpriseFeatures.integrations"),
     ],
   },
-] as const;
-
-const ROLE_OPTIONS: Array<{ value: OrgUserRole; label: string }> = [
-  { value: "member", label: "Member" },
-  { value: "admin", label: "Admin" },
-  { value: "owner", label: "Owner" },
-];
-
-const ROLE_GUIDES = [
-  {
-    role: "Owner",
-    tone: "border-violet-200 bg-violet-50",
-    text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, users, and billing.",
-  },
-  {
-    role: "Admin",
-    tone: "border-sky-200 bg-sky-50",
-    text: "All customers and work; costs, margins, catalog, assignments, record retention, integrations, and users. No billing changes.",
-  },
-  {
-    role: "Member",
-    tone: "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]",
-    text: "Assigned customers, follow-ups, jobs, and quotes. Can create and edit assigned quotes using approved products; cannot see internal costs or margins, manage the catalog, or archive/delete records.",
-  },
-] as const;
+  ];
+}
 
 function normalizeRole(role: string): OrgUserRole {
   const value = role.trim().toLowerCase();
@@ -159,48 +149,51 @@ function normalizePlanCode(planCode: string | null | undefined): PlanCode | null
   return null;
 }
 
-function roleLabel(role: OrgUserRole): string {
-  if (role === "owner") return "Owner";
-  if (role === "admin") return "Admin";
-  return "Member";
+function roleLabel(role: OrgUserRole, t: TFunction): string {
+  if (role === "owner") return t("domain.role.owner");
+  if (role === "admin") return t("domain.role.admin");
+  return t("domain.role.member");
 }
 
-function dateText(value: string | null | undefined): string {
-  if (!value) return "Not set";
-  return new Date(value).toLocaleDateString(undefined, {
+function dateText(value: string | null | undefined, locale: string, t: TFunction): string {
+  if (!value) return t("admin.status.notSet");
+  return new Date(value).toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
 }
 
-function sentenceCaseStatus(value: string | null | undefined): string {
-  if (!value) return "Not started";
-  return value
-    .split(/[_-]/g)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
+function subscriptionStatusLabel(value: string | null | undefined, t: TFunction): string {
+  const normalized = (value ?? "").toLowerCase();
+  if (normalized === "active") return t("admin.status.active");
+  if (normalized === "trialing") return t("admin.status.trialing");
+  if (normalized === "past_due") return t("admin.status.pastDue");
+  if (normalized === "unpaid") return t("admin.status.unpaid");
+  if (normalized === "canceled") return t("admin.status.canceled");
+  if (normalized === "incomplete") return t("admin.status.incomplete");
+  if (normalized === "paused") return t("admin.status.paused");
+  return t("admin.status.unknown");
 }
 
-function billingNoticeText(code: string | null, subscriptionConfirmed: boolean): string | null {
+function billingNoticeText(code: string | null, subscriptionConfirmed: boolean, t: TFunction): string | null {
   if (code === "success") {
     return subscriptionConfirmed
-      ? "Basic billing is active. Your workspace subscription is confirmed."
-      : "Checkout completed. Confirming your subscription with Stripe...";
+      ? t("admin.notices.billingActive")
+      : t("admin.notices.billingConfirming");
   }
-  if (code === "cancel") return "Stripe checkout was canceled. No billing changes were made.";
-  if (code === "portal") return "Returned from the Stripe billing portal.";
+  if (code === "cancel") return t("admin.notices.billingCanceled");
+  if (code === "portal") return t("admin.notices.billingPortalReturned");
   return null;
 }
 
-function integrationNoticeText(code: string | null): string | null {
-  if (code === "quickbooks_connected") return "QuickBooks connected successfully.";
-  if (code === "quickbooks_denied") return "QuickBooks connection was canceled before authorization completed.";
-  if (code === "quickbooks_invalid_state") return "QuickBooks authorization expired or became invalid. Start the connection again.";
-  if (code === "quickbooks_realm_in_use") return "That QuickBooks company is already linked to another QuoteFly tenant.";
-  if (code === "quickbooks_not_configured") return "QuickBooks integration is not configured on the API yet.";
-  if (code === "quickbooks_error") return "QuickBooks connection failed. Review your Intuit app configuration and try again.";
+function integrationNoticeText(code: string | null, t: TFunction): string | null {
+  if (code === "quickbooks_connected") return t("admin.notices.quickBooksConnected");
+  if (code === "quickbooks_denied") return t("admin.notices.quickBooksDenied");
+  if (code === "quickbooks_invalid_state") return t("admin.notices.quickBooksInvalid");
+  if (code === "quickbooks_realm_in_use") return t("admin.notices.quickBooksInUse");
+  if (code === "quickbooks_not_configured") return t("admin.notices.quickBooksUnavailable");
+  if (code === "quickbooks_error") return t("admin.notices.quickBooksError");
   return null;
 }
 
@@ -225,6 +218,14 @@ function roleTone(role: OrgUserRole): "violet" | "sky" | "slate" {
 }
 
 export function AdminPage({ session }: AdminPageProps) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const planCards = buildPlanCards(t, locale);
+  const roleOptions: Array<{ value: OrgUserRole; label: string }> = [
+    { value: "member", label: t("domain.role.member") },
+    { value: "admin", label: t("domain.role.admin") },
+    { value: "owner", label: t("domain.role.owner") },
+  ];
   const navigate = useNavigate();
   const location = useLocation();
   const [members, setMembers] = useState<OrganizationUser[]>([]);
@@ -257,7 +258,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
   const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Basic";
-  const displayPlanName = session?.isTrial ? "Full trial" : effectivePlanName;
+  const displayPlanName = session?.isTrial ? t("admin.plan.fullTrial") : effectivePlanName;
   const seatLimitReached = teamMembersLimit !== null && teamMembersUsed >= teamMembersLimit;
   const hasPortalAccess =
     activeSubscriptionPlan !== null ||
@@ -292,19 +293,31 @@ export function AdminPage({ session }: AdminPageProps) {
       setSeatPlanName(result.policy.seatPlanName);
     } catch (err) {
       if (requestId !== memberRequestIdRef.current) return;
-      setError(err instanceof ApiError ? err.message : "Failed loading organization users.");
+      setError(localizedApiError(err, t, { fallbackKey: "admin.errors.loadUsers" }));
     } finally {
       if (requestId === memberRequestIdRef.current) setLoading(false);
     }
-  }, [debouncedMemberSearch, memberPage, memberPageSize]);
+  }, [debouncedMemberSearch, memberPage, memberPageSize, t]);
+
+  const loadQuickBooksStatus = useCallback(async () => {
+    setQuickBooksLoading(true);
+    try {
+      const result = await api.integrations.quickbooks.status();
+      setQuickBooksStatus(result);
+    } catch (err) {
+      setError(localizedApiError(err, t, { fallbackKey: "admin.errors.loadQuickBooks" }));
+    } finally {
+      setQuickBooksLoading(false);
+    }
+  }, [t]);
 
   useEffect(() => {
     setSEOMetadata({
-      title: "Organization Admin",
-      description: "Manage team members, billing, and workspace access settings.",
+      title: t("admin.seoTitle"),
+      description: t("admin.seoDescription"),
     });
     void loadQuickBooksStatus();
-  }, []);
+  }, [loadQuickBooksStatus, t]);
 
   useEffect(() => {
     void loadMembers();
@@ -315,9 +328,9 @@ export function AdminPage({ session }: AdminPageProps) {
     const billingSubscriptionConfirmed =
       activeSubscriptionPlan !== null &&
       ["active", "trialing"].includes((session?.subscriptionStatus ?? "").toLowerCase());
-    const nextNotice = billingNoticeText(billingState, billingSubscriptionConfirmed);
+    const nextNotice = billingNoticeText(billingState, billingSubscriptionConfirmed, t);
     const integrationsState = new URLSearchParams(location.search).get("integrations");
-    const nextIntegrationNotice = integrationNoticeText(integrationsState);
+    const nextIntegrationNotice = integrationNoticeText(integrationsState, t);
 
     if (!nextNotice && !nextIntegrationNotice) return;
 
@@ -332,19 +345,8 @@ export function AdminPage({ session }: AdminPageProps) {
     navigate,
     session?.subscriptionStatus,
     settingsMode,
+    t,
   ]);
-
-  async function loadQuickBooksStatus() {
-    setQuickBooksLoading(true);
-    try {
-      const result = await api.integrations.quickbooks.status();
-      setQuickBooksStatus(result);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed loading QuickBooks integration status.");
-    } finally {
-      setQuickBooksLoading(false);
-    }
-  }
 
   async function createMember(event: FormEvent) {
     event.preventDefault();
@@ -361,9 +363,12 @@ export function AdminPage({ session }: AdminPageProps) {
       });
       setForm(EMPTY_NEW_USER);
       await loadMembers();
-      setNotice("Team member added.");
+      setNotice(t("admin.notices.memberAdded"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed creating team member.");
+      setError(localizedApiError(err, t, {
+        fallbackKey: "admin.errors.createUser",
+        statusKeys: { 409: "apiErrors.memberExists" },
+      }));
     } finally {
       setSaving(false);
     }
@@ -376,9 +381,9 @@ export function AdminPage({ session }: AdminPageProps) {
     try {
       await api.org.users.updateRole(memberId, { role });
       await loadMembers();
-      setNotice("Role updated.");
+      setNotice(t("admin.notices.roleUpdated"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed updating member role.");
+      setError(localizedApiError(err, t, { fallbackKey: "admin.errors.updateRole" }));
     } finally {
       setSaving(false);
     }
@@ -392,13 +397,13 @@ export function AdminPage({ session }: AdminPageProps) {
     try {
       await api.org.users.remove(pendingRemovalMember.id);
       await loadMembers();
-      notify.success("Team member removed", {
-        description: `${pendingRemovalMember.user.fullName} can no longer access this workspace.`,
+      notify.success(t("admin.notices.removedTitle"), {
+        description: t("admin.notices.removedDescription", { name: pendingRemovalMember.user.fullName }),
       });
       setPendingRemovalMember(null);
     } catch (err) {
-      notify.error("Team member could not be removed", {
-        description: err instanceof ApiError ? err.message : "Please try again. Their access was not changed.",
+      notify.error(t("admin.errors.removeTitle"), {
+        description: localizedApiError(err, t, { fallbackKey: "admin.errors.removeDescription" }),
       });
     } finally {
       setSaving(false);
@@ -418,7 +423,10 @@ export function AdminPage({ session }: AdminPageProps) {
       }
       window.location.assign(result.checkoutUrl);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed starting Stripe checkout.");
+      setError(localizedApiError(err, t, {
+        fallbackKey: "admin.errors.checkout",
+        statusKeys: { 409: "apiErrors.subscriptionExists" },
+      }));
       setBillingAction(null);
     }
   }
@@ -433,15 +441,15 @@ export function AdminPage({ session }: AdminPageProps) {
       const result = await api.billing.createPortalSession();
       window.location.assign(result.url);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed opening billing portal.");
+      setError(localizedApiError(err, t, { fallbackKey: "admin.errors.billingPortal" }));
       setBillingAction(null);
     }
   }
 
   const seatUsageText = useMemo(() => {
-    if (teamMembersLimit === null) return `${teamMembersUsed} in use · Unlimited`;
-    return `${teamMembersUsed} of ${teamMembersLimit} seats in use`;
-  }, [teamMembersLimit, teamMembersUsed]);
+    if (teamMembersLimit === null) return t("admin.access.inUseUnlimited", { used: teamMembersUsed });
+    return t("admin.access.seatsInUse", { used: teamMembersUsed, limit: teamMembersLimit });
+  }, [t, teamMembersLimit, teamMembersUsed]);
   const totalMemberPages = Math.max(1, Math.ceil(memberTotal / memberPageSize));
 
   useEffect(() => {
@@ -450,48 +458,50 @@ export function AdminPage({ session }: AdminPageProps) {
   const aiBudgetLimit = session?.entitlements?.limits.aiSpendUsdPerMonth ?? null;
   const aiBudgetUsed = session?.usage?.monthlyAiSpendUsd ?? 0;
   const aiUsagePercent = aiBudgetLimit && aiBudgetLimit > 0 ? Math.min((aiBudgetUsed / aiBudgetLimit) * 100, 100) : 0;
-  const aiUsagePercentLabel = `${Math.round(aiUsagePercent)}% used`;
-  const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc) : null;
+  const aiUsagePercentLabel = t("admin.access.percentUsed", { percent: Math.round(aiUsagePercent) });
+  const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc, locale, t) : null;
   const adminLinks = [
-    { id: "admin-overview", label: "Overview", hint: "Plan + status" },
-    { id: "admin-appearance", label: "Appearance", hint: "Light + dark theme" },
-    { id: "admin-billing", label: "Billing", hint: "Plans + Stripe" },
-    { id: "admin-quickbooks", label: "QuickBooks", hint: "Accounting sync" },
-    { id: "admin-team", label: "Team", hint: "Users + roles" },
+    { id: "admin-overview", label: t("admin.nav.overview"), hint: t("admin.nav.overviewHint") },
+    { id: "admin-appearance", label: t("admin.nav.appearance"), hint: t("admin.nav.appearanceHint") },
+    { id: "admin-billing", label: t("admin.nav.billing"), hint: t("admin.nav.billingHint") },
+    { id: "admin-quickbooks", label: t("admin.nav.quickBooks"), hint: t("admin.nav.quickBooksHint") },
+    { id: "admin-team", label: t("admin.nav.team"), hint: t("admin.nav.teamHint") },
   ];
   const visibleAdminLinks = settingsMode === "users" ? adminLinks.filter((link) => link.id === "admin-team") : adminLinks.filter((link) => link.id !== "admin-team");
 
   const billingSummaryText = useMemo(() => {
     if (session?.isTrial) {
-      return `Trial access active until ${dateText(session.trialEndsAtUtc)}.`;
+      return t("admin.owner.billingTrial", { date: dateText(session.trialEndsAtUtc, locale, t) });
     }
 
     if (session?.subscriptionCurrentPeriodEndUtc) {
-      return `Current billing period ends ${dateText(session.subscriptionCurrentPeriodEndUtc)}.`;
+      return t("admin.owner.billingPeriod", { date: dateText(session.subscriptionCurrentPeriodEndUtc, locale, t) });
     }
 
     if (activeSubscriptionPlan) {
-      return "Stripe billing is connected for this workspace.";
+      return t("admin.owner.billingConnected");
     }
 
-    return "No paid plan connected yet.";
+    return t("admin.owner.billingNone");
   }, [
     activeSubscriptionPlan,
     session?.isTrial,
     session?.subscriptionCurrentPeriodEndUtc,
     session?.trialEndsAtUtc,
+    locale,
+    t,
   ]);
 
   if (loading) {
       return (
       <div className="space-y-4">
         <PageHeader
-          title="Settings"
-          subtitle="Manage billing, users, and workspace access without leaving the CRM."
+          title={t("admin.title")}
+          subtitle={t("admin.subtitle")}
           mode="actions-only"
         />
         <Card variant="elevated" padding="lg" className="text-sm text-slate-600">
-          Loading organization settings...
+          {t("admin.loading")}
         </Card>
       </div>
     );
@@ -502,8 +512,8 @@ export function AdminPage({ session }: AdminPageProps) {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Settings"
-        subtitle={settingsMode === "users" ? "Manage workspace users, roles, and seat usage." : "Manage organization billing, launch-plan access, and workspace controls."}
+        title={t("admin.title")}
+        subtitle={settingsMode === "users" ? t("admin.usersSubtitle") : t("admin.organizationSubtitle")}
         mode="actions-only"
         actions={
           ownerView && hasPortalAccess ? (
@@ -514,7 +524,7 @@ export function AdminPage({ session }: AdminPageProps) {
               disabled={billingAction !== null}
               loading={billingAction === "portal"}
             >
-              Manage Billing
+              {t("admin.owner.manageBilling")}
             </Button>
           ) : undefined
         }
@@ -534,24 +544,24 @@ export function AdminPage({ session }: AdminPageProps) {
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
           <WorkspaceRailCard
-            eyebrow={settingsMode === "users" ? "Team" : "Admin"}
-            title={settingsMode === "users" ? "Access & seats" : "Workspace Control"}
+            eyebrow={settingsMode === "users" ? t("admin.access.team") : t("admin.access.admin")}
+            title={settingsMode === "users" ? t("admin.access.accessSeats") : t("admin.access.workspaceControl")}
             description={settingsMode === "users"
-              ? "See the current seat allowance and jump directly to team access."
-              : "Billing, accounting, and team settings should be obvious and fast to scan on mobile or desktop."}
+              ? t("admin.access.teamDescription")
+              : t("admin.access.controlDescription")}
           >
             <div className="flex flex-wrap gap-2">
-              <Badge tone={planTone(effectivePlanCode)}>{displayPlanName} access</Badge>
+              <Badge tone={planTone(effectivePlanCode)}>{t("admin.access.accessSuffix", { plan: displayPlanName })}</Badge>
               {settingsMode === "users" ? (
-                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? "Seat limit reached" : "Seats available"}</Badge>
+                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? t("admin.access.seatLimitReached") : t("admin.access.seatsAvailable")}</Badge>
               ) : (
                 <>
-                  {session?.isTrial ? <Badge tone="orange">Trial active</Badge> : null}
+                  {session?.isTrial ? <Badge tone="orange">{t("admin.access.trialActive")}</Badge> : null}
                   <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
-                    {sentenceCaseStatus(session?.subscriptionStatus)}
+                    {subscriptionStatusLabel(session?.subscriptionStatus, t)}
                   </Badge>
                   <Badge tone={starterLaunchMode ? "blue" : "amber"}>
-                    {starterLaunchMode ? "Basic launch" : "Advanced tiers later"}
+                    {starterLaunchMode ? t("admin.access.basicLaunch") : t("admin.access.advancedLater")}
                   </Badge>
                 </>
               )}
@@ -559,42 +569,42 @@ export function AdminPage({ session }: AdminPageProps) {
             <div className={`mt-4 grid gap-3 ${settingsMode === "users" ? "grid-cols-1" : "sm:grid-cols-3 xl:grid-cols-1"}`}>
               {settingsMode === "org" ? <AdminMetricCard
                   icon={<PriceIcon size={16} />}
-                  label="Current access"
+                  label={t("admin.access.currentAccess")}
                   value={displayPlanName}
-                  hint={session?.isTrial ? "Trial access" : "Live plan access"}
+                  hint={session?.isTrial ? t("admin.access.trialAccess") : t("admin.access.livePlanAccess")}
                 /> : null}
               {settingsMode === "org" ? <AdminMetricCard
                   icon={<ClockIcon size={16} />}
-                  label="Billing state"
-                  value={sentenceCaseStatus(session?.subscriptionStatus)}
-                  hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+                  label={t("admin.access.billingState")}
+                  value={subscriptionStatusLabel(session?.subscriptionStatus, t)}
+                  hint={activeSubscriptionPlan ? t("admin.access.subscribed", { plan: activeSubscriptionPlan }) : t("admin.access.noPaidPlan")}
                 /> : null}
               <AdminMetricCard
                 icon={<CustomerIcon size={16} />}
-                label="Team seats"
+                label={t("admin.access.teamSeats")}
                 value={seatUsageText}
-                hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
+                hint={teamMembersLimit === null ? t("admin.access.noSeatCap") : t("admin.access.seatsEnforced")}
               />
             </div>
             {settingsMode === "org" && aiBudgetLimit !== null ? (
               <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">AI Usage</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{t("admin.access.aiUsage")}</p>
                   <span className="text-xs font-semibold text-slate-900">
                     {aiUsagePercentLabel}
                   </span>
                 </div>
                 <ProgressBar
                   value={aiUsagePercent}
-                  label="Monthly AI usage"
+                  label={t("admin.access.monthlyAiUsage")}
                   tone={aiUsageProgressTone(aiUsagePercent)}
                   hint={
                     aiUsagePercent >= 100
                       ? aiRenewalText
-                        ? `Usage limit reached · renews ${aiRenewalText}`
-                        : "Usage limit reached"
+                        ? t("admin.access.usageLimitRenews", { date: aiRenewalText })
+                        : t("admin.access.usageLimitReached")
                       : aiRenewalText
-                        ? `Renews ${aiRenewalText}`
+                        ? t("admin.access.renews", { date: aiRenewalText })
                         : undefined
                   }
                   className="mt-3"
@@ -607,23 +617,23 @@ export function AdminPage({ session }: AdminPageProps) {
                 variant={settingsMode === "org" ? "primary" : "outline"}
                 onClick={() => navigate("/app/settings")}
               >
-                Org
+                {t("admin.access.org")}
               </Button>
               <Button
                 size="sm"
                 variant={settingsMode === "users" ? "primary" : "outline"}
                 onClick={() => navigate("/app/settings/users")}
               >
-                Users
+                {t("admin.access.users")}
               </Button>
             </div>
             <WorkspaceJumpBar links={visibleAdminLinks} className="mt-4" />
           </WorkspaceRailCard>
 
           {settingsMode === "org" ? <WorkspaceRailCard
-            eyebrow="Owner actions"
-            title={ownerView ? "You can manage billing" : "Read-only access"}
-            description={ownerView ? billingSummaryText : "Only workspace owners can change billing and integration settings."}
+            eyebrow={t("admin.owner.eyebrow")}
+            title={ownerView ? t("admin.owner.canManage") : t("admin.owner.readOnly")}
+            description={ownerView ? billingSummaryText : t("admin.owner.readOnlyDescription")}
           >
             <div className="grid gap-2">
               {settingsMode === "org" && ownerView && hasPortalAccess ? (
@@ -635,7 +645,7 @@ export function AdminPage({ session }: AdminPageProps) {
                   loading={billingAction === "portal"}
                   fullWidth
                 >
-                  Manage Billing
+                  {t("admin.owner.manageBilling")}
                 </Button>
               ) : null}
               {settingsMode === "org" && superuserView ? (
@@ -645,12 +655,12 @@ export function AdminPage({ session }: AdminPageProps) {
                   onClick={() => navigate("/app/internal/admin")}
                   fullWidth
                 >
-                  Open Operator Console
+                  {t("admin.owner.operatorConsole")}
                 </Button>
               ) : null}
               {settingsMode === "org" && ownerView ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                  Basic launch keeps the product focused on customer management and quoting. Advanced accounting integrations stay off-sale for now.
+                  {t("admin.owner.launchFocus")}
                 </div>
               ) : null}
             </div>
@@ -661,21 +671,21 @@ export function AdminPage({ session }: AdminPageProps) {
           {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-overview"
-            step="Step 1"
-            title="Overview"
-            description="Keep billing, integrations, and team access aligned from one operator surface."
+            step={t("admin.overview.step")}
+            title={t("admin.overview.title")}
+            description={t("admin.overview.description")}
           >
             <Card variant="blue" padding="lg">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(0,1.35fr)_minmax(460px,580px)] 2xl:items-start">
           <div className="min-w-0 max-w-3xl space-y-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-600">Workspace control center</p>
-              <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">Keep billing, integrations, and team access aligned.</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-600">{t("admin.overview.eyebrow")}</p>
+              <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">{t("admin.overview.heading")}</h2>
             </div>
             <p className="text-sm text-slate-600 sm:text-base">{billingSummaryText}</p>
             {!ownerView ? (
               <Badge tone="amber" icon={<LockIcon size={14} />}>
-                Only workspace owners can change billing and integrations
+                {t("admin.overview.ownerOnly")}
               </Badge>
             ) : null}
           </div>
@@ -683,32 +693,32 @@ export function AdminPage({ session }: AdminPageProps) {
           <div className="grid gap-3 sm:grid-cols-2">
             <AdminMetricCard
               icon={<PriceIcon size={16} />}
-              label="Current access"
+              label={t("admin.access.currentAccess")}
               value={displayPlanName}
-              hint={session?.isTrial ? "Trial access" : "Live plan access"}
+              hint={session?.isTrial ? t("admin.access.trialAccess") : t("admin.access.livePlanAccess")}
             />
             <AdminMetricCard
               icon={<ClockIcon size={16} />}
-              label="Billing state"
-              value={sentenceCaseStatus(session?.subscriptionStatus)}
-              hint={activeSubscriptionPlan ? `${activeSubscriptionPlan} subscribed` : "No paid plan yet"}
+              label={t("admin.access.billingState")}
+              value={subscriptionStatusLabel(session?.subscriptionStatus, t)}
+              hint={activeSubscriptionPlan ? t("admin.access.subscribed", { plan: activeSubscriptionPlan }) : t("admin.access.noPaidPlan")}
             />
             <AdminMetricCard
               icon={<CustomerIcon size={16} />}
-              label="Team seats"
+              label={t("admin.access.teamSeats")}
               value={seatUsageText}
-              hint={teamMembersLimit === null ? "No seat cap on this plan" : "Seats enforced per plan"}
+              hint={teamMembersLimit === null ? t("admin.access.noSeatCap") : t("admin.access.seatsEnforced")}
             />
             <AdminMetricCard
               icon={<ClockIcon size={16} />}
-              label="AI usage"
-              value={aiBudgetLimit === null ? "No cap" : aiUsagePercentLabel}
+              label={t("admin.access.aiUsage")}
+              value={aiBudgetLimit === null ? t("admin.access.noCap") : aiUsagePercentLabel}
               hint={
                 aiBudgetLimit === null
-                  ? "No monthly cap"
+                  ? t("admin.access.noMonthlyCap")
                   : aiRenewalText
-                    ? `Renews ${aiRenewalText}`
-                    : "Monthly limit enforced"
+                    ? t("admin.access.renews", { date: aiRenewalText })
+                    : t("admin.access.monthlyLimit")
               }
             />
           </div>
@@ -720,29 +730,42 @@ export function AdminPage({ session }: AdminPageProps) {
           {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-appearance"
-            step="Step 2"
-            title="Appearance"
-            description="Use QuoteFly comfortably in bright daylight, a dim office, or after-hours field work."
+            step={t("settings.appearanceStep")}
+            title={t("settings.appearance")}
+            description={t("settings.appearanceDescription")}
           >
-            <ThemeSelector />
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ThemeSelector />
+              <LanguageSelector
+                onPreferenceChange={async (preferredLocale) => {
+                  try {
+                    await api.auth.updatePreferences({ preferredLocale });
+                    notify.success(t("language.saved"));
+                  } catch (error) {
+                    notify.error(t("language.saveError"));
+                    throw error;
+                  }
+                }}
+              />
+            </div>
           </WorkspaceSection>
           ) : null}
 
           {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-billing"
-            step="Step 3"
-            title="Billing"
-            description="Basic is the launch plan. Advanced tiers stay visible here, but they are not for sale yet."
-            actions={!ownerView ? <Badge tone="amber">Owner only</Badge> : undefined}
+            step={t("admin.billing.step")}
+            title={t("admin.billing.title")}
+            description={t("admin.billing.description")}
+            actions={!ownerView ? <Badge tone="amber">{t("admin.billing.ownerOnly")}</Badge> : undefined}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
-          title="Billing and Plan Controls"
-          subtitle="Launch with Basic. Stripe handles billing and QuoteFly enforces access while Professional and Enterprise stay off-sale."
+          title={t("admin.billing.controls")}
+          subtitle={t("admin.billing.controlsDescription")}
         />
         <div className="grid gap-4 xl:grid-cols-3">
-          {PLAN_CARDS.map((plan) => {
+          {planCards.map((plan) => {
             const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
             const isCurrentAccessPlan = !session?.isTrial && effectivePlanCode === plan.code;
             const isComingSoon = plan.launchState === "coming-soon";
@@ -755,9 +778,9 @@ export function AdminPage({ session }: AdminPageProps) {
                     <p className="mt-1 text-2xl font-bold text-slate-900">{plan.price}</p>
                   </div>
                   <div className="flex flex-col items-end gap-2">
-                    {isCurrentAccessPlan ? <Badge tone="blue">Current access</Badge> : null}
-                    {isCurrentPaidPlan ? <Badge tone="emerald">Active billing</Badge> : null}
-                    {!isCurrentPaidPlan && isComingSoon ? <Badge tone="amber">Coming soon</Badge> : null}
+                    {isCurrentAccessPlan ? <Badge tone="blue">{t("admin.plan.currentAccess")}</Badge> : null}
+                    {isCurrentPaidPlan ? <Badge tone="emerald">{t("admin.plan.activeBilling")}</Badge> : null}
+                    {!isCurrentPaidPlan && isComingSoon ? <Badge tone="amber">{t("admin.plan.comingSoon")}</Badge> : null}
                   </div>
                 </div>
 
@@ -786,7 +809,7 @@ export function AdminPage({ session }: AdminPageProps) {
                   disabled={!ownerView || isCurrentPaidPlan || billingAction !== null || isComingSoon}
                   loading={billingAction === plan.code}
                 >
-                  {isCurrentPaidPlan ? "Current Paid Plan" : isComingSoon ? "Coming Soon" : `Choose ${plan.name}`}
+                  {isCurrentPaidPlan ? t("admin.plan.currentPaid") : isComingSoon ? t("admin.plan.comingSoon") : t("admin.plan.choose", { plan: plan.name })}
                 </Button>
               </article>
             );
@@ -794,9 +817,9 @@ export function AdminPage({ session }: AdminPageProps) {
         </div>
 
         <Card variant="default" padding="md" className="mt-4 bg-slate-50/80">
-          <p className="text-sm font-semibold text-slate-900">Launch note</p>
+          <p className="text-sm font-semibold text-slate-900">{t("admin.billing.launchNote")}</p>
           <p className="mt-1 text-sm text-slate-600">
-            Basic is the only sellable launch plan right now. Professional and Enterprise remain visible so the roadmap is clear, but they stay off-sale until the deeper reporting and accounting surfaces are hardened.
+            {t("admin.billing.launchDescription")}
           </p>
         </Card>
             </Card>
@@ -806,48 +829,48 @@ export function AdminPage({ session }: AdminPageProps) {
           {settingsMode === "org" ? (
           <WorkspaceSection
             id="admin-quickbooks"
-            step="Step 4"
-            title="Accounting"
-            description={starterLaunchMode ? "Basic launch is focused on CRM and quoting first. Direct accounting sync stays off-sale until the next release." : "Accounting integrations are being hardened for the next release."}
-            actions={<Badge tone="amber">V2 roadmap</Badge>}
+            step={t("admin.accounting.step")}
+            title={t("admin.accounting.title")}
+            description={starterLaunchMode ? t("admin.accounting.basicDescription") : t("admin.accounting.advancedDescription")}
+            actions={<Badge tone="amber">{t("admin.accounting.roadmap")}</Badge>}
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
-          title="Accounting roadmap"
-          subtitle={starterLaunchMode ? "Basic customers should focus on customer management, quote tracking, and PDF delivery. Direct accounting sync is being staged after launch." : "Advanced accounting sync is still being hardened before sale."}
+          title={t("admin.accounting.roadmapTitle")}
+          subtitle={starterLaunchMode ? t("admin.accounting.basicRoadmap") : t("admin.accounting.advancedRoadmap")}
         />
 
         <div className="flex flex-wrap gap-2">
-          <Badge tone="blue">PDF quotes live</Badge>
-          <Badge tone="blue">Customer pipeline live</Badge>
-          <Badge tone="orange">Accounting sync later</Badge>
+          <Badge tone="blue">{t("admin.accounting.pdfLive")}</Badge>
+          <Badge tone="blue">{t("admin.accounting.pipelineLive")}</Badge>
+          <Badge tone="orange">{t("admin.accounting.syncLater")}</Badge>
         </div>
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
           <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">What ships now</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("admin.accounting.shipsNow")}</p>
             <div className="mt-3 grid gap-2 text-sm text-slate-700">
-              <p><span className="font-semibold text-slate-900">Customer pipeline:</span> new through sold, with clear status handling.</p>
-              <p><span className="font-semibold text-slate-900">Quote workflow:</span> draft, send, close, and PDF actions from one workspace.</p>
-              <p><span className="font-semibold text-slate-900">Team access:</span> Basic seat and AI limits are enforced from billing.</p>
-              <p><span className="font-semibold text-slate-900">Exports:</span> PDF delivery is part of the launch workflow today.</p>
+              <p><span className="font-semibold text-slate-900">{t("admin.accounting.pipelineLabel")}</span> {t("admin.accounting.pipelineText")}</p>
+              <p><span className="font-semibold text-slate-900">{t("admin.accounting.quoteLabel")}</span> {t("admin.accounting.quoteText")}</p>
+              <p><span className="font-semibold text-slate-900">{t("admin.accounting.teamLabel")}</span> {t("admin.accounting.teamText")}</p>
+              <p><span className="font-semibold text-slate-900">{t("admin.accounting.exportsLabel")}</span> {t("admin.accounting.exportsText")}</p>
             </div>
           </div>
 
           <Card variant="default" padding="md">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Later release</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("admin.accounting.laterRelease")}</p>
             <div className="mt-3 space-y-3 text-sm text-slate-600">
-              <p>Professional and Enterprise will take on accounting workflows only after the Basic CRM and quoting path is stable in production.</p>
+              <p>{t("admin.accounting.laterDescription")}</p>
               <ul className="space-y-2 text-sm text-slate-700">
-                <li>- Direct QuickBooks Online connection</li>
-                <li>- Invoice push and status refresh</li>
-                <li>- Deeper accounting automation and reconciliation</li>
+                <li>- {t("admin.accounting.quickBooks")}</li>
+                <li>- {t("admin.accounting.invoice")}</li>
+                <li>- {t("admin.accounting.automation")}</li>
               </ul>
               {quickBooksLoading ? (
-                <p className="text-xs text-slate-400">Checking internal QuickBooks foundation...</p>
+                <p className="text-xs text-slate-400">{t("admin.accounting.checking")}</p>
               ) : (
                 <p className="text-xs text-slate-500">
-                  Internal foundation status: {quickBooksStatus?.enabled ? "configured" : "not configured"}.
+                  {t("admin.accounting.foundation", { status: quickBooksStatus?.enabled ? t("admin.accounting.configured") : t("admin.accounting.notConfigured") })}
                 </p>
               )}
             </div>
@@ -860,29 +883,29 @@ export function AdminPage({ session }: AdminPageProps) {
           {settingsMode === "users" ? (
           <WorkspaceSection
             id="admin-team"
-            step="Users"
-            title="Team"
-            description="Invite field users and office staff into the same workspace and keep role controls obvious."
+            step={t("admin.team.step")}
+            title={t("admin.team.title")}
+            description={t("admin.team.description")}
             actions={<Badge tone={seatLimitReached ? "amber" : "slate"}>{seatUsageText}</Badge>}
           >
             <Card variant="default" padding="md" className="mb-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{seatPlanName} seat allowance</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("admin.team.allowance", { plan: seatPlanName })}</p>
                   <p className="mt-1 text-xl font-bold text-slate-950">{seatUsageText}</p>
                   <p className="mt-1 text-sm text-slate-600">
                     {teamMembersLimit === null
-                      ? "This plan has no active-user cap."
-                      : `${Math.max(teamMembersLimit - teamMembersUsed, 0)} seat${Math.max(teamMembersLimit - teamMembersUsed, 0) === 1 ? "" : "s"} remaining.`}
+                      ? t("admin.team.noCap")
+                      : t("admin.team.seatsRemaining", { count: Math.max(teamMembersLimit - teamMembersUsed, 0) })}
                   </p>
                 </div>
-                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? "Limit reached" : "Seats available"}</Badge>
+                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? t("admin.team.limitReached") : t("admin.team.seatsAvailable")}</Badge>
               </div>
               {teamMembersLimit !== null ? (
                 <ProgressBar
                   value={Math.min(100, (teamMembersUsed / Math.max(teamMembersLimit, 1)) * 100)}
-                  label="Active team seats"
-                  hint={`${teamMembersUsed} of ${teamMembersLimit} seats in use`}
+                  label={t("admin.team.activeSeats")}
+                  hint={t("admin.access.seatsInUse", { used: teamMembersUsed, limit: teamMembersLimit })}
                   className="mt-4"
                 />
               ) : null}
@@ -890,8 +913,8 @@ export function AdminPage({ session }: AdminPageProps) {
 
             <details className="mb-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 md:hidden">
               <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-semibold text-[var(--qf-text)]">
-                Compare role permissions
-                <span className="text-xs font-medium text-[var(--qf-text-muted)]">Owner · Admin · Member</span>
+                {t("admin.team.compareRoles")}
+                <span className="text-xs font-medium text-[var(--qf-text-muted)]">{t("admin.team.roleList")}</span>
               </summary>
               <RoleGuideCards className="border-t border-[var(--qf-border)] py-4" />
             </details>
@@ -899,42 +922,42 @@ export function AdminPage({ session }: AdminPageProps) {
             <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Card variant="elevated" padding="lg">
           <CardHeader
-            title="Add Team Member"
-            subtitle="Invite field users and office staff into the same workspace."
+            title={t("admin.team.addTitle")}
+            subtitle={t("admin.team.addDescription")}
           />
           <form onSubmit={createMember} className="space-y-3">
             <Input
-              label="Full name"
-              placeholder="Full name"
+              label={t("admin.team.fullName")}
+              placeholder={t("admin.team.fullName")}
               value={form.fullName}
               onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <Input
-              label="Email"
+              label={t("admin.team.email")}
               type="email"
-              placeholder="Email"
+              placeholder={t("admin.team.email")}
               value={form.email}
               onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <Input
-              label="Temporary password"
+              label={t("admin.team.temporaryPassword")}
               type="password"
               minLength={8}
-              placeholder="Minimum 8 characters"
+              placeholder={t("admin.team.passwordPlaceholder")}
               value={form.password}
               onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
               disabled={!canManageUsers || saving || seatLimitReached}
               required
             />
             <Select
-              label="Role"
+              label={t("admin.team.role")}
               value={form.role}
               onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value as OrgUserRole }))}
-              options={ROLE_OPTIONS}
+              options={roleOptions}
               disabled={!canManageUsers || saving || seatLimitReached}
             />
             <Button
@@ -943,42 +966,42 @@ export function AdminPage({ session }: AdminPageProps) {
               disabled={!canManageUsers || saving || seatLimitReached}
               loading={saving}
             >
-              Add User
+              {t("admin.team.addUser")}
             </Button>
           </form>
           {!canManageUsers ? (
-            <p className="mt-3 text-xs text-slate-500">Your role cannot add users. Ask an owner or admin.</p>
+            <p className="mt-3 text-xs text-slate-500">{t("admin.team.cannotAdd")}</p>
           ) : null}
           {seatLimitReached ? (
             <div className="mt-3">
-              <Alert tone="warning">Seat limit reached. Upgrade the workspace plan to add more users.</Alert>
+              <Alert tone="warning">{t("admin.team.seatLimit")}</Alert>
             </div>
           ) : null}
         </Card>
 
         <Card variant="elevated" padding="lg">
           <CardHeader
-            title="Organization Users"
-            subtitle="Owners can edit roles and remove members. Admins can add members. Members are read-only."
-            actions={<Badge tone="slate">{teamMembersUsed} users</Badge>}
+            title={t("admin.team.usersTitle")}
+            subtitle={t("admin.team.usersDescription")}
+            actions={<Badge tone="slate">{t("admin.team.userCount", { count: teamMembersUsed })}</Badge>}
           />
           <div className="mb-4 max-w-md">
             <Input
-              label="Search team"
+              label={t("admin.team.search")}
               value={memberSearch}
               onChange={(event) => setMemberSearch(event.target.value)}
-              placeholder="Search by name or email"
+              placeholder={t("admin.team.searchPlaceholder")}
             />
           </div>
           <div className="overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
             {members.length ? (
               <>
                 <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_120px_110px_112px] gap-4 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:grid">
-                  <span>User</span>
-                  <span>Role</span>
-                  <span>Assigned</span>
-                  <span>Joined</span>
-                  <span>Action</span>
+                  <span>{t("admin.team.user")}</span>
+                  <span>{t("admin.team.role")}</span>
+                  <span>{t("admin.team.assigned")}</span>
+                  <span>{t("admin.team.joined")}</span>
+                  <span>{t("admin.team.action")}</span>
                 </div>
                 <div className="divide-y divide-[var(--qf-border)]">
                   {members.map((member) => (
@@ -1000,29 +1023,29 @@ export function AdminPage({ session }: AdminPageProps) {
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2 lg:justify-start">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">Role</span>
-                        <Badge tone={roleTone(member.role)}>{roleLabel(member.role)}</Badge>
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">{t("admin.team.role")}</span>
+                        <Badge tone={roleTone(member.role)}>{roleLabel(member.role, t)}</Badge>
                       </div>
                       <div className="flex items-center justify-between gap-3 text-xs text-[var(--qf-text-soft)] lg:block">
-                        <span className="font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">Assigned</span>
+                        <span className="font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] lg:hidden">{t("admin.team.assigned")}</span>
                         <span className="text-right lg:text-left">
-                          <span>{member.assignments?.assignedCustomers ?? 0} customers</span>
-                          <span className="ml-2 lg:ml-0 lg:mt-1 lg:block">{member.assignments?.assignedQuotes ?? 0} quotes</span>
+                          <span>{t("admin.team.assignedCustomers", { count: member.assignments?.assignedCustomers ?? 0 })}</span>
+                          <span className="ml-2 lg:ml-0 lg:mt-1 lg:block">{t("admin.team.assignedQuotes", { count: member.assignments?.assignedQuotes ?? 0 })}</span>
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)] lg:block">
-                        <span className="font-semibold uppercase tracking-wide lg:hidden">Joined</span>
-                        <span>{dateText(member.createdAt)}</span>
+                        <span className="font-semibold uppercase tracking-wide lg:hidden">{t("admin.team.joined")}</span>
+                        <span>{dateText(member.createdAt, locale, t)}</span>
                       </div>
                       <div className="grid gap-2 border-t border-[var(--qf-border)] pt-3 sm:grid-cols-[1fr_auto] lg:grid-cols-[1fr] lg:border-0 lg:pt-0">
                         {ownerView ? (
                       <Select
-                        aria-label={`Role for ${member.user.fullName}`}
+                        aria-label={t("admin.team.roleFor", { name: member.user.fullName })}
                         value={member.role}
                         disabled={!ownerView || saving}
                         onChange={(event) => void updateMemberRole(member.id, event.target.value as OrgUserRole)}
-                        options={ROLE_OPTIONS}
-                        className="min-h-[36px]"
+                        options={roleOptions}
+                        className="min-h-11"
                       />
                         ) : null}
                       <Button
@@ -1032,7 +1055,7 @@ export function AdminPage({ session }: AdminPageProps) {
                         disabled={!ownerView || member.role === "owner" || saving}
                         size="sm"
                       >
-                        Remove
+                        {t("admin.team.remove")}
                       </Button>
                     </div>
                   </div>
@@ -1041,7 +1064,7 @@ export function AdminPage({ session }: AdminPageProps) {
               </>
             ) : (
               <Card variant="default" padding="md" className="bg-slate-50/80 text-sm text-slate-500">
-                No organization users found.
+                {t("admin.team.none")}
               </Card>
             )}
           </div>
@@ -1051,7 +1074,7 @@ export function AdminPage({ session }: AdminPageProps) {
               offset={(memberPage - 1) * memberPageSize}
               total={memberTotal}
               loading={loading}
-              itemLabel="team members"
+              itemLabel={t("admin.team.pagination")}
               onLimitChange={(nextLimit) => {
                 setMemberPageSize(nextLimit);
                 setMemberPage(1);
@@ -1070,13 +1093,13 @@ export function AdminPage({ session }: AdminPageProps) {
         open={pendingRemovalMember !== null}
         onClose={() => setPendingRemovalMember(null)}
         onConfirm={() => void removeMember()}
-        title="Remove team member"
+        title={t("admin.team.removeTitle")}
         description={
           pendingRemovalMember
-            ? `Remove ${pendingRemovalMember.user.fullName} from this workspace? They will lose access immediately.`
-            : "Remove this member from the workspace?"
+            ? t("admin.team.removeDescription", { name: pendingRemovalMember.user.fullName })
+            : t("admin.team.removeFallback")
         }
-        confirmLabel="Remove member"
+        confirmLabel={t("admin.team.removeConfirm")}
         loading={saving}
       />
     </div>
@@ -1084,9 +1107,27 @@ export function AdminPage({ session }: AdminPageProps) {
 }
 
 function RoleGuideCards({ className = "" }: { className?: string }) {
+  const { t } = useTranslation();
+  const guides = [
+    {
+      role: t("domain.role.owner"),
+      tone: "border-violet-200 bg-violet-50",
+      text: t("admin.team.guides.owner"),
+    },
+    {
+      role: t("domain.role.admin"),
+      tone: "border-sky-200 bg-sky-50",
+      text: t("admin.team.guides.admin"),
+    },
+    {
+      role: t("domain.role.member"),
+      tone: "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]",
+      text: t("admin.team.guides.member"),
+    },
+  ];
   return (
     <div className={`grid gap-3 ${className}`}>
-      {ROLE_GUIDES.map((guide) => (
+      {guides.map((guide) => (
         <div key={guide.role} className={`rounded-2xl border p-4 ${guide.tone}`}>
           <p className="text-sm font-bold text-[var(--qf-text)]">{guide.role}</p>
           <p className="mt-2 text-xs leading-5 text-[var(--qf-text-soft)]">{guide.text}</p>

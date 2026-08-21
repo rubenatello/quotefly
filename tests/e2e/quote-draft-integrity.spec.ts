@@ -76,9 +76,9 @@ test("individual save and line insertion preserve other drafts through Save Quot
   await expect(page.getByLabel("Quote status")).toHaveValue("READY_FOR_REVIEW");
   await expect(page.getByLabel("Tax")).toHaveValue("245");
 
-  const presetDialog = page.getByRole("dialog", { name: "Save work name for future jobs" });
-  await presetDialog.getByRole("button", { name: "No, do not save" }).click();
-  await page.getByRole("button", { name: "Save Quote Sheet", exact: true }).click();
+  const presetDialog = page.getByRole("dialog", { name: "Save line as reusable work" });
+  await presetDialog.getByRole("button", { name: "Not now", exact: true }).click();
+  await page.getByRole("button", { name: "Save quote sheet", exact: true }).click();
 
   await expect
     .poll(async () => {
@@ -196,7 +196,7 @@ test("failed line creation keeps every new-line field and does not offer to save
     unitCost: 42.5,
     unitPrice: 79.25,
   });
-  await expect(page.getByText("The line could not be added right now. Your draft is still here.")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("QuoteFly could not complete this action right now. Try again in a moment.");
   await expect(newRow.getByLabel("New line title")).toHaveValue("Alternate premium material");
   await expect(newRow.getByLabel("New line description")).toHaveValue("Premium color and extended material warranty");
   await expect(newRow.getByLabel("New line quantity")).toHaveValue("7");
@@ -204,7 +204,7 @@ test("failed line creation keeps every new-line field and does not offer to save
   await expect(newRow.getByLabel("New line price")).toHaveValue("79.25");
   await expect(newRow.getByLabel("Line type")).toHaveValue("ALTERNATE");
   await expect(newRow.getByLabel("Option label")).toHaveValue("Premium option");
-  await expect(page.getByRole("dialog", { name: "Save work name for future jobs" })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Save line as reusable work" })).toHaveCount(0);
 });
 
 test("failed atomic quote-sheet save retains metadata and line drafts", async ({
@@ -243,10 +243,10 @@ test("failed atomic quote-sheet save retains metadata and line drafts", async ({
   await newRow.getByLabel("New line title").fill("Unsubmitted new-line draft");
   await newRow.getByLabel("New line description").fill("Keep this new-line text too");
 
-  await page.getByRole("button", { name: "Save Quote Sheet", exact: true }).click();
+  await page.getByRole("button", { name: "Save quote sheet", exact: true }).click();
 
   await expect.poll(() => quoteSheetRequests).toBe(1);
-  await expect(page.getByText("Quote changes were not saved. Your draft is ready to retry.")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("QuoteFly could not complete this action right now. Try again in a moment.");
   await expect(page.getByText("Quote updated.")).toHaveCount(0);
   await expect(page.getByLabel("Quote title")).toHaveValue("Metadata failure draft title");
   await expect(page.getByLabel("Quote overview")).toHaveValue("Metadata failure draft overview");

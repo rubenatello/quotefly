@@ -11,6 +11,10 @@ async function readSessionPayload(page: Page, cookieHeader: string) {
 }
 
 test.describe("session recovery", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  });
+
   for (const publicRoute of [
     { path: "/" as const, heading: PUBLIC_ROUTE_SEO["/"].heading },
     { path: "/pricing" as const, heading: PUBLIC_ROUTE_SEO["/pricing"].heading },
@@ -73,9 +77,9 @@ test.describe("session recovery", () => {
     await expect(page).toHaveURL(/\/app\/customers\?resume=retry$/);
 
     await context.setOffline(true);
-    await expect(recoveryStatus).toContainText("You're offline");
+    await expect(recoveryStatus).toContainText(/You(?:'|’)re offline/);
     await context.setOffline(false);
-    await expect(recoveryStatus).toContainText("You're online");
+    await expect(recoveryStatus).toContainText(/You(?:'|’)re online/);
 
     const retry = page.getByRole("button", { name: "Retry" });
     await expect(retry).toBeVisible();
@@ -135,7 +139,7 @@ test.describe("session recovery", () => {
     await expect(signInDialog).toBeVisible();
     await signInDialog.getByLabel("Email Address").fill(account.email);
     await signInDialog.getByLabel("Password").fill(account.password);
-    await signInDialog.getByRole("button", { name: "Sign In", exact: true }).click();
+    await signInDialog.getByRole("button", { name: /^Sign in$/i }).click();
 
     await expect(page.getByRole("status")).toContainText("Your workspace is still here");
     await expect(page.getByRole("status")).not.toContainText("internal provider response");

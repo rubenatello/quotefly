@@ -1,15 +1,9 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { PackageSearch, Search } from "lucide-react";
 import { money } from "../dashboard/DashboardContext";
 import { Badge, Button, Input, Modal, ModalBody, ModalFooter, ModalHeader } from "../ui";
 import type { WorkPreset } from "../../lib/api";
-
-function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
-  if (unitType === "SQ_FT") return "SQ FT";
-  if (unitType === "HOUR") return "Hours";
-  if (unitType === "EACH") return "Units";
-  return "Qty";
-}
 
 export function WorkPresetPickerModal({
   open,
@@ -40,6 +34,10 @@ export function WorkPresetPickerModal({
   onManageProducts?: () => void;
   canViewInternalCosts?: boolean;
 }) {
+  const { t, i18n } = useTranslation();
+  const formatMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
+  const formatPresetUnitLabel = (unitType: WorkPreset["unitType"]) =>
+    t(`quoteComponents.units.${unitType}`);
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ALL" | "STANDARD" | "CUSTOM">("ALL");
 
@@ -62,27 +60,27 @@ export function WorkPresetPickerModal({
   }
 
   return (
-    <Modal open={open} onClose={closePicker} size="lg" ariaLabel="Products and services">
+    <Modal open={open} onClose={closePicker} size="lg" ariaLabel={t("quoteComponents.presetPicker.ariaLabel")}>
       <ModalHeader
-        title="Products & services"
-        description="Choose a standard or custom catalog item, set quantity, then add it to the quote."
+        title={t("quoteComponents.presetPicker.title")}
+        description={t("quoteComponents.presetPicker.description")}
         onClose={closePicker}
       />
       <ModalBody className="space-y-4 bg-[var(--qf-panel-muted)]">
         <Input
-          label="Search products"
+          label={t("quoteComponents.presetPicker.searchLabel")}
           icon={<Search size={14} />}
-          placeholder="Search products and descriptions"
+          placeholder={t("quoteComponents.presetPicker.searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1" aria-label="Product source filter">
+          <div className="inline-flex rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1" aria-label={t("quoteComponents.presetPicker.filterLabel")}>
             {([
-              { value: "ALL", label: "All" },
-              { value: "STANDARD", label: "Standard" },
-              { value: "CUSTOM", label: "Custom" },
+              { value: "ALL", label: t("quoteComponents.presetPicker.all") },
+              { value: "STANDARD", label: t("quoteComponents.presetPicker.standard") },
+              { value: "CUSTOM", label: t("quoteComponents.presetPicker.custom") },
             ] as const).map((option) => (
               <button
                 key={option.value}
@@ -101,7 +99,7 @@ export function WorkPresetPickerModal({
           </div>
           {onManageProducts ? (
             <Button variant="ghost" size="sm" icon={<PackageSearch size={14} />} onClick={onManageProducts}>
-              Manage catalog
+              {t("quoteComponents.presetPicker.manage")}
             </Button>
           ) : null}
         </div>
@@ -130,18 +128,18 @@ export function WorkPresetPickerModal({
                         <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--qf-text-muted)]">{preset.description}</p>
                       ) : null}
                     </div>
-                    {preset.catalogKey ? <Badge tone="blue">Standard</Badge> : <Badge tone="slate">Saved</Badge>}
+                    {preset.catalogKey ? <Badge tone="blue">{t("quoteComponents.presetPicker.standard")}</Badge> : <Badge tone="slate">{t("quoteComponents.presetPicker.saved")}</Badge>}
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3 text-xs text-[var(--qf-text-muted)]">
-                    <span>{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</span>
-                    {canViewInternalCosts ? <span>Cost {money(preset.unitCost ?? 0)}</span> : null}
+                    <span>{formatMoney(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</span>
+                    {canViewInternalCosts ? <span>{t("quoteComponents.presetPicker.cost", { amount: formatMoney(preset.unitCost ?? 0) })}</span> : null}
                   </div>
                 </button>
               );
             })
           ) : (
             <div className="rounded-2xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-4 py-6 text-sm text-[var(--qf-text-muted)] sm:col-span-2">
-              No products match this search and filter.
+              {t("quoteComponents.presetPicker.empty")}
             </div>
           )}
         </div>
@@ -150,7 +148,7 @@ export function WorkPresetPickerModal({
           <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Selected product</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteComponents.presetPicker.selected")}</p>
                 <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">{selectedPreset.name}</p>
               </div>
               <div className="w-24">
@@ -169,7 +167,7 @@ export function WorkPresetPickerModal({
       </ModalBody>
       <ModalFooter>
         <Button variant="outline" onClick={closePicker}>
-          Close
+          {t("common.close")}
         </Button>
         {secondaryActionLabel && onSecondaryAction ? (
           <Button variant="outline" onClick={onSecondaryAction} disabled={!selectedPreset}>

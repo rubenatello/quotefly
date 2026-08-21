@@ -1,8 +1,8 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Planned foundation; UI terminology and mobile Activity queue refinement implemented locally
+Status: Phase 1 implemented, database-backed, and independently approved; pending BCP and deployment authorization
 
-Last updated: 2026-08-18
+Last updated: 2026-08-20
 
 Owners: Product, Engineering, Security, Operations
 
@@ -22,13 +22,13 @@ The commercial and operational records stay separate:
 
 ## Phase 0 — Workspace UX foundation
 
-Status: Implemented locally; pending database-backed responsive E2E evidence
+Status: Implemented locally; core database-backed responsive E2E evidence complete
 
-- Rename the existing Follow-up workspace surface to Activity while keeping `/app/follow-up` as a compatible route.
-- Put Home and Activity in the mobile bottom navigation.
-- Compact phone-width queue rows and keep call, email, and primary quote actions at least 44px.
-- Use explicit `Due`, `Added`, and `Updated` time labels. Store API timestamps in UTC and render them in workspace local time.
-- Use one prominent Kody action on Home and treat Kody as a modal with focus containment below 1024px.
+- [x] Rename the existing Follow-up workspace surface to Activity while keeping `/app/follow-up` as a compatible route.
+- [x] Put Home and Activity in the mobile bottom navigation.
+- [x] Compact phone-width queue rows and keep call, email, and primary quote actions at least 44px.
+- [x] Use explicit `Due`, `Added`, and `Updated` time labels. Store API timestamps in UTC and render them in workspace local time.
+- [x] Use one prominent Kody action on Home and treat Kody as a modal with focus containment below 1024px.
 
 Exit evidence:
 
@@ -37,7 +37,7 @@ Exit evidence:
 
 ## Phase 1 — Assignable ActivityTask
 
-Status: Planned
+Status: Implemented locally with migrated PostgreSQL, responsive browser evidence, full `verify:ci`, and final security/Opera approval
 
 Add a dedicated `ActivityTask`; do not overload immutable `CustomerActivityEvent` history.
 
@@ -52,6 +52,22 @@ Minimum fields:
 - `dueAtUtc`, `completedAtUtc`, `canceledAtUtc`
 - optional `sourceKey` for automated-task deduplication
 - optimistic `version`, `createdAt`, `updatedAt`, `deletedAtUtc`
+
+Implementation checklist:
+
+- [x] Dedicated `ActivityTask` and immutable `ActivityTaskEvent` models.
+- [x] Composite tenant/customer/quote/membership integrity, including quote-to-customer consistency.
+- [x] Forced RLS and least-privileged runtime grants from the creation migration.
+- [x] Tenant-local overdue/today/upcoming windows with 23/25-hour DST tests.
+- [x] Strict, idempotent, optimistic-concurrency API mutations and content-minimal audit events.
+- [x] Member assignment visibility and reassignment-safe idempotency replay.
+- [x] Member-removal protection for active customer, quote, and task assignments.
+- [x] Data-governance inventory; task title/notes excluded from RAG/vector indexing.
+- [x] My work, Team, and preserved Lead queue UI with 25/50/100 pagination.
+- [x] Mobile create, complete, Undo/reopen, light/dark, overflow, and accessibility evidence.
+- [x] Home `My day` prefers assigned task summary and safely falls back to derived CRM signals.
+- [ ] Read-only Kody task listing and prepare-task confirmation tools.
+- [x] Full exact-candidate `verify:ci`, security re-review, and Opera approval.
 
 Database requirements:
 
@@ -83,6 +99,10 @@ Permissions:
 
 Status: Planned after Phase 1 evidence
 
+- [ ] Centralize quote acceptance in one transactional service.
+- [ ] Add locked tenant job-number sequence and one-job-per-accepted-quote invariant.
+- [ ] Add Job API, permissions, UI, audit events, and migration tests.
+
 Add a separate `Job` with:
 
 - tenant-local `jobNumber` from a locked `TenantSequence`
@@ -98,6 +118,11 @@ Acceptance must call one shared transactional service. The unique `(tenantId, so
 
 Status: Planned after Job state-machine evidence
 
+- [ ] Add job appointments, notes, and immutable events.
+- [ ] Add overlap-safe booking and day/week schedule UI.
+- [ ] Add dispatch/arrival/completion state transitions and assigned-member mobile views.
+- [ ] Add durable notification outbox before enabling optional email/SMS delivery.
+
 Add `JobAppointment`, `JobNote`, and immutable `JobEvent`.
 
 Appointments store:
@@ -108,6 +133,16 @@ Appointments store:
 - bounded instructions, optimistic version, and soft-delete fields
 
 Prevent double booking with a transaction-level advisory lock on tenant + assignee, followed by an overlap query and insert. Email/SMS providers never run inside the booking transaction. Notifications begin in-app; external delivery later uses a durable tenant-scoped outbox with retry and idempotency.
+
+## Phase 4 — Invoicing and payments
+
+Status: Partial accounting export exists; QuoteFly invoice ledger is not implemented
+
+- [x] QuickBooks CSV export and QuickBooks Online connection/sync foundation.
+- [ ] Add a durable PROCESSING claim and uncertain-result reconciliation before exposing concurrent Jobs-to-QuickBooks invoice creation.
+- [ ] Add QuoteFly invoice/payment-status ledger linked to Job and accepted Quote.
+- [ ] Keep provider payment handling in Stripe/Square/QuickBooks; QuoteFly stores only provider-safe identifiers and status.
+- [ ] Add webhook idempotency, refunds/disputes policy, tenant permissions, and reconciliation tests.
 
 ## Kody contract
 

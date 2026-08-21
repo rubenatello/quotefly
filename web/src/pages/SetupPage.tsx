@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Check, ChevronRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
-import { Alert, Badge, Button, Card, CardHeader, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import {
-  ApiError,
   api,
   type ServiceType,
   type WorkPreset,
@@ -12,6 +12,8 @@ import {
   type WorkPresetUnitType,
 } from "../lib/api";
 import { setSEOMetadata } from "../lib/seo";
+import { useLocale } from "../i18n";
+import { localizedApiError } from "../lib/localized-api-error";
 
 interface SetupPageProps {
   session?: {
@@ -23,7 +25,9 @@ interface SetupPageProps {
 
 interface SetupPresetDraft {
   id: string;
+  persisted?: boolean;
   catalogKey?: string | null;
+  catalogCustomizedAtUtc?: string | null;
   name: string;
   description: string;
   category: WorkPresetCategory;
@@ -34,35 +38,9 @@ interface SetupPresetDraft {
   isDefault: boolean;
 }
 
-const TRADE_LABELS: Record<ServiceType, string> = {
-  HVAC: "HVAC",
-  PLUMBING: "Plumbing",
-  FLOORING: "Flooring",
-  ROOFING: "Roofing",
-  GARDENING: "Gardening",
-  CONSTRUCTION: "Construction",
-};
-
-const PRESET_CATEGORY_OPTIONS: Array<{ value: WorkPresetCategory; label: string }> = [
-  { value: "SERVICE", label: "Service" },
-  { value: "LABOR", label: "Labor" },
-  { value: "MATERIAL", label: "Material" },
-  { value: "FEE", label: "Fee" },
-];
-
-const PRESET_UNIT_OPTIONS: Array<{ value: WorkPresetUnitType; label: string }> = [
-  { value: "FLAT", label: "Flat" },
-  { value: "SQ_FT", label: "SQ FT" },
-  { value: "HOUR", label: "Hour" },
-  { value: "EACH", label: "Each" },
-];
-
-function formatUnitType(value: WorkPreset["unitType"]): string {
-  if (value === "SQ_FT") return "SQ FT";
-  if (value === "HOUR") return "Hour";
-  if (value === "EACH") return "Each";
-  return "Flat";
-}
+const TRADE_VALUES: ServiceType[] = ["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"];
+const CATEGORY_VALUES: WorkPresetCategory[] = ["SERVICE", "LABOR", "MATERIAL", "FEE"];
+const UNIT_VALUES: WorkPresetUnitType[] = ["FLAT", "SQ_FT", "HOUR", "EACH"];
 
 function normalizePresetName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -78,7 +56,9 @@ function toPresetDraft(
 ): SetupPresetDraft {
   return {
     id: preset.id,
+    persisted: preset.tenantId !== "recommended",
     catalogKey: preset.catalogKey ?? recommendedCatalogMap.get(normalizePresetName(preset.name)) ?? null,
+    catalogCustomizedAtUtc: preset.catalogCustomizedAtUtc ?? null,
     name: preset.name,
     description: preset.description ?? "",
     category: preset.category,
@@ -93,6 +73,7 @@ function toPresetDraft(
 function createEmptyPresetDraft(trade: ServiceType, index: number): SetupPresetDraft {
   return {
     id: `custom-${trade}-${Date.now()}-${index}`,
+    persisted: false,
     name: "",
     description: "",
     category: "SERVICE",
@@ -118,6 +99,8 @@ function SetupRailStat({ label, value }: { label: string; value: string }) {
 }
 
 export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
+  const { t } = useTranslation();
+  const { locale } = useLocale();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -131,13 +114,14 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   const [chargeBySquareFoot, setChargeBySquareFoot] = useState(false);
   const [sqFtUnitCost, setSqFtUnitCost] = useState("");
   const [sqFtUnitPrice, setSqFtUnitPrice] = useState("");
+  const [restoreStarterValuesOpen, setRestoreStarterValuesOpen] = useState(false);
 
   useEffect(() => {
     setSEOMetadata({
-      title: "Workspace Setup",
-      description: "Configure trade defaults, baseline pricing, and recommended presets for your QuoteFly workspace.",
+      title: t("setup.title"),
+      description: t("setup.subtitle"),
     });
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let mounted = true;
@@ -161,7 +145,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
         setSqFtUnitPrice(sqFtPreset ? String(Number(sqFtPreset.unitPrice)) : "");
       } catch (err) {
         if (!mounted) return;
-        setError(err instanceof ApiError ? err.message : "Failed loading setup.");
+        setError(localizedApiError(err, t, { fallbackKey: "setup.loadError" }));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -171,7 +155,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     return () => {
       mounted = false;
     };
-  }, [session?.primaryTrade]);
+  }, [session?.primaryTrade, t]);
 
   useEffect(() => {
     let mounted = true;
@@ -207,9 +191,12 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     };
   }, [trade]);
 
-  const completionText = session?.onboardingCompletedAtUtc ? "Setup active" : "Finish setup";
-  const tradeOptions = supportedTrades.length > 0 ? supportedTrades : (Object.keys(TRADE_LABELS) as ServiceType[]);
-  const tradeSelectOptions = tradeOptions.map((option) => ({ value: option, label: TRADE_LABELS[option] }));
+  const completionText = session?.onboardingCompletedAtUtc ? t("setup.active") : t("setup.finish");
+  const tradeOptions = supportedTrades.length > 0 ? supportedTrades : TRADE_VALUES;
+  const tradeSelectOptions = tradeOptions.map((option) => ({ value: option, label: t(`domain.trade.${option}`) }));
+  const categoryOptions = CATEGORY_VALUES.map((value) => ({ value, label: t(`domain.category.${value}`) }));
+  const unitOptions = UNIT_VALUES.map((value) => ({ value, label: t(`domain.unit.${value}`) }));
+  const formatMoney = (value: number | string) => new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(Number(value) || 0);
 
   const currentPresetSummary = useMemo(() => {
     const tradePresets = existingPresets.filter((preset) => preset.serviceType === trade);
@@ -246,18 +233,18 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
     presetDrafts.every((preset) => preset.name.trim().length >= 2 && Number(preset.defaultQuantity) > 0);
   const pricingConfigured = !chargeBySquareFoot || (sqFtUnitCost.trim().length > 0 && sqFtUnitPrice.trim().length > 0);
   const setupChecklist = [
-    { label: "Trade selected", complete: Boolean(trade) },
-    { label: "Pricing model configured", complete: pricingConfigured },
-    { label: "Starter jobs ready", complete: canSaveSetup },
-    { label: "Workspace saved", complete: Boolean(session?.onboardingCompletedAtUtc) },
+    { label: t("setup.tradeSelected"), complete: Boolean(trade) },
+    { label: t("setup.pricingConfigured"), complete: pricingConfigured },
+    { label: t("setup.jobsReady"), complete: canSaveSetup },
+    { label: t("setup.workspaceSaved"), complete: Boolean(session?.onboardingCompletedAtUtc) },
   ];
   const completedStepCount = setupChecklist.filter((step) => step.complete).length;
   const setupProgressPercent = Math.round((completedStepCount / setupChecklist.length) * 100);
   const setupLinks = [
-    { id: "setup-overview", label: "Overview", hint: "Progress + snapshot" },
-    { id: "setup-defaults", label: "Defaults", hint: "Trade + pricing" },
-    { id: "setup-presets", label: "Presets", hint: "Starter jobs" },
-    { id: "setup-next", label: "Next Steps", hint: "Branding + first quote" },
+    { id: "setup-overview", label: t("setup.overview"), hint: t("setup.progressSnapshot") },
+    { id: "setup-defaults", label: t("setup.defaults"), hint: t("setup.tradePricing") },
+    { id: "setup-presets", label: t("setup.presetNav"), hint: t("setup.starterJobsHint") },
+    { id: "setup-next", label: t("setup.nextSteps"), hint: t("setup.brandingQuote") },
   ];
 
   function resetPresetDraftsToDefaults() {
@@ -282,7 +269,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   function addPresetDraft() {
     setPresetDrafts((current) => {
       if (current.length >= 50) {
-        setError("Preset setup is limited to 50 items.");
+        setError(t("setup.presetLimit"));
         return current;
       }
       return [...current, createEmptyPresetDraft(trade, current.length)];
@@ -325,10 +312,10 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
       const refreshedSetup = await api.onboarding.getSetup();
       await onSetupSaved?.();
       setExistingPresets(refreshedSetup.presets);
-      setNotice(`Setup saved for ${TRADE_LABELS[trade]}. Pricing defaults and presets are ready.`);
+      setNotice(t("setup.savedForTrade", { trade: t(`domain.trade.${trade}`) }));
       if (nextPath) navigate(nextPath);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed saving setup.");
+      setError(localizedApiError(err, t, { fallbackKey: "setup.saveError" }));
     } finally {
       setSaving(false);
     }
@@ -337,16 +324,16 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={session?.onboardingCompletedAtUtc ? "Workspace setup" : "Get ready to quote"}
+        title={session?.onboardingCompletedAtUtc ? t("setup.title") : t("setup.getReady")}
         subtitle={
           session?.onboardingCompletedAtUtc
-            ? "Update the trade, pricing model, and reusable jobs your crew uses for quotes."
-            : "Use QuoteFly's recommended jobs now, then adjust pricing whenever you are ready."
+            ? t("setup.activeSubtitle")
+            : t("setup.firstSubtitle")
         }
         actions={
           session?.onboardingCompletedAtUtc ? (
             <Button variant="outline" onClick={() => navigate("/app/branding")}>
-              Branding
+              {t("setup.branding")}
             </Button>
           ) : null
         }
@@ -359,13 +346,13 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
         <Card variant="blue" padding="lg" className="overflow-hidden">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-quotefly-blue">Fast setup</p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Start with proven defaults</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-quotefly-blue">{t("setup.fast")}</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{t("setup.provenDefaults")}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                We prepared {recommendedPresets.length || "your"} starter jobs for {TRADE_LABELS[trade]}. Use them now to reach your workspace home, or customize the details below first.
+                {t("setup.prepared", { count: recommendedPresets.length, trade: t(`domain.trade.${trade}`) })}
               </p>
               {!canSaveSetup && !loading ? (
-                <p className="mt-2 text-xs font-medium text-amber-700">Preparing your starter jobs…</p>
+                <p className="mt-2 text-xs font-medium text-amber-700">{t("setup.preparing")}</p>
               ) : null}
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[360px]">
@@ -375,14 +362,14 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 disabled={loading || !canSaveSetup}
                 onClick={() => void saveSetup("/app")}
               >
-                Use defaults &amp; continue
+                {t("setup.useDefaults")}
               </Button>
               <Button
                 size="lg"
                 variant="outline"
                 onClick={() => document.getElementById("setup-defaults")?.scrollIntoView({ behavior: "smooth" })}
               >
-                Customize first
+                {t("setup.customizeFirst")}
               </Button>
             </div>
           </div>
@@ -392,37 +379,37 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
           <WorkspaceRailCard
-            eyebrow="Setup"
-            title="First-run baseline"
-            description="Keep trade defaults, starter jobs, and next steps obvious so a new tenant can finish setup quickly."
+            eyebrow={t("pages.setup.label")}
+            title={t("setup.railTitle")}
+            description={t("setup.railDescription")}
           >
             <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <SetupRailStat label="Trade" value={TRADE_LABELS[trade]} />
-              <SetupRailStat label="Starter jobs" value={String(presetDrafts.length)} />
-              <SetupRailStat label="Area pricing" value={chargeBySquareFoot ? "Enabled" : "Optional"} />
+              <SetupRailStat label={t("setup.tradeLabel")} value={t(`domain.trade.${trade}`)} />
+              <SetupRailStat label={t("setup.starterJobs")} value={String(presetDrafts.length)} />
+              <SetupRailStat label={t("setup.areaPricing")} value={chargeBySquareFoot ? t("setup.enabled") : t("setup.optional")} />
             </div>
             <WorkspaceJumpBar links={setupLinks} className="mt-4" />
           </WorkspaceRailCard>
 
           <WorkspaceRailCard
-            eyebrow="Current state"
-            title={`${setupProgressPercent}% ready`}
-            description={`${completedStepCount}/${setupChecklist.length} setup items complete`}
+            eyebrow={t("setup.currentState")}
+            title={t("setup.percentReady", { percent: setupProgressPercent })}
+            description={t("setup.itemsComplete", { complete: completedStepCount, total: setupChecklist.length })}
           >
             <ProgressBar
               value={setupProgressPercent}
-              label="Workspace completion"
-              hint={`${completedStepCount}/${setupChecklist.length} complete`}
+              label={t("setup.completion")}
+              hint={t("setup.completeHint", { complete: completedStepCount, total: setupChecklist.length })}
             />
             <div className="mt-4 grid gap-2">
               <Button onClick={() => void saveSetup()} loading={saving} disabled={!canSaveSetup} fullWidth>
-                Save Setup
+                {t("setup.save")}
               </Button>
               <Button variant="outline" onClick={() => navigate("/app/branding")} fullWidth>
-                Next: Branding
+                {t("setup.nextBranding")}
               </Button>
               <Button variant="ghost" onClick={() => navigate("/app/build")} fullWidth>
-                Quote Builder
+                {t("setup.quoteBuilder")}
               </Button>
             </div>
           </WorkspaceRailCard>
@@ -431,25 +418,25 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
         <div className="space-y-6">
           <WorkspaceSection
             id="setup-overview"
-            step="Step 1"
-            title="Overview"
-            description="Build the quoting baseline once, then move fast."
+            step="1"
+            title={t("setup.overview")}
+            description={t("setup.overviewDescription")}
           >
             <Card variant="blue" padding="lg" className="overflow-hidden">
               <div className="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)] lg:items-center">
                 <div className="space-y-4">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-quotefly-blue">Setup Progress</p>
-                    <h2 className="mt-2 text-2xl font-semibold text-slate-900 sm:text-3xl">Build the quoting baseline once, then move fast.</h2>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-quotefly-blue">{t("setup.progress")}</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-900 sm:text-3xl">{t("setup.overviewTitle")}</h2>
                     <p className="mt-2 max-w-2xl text-sm text-slate-600 sm:text-base">
-                      These are starting defaults, not market truth. Lock in your trade, adjust pricing, and save a clean starter pack your team can reuse.
+                      {t("setup.overviewHelp")}
                     </p>
                   </div>
 
                   <ProgressBar
                     value={setupProgressPercent}
-                    label="Workspace completion"
-                    hint={`${completedStepCount}/${setupChecklist.length} complete`}
+                    label={t("setup.completion")}
+                    hint={t("setup.completeHint", { complete: completedStepCount, total: setupChecklist.length })}
                   />
 
                   <div className="flex flex-wrap gap-2">
@@ -472,19 +459,19 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 </div>
 
                 <div className="rounded-[26px] border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Snapshot</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("setup.snapshot")}</p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
                     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Primary Trade</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("setup.primaryTrade")}</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">{t(`domain.trade.${trade}`)}</p>
                     </div>
                     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Starter Jobs</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("setup.starterJobs")}</p>
                       <p className="mt-1 text-lg font-semibold text-slate-900">{presetDrafts.length}</p>
                     </div>
                     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Area Pricing</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-900">{chargeBySquareFoot ? "Enabled" : "Optional"}</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("setup.areaPricing")}</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">{chargeBySquareFoot ? t("setup.enabled") : t("setup.optional")}</p>
                     </div>
                   </div>
                 </div>
@@ -493,20 +480,20 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
             <div className="grid gap-4 lg:grid-cols-3">
               <Card variant="blue">
-                <CardHeader title="Trade Focus" subtitle="Primary service type used for defaults" />
-                <p className="text-2xl font-semibold text-slate-900">{TRADE_LABELS[trade]}</p>
-                <p className="mt-1 text-sm text-slate-600">This drives pricing defaults, presets, and faster quote creation.</p>
+                <CardHeader title={t("setup.tradeFocus")} subtitle={t("setup.tradeFocusSubtitle")} />
+                <p className="text-2xl font-semibold text-slate-900">{t(`domain.trade.${trade}`)}</p>
+                <p className="mt-1 text-sm text-slate-600">{t("setup.tradeFocusHelp")}</p>
               </Card>
               <Card>
-                <CardHeader title="Preset Pack" subtitle="Jobs and line items ready to start from" />
+                <CardHeader title={t("setup.presetPack")} subtitle={t("setup.presetPackSubtitle")} />
                 <p className="text-2xl font-semibold text-slate-900">{recommendedPresets.length}</p>
-                <p className="mt-1 text-sm text-slate-600">Recommended presets will be saved or refreshed for the selected trade.</p>
+                <p className="mt-1 text-sm text-slate-600">{t("setup.presetPackHelp")}</p>
               </Card>
               <Card>
-                <CardHeader title="Status" subtitle="Workspace readiness" />
+                <CardHeader title={t("setup.status")} subtitle={t("setup.workspaceReadiness")} />
                 <Badge tone={session?.onboardingCompletedAtUtc ? "emerald" : "amber"}>{completionText}</Badge>
                 <p className="mt-3 text-sm text-slate-600">
-                  Finish setup here, then move to branding and quote creation.
+                  {t("setup.finishHelp")}
                 </p>
               </Card>
             </div>
@@ -514,14 +501,14 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
           <WorkspaceSection
             id="setup-defaults"
-            step="Step 2"
-            title="Trade Defaults"
-            description="Choose your core trade and optionally set a square-foot baseline."
+            step="2"
+            title={t("setup.tradeDefaults")}
+            description={t("setup.tradeDefaultsDescription")}
           >
             <Card variant="elevated">
           <CardHeader
-            title="Trade Defaults"
-            subtitle="Choose your core trade and optionally set a square-foot baseline."
+            title={t("setup.tradeDefaults")}
+            subtitle={t("setup.tradeDefaultsDescription")}
           />
           {loading ? (
             <div className="space-y-3">
@@ -533,11 +520,11 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
             <div className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Primary Trade</label>
+                  <label className="mb-1 block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">{t("setup.primaryTrade")}</label>
                   <Select value={trade} onChange={(event) => setTrade(event.target.value as ServiceType)} options={tradeSelectOptions} />
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Recommended Presets</p>
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">{t("setup.recommendedPresets")}</p>
                   <p className="mt-1 text-2xl font-semibold text-slate-900">{recommendedPresets.length}</p>
                 </div>
               </div>
@@ -548,17 +535,18 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                     <Ruler size={18} />
                   </div>
                   <div className="min-w-0">
-                    <p className="font-semibold text-slate-900">Square-Foot Pricing</p>
+                    <p className="font-semibold text-slate-900">{t("setup.squareFootTitle")}</p>
                     <p className="mt-1 text-sm text-slate-600">
-                      Use this when jobs are commonly estimated by area, like roofing or flooring.
+                      {t("setup.squareFootHelp")}
                     </p>
-                    <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                    <label className="mt-3 flex min-h-11 items-center gap-3 rounded-xl px-2 text-sm text-slate-700 outline-none transition focus-within:bg-white focus-within:ring-2 focus-within:ring-quotefly-blue/40">
                       <input
                         type="checkbox"
+                        className="h-5 w-5 shrink-0 rounded border-slate-300 text-quotefly-blue focus-visible:outline-none"
                         checked={chargeBySquareFoot}
                         onChange={(event) => setChargeBySquareFoot(event.target.checked)}
                       />
-                      Enable square-foot baseline pricing
+                      {t("setup.enableSquareFoot")}
                     </label>
                   </div>
                 </div>
@@ -566,18 +554,20 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                 {chargeBySquareFoot ? (
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <Input
+                      label={t("setup.costPrivacy")}
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="SQ FT internal cost"
+                      placeholder="0.00"
                       value={sqFtUnitCost}
                       onChange={(event) => setSqFtUnitCost(event.target.value)}
                     />
                     <Input
+                      label={t("setup.unitPrice")}
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="SQ FT customer price"
+                      placeholder="0.00"
                       value={sqFtUnitPrice}
                       onChange={(event) => setSqFtUnitPrice(event.target.value)}
                     />
@@ -587,13 +577,13 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
               <div className="flex flex-wrap gap-3">
                 <Button onClick={() => void saveSetup()} loading={saving} disabled={!canSaveSetup}>
-                  Save Setup
+                  {t("setup.save")}
                 </Button>
                 <Button variant="outline" onClick={() => navigate("/app/branding")}>
-                  Next: Branding
+                  {t("setup.nextBranding")}
                 </Button>
                 <Button variant="ghost" onClick={() => navigate("/app/build")}>
-                  Go to Quote Builder
+                  {t("setup.goBuilder")}
                 </Button>
               </div>
             </div>
@@ -604,23 +594,23 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
             <WorkspaceSection
               id="setup-presets"
-              step="Step 3"
-              title="Preset Builder"
-              description={`Edit the starter pricing pack for ${TRADE_LABELS[trade]} before your crew starts quoting.`}
+              step="3"
+              title={t("setup.presetBuilder")}
+              description={t("setup.presetBuilderDescription", { trade: t(`domain.trade.${trade}`) })}
             >
               <Card>
             <CardHeader
-              title="Preset Builder"
-              subtitle={`Edit the starter pricing pack for ${TRADE_LABELS[trade]} before your crew starts quoting.`}
+              title={t("setup.presetBuilder")}
+              subtitle={t("setup.presetBuilderDescription", { trade: t(`domain.trade.${trade}`) })}
               actions={
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={resetPresetDraftsToDefaults}>
+                  <Button size="sm" variant="outline" onClick={() => setRestoreStarterValuesOpen(true)}>
                     <RotateCcw size={14} />
-                    Reset
+                    {t("setup.restore")}
                   </Button>
                   <Button size="sm" variant="outline" onClick={addPresetDraft}>
                     <Plus size={14} />
-                    Add
+                    {t("setup.addPreset")}
                   </Button>
                 </div>
               }
@@ -628,40 +618,49 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
             <div className="space-y-3">
               {chargeBySquareFoot ? (
                 <Alert tone="info">
-                  Square-foot baseline pricing is managed above. Custom SQ FT presets created by setup are hidden here to avoid duplicate edits.
+                  {t("setup.squareFootManaged")}
                 </Alert>
               ) : null}
 
               {visiblePresetDrafts.length === 0 ? (
-                <Alert tone="warning">Add at least one preset before saving setup.</Alert>
+                <Alert tone="warning">{t("setup.addAtLeastOne")}</Alert>
               ) : null}
 
               {visiblePresetDrafts.map((preset, index) => (
                 <div key={preset.id} className="rounded-xl border border-slate-200 p-3">
                   {isStandardPresetDraft(preset) ? (
                     <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <Badge tone="blue">Standard Catalog</Badge>
-                      <span>Standard line title stays locked. Description and pricing can be tailored for this tenant.</span>
+                      <Badge tone={preset.catalogCustomizedAtUtc ? "amber" : "blue"}>{preset.catalogCustomizedAtUtc ? t("setup.starterCustomized") : t("setup.standard")}</Badge>
+                      <span>{t("setup.starterSavedHelp")}</span>
                     </div>
                   ) : (
                     <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <Badge tone="slate">Custom</Badge>
-                      <span>Custom items stay private to this tenant and can be renamed or removed.</span>
+                      <Badge tone="slate">{t("setup.yourItem")}</Badge>
+                      <span>{preset.persisted ? t("setup.tenantSavedHelp") : t("setup.draftHelp")}</span>
                     </div>
                   )}
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-medium text-slate-900">Preset {index + 1}</p>
+                      <p className="font-medium text-slate-900">{t("setup.presetNumber", { number: index + 1 })}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        This becomes a reusable starting line in quote creation.
+                        {t("setup.presetHelp")}
                       </p>
                     </div>
-                    {isStandardPresetDraft(preset) ? null : (
+                    {isStandardPresetDraft(preset) ? null : preset.persisted ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigate("/app/products")}
+                      >
+                        {t("setup.manageProducts")}
+                      </Button>
+                    ) : (
                       <button
                         type="button"
                         onClick={() => removePresetDraft(preset.id)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                        aria-label={`Remove preset ${index + 1}`}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-500 outline-none transition hover:bg-slate-50 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-quotefly-blue/50 focus-visible:ring-offset-2"
+                        aria-label={t("setup.removePreset", { number: index + 1 })}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -670,72 +669,72 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
                   <div className="mt-3 grid gap-3">
                     <Input
-                      label="Line title"
+                      label={t("setup.lineTitle")}
                       value={preset.name}
                       disabled={isStandardPresetDraft(preset)}
                       onChange={(event) => updatePresetDraft(preset.id, "name", event.target.value)}
-                      placeholder="Line title"
+                      placeholder={t("setup.lineTitle")}
                     />
                     <Textarea
-                      label="Line description"
+                      label={t("setup.lineDescription")}
                       value={preset.description}
                       onChange={(event) => updatePresetDraft(preset.id, "description", event.target.value)}
-                      placeholder="Explain the scope, materials, exclusions, or service details."
+                      placeholder={t("setup.lineDescriptionPlaceholder")}
                       rows={3}
                     />
 
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Select
-                        label="Category"
+                        label={t("setup.category")}
                         value={preset.category}
                         disabled={isStandardPresetDraft(preset)}
                         onChange={(event) => updatePresetDraft(preset.id, "category", event.target.value as WorkPresetCategory)}
-                        options={PRESET_CATEGORY_OPTIONS}
+                        options={categoryOptions}
                       />
                       <Select
-                        label="Unit type"
+                        label={t("setup.unitType")}
                         value={preset.unitType}
                         disabled={isStandardPresetDraft(preset)}
                         onChange={(event) => updatePresetDraft(preset.id, "unitType", event.target.value as WorkPresetUnitType)}
-                        options={PRESET_UNIT_OPTIONS}
+                        options={unitOptions}
                       />
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Input
-                        label="Default qty"
+                        label={t("setup.defaultQty")}
                         type="number"
                         min="0.01"
                         step="0.01"
                         value={preset.defaultQuantity}
                         onChange={(event) => updatePresetDraft(preset.id, "defaultQuantity", event.target.value)}
-                        placeholder="Qty"
+                        placeholder={t("setup.quantity")}
                       />
                       <Input
-                        label="Unit cost"
+                        label={t("products.editor.cost")}
                         type="number"
                         min="0"
                         step="0.01"
                         value={preset.unitCost}
                         onChange={(event) => updatePresetDraft(preset.id, "unitCost", event.target.value)}
-                        placeholder="Unit cost"
+                        placeholder={t("setup.cost")}
                       />
                       <Input
-                        label="Unit price"
+                        label={t("products.editor.price")}
                         type="number"
                         min="0"
                         step="0.01"
                         value={preset.unitPrice}
                         onChange={(event) => updatePresetDraft(preset.id, "unitPrice", event.target.value)}
-                        placeholder="Unit price"
+                        placeholder={t("setup.price")}
                       />
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <Badge tone="slate">{formatUnitType(preset.unitType)}</Badge>
-                      <span className="rounded-full bg-slate-100 px-2 py-1">Qty {preset.defaultQuantity || "0"}</span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1">Cost ${Number(preset.unitCost || 0).toFixed(2)}</span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1">Price ${Number(preset.unitPrice || 0).toFixed(2)}</span>
+                      <Badge tone="slate">{t(`domain.unit.${preset.unitType}`)}</Badge>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">{t("setup.qty", { quantity: preset.defaultQuantity || "0" })}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">{t("setup.costAmount", { amount: formatMoney(preset.unitCost) })}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1">{t("setup.priceAmount", { amount: formatMoney(preset.unitPrice) })}</span>
                     </div>
                   </div>
                 </div>
@@ -746,20 +745,20 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
 
             <WorkspaceSection
               id="setup-next"
-              step="Step 4"
-              title="Next Steps"
-              description="Keep the first-run path short and useful after the baseline is saved."
+              step="4"
+              title={t("setup.nextSteps")}
+              description={t("setup.nextStepsDescription")}
             >
               <Card>
-                <CardHeader title="Recommended Next Steps" subtitle="Keep the first-run flow short and useful." />
+                <CardHeader title={t("setup.recommendedNext")} subtitle={t("setup.recommendedNextSubtitle")} />
                 <div className="space-y-3">
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
                 <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
                   <Palette size={18} />
                 </div>
                 <div>
-                  <p className="font-medium text-slate-900">Finalize branding</p>
-                  <p className="mt-1 text-sm text-slate-600">Upload the logo, confirm business info, and choose the PDF template.</p>
+                  <p className="font-medium text-slate-900">{t("setup.finalizeBranding")}</p>
+                  <p className="mt-1 text-sm text-slate-600">{t("setup.finalizeBrandingHelp")}</p>
                 </div>
               </div>
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
@@ -767,8 +766,8 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                   <Hammer size={18} />
                 </div>
                 <div>
-                  <p className="font-medium text-slate-900">Create the first customer</p>
-                  <p className="mt-1 text-sm text-slate-600">Start with one real lead so the pipeline and quote flow feel concrete.</p>
+                  <p className="font-medium text-slate-900">{t("setup.firstCustomer")}</p>
+                  <p className="mt-1 text-sm text-slate-600">{t("setup.firstCustomerHelp")}</p>
                 </div>
               </div>
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
@@ -776,12 +775,12 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
                   <Sparkles size={18} />
                 </div>
                 <div>
-                  <p className="font-medium text-slate-900">Use Chat to Quote</p>
-                  <p className="mt-1 text-sm text-slate-600">Once trade defaults exist, AI quote suggestions become materially more useful.</p>
+                  <p className="font-medium text-slate-900">{t("setup.chatQuote")}</p>
+                  <p className="mt-1 text-sm text-slate-600">{t("setup.chatQuoteHelp")}</p>
                 </div>
               </div>
               <Button variant="outline" fullWidth onClick={() => navigate("/app/branding")}>
-                Continue to Branding
+                {t("setup.continueBranding")}
                 <ChevronRight size={16} />
               </Button>
                 </div>
@@ -790,6 +789,18 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
           </div>
         </div>
       </div>
+      <ConfirmModal
+        open={restoreStarterValuesOpen}
+        onClose={() => setRestoreStarterValuesOpen(false)}
+        onConfirm={() => {
+          resetPresetDraftsToDefaults();
+          setRestoreStarterValuesOpen(false);
+        }}
+        title={t("setup.restoreDraftTitle")}
+        description={t("setup.restoreDraftDescription")}
+        confirmLabel={t("setup.restoreDraftConfirm")}
+        confirmVariant="warning"
+      />
     </div>
   );
 }

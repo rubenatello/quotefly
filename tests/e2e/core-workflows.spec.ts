@@ -45,24 +45,24 @@ test.describe("controlled beta core workflow", () => {
     await expect(customerRow).toBeVisible();
 
     await customerRow.click();
-    const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer details and activity" });
-    await expect(customerWorkspaceDialog.getByText("Customer details", { exact: true })).toBeVisible();
-    await expect(customerWorkspaceDialog.getByRole("button", { name: "Save details" })).toBeDisabled();
+    const customerWorkspaceDialog = page.getByRole("dialog", { name: "Customer details", exact: true });
+    await expect(customerWorkspaceDialog).toBeVisible();
+    await expect(customerWorkspaceDialog.getByRole("button", { name: "Save customer", exact: true })).toBeDisabled();
 
     await customerWorkspaceDialog.getByLabel("Email").fill("not-an-email");
-    await customerWorkspaceDialog.getByRole("button", { name: "Save details" }).click();
-    await expect(customerWorkspaceDialog.getByRole("alert")).toContainText(/email|invalid/i);
+    await customerWorkspaceDialog.getByRole("button", { name: "Save customer", exact: true }).click();
+    await expect(customerWorkspaceDialog.getByRole("alert")).toContainText("Customer changes could not be saved.");
 
-    await customerWorkspaceDialog.getByLabel("Name").fill(updatedCustomerName);
+    await customerWorkspaceDialog.getByLabel("Full name", { exact: true }).fill(updatedCustomerName);
     await customerWorkspaceDialog.getByLabel("Email").fill(customerEmail);
-    await customerWorkspaceDialog.getByRole("button", { name: "Save details" }).click();
-    await expect(customerWorkspaceDialog.getByText("Customer details saved.", { exact: true })).toBeVisible();
+    await customerWorkspaceDialog.getByRole("button", { name: "Save customer", exact: true }).click();
+    await expect(customerWorkspaceDialog.getByText("Customer saved.", { exact: true })).toBeVisible();
     await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
     const updatedCustomerRow = page.getByRole("button", { name: `Open ${updatedCustomerName} details` });
     await expect(updatedCustomerRow).toBeVisible();
     await updatedCustomerRow.click();
-    await expect(customerWorkspaceDialog.getByLabel("Name")).toHaveValue(updatedCustomerName);
+    await expect(customerWorkspaceDialog.getByLabel("Full name", { exact: true })).toHaveValue(updatedCustomerName);
     await customerWorkspaceDialog.getByRole("button", { name: "Close" }).last().click();
 
     await page.getByLabel("Search customers").fill(customerName);
@@ -84,7 +84,7 @@ test.describe("controlled beta core workflow", () => {
 
     await page.goto("/app/build");
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("textbox", { name: /find customer by name/i }).fill(customerName);
+    await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customerName);
     await page
       .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") })
       .click();
@@ -93,14 +93,13 @@ test.describe("controlled beta core workflow", () => {
     await page.getByLabel("Quote title").fill(quoteTitle);
     await page.getByLabel("Quote overview").fill("Replace failed condenser, reconnect refrigerant, test startup, and clean the area.");
     const firstLine = page.getByTestId("quote-line-row-1");
-    await firstLine.getByLabel("Line 1 title").last().fill("Condenser replacement");
+    await firstLine.locator('[aria-label="Existing line 1 title"]:visible').fill("Condenser replacement");
     await firstLine
-      .getByLabel("Line 1 description")
-      .last()
+      .locator('[aria-label="Existing line 1 description"]:visible')
       .fill("Install outdoor condenser, reconnect existing lines, and run startup testing.");
-    await firstLine.getByLabel("Line 1 quantity").last().fill("1");
-    await firstLine.getByLabel("Line 1 cost").last().fill("820");
-    await firstLine.getByLabel("Line 1 price").last().fill("1525");
+    await firstLine.locator('[aria-label="Existing line 1 quantity"]:visible').fill("1");
+    await firstLine.locator('[aria-label="Existing line 1 cost"]:visible').fill("820");
+    await firstLine.locator('[aria-label="Existing line 1 price"]:visible').fill("1525");
 
     await page.getByRole("button", { name: "Create Quote" }).first().click();
     await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/);
@@ -141,7 +140,7 @@ test.describe("controlled beta core workflow", () => {
 
     await page.getByRole("button", { name: "Send Log" }).click();
     await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(page.getByText("Copy", { exact: true })).toBeVisible();
+    await expect(page.getByText("Copied message", { exact: true })).toBeVisible();
 
     const meResponse = await request.get(`${apiBaseUrl}/v1/auth/me`, {
       headers: { Cookie: account.cookieHeader },

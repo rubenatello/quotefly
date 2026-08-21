@@ -1,6 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { BadgeInfo, Command, FilePlus2, LifeBuoy, MoreHorizontal, Palette, Search, Settings2, UserPlus2 } from "lucide-react";
 import type { Ref } from "react";
+import { useTranslation } from "react-i18next";
 import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { SUPPORT_MAILTO } from "../../lib/contact";
@@ -31,6 +32,7 @@ export function CrmMobileHeader({
   currentLabel,
   canManageWorkspace,
 }: CrmMobileHeaderProps) {
+  const { t } = useTranslation();
   return (
     <header
       aria-hidden={backgroundInert || undefined}
@@ -44,7 +46,7 @@ export function CrmMobileHeader({
             type="button"
             onClick={onToggleMobile}
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
-            aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+            aria-label={mobileOpen ? t("navigation.close") : t("navigation.open")}
             aria-controls="quotefly-workspace-navigation"
             aria-expanded={mobileOpen}
           >
@@ -54,14 +56,14 @@ export function CrmMobileHeader({
             type="button"
             onClick={() => onNavigate("home")}
             className="min-w-0 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
-            aria-label="Go to workspace home"
+            aria-label={t("navigation.goHome")}
           >
             <div className="flex items-center gap-2">
               <img src="/favicon.png" alt="QuoteFly" className="h-7 w-7 shrink-0 rounded-lg" />
               <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{currentLabel}</p>
             </div>
             <div className="mt-0.5 flex items-center gap-2">
-              <p className="truncate text-xs text-[var(--qf-text-muted)]">QuoteFly workspace</p>
+              <p className="truncate text-xs text-[var(--qf-text-muted)]">{t("navigation.workspaceName")}</p>
             </div>
           </button>
         </div>
@@ -71,7 +73,7 @@ export function CrmMobileHeader({
             type="button"
             onClick={onOpenCommand}
             className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
-            aria-label="Open workspace search"
+            aria-label={t("navigation.openSearch")}
           >
             <Search size={17} />
           </button>
@@ -81,7 +83,7 @@ export function CrmMobileHeader({
               <button
                 type="button"
                 className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
-                aria-label="Open workspace menu"
+                aria-label={t("navigation.openMenu")}
               >
                 <MoreHorizontal size={18} />
               </button>
@@ -97,21 +99,21 @@ export function CrmMobileHeader({
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <Command size={15} />
-                  Search workspace
+                  {t("navigation.search")}
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onQuickAction("new-customer")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <UserPlus2 size={15} className="text-quotefly-blue" />
-                  New customer
+                  {t("navigation.newCustomer")}
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item
                   onSelect={() => onQuickAction("new-quote")}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <FilePlus2 size={15} className="text-quotefly-blue" />
-                  New quote
+                  {t("navigation.newQuote")}
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                 <DropdownMenuPrimitive.Item
@@ -119,7 +121,7 @@ export function CrmMobileHeader({
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <Settings2 size={15} aria-hidden="true" />
-                  Open settings
+                  {t("navigation.openSettings")}
                 </DropdownMenuPrimitive.Item>
                 {canManageWorkspace ? (
                   <DropdownMenuPrimitive.Item
@@ -127,7 +129,7 @@ export function CrmMobileHeader({
                     className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                   >
                     <Palette size={15} aria-hidden="true" />
-                    Open branding
+                    {t("navigation.openBranding")}
                   </DropdownMenuPrimitive.Item>
                 ) : null}
                 <DropdownMenuPrimitive.Item
@@ -135,7 +137,7 @@ export function CrmMobileHeader({
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                 >
                   <BadgeInfo size={15} aria-hidden="true" />
-                  My info
+                  {t("navigation.myInfo")}
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Item asChild>
                   <a
@@ -143,7 +145,7 @@ export function CrmMobileHeader({
                     className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-text-soft)] outline-none transition hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] focus:bg-[var(--qf-interactive-hover)] data-[highlighted]:bg-[var(--qf-interactive-hover)] data-[highlighted]:text-[var(--qf-text)]")}
                   >
                     <LifeBuoy size={15} className="text-quotefly-blue" aria-hidden="true" />
-                    Contact support
+                    {t("navigation.contactSupport")}
                   </a>
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
@@ -151,7 +153,7 @@ export function CrmMobileHeader({
                   onSelect={() => onLogout()}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                 >
-                  Sign out
+                  {t("navigation.signOut")}
                 </DropdownMenuPrimitive.Item>
               </DropdownMenuPrimitive.Content>
             </DropdownMenuPrimitive.Portal>

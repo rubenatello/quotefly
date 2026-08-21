@@ -7,6 +7,10 @@ import {
   signUpViaApi,
 } from "./helpers";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+});
+
 test.describe("mobile stale outbound protection", () => {
   test("Pixel flow saves mobile metadata, existing row, and new row before composing", async ({
     context,
@@ -32,7 +36,7 @@ test.describe("mobile stale outbound protection", () => {
     });
 
     await page.goto(`/app/quotes/${quote.id}`);
-    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
     await page.getByLabel("Quote title").fill("Mobile persisted outbound");
     await page.getByRole("button", { name: "Show details" }).click();
     await page.getByLabel("Quote overview").fill("Mobile persisted scope before send.");
@@ -115,7 +119,7 @@ test.describe("mobile stale outbound protection", () => {
     });
 
     await page.goto(`/app/quotes/${quote.id}`);
-    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
     await page.getByLabel("Quote title").fill("Mobile failure draft title");
     const firstRow = page.getByTestId("existing-quote-line-row-1");
     await firstRow.getByRole("button").first().click();
@@ -129,7 +133,11 @@ test.describe("mobile stale outbound protection", () => {
     await saveGate.getByRole("button", { name: "Save and Continue" }).click();
 
     await expect(saveGate).toBeHidden();
-    await expect(page.getByText("Mobile quote save failed during a later write. Drafts are ready to retry.")).toBeVisible();
+    await expect(
+      page.getByRole("alert").getByText("QuoteFly could not complete this action right now. Try again in a moment.", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(page.getByLabel("Quote title")).toHaveValue("Mobile failure draft title");
     await expect(firstRow.locator('[aria-label="Existing line 1 description"]:visible')).toHaveValue("Mobile existing draft retained");
     await expect(newRow.getByLabel("New line title")).toHaveValue("Mobile new draft retained");

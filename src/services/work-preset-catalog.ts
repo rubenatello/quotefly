@@ -1,7 +1,9 @@
 import { PresetCategory, PresetUnitType, ServiceCategory } from "@prisma/client";
+import { createHash } from "node:crypto";
 
 export interface StandardWorkPresetDefinition {
   catalogKey: string;
+  catalogVersion: number;
   name: string;
   description?: string;
   category: PresetCategory;
@@ -70,10 +72,12 @@ function standardPreset(
   options?: {
     isPrimaryJob?: boolean;
     quantityMode?: "default" | "project_area";
+    catalogVersion?: number;
   },
 ): StandardWorkPresetDefinition {
   return {
     catalogKey,
+    catalogVersion: options?.catalogVersion ?? 1,
     name,
     category,
     unitType,
@@ -194,8 +198,38 @@ const STANDARD_WORK_PRESET_CATALOG: Record<ServiceCategory, StandardWorkPresetDe
     standardPreset("framing_package", "Framing Package", "MATERIAL", "FLAT", 650, 1450, "Lumber and framing materials.", 1, ["framing", "frame", "lumber"], { isPrimaryJob: false }),
     standardPreset("demo_haul_away", "Demo + Haul Away", "SERVICE", "FLAT", 220, 540, "Demolition and disposal service.", 1, ["demo", "demolition", "haul away", "haul-away"], { isPrimaryJob: true }),
     standardPreset("project_management_fee", "Project Management Fee", "FEE", "FLAT", 0, 250, "Coordination and scheduling fee.", 1, ["project management", "coordination"], { isPrimaryJob: false }),
+    standardPreset("rough_carpentry_labor", "Rough Carpentry Labor", "LABOR", "HOUR", 72, 155, "Framing, blocking, backing, and general rough-carpentry labor.", 1, ["rough carpentry", "carpentry labor", "blocking", "framing labor"], { isPrimaryJob: true }),
+    standardPreset("drywall_install_finish", "Drywall Install + Finish", "SERVICE", "SQ_FT", 1.45, 3.65, "Hang, tape, finish, and sand standard drywall ready for primer.", 100, ["drywall", "sheetrock", "gypsum board", "tape and mud"], { isPrimaryJob: true, quantityMode: "project_area" }),
+    standardPreset("drywall_patch_repair", "Drywall Patch + Repair", "SERVICE", "FLAT", 85, 245, "Patch localized wall or ceiling damage and finish ready for paint.", 1, ["drywall repair", "wall patch", "ceiling patch", "sheetrock repair"], { isPrimaryJob: true }),
+    standardPreset("interior_painting", "Interior Painting", "SERVICE", "SQ_FT", 1.35, 3.25, "Prepare and paint interior wall or ceiling surfaces with standard coatings.", 100, ["interior paint", "painting", "wall paint", "ceiling paint"], { isPrimaryJob: true, quantityMode: "project_area" }),
+    standardPreset("concrete_slab_install", "Concrete Slab Install", "SERVICE", "SQ_FT", 5.25, 11.5, "Form, place, finish, and cure a standard concrete slab; reinforcement and access adjustments may apply.", 100, ["concrete slab", "concrete pour", "flatwork", "patio slab"], { isPrimaryJob: true, quantityMode: "project_area" }),
+    standardPreset("finish_carpentry_labor", "Finish Carpentry Labor", "LABOR", "HOUR", 78, 175, "Trim, casing, baseboard, shelving, and other finish-carpentry labor.", 1, ["finish carpentry", "trim", "baseboard", "casing", "shelving"], { isPrimaryJob: false }),
+    standardPreset("permit_allowance", "Permit Allowance", "FEE", "FLAT", 0, 350, "Allowance for common permit and inspection charges; verify local requirements before sending.", 1, ["permit", "inspection", "plan check"], { isPrimaryJob: false }),
+    standardPreset("material_delivery", "Material Delivery", "FEE", "FLAT", 55, 145, "Delivery, unloading, and jobsite material handling allowance.", 1, ["material delivery", "delivery", "unloading", "material handling"], { isPrimaryJob: false }),
+    standardPreset("final_cleanup", "Final Cleanup", "SERVICE", "FLAT", 110, 285, "Final construction cleanup, debris collection, and broom-clean turnover.", 1, ["final cleanup", "construction cleanup", "broom clean", "debris removal"], { isPrimaryJob: false }),
   ],
 };
+
+export function standardWorkPresetContentHash(
+  serviceType: ServiceCategory,
+  preset: StandardWorkPresetDefinition,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      serviceType,
+      catalogKey: preset.catalogKey,
+      catalogVersion: preset.catalogVersion,
+      name: preset.name,
+      description: preset.description ?? null,
+      category: preset.category,
+      unitType: preset.unitType,
+      defaultQuantity: preset.defaultQuantity,
+      unitCost: preset.unitCost,
+      unitPrice: preset.unitPrice,
+      isDefault: preset.isDefault ?? true,
+    }))
+    .digest("hex");
+}
 
 export function getStandardWorkPresetCatalog(serviceType: ServiceCategory): StandardWorkPresetDefinition[] {
   return STANDARD_WORK_PRESET_CATALOG[serviceType].map((preset) => ({ ...preset }));
@@ -207,6 +241,29 @@ export function getStandardWorkPresetDefinition(
 ): StandardWorkPresetDefinition | null {
   return (
     STANDARD_WORK_PRESET_CATALOG[serviceType].find((preset) => preset.catalogKey === catalogKey) ?? null
+  );
+}
+
+export function isStandardWorkPresetCustomized(
+  serviceType: ServiceCategory,
+  catalogKey: string,
+  values: {
+    description: string | null | undefined;
+    defaultQuantity: number | { toString(): string };
+    unitCost: number | { toString(): string };
+    unitPrice: number | { toString(): string };
+    isDefault: boolean;
+  },
+): boolean {
+  const definition = getStandardWorkPresetDefinition(serviceType, catalogKey);
+  if (!definition) return true;
+  const normalizeDescription = (value: string | null | undefined) => value?.trim() || null;
+  return (
+    normalizeDescription(values.description) !== normalizeDescription(definition.description) ||
+    Number(values.defaultQuantity) !== definition.defaultQuantity ||
+    Number(values.unitCost) !== definition.unitCost ||
+    Number(values.unitPrice) !== definition.unitPrice ||
+    values.isDefault !== (definition.isDefault ?? true)
   );
 }
 

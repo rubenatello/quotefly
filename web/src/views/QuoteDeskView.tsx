@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import type { TFunction } from "i18next";
 import {
   Archive,
   ChevronDown,
@@ -82,13 +84,8 @@ import {
 } from "../lib/quote-lines";
 import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
-
-function formatPresetUnitLabel(unitType: WorkPreset["unitType"]): string {
-  if (unitType === "SQ_FT") return "SQ FT";
-  if (unitType === "HOUR") return "Hours";
-  if (unitType === "EACH") return "Units";
-  return "Qty";
-}
+import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
+import { localizedApiError } from "../lib/localized-api-error";
 
 function buildBusinessHint(branding: TenantBranding | null): string | undefined {
   if (!branding) return undefined;
@@ -106,6 +103,7 @@ function resolveQuoteAccentColor(branding: TenantBranding | null): string {
 }
 
 function buildDeskAiPromptStarters(
+  t: TFunction,
   serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
   customerName: string,
   customerPhone: string,
@@ -113,24 +111,36 @@ function buildDeskAiPromptStarters(
 ) {
   const customerLead = `${customerName} ${customerPhone}`.trim();
 
-  if (serviceType === "ROOFING") {
-    return [
-      `Revise ${quoteTitle} for ${customerLead}. Add permit fee, cleanup, and stronger customer-facing scope wording.`,
-      `Update ${quoteTitle} for ${customerLead}. Include flashing, disposal, and warranty language.`,
-    ];
-  }
-
-  if (serviceType === "HVAC") {
-    return [
-      `Revise ${quoteTitle} for ${customerLead}. Add startup testing, thermostat hookup, and cleanup.`,
-      `Update ${quoteTitle} for ${customerLead}. Add haul-away, install materials, and a clearer customer overview.`,
-    ];
-  }
-
+  const tradeKey = serviceType === "ROOFING" ? "roofing" : serviceType === "HVAC" ? "hvac" : "default";
   return [
-    `Revise ${quoteTitle} for ${customerLead}. Add any missing line items, tighten the scope, and keep the quote customer-friendly.`,
-    `Update ${quoteTitle} for ${customerLead}. Make the quote clearer for the customer and add any missing job lines.`,
+    t(`quoteDesk.aiStarters.${tradeKey}.one`, { title: quoteTitle, customer: customerLead }),
+    t(`quoteDesk.aiStarters.${tradeKey}.two`, { title: quoteTitle, customer: customerLead }),
   ];
+}
+
+function localizedQuoteHeadingError(
+  t: TFunction,
+  title: string,
+  scopeText: string,
+  taxAmount: string,
+) {
+  const error = validateQuoteHeading(title, scopeText, taxAmount);
+  if (!error) return null;
+  if (error.startsWith("Quote title")) return t("quoteComponents.validation.title");
+  if (error.startsWith("Quote scope")) return t("quoteComponents.validation.scope");
+  if (error.startsWith("Tax")) return t("quoteComponents.validation.tax");
+  return t("quoteComponents.validation.generic");
+}
+
+function localizedQuoteLineError(t: TFunction, line: EditableQuoteLine, label: string) {
+  const error = validateQuoteLine(line, label);
+  if (!error) return null;
+  if (error.endsWith("needs a title.")) return t("quoteComponents.validation.lineTitle", { label });
+  if (error.includes("option label")) return t("quoteComponents.validation.optionLabel", { label });
+  if (error.includes("quantity")) return t("quoteComponents.validation.quantity", { label });
+  if (error.includes(" cost ")) return t("quoteComponents.validation.cost", { label });
+  if (error.includes(" price ")) return t("quoteComponents.validation.price", { label });
+  return t("quoteComponents.validation.generic");
 }
 
 type DeskTab = "quote" | "send" | "history" | "log";
@@ -150,6 +160,7 @@ type StoredDeskDraft = {
     title: string;
     scopeText: string;
     taxAmount: string;
+    documentLocale: Quote["documentLocale"];
   };
   lines: EditableQuoteLine[];
   newLine: EditableQuoteLine;
@@ -161,6 +172,10 @@ const SERVICE_TYPES = new Set(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDE
 const QUOTE_STATUSES = new Set(["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"]);
 const JOB_STATUSES = new Set(["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"]);
 const FOLLOW_UP_STATUSES = new Set(["NOT_READY", "DUE", "COMPLETED"]);
+
+function canEditQuoteDocumentLocale(status: Quote["status"]): boolean {
+  return status === "DRAFT" || status === "READY_FOR_REVIEW";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -239,6 +254,11 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
     !isBoundedString(quote.taxAmount, 100)
   ) return null;
 
+  const documentLocale =
+    quote.documentLocale === "es-US" || quote.documentLocale === "en-US"
+      ? quote.documentLocale
+      : "en-US";
+
   const lines = value.lines.map(parseStoredDeskLine);
   const newLine = parseStoredDeskLine(value.newLine);
   if (lines.some((line) => line === null) || !newLine) return null;
@@ -256,6 +276,7 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
       title: quote.title,
       scopeText: quote.scopeText,
       taxAmount: quote.taxAmount,
+      documentLocale,
     },
     lines: lines as EditableQuoteLine[],
     newLine,
@@ -294,6 +315,9 @@ function editableQuoteLinesMatch(left: EditableQuoteLine, right: EditableQuoteLi
 
 export function QuoteDeskView() {
   usePageView("quote_desk");
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en-US";
+  const formatMoney = (value: string | number) => money(value, locale);
   const track = useTrack();
   const navigate = useNavigate();
   const location = useLocation();
@@ -397,6 +421,7 @@ export function QuoteDeskView() {
     navigateToBuilder,
     navigateToQuote,
   } = useDashboard();
+  const formatLocalDateTime = (value: string | null | undefined) => value ? formatDateTime(value, locale, session?.timezone) : "—";
   const { quoteId } = useParams<{ quoteId: string }>();
   const deskDraftStorageKey = useMemo(
     () => session && quoteId ? quoteDeskDraftStorageKey(session.tenantId, session.userId, quoteId) : null,
@@ -419,13 +444,13 @@ export function QuoteDeskView() {
     try {
       await api.quotes.update(selectedQuote.id, { assignedTenantUserId: assignedTenantUserId || null });
       await refreshSelectedQuote();
-      setNotice(assignedTenantUserId ? "Quote assignment updated." : "Quote is now unassigned.");
+      setNotice(assignedTenantUserId ? t("quoteDesk.notices.assignmentUpdated") : t("quoteDesk.notices.unassigned"));
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Failed updating quote assignment.");
+      setError(localizedApiError(error, t, { fallbackKey: "quoteDesk.errors.assignment" }));
     } finally {
       setAssignmentSaving(false);
     }
-  }, [assignmentSaving, canManageAssignments, refreshSelectedQuote, selectedQuote, setError, setNotice]);
+  }, [assignmentSaving, canManageAssignments, refreshSelectedQuote, selectedQuote, setError, setNotice, t]);
 
   useEffect(() => {
     if (!quoteId) return;
@@ -447,7 +472,7 @@ export function QuoteDeskView() {
       })
       .catch(() => {
         if (!mounted) return;
-        setPresetLoadError("Products and services could not be loaded.");
+        setPresetLoadError(t("quoteBuilder.errors.catalogLoad"));
       })
       .finally(() => {
         if (mounted) setPresetsLoading(false);
@@ -456,7 +481,7 @@ export function QuoteDeskView() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!session?.tenantId) return;
@@ -546,11 +571,11 @@ export function QuoteDeskView() {
       setAiRuns(runs);
     } catch (err) {
       setAiRuns([]);
-      setError(err instanceof Error ? err.message : "Failed loading AI runs.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.aiRuns" }));
     } finally {
       setAiRunsLoading(false);
     }
-  }, [selectedQuote?.id, setError]);
+  }, [selectedQuote?.id, setError, t]);
 
   useEffect(() => {
     if (activeTab !== "history" || !selectedQuote?.id) return;
@@ -651,9 +676,11 @@ export function QuoteDeskView() {
   const totalAmount = customerSubtotal + taxAmount;
   const estimatedProfit = customerSubtotal - internalSubtotal;
   const estimatedMarginPercent = customerSubtotal > 0 ? (estimatedProfit / customerSubtotal) * 100 : 0;
-  const sentDateLabel = selectedQuote?.sentAt ? formatDateTime(selectedQuote.sentAt) : "N/A";
-  const customerName = selectedQuote?.customer?.fullName ?? "Customer unavailable";
-  const customerPhone = selectedQuote?.customer?.phone ?? "No phone";
+  const sentDateLabel = selectedQuote?.sentAt
+    ? formatQuoteDocumentDate(selectedQuote.sentAt, quoteEditForm.documentLocale, session?.timezone)
+    : quoteDocumentCopy(quoteEditForm.documentLocale).notAvailable;
+  const customerName = selectedQuote?.customer?.fullName ?? t("quoteDesk.customerUnavailable");
+  const customerPhone = selectedQuote?.customer?.phone ?? t("quoteDesk.noPhone");
   const customerEmail = selectedQuote?.customer?.email ?? null;
   const previewLines = useMemo(
     () =>
@@ -677,36 +704,39 @@ export function QuoteDeskView() {
         businessName: session?.tenantName ?? "QuoteFly",
         businessPhone: branding?.businessPhone ?? null,
         businessEmail: branding?.businessEmail ?? null,
+        documentLocale: quoteEditForm.documentLocale,
       }),
-    [branding?.businessEmail, branding?.businessPhone, session?.tenantName],
+    [branding?.businessEmail, branding?.businessPhone, quoteEditForm.documentLocale, session?.tenantName],
   );
   const showQuoteFlyAttribution = useMemo(
     () => shouldShowQuoteFlyAttribution(session?.effectivePlanCode, branding?.hideQuoteFlyAttribution),
     [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
   );
-  const selectedQuoteTitle = selectedQuote?.title ?? "Current quote";
+  const selectedQuoteTitle = selectedQuote?.title ?? t("quoteDesk.currentQuote");
   const aiUsageHint = useMemo(
     () =>
       formatAiUsageAvailability({
         usedUsd: session?.usage?.monthlyAiSpendUsd,
         limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
         renewsAtUtc: session?.usage?.periodEndUtc,
-      }),
+      }, locale),
     [
       session?.entitlements?.limits.aiSpendUsdPerMonth,
       session?.usage?.monthlyAiSpendUsd,
       session?.usage?.periodEndUtc,
+      locale,
     ],
   );
   const aiPromptStarters = useMemo(
     () =>
       buildDeskAiPromptStarters(
+        t,
         quoteEditForm.serviceType,
         customerName,
         customerPhone,
         quoteEditForm.title || selectedQuoteTitle,
       ),
-    [customerName, customerPhone, quoteEditForm.serviceType, quoteEditForm.title, selectedQuoteTitle],
+    [customerName, customerPhone, quoteEditForm.serviceType, quoteEditForm.title, selectedQuoteTitle, t],
   );
   const isQuoteLocked = requiresExplicitUnlock && !isEditUnlocked;
   const metadataDirty = useMemo(() => {
@@ -718,7 +748,8 @@ export function QuoteDeskView() {
       quoteEditForm.afterSaleFollowUpStatus !== selectedQuote.afterSaleFollowUpStatus ||
       quoteEditForm.title !== selectedQuote.title ||
       quoteEditForm.scopeText !== selectedQuote.scopeText ||
-      String(Number(quoteEditForm.taxAmount)) !== String(Number(selectedQuote.taxAmount))
+      String(Number(quoteEditForm.taxAmount)) !== String(Number(selectedQuote.taxAmount)) ||
+      quoteEditForm.documentLocale !== selectedQuote.documentLocale
     );
   }, [quoteEditForm, selectedQuote]);
   const hasDraftNewLine = useMemo(
@@ -771,6 +802,7 @@ export function QuoteDeskView() {
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
         taxAmount: quoteEditForm.taxAmount,
+        documentLocale: quoteEditForm.documentLocale,
       },
       lines: editableLines,
       newLine,
@@ -807,7 +839,7 @@ export function QuoteDeskView() {
         const stored = parseStoredDeskDraft(raw);
         if (!stored || stored.quoteId !== selectedQuote.id) {
           await removeQuoteDeskDraft(deskDraftStorageKey);
-          if (!cancelled) setDeskDraftRecoveryMessage("An incompatible saved quote draft was cleared safely.");
+          if (!cancelled) setDeskDraftRecoveryMessage(t("quoteDesk.recovery.incompatible"));
           return;
         }
         if (stored.baseUpdatedAtUtc !== selectedQuote.updatedAt) {
@@ -818,7 +850,7 @@ export function QuoteDeskView() {
         applyStoredDeskDraft(stored);
       } catch {
         await removeQuoteDeskDraft(deskDraftStorageKey);
-        if (!cancelled) setDeskDraftRecoveryMessage("The saved quote draft could not be read and was cleared safely.");
+        if (!cancelled) setDeskDraftRecoveryMessage(t("quoteDesk.recovery.unreadable"));
       } finally {
         if (!cancelled && !hydrationDeferred) setHydratedDeskDraftKey(deskDraftStorageKey);
       }
@@ -826,7 +858,7 @@ export function QuoteDeskView() {
     return () => {
       cancelled = true;
     };
-  }, [applyStoredDeskDraft, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote]);
+  }, [applyStoredDeskDraft, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote, t]);
 
   useEffect(() => {
     if (!deskDraftStorageKey || hydratedDeskDraftKey !== deskDraftStorageKey || !currentDeskDraft) return;
@@ -889,7 +921,7 @@ export function QuoteDeskView() {
     if (!conflictingDeskDraft || !deskDraftStorageKey) return;
     applyStoredDeskDraft(conflictingDeskDraft);
     setHydratedDeskDraftKey(deskDraftStorageKey);
-    setNotice("Restored your recovery draft. Review it against the latest saved quote before saving.");
+    setNotice(t("quoteDesk.notices.recoveryRestored"));
   }
 
   function useLatestSavedQuote() {
@@ -899,7 +931,7 @@ export function QuoteDeskView() {
     setHydratedDeskDraftKey(deskDraftStorageKey);
     setDeskDraftRestored(false);
     setDeskDraftSavedAtUtc(null);
-    setNotice("Using the latest saved quote. The older recovery draft was discarded.");
+    setNotice(t("quoteDesk.notices.latestSaved"));
   }
 
   function updateEditableLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
@@ -915,7 +947,7 @@ export function QuoteDeskView() {
     }
     const line = editableLines.find((entry) => entry.id === lineId);
     if (!line) return false;
-    const lineError = validateQuoteLine(line);
+    const lineError = localizedQuoteLineError(t, line, t("quoteDesk.line.number", { number: editableLines.findIndex((entry) => entry.id === lineId) + 1 }));
     if (lineError) {
       setError(lineError);
       return false;
@@ -932,7 +964,7 @@ export function QuoteDeskView() {
         unitCost: Number(line.unitCost) || 0,
         unitPrice: Number(line.unitPrice) || 0,
       },
-      { notice: `${line.title} saved.` },
+      { notice: t("quoteDesk.notices.lineSaved", { name: line.title }) },
     );
   }
 
@@ -941,7 +973,7 @@ export function QuoteDeskView() {
       setUnlockConfirmOpen(true);
       return false;
     }
-    const lineError = validateQuoteLine(newLine, "New line");
+    const lineError = localizedQuoteLineError(t, newLine, t("quoteDesk.line.new"));
     if (lineError) {
       setError(lineError);
       return false;
@@ -960,7 +992,7 @@ export function QuoteDeskView() {
         sourcePresetId: lineToMaybeSave.sourcePresetId ?? undefined,
       },
       {
-        notice: `${lineToMaybeSave.title} added to the quote.`,
+        notice: t("quoteDesk.notices.lineAdded", { name: lineToMaybeSave.title }),
       },
     );
     if (!added) return false;
@@ -984,7 +1016,7 @@ export function QuoteDeskView() {
       setUnlockConfirmOpen(true);
       return null;
     }
-    const headingError = validateQuoteHeading(quoteEditForm.title, quoteEditForm.scopeText, quoteEditForm.taxAmount);
+    const headingError = localizedQuoteHeadingError(t, quoteEditForm.title, quoteEditForm.scopeText, quoteEditForm.taxAmount);
     if (headingError) {
       setError(headingError);
       return null;
@@ -992,12 +1024,12 @@ export function QuoteDeskView() {
     const changedLines = editableLines.filter((line) => dirtyLineIds.includes(line.id));
     const linesToValidate = hasDraftNewLine ? [...changedLines, newLine] : changedLines;
     if (linesToValidate.length > QUOTE_LINE_CHANGE_LIMIT) {
-      setError(`At most ${QUOTE_LINE_CHANGE_LIMIT} line changes can be saved at once.`);
+      setError(t("quoteDesk.errors.lineLimit", { count: QUOTE_LINE_CHANGE_LIMIT }));
       return null;
     }
     const invalidLineIndex = linesToValidate.findIndex((line) => validateQuoteLine(line) !== null);
     if (invalidLineIndex >= 0) {
-      setError(validateQuoteLine(linesToValidate[invalidLineIndex], `Changed line ${invalidLineIndex + 1}`));
+      setError(localizedQuoteLineError(t, linesToValidate[invalidLineIndex], t("quoteDesk.line.changed", { number: invalidLineIndex + 1 })));
       return null;
     }
 
@@ -1021,6 +1053,7 @@ export function QuoteDeskView() {
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
         taxAmount: Number(quoteEditForm.taxAmount),
+        documentLocale: quoteEditForm.documentLocale,
       },
       lineItems: editableLines
         .filter((line) => dirtyLineIds.includes(line.id))
@@ -1147,7 +1180,7 @@ export function QuoteDeskView() {
       setPendingOutboundOrigin(null);
       setActiveTab("quote");
       setMobilePane("editor");
-      setError(err instanceof Error ? err.message : "The saved quote could not be reloaded. Try sending again.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.reloadSend" }));
     } finally {
       setOutboundPreparationSaving(false);
     }
@@ -1157,7 +1190,7 @@ export function QuoteDeskView() {
     event.preventDefault();
 
     if (!selectedQuote) {
-      setError("Open a quote before using AI suggestions.");
+      setError(t("quoteDesk.errors.openForAi"));
       return;
     }
 
@@ -1167,13 +1200,13 @@ export function QuoteDeskView() {
     }
 
     if (!canUseChatToQuote) {
-      setError("AI drafting is not available on this workspace.");
+      setError(t("quoteDesk.errors.aiUnavailable"));
       return;
     }
 
     const prompt = chatPrompt.trim();
     if (!prompt) {
-      setError("Enter a prompt before generating a quote.");
+      setError(t("quoteDesk.errors.promptRequired"));
       return;
     }
 
@@ -1218,23 +1251,27 @@ export function QuoteDeskView() {
       setAiModalOpen(false);
       setMobilePane("editor");
       publishAiUsageUpdate(usage);
-      const usageSummary = formatAiUsageNotice(usage);
+      const usageSummary = formatAiUsageNotice(usage, locale);
       const patchSummary = [
-        patch.updated ? `updated ${patch.updated}` : null,
-        patch.added ? `added ${patch.added}` : null,
-        patch.removed ? `removed ${patch.removed}` : null,
+        patch.updated ? t("quoteBuilder.aiPatch.updated", { count: patch.updated }) : null,
+        patch.added ? t("quoteBuilder.aiPatch.added", { count: patch.added }) : null,
+        patch.removed ? t("quoteBuilder.aiPatch.removed", { count: patch.removed }) : null,
       ]
         .filter(Boolean)
         .join(", ");
       setNotice(
-        `AI suggestion applied for ${customer?.fullName ?? parsed.customerName ?? customerName}. ${patchSummary ? `${patchSummary}. ` : ""}${usageSummary} Review the sheet, then save tracked edits.`,
+        t("quoteDesk.notices.aiApplied", {
+          customer: customer?.fullName ?? parsed.customerName ?? customerName,
+          changes: patchSummary ? `${patchSummary}. ` : "",
+          usage: usageSummary ? `${usageSummary} ` : "",
+        }),
       );
     } catch (err) {
       if (err instanceof ApiError && err.details && typeof err.details === "object") {
         const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
         if (usage) publishAiUsageUpdate(usage);
       }
-      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
+      const message = localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
     } finally {
@@ -1246,14 +1283,14 @@ export function QuoteDeskView() {
   function handleUnlockEditing() {
     setIsEditUnlocked(true);
     setUnlockConfirmOpen(false);
-    setNotice("Quote unlocked. Any saved edits will be tracked in history.");
+    setNotice(t("quoteDesk.notices.unlocked"));
   }
 
   async function confirmRestoreRevision() {
     if (!selectedQuote || !restoreRevisionTarget) return;
     if (hasUnsavedQuoteSheetChanges) {
       setRestoreRevisionTarget(null);
-      setError("Save or revert the current quote edits before restoring an older revision.");
+      setError(t("quoteDesk.errors.restoreDirty"));
       return;
     }
     setRestoreRevisionSaving(true);
@@ -1266,9 +1303,9 @@ export function QuoteDeskView() {
       setAiInsight(null);
       setMobilePane("editor");
       clearStoredDeskDraft();
-      setNotice(`${result.quote.title} restored to revision v${restoreRevisionTarget.version}.`);
+      setNotice(t("quoteDesk.notices.revisionRestored", { title: result.quote.title, version: restoreRevisionTarget.version }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed restoring the selected revision.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.restore" }));
     } finally {
       setRestoreRevisionSaving(false);
     }
@@ -1284,12 +1321,13 @@ export function QuoteDeskView() {
       title: selectedQuote.title,
       scopeText: selectedQuote.scopeText,
       taxAmount: String(Number(selectedQuote.taxAmount)),
+      documentLocale: selectedQuote.documentLocale,
     });
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
     setPresetPromptLine(null);
     clearStoredDeskDraft();
-    setNotice("Reverted to the last saved quote version.");
+    setNotice(t("quoteDesk.notices.reverted"));
   }
 
   function loadPresetToNewLine(preset: WorkPreset) {
@@ -1307,7 +1345,7 @@ export function QuoteDeskView() {
         sourcePresetId: preset.id,
       }),
     );
-    setNotice(`${preset.name} loaded into the new line row.`);
+    setNotice(t("quoteDesk.notices.presetLoaded", { name: preset.name }));
   }
 
   async function addPresetToQuote(preset: WorkPreset) {
@@ -1326,7 +1364,7 @@ export function QuoteDeskView() {
         unitPrice: Number(preset.unitPrice),
         sourcePresetId: preset.id,
       },
-      { notice: `${preset.name} added to the quote.` },
+      { notice: t("quoteDesk.notices.presetAdded", { name: preset.name }) },
     );
   }
 
@@ -1343,10 +1381,10 @@ export function QuoteDeskView() {
         return [...next, result.preset];
       });
       setSelectedPresetId(result.preset.id);
-      setNotice(includeDescription ? "Saved job name and description for future quotes." : "Saved job name for future quotes.");
+      setNotice(includeDescription ? t("quoteBuilder.notices.presetFullSaved") : t("quoteBuilder.notices.presetNameSaved"));
       setPresetPromptLine(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed saving work name.");
+      setError(localizedApiError(err, t, { fallbackKey: "quoteBuilder.errors.presetSave" }));
     } finally {
       setPresetPromptSaving(false);
     }
@@ -1367,7 +1405,7 @@ export function QuoteDeskView() {
     if (!selectedQuote || !quoteRetentionAction) return;
     if (hasUnsavedQuoteSheetChanges) {
       setQuoteRetentionAction(null);
-      setError("Save or revert the current quote edits before archiving or deleting this quote.");
+      setError(t("quoteDesk.errors.retentionDirty"));
       return;
     }
 
@@ -1377,13 +1415,13 @@ export function QuoteDeskView() {
     try {
       if (quoteRetentionAction === "archive") {
         await api.quotes.archive(selectedQuote.id);
-        notify.success("Quote archived", {
-          description: `${selectedQuote.title} left active views, while its history remains retained.`,
+        notify.success(t("quoteDesk.notifications.archivedTitle"), {
+          description: t("quoteDesk.notifications.archivedDescription", { title: selectedQuote.title }),
         });
       } else {
         await api.quotes.delete(selectedQuote.id);
-        notify.success("Quote removed from the workspace", {
-          description: `${selectedQuote.title} remains retained with its audit history.`,
+        notify.success(t("quoteDesk.notifications.deletedTitle"), {
+          description: t("quoteDesk.notifications.deletedDescription", { title: selectedQuote.title }),
         });
       }
 
@@ -1392,8 +1430,8 @@ export function QuoteDeskView() {
       await loadQuotes();
       navigate("/app/quotes");
     } catch (err) {
-      notify.error(`Could not ${quoteRetentionAction} quote`, {
-        description: err instanceof Error ? err.message : "Please try again. The quote was not changed.",
+      notify.error(quoteRetentionAction === "archive" ? t("quoteDesk.notifications.archiveFailed") : t("quoteDesk.notifications.deleteFailed"), {
+        description: localizedApiError(err, t, { fallbackKey: "quoteDesk.notifications.unchanged" }),
       });
     } finally {
       setQuoteRetentionSaving(false);
@@ -1403,12 +1441,12 @@ export function QuoteDeskView() {
   if (quoteDetailLoading && (!selectedQuote || selectedQuote.id !== quoteId)) {
     return (
       <div className="space-y-5" data-testid="quote-detail-loading">
-        <PageHeader title="Loading quote" subtitle="Getting the latest quote details and customer information." />
+        <PageHeader title={t("quoteDesk.loading.title")} subtitle={t("quoteDesk.loading.description")} />
         <Card variant="default" padding="lg">
           <div role="status" aria-live="polite" className="space-y-3">
             <div className="h-4 w-32 animate-pulse rounded-full bg-[var(--qf-interactive-active)]" aria-hidden="true" />
             <div className="h-8 w-3/4 animate-pulse rounded-lg bg-[var(--qf-interactive-active)]" aria-hidden="true" />
-            <p className="text-sm text-[var(--qf-text-soft)]">Loading this quote...</p>
+            <p className="text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.loading.status")}</p>
           </div>
         </Card>
       </div>
@@ -1419,19 +1457,19 @@ export function QuoteDeskView() {
     return (
       <div className="space-y-5" data-testid="quote-detail-error">
         <PageHeader
-          title={quoteDetailError.kind === "not-found" ? "Quote unavailable" : "Quote did not load"}
+          title={quoteDetailError.kind === "not-found" ? t("quoteDesk.errors.unavailable") : t("quoteDesk.errors.load")}
           subtitle={quoteDetailError.message}
         />
         <Card variant="default" padding="lg">
           <div role="alert" className="space-y-4">
             <p className="text-sm text-[var(--qf-text-soft)]">
               {quoteDetailError.kind === "not-found"
-                ? "Open the quote board to choose another quote, or retry if this link should still be active."
-                : "Your current page has not changed. Retry when your connection is ready."}
+                ? t("quoteDesk.errors.notFoundHelp")
+                : t("quoteDesk.errors.retryHelp")}
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button className="min-h-[44px] sm:min-h-[44px]" onClick={() => void retrySelectedQuote()}>
-                Retry quote
+                {t("quoteDesk.actions.retry")}
               </Button>
               <Button
                 variant="outline"
@@ -1441,7 +1479,7 @@ export function QuoteDeskView() {
                   navigate("/app/quotes");
                 }}
               >
-                Back to quotes
+                {t("quoteDesk.actions.back")}
               </Button>
             </div>
           </div>
@@ -1455,16 +1493,16 @@ export function QuoteDeskView() {
       <div className="space-y-5">
         <EmptyState
           icon={<FileOutput size={18} />}
-          title="No quote selected"
-          description="Find an existing quote or jump into a fresh quote for an existing customer."
+          title={t("quoteDesk.empty.title")}
+          description={t("quoteDesk.empty.description")}
         />
         <QuickLookupCard
-          title="Find Customer or Quote"
-          subtitle="Open an existing quote or start a new quote for an existing customer."
-          customerActionLabel="New Quote"
+          title={t("quoteDesk.lookup.title")}
+          subtitle={t("quoteDesk.lookup.description")}
+          customerActionLabel={t("quoteDesk.actions.newQuote")}
           customerActionVariant="secondary"
           onCustomerAction={(customer) => {
-            setNotice(`${customer.fullName} is ready for a new quote.`);
+            setNotice(t("quoteDesk.notices.customerReady", { name: customer.fullName }));
             requestNavigation(() => navigateToBuilder(customer.id));
           }}
           onQuoteAction={(quote) => requestNavigation(() => navigateToQuote(quote.id))}
@@ -1474,26 +1512,26 @@ export function QuoteDeskView() {
   }
 
   const tabs: Array<{ id: DeskTab; label: string }> = [
-    { id: "quote", label: "Quote" },
-    { id: "send", label: "Send" },
-    { id: "history", label: "History" },
-    { id: "log", label: "Send Log" },
+    { id: "quote", label: t("quoteDesk.tabs.quote") },
+    { id: "send", label: t("quoteDesk.tabs.send") },
+    { id: "history", label: t("quoteDesk.tabs.history") },
+    { id: "log", label: t("quoteDesk.tabs.log") },
   ];
 
   return (
     <div className="space-y-5" data-testid="quote-desk">
       <PageHeader
         title={quoteEditForm.title || selectedQuote.title}
-        subtitle="Edit the quote directly: update the customer-facing copy, adjust the lines, then send or export when it is ready."
+        subtitle={t("quoteDesk.subtitle")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <KodyButton
-              label="Ask Kody"
+              label={t("quoteDesk.actions.askKody")}
               prompt={[
-                `Help me with this quote for ${customerName}.`,
-                `Quote title: ${quoteEditForm.title || selectedQuote.title}.`,
-                `Status: ${selectedQuote.status}.`,
-                "Suggest the next best action, follow-up angle, or quote improvement. Do not send or save anything automatically.",
+                t("quoteDesk.kodyPrompt.help", { customer: customerName }),
+                t("quoteDesk.kodyPrompt.title", { title: quoteEditForm.title || selectedQuote.title }),
+                t("quoteDesk.kodyPrompt.status", { status: t(`domain.quoteStatus.${selectedQuote.status}`) }),
+                t("quoteDesk.kodyPrompt.guidance"),
               ].join("\n")}
               tool="DRAFT_QUOTE"
               context={{
@@ -1515,18 +1553,18 @@ export function QuoteDeskView() {
         <Card variant="blue" padding="md" className="xl:hidden">
           {canManageAssignments ? (
             <Select
-              label="Assigned to"
+              label={t("quoteDesk.assignment.label")}
               value={selectedQuote.assignedTenantUserId ?? ""}
               onChange={(event) => void updateQuoteAssignment(event.target.value)}
               disabled={assignmentSaving}
               options={[
-                { value: "", label: "Unassigned" },
-                ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${member.role}` })),
+                { value: "", label: t("quoteDesk.assignment.unassigned") },
+                ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${t(`domain.role.${member.role.toLowerCase()}`)}` })),
               ]}
             />
           ) : selectedQuote.assignedTenantUser ? (
             <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-800">
-              Assigned to {selectedQuote.assignedTenantUser.user.fullName}
+              {t("quoteDesk.assignment.assignedTo", { name: selectedQuote.assignedTenantUser.user.fullName })}
             </div>
           ) : null}
         </Card>
@@ -1536,25 +1574,25 @@ export function QuoteDeskView() {
       ) : null}
       {conflictingDeskDraft ? (
         <div role="alert" className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]">
-          <p className="text-sm font-semibold">This quote changed after the recovery draft was saved</p>
+          <p className="text-sm font-semibold">{t("quoteDesk.recovery.conflictTitle")}</p>
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
-            Use the latest saved quote, or restore the recovery draft and review it carefully before saving.
+            {t("quoteDesk.recovery.conflictDescription")}
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <Button variant="outline" size="sm" onClick={restoreConflictingDeskDraft}>Restore recovery draft</Button>
-            <Button size="sm" onClick={useLatestSavedQuote}>Use latest saved quote</Button>
+            <Button variant="outline" size="sm" onClick={restoreConflictingDeskDraft}>{t("quoteDesk.recovery.restore")}</Button>
+            <Button size="sm" onClick={useLatestSavedQuote}>{t("quoteDesk.recovery.useLatest")}</Button>
           </div>
         </div>
       ) : null}
       {hasUnsavedQuoteSheetChanges && hydratedDeskDraftKey === deskDraftStorageKey ? (
         <div role="status" aria-live="polite" className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3">
           <p className="text-sm font-semibold text-[var(--qf-text)]">
-            {deskDraftPersistenceFailed ? "Unsaved edits are open in this tab" : deskDraftRestored ? "Browser draft restored" : "Edits saved for recovery"}
+            {deskDraftPersistenceFailed ? t("quoteDesk.recovery.open") : deskDraftRestored ? t("quoteDesk.recovery.restored") : t("quoteDesk.recovery.saved")}
           </p>
           <p className="mt-1 text-xs text-[var(--qf-text-soft)]">
             {deskDraftPersistenceFailed
-              ? "Keep this tab open until the quote is saved."
-              : `Stored in this browser for up to 12 hours${deskDraftSavedAtUtc ? ` · updated ${new Date(deskDraftSavedAtUtc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}.`}
+              ? t("quoteDesk.recovery.keepOpen")
+              : t("quoteDesk.recovery.stored", { updated: deskDraftSavedAtUtc ? t("quoteDesk.recovery.updated", { time: formatLocalDateTime(deskDraftSavedAtUtc) }) : "" })}
           </p>
         </div>
       ) : null}
@@ -1562,7 +1600,7 @@ export function QuoteDeskView() {
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3 text-sm text-[var(--qf-text-soft)]">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">Why AI suggested this</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">{t("quoteDesk.ai.why")}</p>
               <p className="mt-1 font-medium text-[var(--qf-text)]">{aiInsight.summary}</p>
             </div>
             <button
@@ -1570,7 +1608,7 @@ export function QuoteDeskView() {
               onClick={() => setAiInsight(null)}
               className="self-start min-h-[44px] rounded-lg px-2 text-xs font-medium text-[var(--qf-text-muted)] hover:bg-[var(--qf-interactive-hover)] hover:text-[var(--qf-text)] sm:min-h-[36px]"
             >
-              Dismiss
+              {t("quoteDesk.actions.dismiss")}
             </button>
           </div>
           {aiInsight.reasons.length ? (
@@ -1588,7 +1626,7 @@ export function QuoteDeskView() {
           </div>
           {aiInsight.sources.length ? (
             <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
-              Context used: {aiInsight.sources.map((source) => source.label).join(" | ")}
+              {t("quoteDesk.ai.contextUsed")}: {aiInsight.sources.map((source) => source.label).join(" | ")}
             </p>
           ) : null}
         </div>
@@ -1597,8 +1635,8 @@ export function QuoteDeskView() {
       {activeTab === "quote" ? (
         <div className="flex gap-2 xl:hidden">
           {([
-            { id: "editor", label: "Edit quote" },
-            { id: "preview", label: "Draft preview" },
+            { id: "editor", label: t("quoteDesk.mobile.edit") },
+            { id: "preview", label: t("quoteDesk.mobile.preview") },
           ] as const).map((pane) => (
             <button
               key={pane.id}
@@ -1635,7 +1673,7 @@ export function QuoteDeskView() {
         ))}
         {isQuoteLocked ? (
           <Badge tone="amber" icon={<Lock size={12} />}>
-            Locked until you unlock edits
+            {t("quoteDesk.locked.badge")}
           </Badge>
         ) : null}
       </div>
@@ -1650,11 +1688,35 @@ export function QuoteDeskView() {
               businessHint={businessHint}
               customerName={customerName}
               customerHint={`${customerPhone}${customerEmail ? ` / ${customerEmail}` : ""}`}
-              preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+              headerTools={
+                <div className="min-w-[180px]">
+                  <Select
+                    label={t("quoteComponents.documentLanguage.label")}
+                    value={quoteEditForm.documentLocale}
+                    disabled={!canEditQuoteDocumentLocale(selectedQuote.status)}
+                    onChange={(event) =>
+                      setQuoteEditForm((prev) => ({
+                        ...prev,
+                        documentLocale: event.target.value as Quote["documentLocale"],
+                      }))
+                    }
+                    options={[
+                      { value: "en-US", label: t("quoteComponents.documentLanguage.english") },
+                      { value: "es-US", label: t("quoteComponents.documentLanguage.spanish") },
+                    ]}
+                  />
+                  {!canEditQuoteDocumentLocale(selectedQuote.status) ? (
+                    <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
+                      {t("quoteComponents.documentLanguage.locked")}
+                    </p>
+                  ) : null}
+                </div>
+              }
+              preparedDateLabel={formatQuoteDocumentDate(selectedQuote.createdAt, quoteEditForm.documentLocale, session?.timezone)}
               sentDateLabel={sentDateLabel}
               overview={quoteEditForm.scopeText}
               onOverviewChange={(value) => setQuoteEditForm((prev) => ({ ...prev, scopeText: value }))}
-              overviewPlaceholder="Optional overview shown near the top of the quote."
+              overviewPlaceholder={t("quoteComponents.sheet.overviewPlaceholder")}
               logoUrl={branding?.logoUrl ?? null}
               logoPosition={branding?.logoPosition ?? "left"}
               templateId={branding?.templateId ?? "modern"}
@@ -1662,6 +1724,7 @@ export function QuoteDeskView() {
               componentColors={branding?.componentColors ?? null}
               footerText={quoteFooterText}
               showQuoteFlyAttribution={showQuoteFlyAttribution}
+              documentLocale={quoteEditForm.documentLocale}
               readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
@@ -1678,8 +1741,8 @@ export function QuoteDeskView() {
                       setAiModalOpen(true);
                     }}
                     disabled={!canUseChatToQuote}
-                    aria-label="AI Prompt"
-                    title="AI Prompt"
+                    aria-label={t("quoteDesk.actions.aiPrompt")}
+                    title={t("quoteDesk.actions.aiPrompt")}
                   />
                   <Button
                     variant="secondary"
@@ -1695,45 +1758,45 @@ export function QuoteDeskView() {
                     }}
                     disabled={!canUseChatToQuote}
                   >
-                    AI Prompt
+                    {t("quoteDesk.actions.aiPrompt")}
                   </Button>
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
-                    Draft preview
+                    {t("quoteDesk.mobile.preview")}
                   </Button>
                   {isQuoteLocked ? (
                     <Button variant="outline" size="sm" icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
-                      Unlock to edit
+                      {t("quoteDesk.actions.unlock")}
                     </Button>
                   ) : hasUnsavedQuoteSheetChanges ? (
-                    <Badge tone="amber">Unsaved edits</Badge>
+                    <Badge tone="amber">{t("quoteDesk.unsaved")}</Badge>
                   ) : (
-                    <Badge tone="blue">Line editor live</Badge>
+                    <Badge tone="blue">{t("quoteDesk.editorLive")}</Badge>
                   )}
                 </div>
               }
             >
               {isQuoteLocked ? (
                 <Alert tone="warning">
-                  This quote is locked because it has already been sent or closed. Unlock it to edit. All saved changes will be tracked.
+                  {t("quoteDesk.locked.description")}
                 </Alert>
               ) : null}
 
               <div className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Products &amp; services</p>
-                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Load catalog items into the new row or insert them directly into the quote.</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteDesk.catalog.title")}</p>
+                    <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.catalog.description")}</p>
                   </div>
                   <div>
                     <Button size="sm" variant="outline" onClick={() => setPresetPickerOpen(true)}>
-                      Browse products
+                      {t("quoteDesk.catalog.browse")}
                     </Button>
                   </div>
                   {selectedPreset ? (
                     <div className="hidden flex-col gap-2 sm:flex-row sm:items-end xl:flex">
                       <div className="sm:w-24">
                         <Input
-                          label={formatPresetUnitLabel(selectedPreset.unitType)}
+                          label={t(`quoteComponents.units.${selectedPreset.unitType}`)}
                           type="number"
                           min="0.01"
                           step="0.01"
@@ -1743,10 +1806,10 @@ export function QuoteDeskView() {
                         />
                       </div>
                       <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)} disabled={isQuoteLocked}>
-                        Load to new row
+                        {t("quoteDesk.catalog.loadRow")}
                       </Button>
                       <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)} disabled={isQuoteLocked}>
-                        Add to quote
+                        {t("quoteDesk.catalog.add")}
                       </Button>
                     </div>
                   ) : null}
@@ -1760,14 +1823,14 @@ export function QuoteDeskView() {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-[var(--qf-text)]">{selectedPreset.name}</p>
                         <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
-                          {money(selectedPreset.unitPrice)} / {formatPresetUnitLabel(selectedPreset.unitType)}
+                          {formatMoney(selectedPreset.unitPrice)} / {t(`quoteComponents.units.${selectedPreset.unitType}`)}
                         </p>
                       </div>
-                      {selectedPreset.catalogKey ? <Badge tone="blue">Standard</Badge> : <Badge tone="slate">Saved</Badge>}
+                      {selectedPreset.catalogKey ? <Badge tone="blue">{t("quoteComponents.presetPicker.standard")}</Badge> : <Badge tone="slate">{t("quoteComponents.presetPicker.saved")}</Badge>}
                     </div>
                     <div className="mt-3 grid gap-2">
                       <Input
-                        label={formatPresetUnitLabel(selectedPreset.unitType)}
+                        label={t(`quoteComponents.units.${selectedPreset.unitType}`)}
                         type="number"
                         min="0.01"
                         step="0.01"
@@ -1777,10 +1840,10 @@ export function QuoteDeskView() {
                       />
                       <div className="grid grid-cols-2 gap-2">
                         <Button size="sm" variant="outline" onClick={() => loadPresetToNewLine(selectedPreset)} disabled={isQuoteLocked}>
-                          Load row
+                          {t("quoteDesk.catalog.loadRowShort")}
                         </Button>
                         <Button size="sm" onClick={() => void addPresetToQuote(selectedPreset)} disabled={isQuoteLocked}>
-                          Add to quote
+                          {t("quoteDesk.catalog.add")}
                         </Button>
                       </div>
                     </div>
@@ -1790,8 +1853,8 @@ export function QuoteDeskView() {
                 <div className="mt-3 hidden gap-2 overflow-x-auto pb-1 xl:flex">
                   {presetsLoading ? (
                     <LoadingState
-                      title="Loading common work"
-                      description="Fetching saved tenant work presets for this trade."
+                      title={t("quoteDesk.catalog.loading")}
+                      description={t("quoteDesk.catalog.loadingDescription")}
                       variant="compact"
                       className="min-w-[260px] bg-[var(--qf-panel)]"
                     />
@@ -1808,12 +1871,12 @@ export function QuoteDeskView() {
                         }`}
                       >
                         <p className="text-sm font-semibold">{preset.name}</p>
-                        <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{money(preset.unitPrice)} / {formatPresetUnitLabel(preset.unitType)}</p>
+                        <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{formatMoney(preset.unitPrice)} / {t(`quoteComponents.units.${preset.unitType}`)}</p>
                       </button>
                     ))
                   ) : (
                     <div className="rounded-xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-3 text-sm text-[var(--qf-text-muted)]">
-                      No products for this trade yet.
+                      {t("quoteDesk.catalog.empty")}
                     </div>
                   )}
                 </div>
@@ -1823,17 +1886,17 @@ export function QuoteDeskView() {
                 <div
                   className={`hidden gap-3 border-b border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)] xl:grid ${QUOTE_DESK_HEADER_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
                 >
-                  <span>Line</span>
-                  <span>Description</span>
-                  <span>Qty</span>
-                  <span>{canViewInternalCosts ? "Cost" : ""}</span>
-                  <span>Price</span>
-                  <span>Total</span>
-                  <span className="text-right">Actions</span>
+                  <span>{t("quoteDesk.line.title")}</span>
+                  <span>{t("quoteDesk.line.description")}</span>
+                  <span>{t("quoteDesk.line.quantity")}</span>
+                  <span>{canViewInternalCosts ? t("quoteDesk.line.cost") : ""}</span>
+                  <span>{t("quoteDesk.line.price")}</span>
+                  <span>{t("quoteComponents.math.total")}</span>
+                  <span className="text-right">{t("quoteDesk.line.actions")}</span>
                 </div>
                 {lineItemCount === 0 ? (
                   <div className="p-4">
-                    <EmptyState title="No saved lines yet" description="Add the first line below or load one from Products & services." />
+                    <EmptyState title={t("quoteDesk.line.empty")} description={t("quoteDesk.line.emptyDescription")} />
                   </div>
                 ) : null}
                 <div className="divide-y divide-[var(--qf-border)]">
@@ -1855,11 +1918,11 @@ export function QuoteDeskView() {
                     <div className="rounded-2xl border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Add line</p>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteDesk.line.add")}</p>
                           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
                             {isQuoteLocked
-                              ? "Unlock the quote to add new rows."
-                              : "Keep adding rows directly in the quote sheet."}
+                              ? t("quoteDesk.line.unlockToAdd")
+                              : t("quoteDesk.line.addHelp")}
                           </p>
                         </div>
                       </div>
@@ -1875,12 +1938,12 @@ export function QuoteDeskView() {
             <div className={mobilePane === "preview" ? "block xl:hidden" : "hidden"}>
               <QuoteLivePreview
                 businessName={session?.tenantName ?? "QuoteFly"}
-                quoteReferenceLabel={`Quote #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
+                quoteReferenceLabel={`${quoteDocumentCopy(quoteEditForm.documentLocale).customerQuote} #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
                 businessHint={businessHint}
                 customerName={customerName}
                 customerPhone={customerPhone}
                 customerEmail={customerEmail}
-                preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+                preparedDateLabel={formatQuoteDocumentDate(selectedQuote.createdAt, quoteEditForm.documentLocale, session?.timezone)}
                 sentDateLabel={sentDateLabel}
                 quoteTitle={quoteEditForm.title}
                 scopeText={quoteEditForm.scopeText}
@@ -1895,69 +1958,70 @@ export function QuoteDeskView() {
                 componentColors={branding?.componentColors ?? null}
                 footerText={quoteFooterText}
                 showQuoteFlyAttribution={showQuoteFlyAttribution}
+                documentLocale={quoteEditForm.documentLocale}
               />
             </div>
 
             <Card variant="blue" padding="md" className="hidden xl:block">
               <CardHeader
-                title="Quote actions"
-                subtitle="Use the same control rail whether you are opening, reviewing, or editing a quote."
+                title={t("quoteDesk.controls.title")}
+                subtitle={t("quoteDesk.controls.description")}
               />
               <div className="mb-4 space-y-3">
                 {canManageAssignments ? (
                   <Select
-                    label="Assigned to"
+                    label={t("quoteDesk.assignment.label")}
                     value={selectedQuote.assignedTenantUserId ?? ""}
                     onChange={(event) => void updateQuoteAssignment(event.target.value)}
                     disabled={assignmentSaving}
                     options={[
-                      { value: "", label: "Unassigned" },
-                      ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${member.role}` })),
+                      { value: "", label: t("quoteDesk.assignment.unassigned") },
+                      ...workspaceMembers.map((member) => ({ value: member.id, label: `${member.user.fullName} · ${t(`domain.role.${member.role.toLowerCase()}`)}` })),
                     ]}
                   />
                 ) : selectedQuote.assignedTenantUser ? (
                   <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm font-semibold text-blue-800">
-                    Assigned to {selectedQuote.assignedTenantUser.user.fullName}
+                    {t("quoteDesk.assignment.assignedTo", { name: selectedQuote.assignedTenantUser.user.fullName })}
                   </div>
                 ) : null}
                 <Select
-                  label="Trade"
+                  label={t("quoteBuilder.trade")}
                   value={quoteEditForm.serviceType}
                   onChange={(event) =>
                     setQuoteEditForm((prev) => ({ ...prev, serviceType: event.target.value as typeof prev.serviceType }))
                   }
                   disabled={isQuoteLocked}
                   options={[
-                    { value: "HVAC", label: "HVAC" },
-                    { value: "PLUMBING", label: "PLUMBING" },
-                    { value: "FLOORING", label: "FLOORING" },
-                    { value: "ROOFING", label: "ROOFING" },
-                    { value: "GARDENING", label: "GARDENING" },
-                    { value: "CONSTRUCTION", label: "CONSTRUCTION" },
+                    { value: "HVAC", label: t("domain.trade.HVAC") },
+                    { value: "PLUMBING", label: t("domain.trade.PLUMBING") },
+                    { value: "FLOORING", label: t("domain.trade.FLOORING") },
+                    { value: "ROOFING", label: t("domain.trade.ROOFING") },
+                    { value: "GARDENING", label: t("domain.trade.GARDENING") },
+                    { value: "CONSTRUCTION", label: t("domain.trade.CONSTRUCTION") },
                   ]}
                 />
                 <Select
-                  label="Quote status"
+                  label={t("quoteDesk.controls.status")}
                   value={quoteEditForm.status}
                   onChange={(event) =>
                     setQuoteEditForm((prev) => ({ ...prev, status: event.target.value as typeof prev.status }))
                   }
                   disabled={isQuoteLocked}
                   options={[
-                    { value: "DRAFT", label: "Draft" },
-                    { value: "READY_FOR_REVIEW", label: "Completed" },
-                    { value: "SENT_TO_CUSTOMER", label: "Sent" },
-                    { value: "ACCEPTED", label: "Closed" },
-                    { value: "REJECTED", label: "Lost" },
+                    { value: "DRAFT", label: t("domain.quoteStatus.DRAFT") },
+                    { value: "READY_FOR_REVIEW", label: t("domain.quoteStatus.READY_FOR_REVIEW") },
+                    { value: "SENT_TO_CUSTOMER", label: t("domain.quoteStatus.SENT_TO_CUSTOMER") },
+                    { value: "ACCEPTED", label: t("domain.quoteStatus.ACCEPTED") },
+                    { value: "REJECTED", label: t("domain.quoteStatus.REJECTED") },
                   ]}
                 />
               </div>
               <div className="space-y-3 text-sm">
-                <SummaryRow label="Line items" value={String(lineItemCount)} />
-                <SummaryRow label="Customer subtotal" value={money(customerSubtotal)} />
+                <SummaryRow label={t("quoteDesk.controls.lineItems")} value={String(lineItemCount)} />
+                <SummaryRow label={t("quoteComponents.math.customerSubtotal")} value={formatMoney(customerSubtotal)} />
                 <div className="space-y-1">
                   <Input
-                    label="Tax"
+                    label={t("quoteComponents.math.tax")}
                     type="number"
                     min="0"
                     step="0.01"
@@ -1966,38 +2030,38 @@ export function QuoteDeskView() {
                     disabled={isQuoteLocked}
                   />
                 </div>
-                <SummaryRow label="Total" value={money(totalAmount)} strong />
-                {canViewInternalCosts ? <SummaryRow label="Internal subtotal" value={money(internalSubtotal)} /> : null}
-                {canViewInternalCosts ? <SummaryRow label="Est. profit" value={money(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
-                {canViewInternalCosts ? <SummaryRow label="Margin" value={`${estimatedMarginPercent.toFixed(1)}%`} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
+                <SummaryRow label={t("quoteComponents.math.total")} value={formatMoney(totalAmount)} strong />
+                {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.internalCost")} value={formatMoney(internalSubtotal)} /> : null}
+                {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.estimatedProfit")} value={formatMoney(estimatedProfit)} tone={estimatedProfit >= 0 ? "good" : "bad"} /> : null}
+                {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.margin")} value={new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(estimatedMarginPercent / 100)} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
               </div>
               <div className="mt-4 space-y-2 text-sm text-[var(--qf-text-soft)]">
-                <ChecklistItem compact complete={Boolean(selectedQuote.customerId)} label="Customer attached" />
-                <ChecklistItem compact complete={Boolean(quoteEditForm.title.trim())} label="Quote title present" />
-                <ChecklistItem compact complete={lineItemCount > 0} label={`${lineItemCount} line${lineItemCount === 1 ? "" : "s"} in quote`} />
+                <ChecklistItem compact complete={Boolean(selectedQuote.customerId)} label={t("quoteDesk.controls.customerAttached")} />
+                <ChecklistItem compact complete={Boolean(quoteEditForm.title.trim())} label={t("quoteDesk.controls.titlePresent")} />
+                <ChecklistItem compact complete={lineItemCount > 0} label={t("quoteDesk.controls.linesInQuote", { count: lineItemCount })} />
               </div>
               {isQuoteLocked ? (
                 <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
-                  This quote is currently locked because it has already been sent or closed.
+                  {t("quoteDesk.controls.locked")}
                 </div>
               ) : null}
               <div className="mt-4 grid gap-2">
                 {isQuoteLocked ? (
                   <Button fullWidth icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
-                    Unlock to Edit
+                    {t("quoteDesk.actions.unlock")}
                   </Button>
                 ) : (
                   <Button fullWidth loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-                    Save Quote Sheet
+                    {t("quoteDesk.actions.saveSheet")}
                   </Button>
                 )}
                 <div className="grid gap-2 xl:hidden">
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
-                    Start Another Quote
+                    {t("quoteDesk.actions.startAnother")}
                   </Button>
                   {canManageRecordRetention ? <details className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2">
                     <summary className="min-h-11 cursor-pointer list-none py-3 text-sm font-semibold text-[var(--qf-text-soft)]">
-                      More actions
+                      {t("quoteDesk.actions.more")}
                     </summary>
                     <div className="mt-3 grid gap-2">
                       <Button
@@ -2007,7 +2071,7 @@ export function QuoteDeskView() {
                         onClick={revertQuoteSheetToLastSaved}
                         disabled={!hasUnsavedQuoteSheetChanges}
                       >
-                        Revert to Last Saved
+                        {t("quoteDesk.actions.revert")}
                       </Button>
                       <div className="grid grid-cols-2 gap-2">
                         <Button
@@ -2016,7 +2080,7 @@ export function QuoteDeskView() {
                           icon={<Archive size={14} />}
                           onClick={() => setQuoteRetentionAction("archive")}
                         >
-                          Archive
+                          {t("quoteDesk.actions.archive")}
                         </Button>
                         <Button
                           fullWidth
@@ -2024,7 +2088,7 @@ export function QuoteDeskView() {
                           icon={<Trash2 size={14} />}
                           onClick={() => setQuoteRetentionAction("delete")}
                         >
-                          Delete
+                          {t("quoteDesk.actions.delete")}
                         </Button>
                       </div>
                     </div>
@@ -2032,13 +2096,13 @@ export function QuoteDeskView() {
                 </div>
                 <div className="hidden gap-2 lg:grid">
                   <Button fullWidth variant="outline" icon={<RotateCcw size={14} />} onClick={revertQuoteSheetToLastSaved} disabled={!hasUnsavedQuoteSheetChanges}>
-                    Revert to Last Saved
+                    {t("quoteDesk.actions.revert")}
                   </Button>
                   <Button fullWidth variant="outline" icon={<Eye size={14} />} onClick={() => requestOutboundAction("pdf-preview")}>
-                    Preview Generated PDF
+                    {t("quoteDesk.actions.previewPdf")}
                   </Button>
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
-                    Start Another Quote
+                    {t("quoteDesk.actions.startAnother")}
                   </Button>
                   {canManageRecordRetention ? <div className="grid grid-cols-2 gap-2">
                     <Button
@@ -2047,7 +2111,7 @@ export function QuoteDeskView() {
                       icon={<Archive size={14} />}
                       onClick={() => setQuoteRetentionAction("archive")}
                     >
-                      Archive
+                      {t("quoteDesk.actions.archive")}
                     </Button>
                     <Button
                       fullWidth
@@ -2055,40 +2119,40 @@ export function QuoteDeskView() {
                       icon={<Trash2 size={14} />}
                       onClick={() => setQuoteRetentionAction("delete")}
                     >
-                      Delete
+                      {t("quoteDesk.actions.delete")}
                     </Button>
                   </div> : null}
                 </div>
-                <p className="text-xs text-[var(--qf-text-soft)]">Prepared on {formatDateTime(selectedQuote.createdAt)} - Sent {sentDateLabel}</p>
+                <p className="text-xs text-[var(--qf-text-soft)]">{t("quoteDesk.preparedSent", { prepared: formatLocalDateTime(selectedQuote.createdAt), sent: sentDateLabel })}</p>
               </div>
             </Card>
 
             <div className={`space-y-5 ${mobilePane === "preview" ? "hidden xl:block" : ""}`}>
               <QuickLookupCard
-                title="Switch Customer or Quote"
-                subtitle="Jump to another quote or start a fresh quote for an existing customer without leaving the quote desk."
-                customerActionLabel="New Quote"
+                title={t("quoteDesk.switcher.title")}
+                subtitle={t("quoteDesk.switcher.description")}
+                customerActionLabel={t("quoteDesk.actions.newQuote")}
                 customerActionVariant="outline"
                 activeCustomerId={selectedQuote.customerId}
                 activeQuoteId={selectedQuote.id}
                 onCustomerAction={(customer) => {
-                  setNotice(`${customer.fullName} is ready for a new quote.`);
+                  setNotice(t("quoteDesk.notices.customerReady", { name: customer.fullName }));
                   requestNavigation(() => navigateToBuilder(customer.id));
                 }}
                 onQuoteAction={(quote) => requestNavigation(() => navigateToQuote(quote.id))}
               />
 
               <Card variant="default" padding="md">
-                <CardHeader title="Quote status" subtitle="Move the quote forward without leaving the editor." />
+                <CardHeader title={t("quoteDesk.lifecycle.title")} subtitle={t("quoteDesk.lifecycle.description")} />
                 <div className="grid gap-2">
                   <Button variant="outline" onClick={() => requestLifecycleUpdate("SENT_TO_CUSTOMER")}>
-                    Mark sent
+                    {t("quoteDesk.lifecycle.sent")}
                   </Button>
                   <Button variant="outline" onClick={() => requestLifecycleUpdate("ACCEPTED")}>
-                    Mark closed / won
+                    {t("quoteDesk.lifecycle.won")}
                   </Button>
                   <Button variant="outline" onClick={() => requestLifecycleUpdate("REJECTED")}>
-                    Mark lost
+                    {t("quoteDesk.lifecycle.lost")}
                   </Button>
                 </div>
               </Card>
@@ -2102,8 +2166,8 @@ export function QuoteDeskView() {
           <div className="h-24" />
           <WorkflowActionDock>
             <div className="mb-2 flex items-center justify-between text-xs text-[var(--qf-text-muted)]">
-              <span>{lineItemCount} line{lineItemCount === 1 ? "" : "s"}</span>
-              <span>Total {money(totalAmount)}</span>
+              <span>{t("quoteDesk.controls.lineCount", { count: lineItemCount })}</span>
+              <span>{t("quoteComponents.math.total")} {formatMoney(totalAmount)}</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -2111,15 +2175,15 @@ export function QuoteDeskView() {
                 icon={mobilePane === "preview" ? <ChevronDown size={14} /> : <Eye size={14} />}
                 onClick={() => setMobilePane((current) => (current === "editor" ? "preview" : "editor"))}
               >
-                {mobilePane === "preview" ? "Edit Quote" : "Draft preview"}
+                {mobilePane === "preview" ? t("quoteDesk.mobile.edit") : t("quoteDesk.mobile.preview")}
               </Button>
               {isQuoteLocked ? (
                 <Button icon={<Lock size={14} />} onClick={() => setUnlockConfirmOpen(true)}>
-                  Unlock
+                  {t("quoteDesk.actions.unlockShort")}
                 </Button>
               ) : (
                 <Button loading={saving} icon={<Save size={14} />} onClick={() => void handleSaveQuoteSheet()}>
-                  Save Quote
+                  {t("quoteDesk.actions.save")}
                 </Button>
               )}
             </div>
@@ -2130,29 +2194,29 @@ export function QuoteDeskView() {
       {activeTab === "send" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <Card variant="default" padding="md">
-            <CardHeader title="Send the quote" subtitle="When the sheet is ready, open the customer's app or export the PDF." />
+            <CardHeader title={t("quoteDesk.send.title")} subtitle={t("quoteDesk.send.description")} />
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Button variant="outline" icon={<Mail size={14} />} onClick={() => requestOutboundAction("email")} disabled={saving}>
-                Email App
+                {t("quoteDesk.send.emailApp")}
               </Button>
               <Button variant="outline" icon={<MessageSquare size={14} />} onClick={() => requestOutboundAction("sms")} disabled={saving}>
-                Text App
+                {t("quoteDesk.send.textApp")}
               </Button>
               <Button variant="outline" icon={<Copy size={14} />} onClick={() => requestOutboundAction("copy")} disabled={saving}>
-                Copy Message
+                {t("quoteDesk.send.copyMessage")}
               </Button>
               <Button variant="secondary" icon={<FileOutput size={14} />} onClick={() => requestOutboundAction("pdf")} disabled={saving}>
-                Download PDF
+                {t("quoteDesk.send.downloadPdf")}
               </Button>
             </div>
           </Card>
 
           <Card variant="blue" padding="md">
-            <CardHeader title="Send notes" subtitle="QuoteFly opens the user's native apps so V1 does not need a paid send service." />
+            <CardHeader title={t("quoteDesk.send.notesTitle")} subtitle={t("quoteDesk.send.notesDescription")} />
             <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
-              <p>Text App opens Messages at the customer's phone number with the quote message filled in.</p>
-              <p>Email can use the native share sheet with the PDF attached on supported phones; otherwise attach the downloaded PDF manually.</p>
-              <p>Sent date updates once the quote is marked sent.</p>
+              <p>{t("quoteDesk.send.textNote")}</p>
+              <p>{t("quoteDesk.send.emailNote")}</p>
+              <p>{t("quoteDesk.send.sentDateNote")}</p>
             </div>
           </Card>
         </div>
@@ -2161,13 +2225,13 @@ export function QuoteDeskView() {
       {activeTab === "history" ? (
         <Card variant="default" padding="md">
           <CardHeader
-            title="History"
-            subtitle="Review AI runs and quote revisions from one audit surface."
+            title={t("quoteDesk.history.title")}
+            subtitle={t("quoteDesk.history.description")}
             actions={
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => void loadAiRuns(selectedQuote.id)}>Refresh AI Runs</Button>
+                <Button variant="outline" size="sm" onClick={() => void loadAiRuns(selectedQuote.id)}>{t("quoteDesk.history.refreshAi")}</Button>
                 {canViewQuoteHistory ? (
-                  <Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>Refresh Revisions</Button>
+                  <Button variant="outline" size="sm" onClick={() => void loadQuoteHistory()}>{t("quoteDesk.history.refreshRevisions")}</Button>
                 ) : null}
               </div>
             }
@@ -2177,27 +2241,27 @@ export function QuoteDeskView() {
             <section className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">AI runs</p>
-                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Review privacy-safe AI activity and context quality for this quote.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-quotefly-blue">{t("quoteDesk.history.aiRuns")}</p>
+                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.history.aiRunsDescription")}</p>
                 </div>
               </div>
 
               {aiRunsLoading ? (
                 <LoadingState
-                  title="Loading AI runs"
-                  description="Retrieving redacted prompts, confidence labels, and guarded AI activity."
+                  title={t("quoteDesk.history.loadingAi")}
+                  description={t("quoteDesk.history.loadingAiDescription")}
                   variant="list"
                   rows={3}
                 />
               ) : aiRuns.length === 0 ? (
-                <EmptyState title="No AI runs yet" description="Privacy-safe AI activity appears here after draft or revise actions." />
+                <EmptyState title={t("quoteDesk.history.noAi")} description={t("quoteDesk.history.noAiDescription")} />
               ) : (
                 <div className="space-y-2">
                   {aiRuns.map((run) => (
                     <div key={run.id} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <Badge tone={run.eventType === "REVISE" ? "orange" : "blue"}>{run.eventType === "REVISE" ? "AI Revise" : "AI Draft"}</Badge>
+                          <Badge tone={run.eventType === "REVISE" ? "orange" : "blue"}>{run.eventType === "REVISE" ? t("quoteDesk.history.aiRevise") : t("quoteDesk.history.aiDraft")}</Badge>
                           {run.confidenceLabel ? (
                             <Badge tone={run.confidenceLevel === "high" ? "emerald" : run.confidenceLevel === "medium" ? "amber" : "red"}>
                               {run.confidenceLabel}
@@ -2205,17 +2269,17 @@ export function QuoteDeskView() {
                           ) : null}
                           {typeof run.patchAdded === "number" || typeof run.patchUpdated === "number" || typeof run.patchRemoved === "number" ? (
                             <span className="text-xs text-[var(--qf-text-muted)]">
-                              {run.patchUpdated ?? 0} updated | {run.patchAdded ?? 0} added | {run.patchRemoved ?? 0} removed
+                              {t("quoteDesk.history.patchSummary", { updated: run.patchUpdated ?? 0, added: run.patchAdded ?? 0, removed: run.patchRemoved ?? 0 })}
                             </span>
                           ) : null}
                         </div>
-                        <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(run.createdAt)}</span>
+                    <span className="text-xs text-[var(--qf-text-muted)]">{formatLocalDateTime(run.createdAt)}</span>
                       </div>
-                      <p className="mt-2 text-sm font-semibold text-[var(--qf-text)]">{run.insightSummary || "AI prepared a quote update."}</p>
+                      <p className="mt-2 text-sm font-semibold text-[var(--qf-text)]">{run.insightSummary || t("quoteDesk.history.aiPrepared")}</p>
                       {run.promptRedacted ? (
                         <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{run.promptRedacted}</p>
                       ) : (
-                        <p className="mt-1 text-sm text-[var(--qf-text-muted)]">Prompt details are unavailable for this historical run.</p>
+                        <p className="mt-1 text-sm text-[var(--qf-text-muted)]">{t("quoteDesk.history.promptUnavailable")}</p>
                       )}
                       {run.riskNote ? <p className="mt-2 text-xs text-[var(--qf-text-soft)]">{run.riskNote}</p> : null}
                       {run.insightReasons.length ? (
@@ -2227,13 +2291,13 @@ export function QuoteDeskView() {
                       ) : null}
                       {run.insightSourceLabels.length ? (
                         <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
-                          Context used: {run.insightSourceLabels.join(" | ")}
+                          {t("quoteDesk.ai.contextUsed")}: {run.insightSourceLabels.join(" | ")}
                         </p>
                       ) : null}
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--qf-text-muted)]">
-                        <span>By {run.actorName || run.actorEmail || "Unknown"}</span>
+                        <span>{t("quoteDesk.history.by", { actor: run.actorName || run.actorEmail || t("quoteComponents.unknown") })}</span>
                         <span>
-                          {run.totalTokens ? `${run.totalTokens.toLocaleString()} tokens` : "Tokens not captured"}
+                          {run.totalTokens ? t("quoteDesk.history.tokens", { count: run.totalTokens, formatted: new Intl.NumberFormat(locale).format(run.totalTokens) }) : t("quoteDesk.history.tokensUnavailable")}
                         </span>
                       </div>
                     </div>
@@ -2245,8 +2309,8 @@ export function QuoteDeskView() {
             <section className="space-y-3 border-t border-[var(--qf-border)] pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">Revision history</p>
-                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">Track title, status, and pricing changes for this quote.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--qf-text-muted)]">{t("quoteDesk.history.revisions")}</p>
+                  <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.history.revisionsDescription")}</p>
                 </div>
               </div>
 
@@ -2264,7 +2328,7 @@ export function QuoteDeskView() {
                             : "border-[var(--qf-border-strong)] bg-[var(--qf-panel)] text-[var(--qf-text-soft)] hover:bg-[var(--qf-interactive-hover)]"
                         }`}
                       >
-                        {mode === "quote" ? "Selected Quote" : mode === "customer" ? "By Customer" : "All Activity"}
+                        {mode === "quote" ? t("quoteDesk.history.selectedQuote") : mode === "customer" ? t("quoteDesk.history.byCustomer") : t("quoteDesk.history.allActivity")}
                       </button>
                     ))}
                     {historyMode === "customer" ? (
@@ -2273,7 +2337,7 @@ export function QuoteDeskView() {
                         onChange={(event) => setHistoryCustomerId(event.target.value)}
                         className="min-h-[44px] rounded-full border border-[var(--qf-border-strong)] bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:min-h-[36px] sm:py-1"
                       >
-                        <option value="ALL">Select customer...</option>
+                        <option value="ALL">{t("quoteDesk.history.selectCustomer")}</option>
                         {customers.map((customer) => (
                           <option key={customer.id} value={customer.id}>{customer.fullName}</option>
                         ))}
@@ -2282,13 +2346,13 @@ export function QuoteDeskView() {
                   </div>
                   {historyLoading ? (
                     <LoadingState
-                      title="Loading history"
-                      description="Getting quote versions, totals, and restore checkpoints."
+                      title={t("quoteDesk.history.loading")}
+                      description={t("quoteDesk.history.loadingDescription")}
                       variant="list"
                       rows={4}
                     />
                   ) : quoteHistory.length === 0 ? (
-                    <EmptyState title="No history yet" description="History entries appear after the quote changes." />
+                    <EmptyState title={t("quoteDesk.history.empty")} description={t("quoteDesk.history.emptyDescription")} />
                   ) : (
                     <div className="space-y-2">
                       {quoteHistory.map((revision) => (
@@ -2307,14 +2371,14 @@ export function QuoteDeskView() {
                                   icon={<RotateCcw size={13} />}
                                   onClick={() => setRestoreRevisionTarget(revision)}
                                 >
-                                  Restore
+                                  {t("quoteDesk.history.restore")}
                                 </Button>
                               ) : null}
-                              <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(revision.createdAt)}</span>
+                    <span className="text-xs text-[var(--qf-text-muted)]">{formatLocalDateTime(revision.createdAt)}</span>
                             </div>
                           </div>
                           <p className="mt-2 text-xs text-[var(--qf-text-soft)]">
-                            v{revision.version} - Total {money(revision.totalAmount)} - By {revision.actorName || revision.actorEmail || "Unknown"}
+                      {t("quoteDesk.revisionSummary", { version: revision.version, total: formatMoney(revision.totalAmount), actor: revision.actorName || revision.actorEmail || t("quoteComponents.unknown") })}
                           </p>
                         </div>
                       ))}
@@ -2323,8 +2387,8 @@ export function QuoteDeskView() {
                 </>
               ) : (
                 <FeatureLockedCard
-                  title="Revision history"
-                  description="Revision history unlocks on Professional."
+                  title={t("quoteDesk.history.revisions")}
+                  description={t("quoteDesk.history.professionalRequired")}
                   currentPlanLabel={currentPlanLabel}
                   requiredPlanLabel="Professional"
                   showUpgradeHint={canAutoUpgradeMessage}
@@ -2339,34 +2403,34 @@ export function QuoteDeskView() {
         canViewCommunicationLog ? (
           <Card variant="default" padding="md">
             <CardHeader
-              title="Send log"
-              subtitle="Review email, text, and copy actions for this quote."
-              actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>Refresh</Button>}
+              title={t("quoteComponents.sendLog.title")}
+              subtitle={t("quoteDesk.sendLog.description")}
+              actions={<Button variant="outline" size="sm" onClick={() => void loadOutboundEvents(selectedQuote.id)}>{t("quoteComponents.history.refresh")}</Button>}
             />
             {outboundEventsLoading ? (
               <LoadingState
-                title="Loading send log"
-                description="Checking email, SMS, copy, and download events."
+                title={t("quoteComponents.sendLog.loading")}
+                description={t("quoteDesk.sendLog.loadingDescription")}
                 variant="list"
                 rows={3}
               />
             ) : outboundEvents.length === 0 ? (
-              <EmptyState title="No send log yet" description="Send activity appears after an email, text, or copy action is confirmed." />
+              <EmptyState title={t("quoteComponents.sendLog.empty")} description={t("quoteDesk.sendLog.emptyDescription")} />
             ) : (
               <div className="space-y-2">
                 {outboundEvents.map((event) => (
                   <div key={event.id} className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <OutboundChannelPill channel={event.channel} />
-                      <span className="text-xs text-[var(--qf-text-muted)]">{formatDateTime(event.createdAt)}</span>
+                    <span className="text-xs text-[var(--qf-text-muted)]">{formatLocalDateTime(event.createdAt)}</span>
                     </div>
                     <p className="mt-2 text-xs text-[var(--qf-text-soft)]">
-                      {event.destination ? `Destination: ${event.destination}` : "Destination not captured"}
+                      {event.destination ? t("quoteDesk.sendLog.destination", { destination: event.destination }) : t("quoteDesk.sendLog.noDestination")}
                     </p>
                     <p className="mt-1 text-xs text-[var(--qf-text-muted)]">
-                      By {event.actorName || event.actorEmail || "Unknown"}
+                      {t("quoteComponents.sendLog.by", { actor: event.actorName || event.actorEmail || t("quoteComponents.unknown") })}
                     </p>
-                    {event.subject ? <p className="mt-1 text-xs text-[var(--qf-text-muted)]">Subject: {event.subject}</p> : null}
+                    {event.subject ? <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{t("quoteComponents.sendLog.subject", { subject: event.subject })}</p> : null}
                   </div>
                 ))}
               </div>
@@ -2374,8 +2438,8 @@ export function QuoteDeskView() {
           </Card>
         ) : (
           <FeatureLockedCard
-            title="Send log"
-            description="Communication logs unlock on Professional."
+            title={t("quoteComponents.sendLog.title")}
+            description={t("quoteDesk.sendLog.professionalRequired")}
             currentPlanLabel={currentPlanLabel}
             requiredPlanLabel="Professional"
             showUpgradeHint={canAutoUpgradeMessage}
@@ -2388,30 +2452,30 @@ export function QuoteDeskView() {
         onClose={cancelOutboundPreparation}
         closeOnBackdrop={!outboundPreparationSaving}
         size="md"
-        ariaLabel="Save changes before sending"
+        ariaLabel={t("quoteDesk.saveBeforeSend.title")}
       >
         <ModalHeader
-          title="Save changes before sending"
-          description="The customer should only receive the quote currently shown in the editor."
+          title={t("quoteDesk.saveBeforeSend.title")}
+          description={t("quoteDesk.saveBeforeSend.description")}
           onClose={cancelOutboundPreparation}
         />
         <ModalBody className="space-y-3">
           <Alert tone="warning">
-            This quote has unsaved changes. Save them before continuing, or explicitly discard them and use the last saved quote.
+            {t("quoteDesk.saveBeforeSend.warning")}
           </Alert>
           {newLine.title.trim() ? (
-            <p className="text-sm text-slate-600">The completed new line will be added to the quote before sending.</p>
+            <p className="text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.saveBeforeSend.newLine")}</p>
           ) : null}
         </ModalBody>
         <ModalFooter>
           <Button variant="outline" onClick={cancelOutboundPreparation} disabled={outboundPreparationSaving}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="ghost" onClick={discardEditsAndContinueOutbound} disabled={outboundPreparationSaving}>
-            Discard Edits
+            {t("quoteDesk.actions.discardEdits")}
           </Button>
           <Button onClick={() => void saveAndContinueOutbound()} loading={outboundPreparationSaving}>
-            Save and Continue
+            {t("quoteDesk.actions.saveContinue")}
           </Button>
         </ModalFooter>
       </Modal>
@@ -2423,22 +2487,22 @@ export function QuoteDeskView() {
         }}
         closeOnBackdrop={!lifecyclePreparationSaving}
         size="md"
-        ariaLabel="Save changes before updating quote status"
+        ariaLabel={t("quoteDesk.saveBeforeStatus.title")}
       >
         <ModalHeader
-          title="Save changes before updating status"
-          description="Choose whether the status change should use the quote currently shown or the last saved version."
+          title={t("quoteDesk.saveBeforeStatus.title")}
+          description={t("quoteDesk.saveBeforeStatus.description")}
           onClose={() => {
             if (!lifecyclePreparationSaving) setPendingLifecycleStatus(null);
           }}
         />
         <ModalBody>
-          <Alert tone="warning">This quote has unsaved changes. They will not be included unless you save first.</Alert>
+          <Alert tone="warning">{t("quoteDesk.saveBeforeStatus.warning")}</Alert>
         </ModalBody>
         <ModalFooter>
-          <Button variant="outline" onClick={() => setPendingLifecycleStatus(null)} disabled={lifecyclePreparationSaving}>Cancel</Button>
-          <Button variant="ghost" onClick={discardEditsAndContinueLifecycle} disabled={lifecyclePreparationSaving}>Discard edits</Button>
-          <Button onClick={() => void saveAndContinueLifecycle()} loading={lifecyclePreparationSaving}>Save and continue</Button>
+          <Button variant="outline" onClick={() => setPendingLifecycleStatus(null)} disabled={lifecyclePreparationSaving}>{t("common.cancel")}</Button>
+          <Button variant="ghost" onClick={discardEditsAndContinueLifecycle} disabled={lifecyclePreparationSaving}>{t("quoteDesk.actions.discardEdits")}</Button>
+          <Button onClick={() => void saveAndContinueLifecycle()} loading={lifecyclePreparationSaving}>{t("quoteDesk.actions.saveContinue")}</Button>
         </ModalFooter>
       </Modal>
 
@@ -2446,9 +2510,9 @@ export function QuoteDeskView() {
         open={navigationPromptOpen}
         onClose={cancelNavigation}
         onConfirm={continueNavigation}
-        title="Leave with unsaved quote edits?"
-        description="Your edits are saved in this browser for up to 12 hours and can be restored when you return."
-        confirmLabel="Keep draft and leave"
+        title={t("quoteDesk.leave.title")}
+        description={t("quoteDesk.leave.description")}
+        confirmLabel={t("quoteDesk.leave.confirm")}
         confirmVariant="warning"
       />
 
@@ -2456,9 +2520,9 @@ export function QuoteDeskView() {
         open={lineItemPendingDeleteId !== null}
         onClose={() => setLineItemPendingDeleteId(null)}
         onConfirm={() => void confirmDeleteLineItem()}
-        title="Delete line item"
-        description="This removes the row from the quote and recalculates totals."
-        confirmLabel="Delete line"
+        title={t("quoteDesk.deleteLine.title")}
+        description={t("quoteDesk.deleteLine.description")}
+        confirmLabel={t("quoteDesk.deleteLine.confirm")}
         loading={saving}
       />
 
@@ -2466,14 +2530,14 @@ export function QuoteDeskView() {
         open={unlockConfirmOpen}
         onClose={() => setUnlockConfirmOpen(false)}
         onConfirm={handleUnlockEditing}
-        title="Unlock quote for editing"
-        description="This quote has already been sent or closed. If you unlock it and save changes, the update will be tracked in quote history."
-        confirmLabel="Unlock quote"
+        title={t("quoteDesk.unlock.title")}
+        description={t("quoteDesk.unlock.description")}
+        confirmLabel={t("quoteDesk.unlock.confirm")}
         confirmVariant="warning"
       >
         <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
-          <p>Use this when you need to revise a sent quote, correct pricing, or update scope after the customer has already seen it.</p>
-          <p>Revert only resets unsaved edits in the current session. Saved changes remain in the audit trail.</p>
+          <p>{t("quoteDesk.unlock.help")}</p>
+          <p>{t("quoteDesk.unlock.revertHelp")}</p>
         </div>
       </ConfirmModal>
 
@@ -2481,23 +2545,23 @@ export function QuoteDeskView() {
         open={quoteRetentionAction !== null}
         onClose={() => setQuoteRetentionAction(null)}
         onConfirm={() => void confirmQuoteRetentionAction()}
-        title={quoteRetentionAction === "archive" ? "Archive quote" : "Delete quote"}
+        title={quoteRetentionAction === "archive" ? t("quoteDesk.retention.archiveTitle") : t("quoteDesk.retention.deleteTitle")}
         description={
           quoteRetentionAction === "archive"
-            ? "This hides the quote from active views but retains it in the database and audit history."
-            : "This removes the quote from active views but retains it in the database and audit history."
+            ? t("quoteDesk.retention.archiveDescription")
+            : t("quoteDesk.retention.deleteDescription")
         }
-        confirmLabel={quoteRetentionAction === "archive" ? "Archive quote" : "Delete quote"}
+        confirmLabel={quoteRetentionAction === "archive" ? t("quoteDesk.retention.archiveConfirm") : t("quoteDesk.retention.deleteConfirm")}
         confirmVariant={quoteRetentionAction === "archive" ? "warning" : "danger"}
         loading={quoteRetentionSaving}
       >
         <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
           <p>
             {quoteRetentionAction === "archive"
-              ? "Archived quotes stay retained for audit purposes and can be referenced later."
-              : "Deleted quotes stay retained for audit purposes, but they are removed from active workflow views."}
+              ? t("quoteDesk.retention.archiveHelp")
+              : t("quoteDesk.retention.deleteHelp")}
           </p>
-          <p>All existing quote history remains stored.</p>
+          <p>{t("quoteDesk.retention.historyStored")}</p>
         </div>
       </ConfirmModal>
 
@@ -2505,19 +2569,16 @@ export function QuoteDeskView() {
         open={restoreRevisionTarget !== null}
         onClose={() => setRestoreRevisionTarget(null)}
         onConfirm={() => void confirmRestoreRevision()}
-        title="Restore quote revision"
-        description="This will replace the current quote sheet with the selected saved revision and track the restore in history."
-        confirmLabel={restoreRevisionTarget ? `Restore v${restoreRevisionTarget.version}` : "Restore revision"}
+        title={t("quoteDesk.restore.title")}
+        description={t("quoteDesk.restore.description")}
+        confirmLabel={restoreRevisionTarget ? t("quoteDesk.restore.versionConfirm", { version: restoreRevisionTarget.version }) : t("quoteDesk.restore.confirm")}
         confirmVariant="warning"
         loading={restoreRevisionSaving}
       >
         {restoreRevisionTarget ? (
           <div className="space-y-2 text-sm text-[var(--qf-text-soft)]">
-            <p>
-              Restoring revision <strong>v{restoreRevisionTarget.version}</strong> will bring back the saved title,
-              totals, status, and line items from {formatDateTime(restoreRevisionTarget.createdAt)}.
-            </p>
-            <p>The current version remains in history, so you can track this restore action later.</p>
+            <p>{t("quoteDesk.restore.help", { version: restoreRevisionTarget.version, date: formatLocalDateTime(restoreRevisionTarget.createdAt) })}</p>
+            <p>{t("quoteDesk.restore.historyHelp")}</p>
           </div>
         ) : null}
       </ConfirmModal>
@@ -2539,13 +2600,13 @@ export function QuoteDeskView() {
         onSelectPreset={setSelectedPresetId}
         quantity={selectedPresetQuantity}
         onQuantityChange={setSelectedPresetQuantity}
-        primaryActionLabel="Add to quote"
+        primaryActionLabel={t("quoteDesk.catalog.add")}
         onPrimaryAction={() => {
           if (!selectedPreset) return;
           void addPresetToQuote(selectedPreset);
           setPresetPickerOpen(false);
         }}
-        secondaryActionLabel="Load to new row"
+        secondaryActionLabel={t("quoteDesk.catalog.loadRow")}
         onSecondaryAction={() => {
           if (!selectedPreset) return;
           loadPresetToNewLine(selectedPreset);
@@ -2578,33 +2639,33 @@ export function QuoteDeskView() {
         customerContextName={customerName}
         customerContextDetails={[customerPhone, customerEmail].filter(Boolean).join(" | ")}
         customerContextText={`${customerName}${customerPhone ? ` | ${customerPhone}` : ""}${customerEmail ? ` | ${customerEmail}` : ""}`}
-        customerContextBadge="Using current quote"
+        customerContextBadge={t("quoteDesk.ai.usingCurrent")}
         usageHint={aiUsageHint}
         errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiSuggestSubmit(event)}
-        title="Revise quote with AI"
-        description="Apply an AI suggestion into the current quote sheet, then review and save the tracked edits."
-        submitLabel="Apply AI Suggestion"
+        title={t("quoteDesk.ai.reviseTitle")}
+        description={t("quoteDesk.ai.reviseDescription")}
+        submitLabel={t("quoteDesk.ai.apply")}
       />
 
-      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel="Draft quote preview">
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel={t("quoteDesk.preview.ariaLabel")}>
         <ModalHeader
-          title="Draft preview"
-          description="This in-app preview includes current unsaved edits. Use Preview Generated PDF to review the saved PDF output."
+          title={t("quoteDesk.preview.title")}
+          description={t("quoteDesk.preview.description")}
           onClose={() => setPreviewOpen(false)}
         />
         <ModalBody className="bg-[var(--qf-panel-muted)]">
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
-            quoteReferenceLabel={`Quote #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
+            quoteReferenceLabel={`${quoteDocumentCopy(quoteEditForm.documentLocale).customerQuote} #${selectedQuote.id.slice(0, 8).toUpperCase()}`}
             businessHint={businessHint}
             customerName={customerName}
             customerPhone={customerPhone}
             customerEmail={customerEmail}
-            preparedDateLabel={formatDateTime(selectedQuote.createdAt)}
+            preparedDateLabel={formatQuoteDocumentDate(selectedQuote.createdAt, quoteEditForm.documentLocale, session?.timezone)}
             sentDateLabel={sentDateLabel}
             quoteTitle={quoteEditForm.title}
             scopeText={quoteEditForm.scopeText}
@@ -2619,10 +2680,11 @@ export function QuoteDeskView() {
             componentColors={branding?.componentColors ?? null}
             footerText={quoteFooterText}
             showQuoteFlyAttribution={showQuoteFlyAttribution}
+            documentLocale={quoteEditForm.documentLocale}
           />
         </ModalBody>
         <ModalFooter>
-          <Button variant="outline" onClick={() => setPreviewOpen(false)}>Close</Button>
+          <Button variant="outline" onClick={() => setPreviewOpen(false)}>{t("common.close")}</Button>
           <Button
             icon={<FileOutput size={14} />}
             onClick={() => {
@@ -2630,29 +2692,29 @@ export function QuoteDeskView() {
               requestOutboundAction("pdf-preview");
             }}
           >
-            Preview Generated PDF
+            {t("quoteDesk.actions.previewPdf")}
           </Button>
         </ModalFooter>
       </Modal>
 
       {sendComposer ? (
-        <Modal open={true} onClose={() => { setError(null); setSendComposer(null); }} size="lg" ariaLabel="Send quote confirmation">
+        <Modal open={true} onClose={() => { setError(null); setSendComposer(null); }} size="lg" ariaLabel={t("quoteDesk.composer.ariaLabel")}>
           <ModalHeader
             title={
               sendComposer.channel === "email"
-                ? "Email Quote"
+                ? t("quoteDesk.composer.emailTitle")
                 : sendComposer.channel === "sms"
-                  ? "Text Quote"
-                  : "Copy Quote Message"
+                  ? t("quoteDesk.composer.textTitle")
+                  : t("quoteDesk.composer.copyTitle")
             }
-            description={`Customer: ${sendComposer.customerName}${sendComposer.channel === "sms" ? ` • ${formatUsPhoneDisplay(sendComposer.customerPhone)}` : ""}`}
+            description={t("quoteDesk.composer.customer", { customer: sendComposer.customerName, phone: sendComposer.channel === "sms" ? ` • ${formatUsPhoneDisplay(sendComposer.customerPhone)}` : "" })}
             onClose={() => { setError(null); setSendComposer(null); }}
           />
           <ModalBody className="space-y-4">
             {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
             {sendComposer.channel === "email" ? (
               <Input
-                label="Subject"
+                label={t("quoteDesk.composer.subject")}
                 value={sendComposer.subject}
                 onChange={(event) =>
                   setSendComposer((prev) => (prev ? { ...prev, subject: event.target.value } : prev))
@@ -2660,7 +2722,7 @@ export function QuoteDeskView() {
               />
             ) : null}
             <Textarea
-              label="Message"
+              label={t("quoteDesk.composer.message")}
               rows={8}
               value={sendComposer.body}
               onChange={(event) =>
@@ -2669,12 +2731,12 @@ export function QuoteDeskView() {
             />
             <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-3 text-sm text-[var(--qf-text-soft)]">
               {sendComposer.handoffComplete
-                ? "Did the message leave your phone? QuoteFly has not changed the quote status yet."
+                ? t("quoteDesk.composer.confirmSent")
                 : canSharePdfFromDevice && sendComposer.channel === "email"
-                  ? "QuoteFly will open your phone's share sheet with the PDF attached. Come back here to confirm after you send it."
+                  ? t("quoteDesk.composer.sharePdfHelp")
                   : sendComposer.channel === "copy"
-                    ? "Copy the message, send it in the app you prefer, then come back here to confirm."
-                    : "QuoteFly will open the selected app with the customer and message filled in. Attach the downloaded PDF if needed, then come back here to confirm."}
+                    ? t("quoteDesk.composer.copyHelp")
+                    : t("quoteDesk.composer.appHelp")}
             </div>
           </ModalBody>
           <ModalFooter>
@@ -2690,18 +2752,18 @@ export function QuoteDeskView() {
               }}
               disabled={saving}
             >
-              {sendComposer.handoffComplete ? "Share Again" : "Cancel"}
+              {sendComposer.handoffComplete ? t("quoteDesk.composer.shareAgain") : t("common.cancel")}
             </Button>
             <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
               {sendComposer.handoffComplete
-                ? "Yes, Mark Sent"
+                ? t("quoteDesk.composer.markSent")
                 : sendComposer.channel === "copy"
-                  ? "Copy Message"
+                  ? t("quoteDesk.send.copyMessage")
                   : canSharePdfFromDevice && sendComposer.channel === "email"
-                    ? "Share PDF"
+                    ? t("quoteDesk.composer.sharePdf")
                     : sendComposer.channel === "sms"
-                      ? "Open Text App"
-                      : "Open Email App"}
+                      ? t("quoteDesk.composer.openText")
+                      : t("quoteDesk.composer.openEmail")}
             </Button>
           </ModalFooter>
         </Modal>
@@ -2775,12 +2837,14 @@ function ExistingLineEditorRow({
   onDelete: () => void;
   canViewInternalCosts: boolean;
 }) {
+  const { t, i18n } = useTranslation();
+  const formatLineMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
   const [expanded, setExpanded] = useState(startExpanded ?? false);
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
   const sectionPillLabel =
     line.sectionType === "ALTERNATE"
-      ? line.sectionLabel?.trim() || "Alternate option"
-      : "Included in total";
+      ? line.sectionLabel?.trim() || t("quoteComponents.line.alternate")
+      : t("quoteComponents.line.included");
   const sectionPillClassName =
     line.sectionType === "ALTERNATE"
       ? "border-orange-200 bg-orange-50 text-orange-700"
@@ -2803,17 +2867,17 @@ function ExistingLineEditorRow({
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">Line {index + 1}</p>
-                {dirty ? <Badge tone="amber">Unsaved</Badge> : null}
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteDesk.line.number", { number: index + 1 })}</p>
+                {dirty ? <Badge tone="amber">{t("quoteDesk.unsaved")}</Badge> : null}
                 <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
                   {sectionPillLabel}
                 </span>
               </div>
-              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || "Untitled line"}</p>
+              <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{line.title.trim() || t("quoteComponents.savePreset.untitled")}</p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--qf-text-muted)]">
-                <span>Qty {line.quantity}</span>
-                <span>Price {money(line.unitPrice)}</span>
-                <span>Total {money(lineTotal)}</span>
+                <span>{t("quoteDesk.line.quantity")} {line.quantity}</span>
+                <span>{t("quoteDesk.line.price")} {formatLineMoney(line.unitPrice)}</span>
+                <span>{t("quoteComponents.math.total")} {formatLineMoney(lineTotal)}</span>
               </div>
             </div>
             <span className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-2 text-[var(--qf-text-muted)]">
@@ -2823,22 +2887,22 @@ function ExistingLineEditorRow({
           <div id={`existing-quote-line-${line.id}`} className={expanded ? "border-t border-[var(--qf-border)] px-3 py-3" : "hidden"}>
             <div className="mb-2 flex items-center justify-end gap-2">
               <Button size="sm" variant="outline" icon={<Save size={14} />} onClick={() => void onSave(line.id)} disabled={!dirty || readOnly}>
-                Save
+                {t("common.save")}
               </Button>
               <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={onDelete} disabled={readOnly}>
-                Remove
+                {t("quoteDesk.line.remove")}
               </Button>
             </div>
             <div className="space-y-3">
-              <Input label="Line" aria-label={`Existing line ${index + 1} title`} value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
-              <Textarea label="Description" aria-label={`Existing line ${index + 1} description`} rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+              <Input label={t("quoteDesk.line.title")} aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })} value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+              <Textarea label={t("quoteDesk.line.description")} aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })} rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
               <div className={`grid gap-2 ${canViewInternalCosts ? "grid-cols-3" : "grid-cols-2"}`}>
-                <Input label="Qty" aria-label={`Existing line ${index + 1} quantity`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-                {canViewInternalCosts ? <Input label="Cost" aria-label={`Existing line ${index + 1} cost`} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : null}
-                <Input label="Price" aria-label={`Existing line ${index + 1} price`} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
+                <Input label={t("quoteDesk.line.quantity")} aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+                {canViewInternalCosts ? <Input label={t("quoteDesk.line.cost")} aria-label={t("quoteDesk.line.costAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : null}
+                <Input label={t("quoteDesk.line.price")} aria-label={t("quoteDesk.line.priceAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
               </div>
               <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)]">
-                Line total {money(lineTotal)}
+                {t("quoteDesk.line.total", { amount: formatLineMoney(lineTotal) })}
               </div>
             </div>
           </div>
@@ -2853,19 +2917,19 @@ function ExistingLineEditorRow({
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
-            {dirty ? <Badge tone="amber">Unsaved</Badge> : null}
+            {dirty ? <Badge tone="amber">{t("quoteDesk.unsaved")}</Badge> : null}
             <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${sectionPillClassName}`}>
               {sectionPillLabel}
             </span>
           </div>
-          <Input aria-label={`Existing line ${index + 1} title`} className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+          <Input aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })} className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
         </div>
-        <Textarea aria-label={`Existing line ${index + 1} description`} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
-        <Input aria-label={`Existing line ${index + 1} quantity`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
-        {canViewInternalCosts ? <Input aria-label={`Existing line ${index + 1} cost`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : <span aria-hidden="true" />}
-        <Input aria-label={`Existing line ${index + 1} price`} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
+        <Textarea aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+        <Input aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
+        {canViewInternalCosts ? <Input aria-label={t("quoteDesk.line.costAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : <span aria-hidden="true" />}
+        <Input aria-label={t("quoteDesk.line.priceAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
         <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
-          {money(lineTotal)}
+          {formatLineMoney(lineTotal)}
         </div>
         <div className="flex justify-end gap-2">
           <Button
@@ -2875,8 +2939,8 @@ function ExistingLineEditorRow({
             className="w-9 px-0"
             onClick={() => void onSave(line.id)}
             disabled={!dirty || readOnly}
-            aria-label="Save line"
-            title="Save line"
+            aria-label={t("quoteDesk.line.save")}
+            title={t("quoteDesk.line.save")}
           />
           <Button
             size="sm"
@@ -2885,8 +2949,8 @@ function ExistingLineEditorRow({
             className="w-9 px-0 text-[var(--qf-text-muted)] hover:text-[var(--qf-danger-strong)]"
             onClick={onDelete}
             disabled={readOnly}
-            aria-label="Remove line"
-            title="Remove line"
+            aria-label={t("quoteDesk.line.remove")}
+            title={t("quoteDesk.line.remove")}
           />
         </div>
       </div>
@@ -2909,6 +2973,8 @@ function NewLineEditorRow({
   readOnly?: boolean;
   canViewInternalCosts: boolean;
 }) {
+  const { t, i18n } = useTranslation();
+  const formatLineMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
   const lineTotal = quoteLineAmount(line.quantity, line.unitPrice);
 
   return (
@@ -2917,40 +2983,40 @@ function NewLineEditorRow({
         className={`grid gap-3 ${QUOTE_DESK_NEW_LINE_GRID_COLUMNS} ${QUOTE_DESK_LINE_GRID_MIN_WIDTH}`}
       >
         <div className="hidden h-[38px] items-center justify-center rounded-lg border border-dashed border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[11px] font-semibold text-[var(--qf-text-muted)] xl:flex">
-          New
+          {t("quoteDesk.line.new")}
         </div>
         <Input
           className="min-h-[38px] rounded-lg"
-          label="Line"
-          aria-label="New line title"
-          placeholder="Service or job name"
+          label={t("quoteDesk.line.title")}
+          aria-label={t("quoteDesk.line.newTitleAria")}
+          placeholder={t("quoteDesk.line.titlePlaceholder")}
           value={line.title}
           onChange={(event) => onChange({ ...line, title: event.target.value })}
           disabled={readOnly}
         />
         <Textarea
-          label="Description"
-          aria-label="New line description"
+          label={t("quoteDesk.line.description")}
+          aria-label={t("quoteDesk.line.newDescriptionAria")}
           rows={3}
           className="rounded-lg lg:min-h-[64px]"
-          placeholder="Optional line description"
+          placeholder={t("quoteDesk.line.descriptionPlaceholder")}
           value={line.details}
           onChange={(event) => onChange({ ...line, details: event.target.value })}
           disabled={readOnly}
         />
-        <Input aria-label="New line quantity" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Qty" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
-        {canViewInternalCosts ? <Input aria-label="New line cost" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Cost" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} /> : <span aria-hidden="true" />}
-        <Input aria-label="New line price" className="min-h-[38px] rounded-lg text-right tabular-nums" label="Price" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
+        <Input aria-label={t("quoteDesk.line.newQuantityAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.quantity")} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
+        {canViewInternalCosts ? <Input aria-label={t("quoteDesk.line.newCostAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.cost")} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} /> : <span aria-hidden="true" />}
+        <Input aria-label={t("quoteDesk.line.newPriceAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.price")} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />
         <div className="space-y-1">
-          <label className="block text-xs font-medium text-[var(--qf-text-soft)]">Total</label>
+          <label className="block text-xs font-medium text-[var(--qf-text-soft)]">{t("quoteComponents.math.total")}</label>
           <div className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5 text-sm font-semibold text-[var(--qf-text)] tabular-nums">
-            {money(lineTotal)}
+            {formatLineMoney(lineTotal)}
           </div>
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
-          label="Line type"
+          label={t("quoteDesk.line.type")}
           value={line.sectionType}
           onChange={(event) =>
             onChange({
@@ -2961,16 +3027,16 @@ function NewLineEditorRow({
           }
           disabled={readOnly}
           options={[
-            { value: "INCLUDED", label: "Included in total" },
-            { value: "ALTERNATE", label: "Alternate option" },
+            { value: "INCLUDED", label: t("quoteComponents.line.included") },
+            { value: "ALTERNATE", label: t("quoteComponents.line.alternate") },
           ]}
         />
         {line.sectionType === "ALTERNATE" ? (
           <Input
-            label="Option label"
+            label={t("quoteDesk.line.optionLabel")}
             value={line.sectionLabel}
             onChange={(event) => onChange({ ...line, sectionLabel: event.target.value })}
-            placeholder="Optional alternate name"
+            placeholder={t("quoteDesk.line.optionPlaceholder")}
             disabled={readOnly}
           />
         ) : null}
@@ -2982,10 +3048,10 @@ function NewLineEditorRow({
           onClick={() => onChange(makeEditableQuoteLine())}
           disabled={readOnly}
         >
-          Clear
+          {t("quoteDesk.line.clear")}
         </Button>
         <Button icon={<Plus size={14} />} loading={saving} onClick={() => void onAdd()} disabled={readOnly}>
-          Add line
+          {t("quoteDesk.line.add")}
         </Button>
       </div>
     </div>

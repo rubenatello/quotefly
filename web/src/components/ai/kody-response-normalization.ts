@@ -27,6 +27,7 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "CUSTOMERS_WITHOUT_QUOTES",
   "PIPELINE_SCENARIO",
   "SEARCH_CUSTOMERS",
+  "SEARCH_PRODUCTS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
   "DRAFT_CUSTOMER",
@@ -83,14 +84,9 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
 }
 
 function actionLabelForType(type: AiAssistantAction["type"]) {
-  if (type === "OPEN_CUSTOMER") return "Open customer";
-  if (type === "OPEN_CUSTOMER_DRAFT") return "Review customer draft";
-  if (type === "OPEN_PRODUCT_DRAFT") return "Review product draft";
-  if (type === "OPEN_QUOTE_DRAFT") return "Review quote draft";
-  if (type === "OPEN_QUOTE_SEND") return "Review quote send";
-  if (type === "OPEN_ANALYTICS") return "Open analytics";
-  if (type === "OPEN_WORKSPACE_PAGE") return "Open page";
-  return "Request access";
+  // This is an internal fallback only. Presentation maps the canonical action
+  // type through the active locale and never routes from this display label.
+  return type;
 }
 
 const REVIEW_ACTION_TYPES = new Set<AiAssistantAction["type"]>([
@@ -132,8 +128,8 @@ function normalizeCitation(
     : fallbackClassification;
   return {
     key: getString(value.key) ?? `A${index + 1}`,
-    label: getString(value.label) ?? "Workspace source",
-    sourceType: getString(value.sourceType) ?? "Workspace",
+    label: getString(value.label) ?? `A${index + 1}`,
+    sourceType: getString(value.sourceType) ?? "WORKSPACE",
     classification,
   };
 }
@@ -214,9 +210,7 @@ export function normalizeKodyAssistantResponse(response: unknown): AssistantPayl
     generatedAtUtc: getString(raw.generatedAtUtc) ?? "1970-01-01T00:00:00.000Z",
     policyVersion: getString(raw.policyVersion) ?? "unknown",
     maxClassification,
-    answer:
-      getString(raw.answer) ??
-      "Kody returned a response, but the answer text was unavailable. Try asking again.",
+    answer: getString(raw.answer) ?? "",
     results,
     citations,
     actions,
@@ -234,9 +228,7 @@ export function normalizeKodyAssistantResponse(response: unknown): AssistantPayl
       resultCount: getFiniteNumber(rawDiagnostics.resultCount) ?? results.length,
       citationCount: getFiniteNumber(rawDiagnostics.citationCount) ?? citations.length,
       emptyReason: getString(rawDiagnostics.emptyReason),
-      archivePolicy:
-        getString(rawDiagnostics.archivePolicy) ??
-        "Active tenant-scoped records only when available.",
+      archivePolicy: getString(rawDiagnostics.archivePolicy) ?? "TENANT_ACTIVE_ONLY",
       filters: sanitizePrimitiveFilters(rawDiagnostics.filters),
       answerMode: normalizeAnswerMode(rawDiagnostics.answerMode),
       model: getString(rawDiagnostics.model),

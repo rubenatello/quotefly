@@ -34,7 +34,7 @@ test("core workspace routes have no serious accessibility violations", async ({ 
     { path: "/app/customers", ready: () => page.getByText("Accessible Customer").filter({ visible: true }).first() },
     { path: "/app/quotes", ready: () => page.getByText("Accessible Quote").filter({ visible: true }).first() },
     { path: "/app/products", ready: () => page.getByRole("button", { name: /add product/i }).first() },
-    { path: "/app/follow-up", ready: () => page.getByTestId("follow-up-metrics") },
+    { path: "/app/follow-up", ready: () => page.getByRole("region", { name: "My work tasks" }) },
     { path: "/app/analytics", ready: () => page.getByRole("heading", { name: "Analytics", exact: true }) },
     { path: "/app/settings", ready: () => page.getByTestId("theme-option-system") },
     { path: "/app/branding", ready: () => page.getByRole("heading", { name: "Build your quote look in three steps" }) },
