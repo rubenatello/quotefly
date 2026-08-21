@@ -44,16 +44,13 @@ function localParts(value: Date, timeZone: string): LocalDateParts {
   };
 }
 
+function wallClockUtc(parts: LocalDateParts): number {
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+}
+
 function offsetAt(value: Date, timeZone: string): number {
   const parts = localParts(value, timeZone);
-  const renderedAsUtc = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second,
-  );
+  const renderedAsUtc = wallClockUtc(parts);
   return renderedAsUtc - value.getTime();
 }
 
@@ -81,6 +78,52 @@ function shiftLocalDate(
     month: shifted.getUTCMonth() + 1,
     day: shifted.getUTCDate(),
   };
+}
+
+export function tenantLocalDateParts(
+  value: Date,
+  requestedTimeZone: string,
+): Pick<LocalDateParts, "year" | "month" | "day" | "hour" | "minute"> {
+  const parts = localParts(value, validTimeZone(requestedTimeZone));
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+  };
+}
+
+export function shiftTenantLocalDate(
+  date: Pick<LocalDateParts, "year" | "month" | "day">,
+  days: number,
+): Pick<LocalDateParts, "year" | "month" | "day"> {
+  return shiftLocalDate(date, days);
+}
+
+export function tenantWallTimeToUtc(
+  value: Pick<LocalDateParts, "year" | "month" | "day" | "hour" | "minute"> & { second?: number },
+  requestedTimeZone: string,
+): Date | null {
+  const desired: LocalDateParts = {
+    year: value.year,
+    month: value.month,
+    day: value.day,
+    hour: value.hour,
+    minute: value.minute,
+    second: value.second ?? 0,
+  };
+  const timeZone = validTimeZone(requestedTimeZone);
+  let candidate = wallClockUtc(desired);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rendered = localParts(new Date(candidate), timeZone);
+    const delta = wallClockUtc(desired) - wallClockUtc(rendered);
+    if (delta === 0) break;
+    candidate += delta;
+  }
+  const finalParts = localParts(new Date(candidate), timeZone);
+  if (wallClockUtc(finalParts) !== wallClockUtc(desired)) return null;
+  return new Date(candidate);
 }
 
 export function isValidIanaTimeZone(timeZone: string): boolean {

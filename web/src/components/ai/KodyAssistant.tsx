@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Clock3,
   FilePlus2,
+  ListChecks,
   PackagePlus,
   RotateCcw,
   Search,
@@ -65,6 +66,22 @@ type QuickPrompt = {
 
 function quickPrompts(t: TFunction): QuickPrompt[] {
   return [
+  {
+    tool: "PRIORITIZE_MY_DAY",
+    label: t("kody.quick.prioritizeDay.label"),
+    description: t("kody.quick.prioritizeDay.description"),
+    prompt: t("kody.quick.prioritizeDay.prompt"),
+    icon: <ListChecks size={15} />,
+    submitImmediately: true,
+  },
+  {
+    tool: "LIST_MY_ACTIVITIES",
+    label: t("kody.quick.myTasks.label"),
+    description: t("kody.quick.myTasks.description"),
+    prompt: t("kody.quick.myTasks.prompt"),
+    icon: <Clock3 size={15} />,
+    submitImmediately: true,
+  },
   {
     tool: "DRAFT_CUSTOMER",
     label: t("kody.quick.addCustomer.label"),
@@ -135,14 +152,14 @@ function quickPrompts(t: TFunction): QuickPrompt[] {
 }
 
 const QUICK_PROMPT_PRIORITY: Partial<Record<WorkspacePage, AiAssistantTool[]>> = {
-  home: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "FOLLOW_UP_QUEUE"],
+  home: ["PRIORITIZE_MY_DAY", "DRAFT_QUOTE", "DRAFT_CUSTOMER"],
   customers: ["DRAFT_CUSTOMER", "SEARCH_CUSTOMERS", "DRAFT_QUOTE"],
   quotes: ["DRAFT_QUOTE", "PREPARE_QUOTE_SEND", "SUMMARIZE_PIPELINE"],
   "quote-desk": ["PREPARE_QUOTE_SEND", "DRAFT_QUOTE", "SUMMARIZE_PIPELINE"],
   products: ["SEARCH_PRODUCTS", "DRAFT_PRODUCT", "DRAFT_QUOTE"],
   build: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "DRAFT_PRODUCT"],
-  "follow-up": ["FOLLOW_UP_QUEUE", "SEARCH_CUSTOMERS", "PREPARE_QUOTE_SEND"],
-  analytics: ["SUMMARIZE_PIPELINE", "RANK_PROFITABLE_JOBS", "FOLLOW_UP_QUEUE"],
+  "follow-up": ["PRIORITIZE_MY_DAY", "LIST_MY_ACTIVITIES", "PREPARE_ACTIVITY"],
+  analytics: ["SUMMARIZE_PIPELINE", "RANK_PROFITABLE_JOBS", "PRIORITIZE_MY_DAY"],
 };
 
 function orderQuickPrompts(page: WorkspacePage, available: QuickPrompt[]) {
@@ -229,11 +246,14 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
     if (tool === "SEARCH_PRODUCTS") return t("kody.loading.products");
     if (tool === "NAVIGATE_WORKSPACE") return t("kody.loading.navigation");
     if (tool === "FOLLOW_UP_QUEUE") return t("kody.loading.followUps");
+    if (tool === "LIST_MY_ACTIVITIES") return t("kody.loading.activities");
+    if (tool === "PRIORITIZE_MY_DAY") return t("kody.loading.prioritizeDay");
     if (tool === "CUSTOMERS_WITHOUT_QUOTES") return t("kody.loading.unquoted");
     if (tool === "PIPELINE_SCENARIO") return t("kody.loading.math");
     if (tool === "DRAFT_CUSTOMER") return t("kody.loading.customerDraft");
     if (tool === "DRAFT_PRODUCT") return t("kody.loading.productDraft");
     if (tool === "DRAFT_QUOTE") return t("kody.loading.quoteDraft");
+    if (tool === "PREPARE_ACTIVITY") return t("kody.loading.activityDraft");
     if (tool === "PREPARE_QUOTE_SEND") return t("kody.loading.quoteSend");
     if (tool === "SUMMARIZE_PIPELINE") return t("kody.loading.pipeline");
     if (tool === "RANK_PROFITABLE_JOBS") return t("kody.loading.profitability");
@@ -256,6 +276,8 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
     NAVIGATE_WORKSPACE: t("kody.tools.navigate"), DRAFT_CUSTOMER: t("kody.tools.draftCustomer"),
     SEARCH_CUSTOMERS: t("kody.tools.searchCustomers"), CUSTOMERS_WITHOUT_QUOTES: t("kody.tools.customersWithoutQuotes"),
     DRAFT_PRODUCT: t("kody.tools.draftProduct"), SEARCH_PRODUCTS: t("kody.tools.searchProducts"),
+    LIST_MY_ACTIVITIES: t("kody.tools.listActivities"), PRIORITIZE_MY_DAY: t("kody.tools.prioritizeDay"),
+    PREPARE_ACTIVITY: t("kody.tools.prepareActivity"),
     DRAFT_QUOTE: t("kody.tools.draftQuote"), PREPARE_QUOTE_SEND: t("kody.tools.prepareQuoteSend"),
     FOLLOW_UP_QUEUE: t("kody.tools.followUpQueue"), SUMMARIZE_PIPELINE: t("kody.tools.pipeline"),
     PIPELINE_SCENARIO: t("kody.tools.pipelineScenario"), RANK_PROFITABLE_JOBS: t("kody.tools.profitability"),
@@ -268,7 +290,8 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
   const labels: Record<AiAssistantAction["type"], string> = {
     OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
     OPEN_PRODUCT_DRAFT: t("kody.actions.reviewProduct"), OPEN_QUOTE_DRAFT: t("kody.actions.reviewQuote"),
-    OPEN_QUOTE_SEND: t("kody.actions.reviewSend"), OPEN_ANALYTICS: t("kody.actions.openAnalytics"),
+    OPEN_QUOTE_SEND: t("kody.actions.reviewSend"), OPEN_ACTIVITY_DRAFT: t("kody.actions.reviewActivity"),
+    OPEN_ANALYTICS: t("kody.actions.openAnalytics"),
     OPEN_WORKSPACE_PAGE: t("kody.actions.openPage"), REQUEST_ADMIN_ACCESS: t("kody.actions.requestAccess"),
   };
   return labels[action.type];
@@ -285,6 +308,9 @@ function localizedResultField(key: string, t: TFunction) {
     quoteAmount: t("kody.resultFields.quoteAmount"), amount: t("kody.resultFields.amount"), revenue: t("kody.resultFields.revenue"),
     cost: t("kody.resultFields.cost"), profit: t("kody.resultFields.profit"), margin: t("kody.resultFields.margin"),
     followUpType: t("kody.resultFields.followUpType"), dueSince: t("kody.resultFields.dueSince"),
+    activityRank: t("kody.resultFields.activityRank"), taskType: t("kody.resultFields.taskType"),
+    priority: t("kody.resultFields.priority"), dueBucket: t("kody.resultFields.dueBucket"),
+    dueAtUtc: t("kody.resultFields.dueAt"),
     assignedTo: t("kody.resultFields.assignedTo"), description: t("kody.resultFields.description"), notes: t("kody.resultFields.notes"),
     createdAtUtc: t("kody.resultFields.created"), updatedAtUtc: t("kody.resultFields.updated"),
   };
@@ -301,6 +327,9 @@ function localizedKnownValue(value: string, t: TFunction) {
     NEEDS_FOLLOW_UP: t("kody.values.needsFollowUp"), FOLLOWED_UP: t("kody.values.followedUp"),
     NEW_CUSTOMER: t("kody.values.newCustomer"), SENT_QUOTE: t("kody.values.sentQuote"),
     CUSTOMER_CHECK_IN: t("kody.values.customerCheckIn"), PREPARE_QUOTE: t("kody.values.prepareQuote"),
+    FOLLOW_UP: t("kody.values.followUp"), SEND_QUOTE: t("kody.values.sendQuote"), CHECK_IN: t("kody.values.checkIn"),
+    CUSTOM: t("kody.values.custom"), LOW: t("kody.values.low"), NORMAL: t("kody.values.normal"),
+    HIGH: t("kody.values.high"), URGENT: t("kody.values.urgent"),
     ACTIVE: t("kody.values.active"), ARCHIVED: t("kody.values.archived"), DELETED: t("kody.values.deleted"),
     QUOTED: t("kody.values.quoted"), CLOSED: t("kody.values.closed"), POST_JOB: t("kody.values.postJob"),
     SCHEDULED: t("kody.values.scheduled"), DISPATCHED: t("kody.values.dispatched"),
@@ -364,6 +393,7 @@ function compactSourceList(citations: AiAssistantResponse["assistant"]["citation
     WORKSPACE: t("kody.sources.workspace"), Workspace: t("kody.sources.workspace"), Customer: t("kody.sources.customers"), Customers: t("kody.sources.customers"),
     Quote: t("kody.sources.quotes"), Quotes: t("kody.sources.quotes"), Product: t("kody.sources.products"),
     Products: t("kody.sources.products"), Analytics: t("kody.sources.analytics"), Job: t("kody.sources.jobs"), Jobs: t("kody.sources.jobs"),
+    ActivityTask: t("kody.sources.activities"), "ActivityTask + Customer + Quote": t("kody.sources.activities"),
   };
   return sources.slice(0, 3).map((source) => knownSources[source] ?? formatBackendLabel(source)).join(" + ");
 }
@@ -429,6 +459,15 @@ function actionConfirmationCopy(action: AiAssistantAction, t: TFunction) {
       title: t("kody.confirm.sendTitle", { channel: channelLabel, customer: customerName }),
       description: t("kody.confirm.sendDescription", { quote: quoteTitle, destination: destination ? ` · ${destination}` : "" }),
       confirmLabel: t("kody.confirm.sendButton"),
+    };
+  }
+  if (action.type === "OPEN_ACTIVITY_DRAFT") {
+    const title = getString(action.payload.title) ?? t("kody.confirm.thisTask");
+    const customerName = getString(action.payload.customerName) ?? t("kody.confirm.theCustomer");
+    return {
+      title: t("kody.confirm.activityTitle", { task: title }),
+      description: t("kody.confirm.activityDescription", { customer: customerName }),
+      confirmLabel: t("kody.confirm.activityButton"),
     };
   }
   if (action.type === "REQUEST_ADMIN_ACCESS") {
@@ -1150,6 +1189,34 @@ export function KodyAssistant({
       collapseForMobileHandoff(action.type);
       navigate(`/app/quotes/${encodeURIComponent(quoteId)}`, {
         state: { kodyQuoteSend: { quoteId, channel } },
+      });
+      return;
+    }
+
+    if (action.type === "OPEN_ACTIVITY_DRAFT") {
+      const customerId = getString(action.payload.customerId);
+      const customerName = getString(action.payload.customerName);
+      const title = getString(action.payload.title);
+      const dueAtUtc = getString(action.payload.dueAtUtc);
+      const type = getString(action.payload.type);
+      const priority = getString(action.payload.priority);
+      if (!customerId || !customerName || !title || !dueAtUtc || !type || !priority) {
+        return rejectInvalidAction(t("kody.errors.activityDraft"), action);
+      }
+      collapseForMobileHandoff(action.type);
+      navigate("/app/follow-up", {
+        state: {
+          kodyActivityDraft: {
+            customerId,
+            customerName,
+            quoteId: getString(action.payload.quoteId),
+            quoteTitle: getString(action.payload.quoteTitle),
+            type,
+            priority,
+            title,
+            dueAtUtc,
+          },
+        },
       });
       return;
     }

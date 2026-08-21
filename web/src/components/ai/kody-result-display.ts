@@ -9,7 +9,7 @@ const PRODUCT_FIELD_PRIORITY = [
 ] as const;
 
 function isHiddenResultKey(key: string) {
-  return key === "id" || key.endsWith("Id") || key.endsWith("ID") || key.endsWith("RefHash");
+  return key === "id" || key === "version" || key.endsWith("Version") || key.endsWith("Id") || key.endsWith("ID") || key.endsWith("RefHash");
 }
 
 export function visibleKodyResultEntries(

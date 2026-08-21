@@ -578,6 +578,125 @@ export async function summarizeActivityTasks(
   return { overdue, today, upcoming, completed, top };
 }
 
+export type AssistantActivityTaskProjection = Readonly<{
+  id: string;
+  customerId: string;
+  quoteId: string | null;
+  version: number;
+  type: ActivityTaskType;
+  status: ActivityTaskStatus;
+  priority: ActivityTaskPriority;
+  title: string;
+  dueAtUtc: Date;
+  customer: { fullName: string };
+  quote: { title: string } | null;
+}>;
+
+/**
+ * Narrow AI-safe projection for Kody activity tools.
+ *
+ * This deliberately does not select task notes, customer phone/email,
+ * assignee email, source keys, creator/completer IDs, tenant IDs, or any
+ * internal authorization state. It must stay deterministic and provider-free.
+ */
+export async function summarizeAssistantActivityAgenda(
+  transaction: ActivityTaskTransaction,
+  access: AccessContext,
+  windows: {
+    todayStartUtc: Date;
+    tomorrowStartUtc: Date;
+    upcomingEndUtc: Date;
+    completedStartUtc: Date;
+  },
+  options: {
+    limit: number;
+    prioritizeTodayOnly: boolean;
+  },
+) {
+  const activeWhere: Prisma.ActivityTaskWhereInput = {
+    ...visibleActivityTaskWhere(access),
+    assignedTenantUserId: access.tenantUserId,
+    status: { in: ACTIVE_TASK_STATUSES },
+  };
+  const prioritizedWhere: Prisma.ActivityTaskWhereInput = options.prioritizeTodayOnly
+    ? { ...activeWhere, dueAtUtc: { lt: windows.tomorrowStartUtc } }
+    : activeWhere;
+  const completedWhere: Prisma.ActivityTaskWhereInput = {
+    ...visibleActivityTaskWhere(access),
+    assignedTenantUserId: access.tenantUserId,
+    status: "COMPLETED",
+    completedAtUtc: {
+      gte: windows.completedStartUtc,
+      lt: windows.tomorrowStartUtc,
+    },
+  };
+  const assistantSelect = {
+    id: true,
+    customerId: true,
+    quoteId: true,
+    version: true,
+    type: true,
+    status: true,
+    priority: true,
+    title: true,
+    dueAtUtc: true,
+    customer: { select: { fullName: true } },
+    quote: { select: { title: true } },
+  } as const satisfies Prisma.ActivityTaskSelect;
+  const listPrioritized = (where: Prisma.ActivityTaskWhereInput) =>
+    transaction.activityTask.findMany({
+      where,
+      orderBy: [{ priority: "desc" }, { dueAtUtc: "asc" }, { id: "asc" }],
+      take: options.limit + 1,
+      select: assistantSelect,
+    });
+  const tasksPromise = options.prioritizeTodayOnly
+    ? Promise.all([
+        listPrioritized({ ...activeWhere, dueAtUtc: { lt: windows.todayStartUtc } }),
+        listPrioritized({
+          ...activeWhere,
+          dueAtUtc: { gte: windows.todayStartUtc, lt: windows.tomorrowStartUtc },
+        }),
+      ]).then(([overdueTasks, todayTasks]) =>
+        [...overdueTasks, ...todayTasks].slice(0, options.limit),
+      )
+    : transaction.activityTask.findMany({
+        where: prioritizedWhere,
+        orderBy: [{ dueAtUtc: "asc" }, { id: "asc" }],
+        take: options.limit,
+        select: assistantSelect,
+      });
+
+  const [overdue, today, upcoming, completed, activeTotal, matchingTotal, tasks] = await Promise.all([
+    transaction.activityTask.count({
+      where: { ...activeWhere, dueAtUtc: { lt: windows.todayStartUtc } },
+    }),
+    transaction.activityTask.count({
+      where: {
+        ...activeWhere,
+        dueAtUtc: { gte: windows.todayStartUtc, lt: windows.tomorrowStartUtc },
+      },
+    }),
+    transaction.activityTask.count({
+      where: {
+        ...activeWhere,
+        dueAtUtc: { gte: windows.tomorrowStartUtc, lt: windows.upcomingEndUtc },
+      },
+    }),
+    transaction.activityTask.count({ where: completedWhere }),
+    transaction.activityTask.count({ where: activeWhere }),
+    transaction.activityTask.count({ where: prioritizedWhere }),
+    tasksPromise,
+  ]);
+
+  return {
+    counts: { overdue, today, upcoming, completed },
+    activeTotal,
+    matchingTotal,
+    tasks,
+  };
+}
+
 export async function createActivityTask(
   transaction: ActivityTaskTransaction,
   access: AccessContext,

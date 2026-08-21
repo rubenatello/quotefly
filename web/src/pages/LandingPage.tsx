@@ -4,7 +4,7 @@ import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingProductShowcase } from "../components/marketing/LandingProductShowcase";
 import { LandingTradeRail } from "../components/marketing/LandingTradeRail";
-import { MarketingAction, MarketingCta, MarketingMomentumStrip } from "../components/marketing/PublicPageLayout";
+import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { LANDING_FAQS } from "../lib/landing-content";
 import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
@@ -72,11 +72,6 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <LandingProductDemo />
         </div>
       </section>
-
-      <MarketingMomentumStrip
-        tone="blue"
-        items={["Find the customer", "Draft with Kody", "Price the work", "Review the margin"]}
-      />
 
       <section aria-label="QuoteFly plan and workflow highlights" className="border-b border-slate-200 bg-white px-4 py-5 sm:px-6 lg:px-8">
         <div className="mx-auto grid max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-4">

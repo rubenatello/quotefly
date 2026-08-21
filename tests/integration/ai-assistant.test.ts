@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { buildServer } from "../../src/app";
 import { setAssistantCompositionProviderForTest } from "../../src/lib/ai-assistant-composer";
 import { prisma } from "../../src/lib/prisma";
@@ -121,6 +121,32 @@ async function createQuote(params: {
     },
   });
   return quote;
+}
+
+async function createActivityTask(params: {
+  session: Session;
+  customerId: string;
+  quoteId?: string | null;
+  assignedTenantUserId: string;
+  title: string;
+  notes?: string | null;
+  priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
+  dueAtUtc: Date;
+}) {
+  return prisma.activityTask.create({
+    data: {
+      tenantId: params.session.tenant.id,
+      customerId: params.customerId,
+      quoteId: params.quoteId ?? null,
+      assignedTenantUserId: params.assignedTenantUserId,
+      createdByTenantUserId: params.assignedTenantUserId,
+      type: "FOLLOW_UP",
+      priority: params.priority ?? "NORMAL",
+      title: params.title,
+      notes: params.notes ?? null,
+      dueAtUtc: params.dueAtUtc,
+    },
+  });
 }
 
 let app: FastifyInstance;
@@ -395,6 +421,277 @@ describe("AI assistant", () => {
     const results = (response.json() as { assistant: { results: Array<Record<string, unknown>> } }).assistant.results;
     expect(results.map((row) => row.fullName)).toContain("Assigned Field Customer");
     expect(results.map((row) => row.fullName)).not.toContain("Owner Office Customer");
+  });
+
+  test("activity assistant tools use narrow assigned projections and activity previews write nothing", async () => {
+    const owner = await signUp("assistant-activity-owner");
+    await prisma.tenant.update({
+      where: { id: owner.tenant.id },
+      data: { timezone: "America/Los_Angeles" },
+    });
+    const member = await addWorkspaceUser(owner, "member");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const assigned = await createCustomer({
+      session: owner,
+      name: "Assigned Field Customer",
+      phoneDigits: "5554040101",
+      notes: "Customer note must stay out of Kody activity agenda.",
+      assignedTenantUserId: membership.id,
+    });
+    const privateCustomer = await createCustomer({
+      session: owner,
+      name: "Private Office Customer",
+      phoneDigits: "5554040102",
+      notes: "Private owner-only customer note.",
+    });
+    const assignedQuote = await createQuote({
+      session: owner,
+      customerId: assigned.id,
+      title: "Assigned roof repair",
+      serviceType: "ROOFING",
+      status: "READY_FOR_REVIEW",
+      price: 1800,
+      cost: 900,
+      createdAt: new Date("2026-08-12T12:00:00.000Z"),
+      assignedTenantUserId: membership.id,
+    });
+    await prisma.activityTask.createMany({
+      data: Array.from({ length: 27 }, (_, index) => ({
+        tenantId: owner.tenant.id,
+        customerId: assigned.id,
+        quoteId: assignedQuote.id,
+        assignedTenantUserId: membership.id,
+        createdByTenantUserId: membership.id,
+        type: "FOLLOW_UP",
+        priority: "LOW",
+        title: `Low backlog task ${index + 1}`,
+        notes: `low-secret-note-${index + 1}`,
+        dueAtUtc: new Date(Date.now() - (11 + index) * 24 * 60 * 60 * 1000),
+      })),
+    });
+    await createActivityTask({
+      session: owner,
+      customerId: assigned.id,
+      quoteId: assignedQuote.id,
+      assignedTenantUserId: membership.id,
+      title: "Urgent assigned task",
+      notes: "urgent-secret-note-should-not-render",
+      priority: "URGENT",
+      dueAtUtc: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    });
+    await createActivityTask({
+      session: owner,
+      customerId: privateCustomer.id,
+      assignedTenantUserId: membership.id,
+      title: "Private linked task",
+      notes: "private-task-note-should-not-render",
+      priority: "URGENT",
+      dueAtUtc: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    let compositionCalls = 0;
+    setAssistantCompositionProviderForTest(async () => {
+      compositionCalls += 1;
+      throw new Error("Activity assistant tools must not call the composition provider.");
+    });
+
+    const agendaResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Prioritize my day", tool: "AUTO", context: { currentPage: "follow-up" } },
+    });
+    expect(agendaResponse.statusCode).toBe(200);
+    const agendaBody = agendaResponse.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        fieldsExcluded: string[];
+        diagnostics: { filters: Record<string, unknown> };
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(agendaBody.assistant.tool).toBe("PRIORITIZE_MY_DAY");
+    expect(agendaBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(agendaBody.assistant.results[0]).toMatchObject({
+      title: "Urgent assigned task",
+      customerName: "Assigned Field Customer",
+      taskType: "FOLLOW_UP",
+      priority: "URGENT",
+    });
+    expect(agendaBody.assistant.results.map((row) => row.title)).not.toContain("Private linked task");
+    expect(agendaBody.assistant.fieldsExcluded).toEqual(expect.arrayContaining([
+      "task notes",
+      "customer phone numbers",
+      "customer email addresses",
+    ]));
+    expect(agendaBody.assistant.diagnostics.filters).toMatchObject({
+      mine: true,
+      dueWindow: "overdue_or_today",
+    });
+    expect(agendaResponse.body).not.toContain("urgent-secret-note-should-not-render");
+    expect(agendaResponse.body).not.toContain("low-secret-note");
+    expect(agendaResponse.body).not.toContain("5554040101");
+    expect(agendaResponse.body).not.toContain("Private Office Customer");
+
+    const listResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "What active tasks are assigned to me?", tool: "AUTO", context: { currentPage: "follow-up" } },
+    });
+    expect(listResponse.statusCode).toBe(200);
+    const listBody = listResponse.json() as {
+      assistant: { tool: string; results: Array<Record<string, unknown>> };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(listBody.assistant.tool).toBe("LIST_MY_ACTIVITIES");
+    expect(listBody.assistant.results.map((row) => row.title)).not.toContain("Private linked task");
+    expect(listBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+
+    const beforePreview = await Promise.all([
+      prisma.activityTask.count({ where: { tenantId: owner.tenant.id } }),
+      prisma.activityTaskEvent.count({ where: { tenantId: owner.tenant.id } }),
+      prisma.customerActivityEvent.count({ where: { tenantId: owner.tenant.id } }),
+    ]);
+    const previewResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Create a follow-up task for Assigned Field Customer tomorrow at 3pm",
+        tool: "AUTO",
+        context: { currentPage: "follow-up" },
+      },
+    });
+    expect(previewResponse.statusCode).toBe(200);
+    const previewBody = previewResponse.json() as {
+      assistant: {
+        tool: string;
+        answer: string;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(previewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
+    expect(previewBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(previewBody.assistant.answer).toContain("I used the due time from your request.");
+    expect(previewBody.assistant.actions[0]).toMatchObject({
+      type: "OPEN_ACTIVITY_DRAFT",
+      requiresConfirmation: true,
+      payload: {
+        customerId: assigned.id,
+        customerName: "Assigned Field Customer",
+        type: "FOLLOW_UP",
+        priority: "NORMAL",
+      },
+    });
+    const previewDueAt = new Date(String(previewBody.assistant.actions[0]?.payload.dueAtUtc));
+    const previewDueParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(previewDueAt);
+    expect(Number(previewDueParts.find((part) => part.type === "hour")?.value)).toBe(15);
+    expect(Number(previewDueParts.find((part) => part.type === "minute")?.value)).toBe(0);
+
+    const spanishPreviewResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Crea una tarea de seguimiento para Assigned Field Customer manana a las 3",
+        tool: "AUTO",
+        context: { currentPage: "follow-up" },
+      },
+    });
+    expect(spanishPreviewResponse.statusCode).toBe(200);
+    const spanishPreviewBody = spanishPreviewResponse.json() as {
+      assistant: { tool: string; actions: Array<{ payload: Record<string, unknown> }> };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(spanishPreviewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
+    expect(spanishPreviewBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    const spanishPreviewDueAt = new Date(String(spanishPreviewBody.assistant.actions[0]?.payload.dueAtUtc));
+    const spanishPreviewDueParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(spanishPreviewDueAt);
+    expect(Number(spanishPreviewDueParts.find((part) => part.type === "hour")?.value)).toBe(15);
+    expect(Number(spanishPreviewDueParts.find((part) => part.type === "minute")?.value)).toBe(0);
+
+    const standalonePreviewResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Create a follow-up task for Assigned Field Customer at 3pm",
+        tool: "AUTO",
+        context: { currentPage: "follow-up" },
+      },
+    });
+    expect(standalonePreviewResponse.statusCode).toBe(200);
+    const standalonePreviewBody = standalonePreviewResponse.json() as {
+      assistant: { tool: string; answer: string; actions: Array<{ payload: Record<string, unknown> }> };
+    };
+    expect(standalonePreviewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
+    expect(standalonePreviewBody.assistant.answer).toContain("I used the due time from your request.");
+    const standalonePreviewDueAt = new Date(String(standalonePreviewBody.assistant.actions[0]?.payload.dueAtUtc));
+    expect(standalonePreviewDueAt.getTime()).toBeGreaterThan(Date.now());
+    const standalonePreviewDueParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(standalonePreviewDueAt);
+    expect(Number(standalonePreviewDueParts.find((part) => part.type === "hour")?.value)).toBe(15);
+    expect(Number(standalonePreviewDueParts.find((part) => part.type === "minute")?.value)).toBe(0);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-07T18:00:00.000Z"));
+    try {
+      const dstPreviewResponse = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: member.cookie },
+        payload: {
+          message: "Create a follow-up task for Assigned Field Customer tomorrow at 2:30am",
+          tool: "AUTO",
+          context: { currentPage: "follow-up" },
+        },
+      });
+      expect(dstPreviewResponse.statusCode).toBe(200);
+      const dstPreviewBody = dstPreviewResponse.json() as {
+        assistant: { tool: string; answer: string; actions: Array<{ payload: Record<string, unknown> }> };
+      };
+      expect(dstPreviewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
+      expect(dstPreviewBody.assistant.answer).toContain("not valid in your workspace timezone");
+      const dstPreviewDueAt = new Date(String(dstPreviewBody.assistant.actions[0]?.payload.dueAtUtc));
+      const dstPreviewDueParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(dstPreviewDueAt);
+      expect(Number(dstPreviewDueParts.find((part) => part.type === "hour")?.value)).toBe(9);
+      expect(Number(dstPreviewDueParts.find((part) => part.type === "minute")?.value)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(compositionCalls).toBe(0);
+
+    const afterPreview = await Promise.all([
+      prisma.activityTask.count({ where: { tenantId: owner.tenant.id } }),
+      prisma.activityTaskEvent.count({ where: { tenantId: owner.tenant.id } }),
+      prisma.customerActivityEvent.count({ where: { tenantId: owner.tenant.id } }),
+    ]);
+    expect(afterPreview).toEqual(beforePreview);
   });
 
   test("members cannot ask Kody to draft catalog changes", async () => {

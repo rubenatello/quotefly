@@ -24,6 +24,8 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "OUT_OF_SCOPE",
   "NAVIGATE_WORKSPACE",
   "FOLLOW_UP_QUEUE",
+  "LIST_MY_ACTIVITIES",
+  "PRIORITIZE_MY_DAY",
   "CUSTOMERS_WITHOUT_QUOTES",
   "PIPELINE_SCENARIO",
   "SEARCH_CUSTOMERS",
@@ -33,6 +35,7 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "DRAFT_CUSTOMER",
   "DRAFT_PRODUCT",
   "DRAFT_QUOTE",
+  "PREPARE_ACTIVITY",
   "PREPARE_QUOTE_SEND",
 ];
 
@@ -77,6 +80,7 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
     value === "OPEN_PRODUCT_DRAFT" ||
     value === "OPEN_QUOTE_DRAFT" ||
     value === "OPEN_QUOTE_SEND" ||
+    value === "OPEN_ACTIVITY_DRAFT" ||
     value === "OPEN_ANALYTICS" ||
     value === "OPEN_WORKSPACE_PAGE" ||
     value === "REQUEST_ADMIN_ACCESS"
@@ -94,6 +98,7 @@ const REVIEW_ACTION_TYPES = new Set<AiAssistantAction["type"]>([
   "OPEN_PRODUCT_DRAFT",
   "OPEN_QUOTE_DRAFT",
   "OPEN_QUOTE_SEND",
+  "OPEN_ACTIVITY_DRAFT",
 ]);
 
 function sanitizePrimitiveRecord(value: unknown): AssistantResult | null {

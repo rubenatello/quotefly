@@ -45,6 +45,17 @@ type TaskForm = {
   dueLocal: string;
 };
 
+export type ActivityTaskDraft = {
+  customerId: string;
+  customerName: string;
+  quoteId?: string | null;
+  quoteTitle?: string | null;
+  type: ActivityTaskType;
+  priority: ActivityTaskPriority;
+  title: string;
+  dueAtUtc: string;
+};
+
 const TYPE_VALUES: ActivityTaskType[] = ["FOLLOW_UP", "PREPARE_QUOTE", "SEND_QUOTE", "CHECK_IN", "CUSTOM"];
 const PRIORITY_VALUES: ActivityTaskPriority[] = ["LOW", "NORMAL", "HIGH", "URGENT"];
 const FILTER_VALUES: ActivityTaskDueFilter[] = ["active", "overdue", "today", "upcoming", "completed"];
@@ -78,6 +89,21 @@ function initialForm(timezone: string, assignedTenantUserId: string): TaskForm {
     title: "",
     notes: "",
     dueLocal: toTenantDateTimeInput(due, timezone),
+  };
+}
+
+function draftCustomerOption(draft: ActivityTaskDraft, nowIso: string): Customer {
+  return {
+    id: draft.customerId,
+    tenantId: "",
+    fullName: draft.customerName,
+    phone: "",
+    email: null,
+    notes: null,
+    preferredLocale: null,
+    followUpStatus: "NEEDS_FOLLOW_UP",
+    createdAt: nowIso,
+    updatedAt: nowIso,
   };
 }
 
@@ -138,6 +164,7 @@ function dueLabel(task: ActivityTask, timezone: string, t: TFunction, locale: st
 function TaskEditor({
   open,
   task,
+  draft,
   timezone,
   currentUserId,
   canManage,
@@ -148,6 +175,7 @@ function TaskEditor({
 }: {
   open: boolean;
   task: ActivityTask | null;
+  draft?: ActivityTaskDraft | null;
   timezone: string;
   currentUserId: string;
   canManage: boolean;
@@ -195,13 +223,29 @@ function TaskEditor({
       setBaselineFingerprint(editableFormFingerprint(nextForm));
       setCustomers([task.customer as Customer]);
       setQuotes(task.quote ? [{ id: task.quote.id, title: task.quote.title }] : []);
+    } else if (draft) {
+      const nextForm: TaskForm = {
+        customerId: draft.customerId,
+        quoteId: draft.quoteId ?? "",
+        assignedTenantUserId: "",
+        type: draft.type,
+        priority: draft.priority,
+        title: draft.title,
+        notes: "",
+        dueLocal: toTenantDateTimeInput(draft.dueAtUtc, timezone),
+      };
+      const nowIso = new Date().toISOString();
+      setForm(nextForm);
+      setBaselineFingerprint(editableFormFingerprint(nextForm));
+      setCustomers([draftCustomerOption(draft, nowIso)]);
+      setQuotes(draft.quoteId && draft.quoteTitle ? [{ id: draft.quoteId, title: draft.quoteTitle }] : []);
     } else {
       const nextForm = initialForm(timezone, "");
       setForm(nextForm);
       setBaselineFingerprint(editableFormFingerprint(nextForm));
       setQuotes([]);
     }
-  }, [open, task, timezone]);
+  }, [draft, open, task, timezone]);
 
   useEffect(() => {
     if (!open || (task && !canManage)) return;
@@ -210,7 +254,7 @@ function TaskEditor({
       setLoadingOptions(true);
       try {
         const [customerResult, memberResult] = await Promise.all([
-          task
+          task || draft
             ? Promise.resolve(null)
             : api.customers.list({ lifecycle: "active", search: customerSearch.trim() || undefined, limit: 100 }),
           canManage ? api.org.users.list({ limit: 100 }) : Promise.resolve(null),
@@ -239,11 +283,11 @@ function TaskEditor({
       }
     }, 200);
     return () => window.clearTimeout(timeoutId);
-  }, [canManage, currentUserId, customerSearch, open, t, task]);
+  }, [canManage, currentUserId, customerSearch, draft, open, t, task]);
 
   useEffect(() => {
-    if (!open || task || !form.customerId) {
-      if (!task) setQuotes([]);
+    if (!open || task || draft || !form.customerId) {
+      if (!task && !draft) setQuotes([]);
       return;
     }
     let live = true;
@@ -257,7 +301,7 @@ function TaskEditor({
     return () => {
       live = false;
     };
-  }, [form.customerId, open, task]);
+  }, [draft, form.customerId, open, task]);
 
   async function submit() {
     if (submittingRef.current) return;
@@ -483,6 +527,7 @@ export function ActivityTaskPanel({
   timezone,
   navigateToQuote,
   initialTaskId,
+  initialDraft,
 }: {
   mine: boolean;
   canManage: boolean;
@@ -490,6 +535,7 @@ export function ActivityTaskPanel({
   timezone: string;
   navigateToQuote: (quoteId: string) => void;
   initialTaskId?: string;
+  initialDraft?: ActivityTaskDraft | null;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? "en-US";
@@ -505,10 +551,12 @@ export function ActivityTaskPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editorTask, setEditorTask] = useState<ActivityTask | null>(null);
+  const [editorDraft, setEditorDraft] = useState<ActivityTaskDraft | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [removeTask, setRemoveTask] = useState<ActivityTask | null>(null);
   const requestIdRef = useRef(0);
   const openedInitialTaskRef = useRef<string | null>(null);
+  const openedInitialDraftRef = useRef<string | null>(null);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -555,6 +603,16 @@ export function ActivityTaskPanel({
     setEditorTask(task);
     setEditorOpen(true);
   }, [initialTaskId, items, loading]);
+
+  useEffect(() => {
+    if (!initialDraft) return;
+    const fingerprint = JSON.stringify(initialDraft);
+    if (openedInitialDraftRef.current === fingerprint) return;
+    openedInitialDraftRef.current = fingerprint;
+    setEditorTask(null);
+    setEditorDraft(initialDraft);
+    setEditorOpen(true);
+  }, [initialDraft]);
 
   async function complete(task: ActivityTask) {
     setSaving(true);
@@ -674,6 +732,7 @@ export function ActivityTaskPanel({
               icon={<Plus size={17} aria-hidden="true" />}
               onClick={() => {
                 setEditorTask(null);
+                setEditorDraft(null);
                 setEditorOpen(true);
               }}
             >
@@ -710,7 +769,11 @@ export function ActivityTaskPanel({
               icon={<ClipboardList size={18} aria-hidden="true" />}
               title={debouncedSearch ? t("activity.tasks.noMatches") : filter === "completed" ? t("activity.tasks.noCompleted") : t("activity.tasks.noTasks")}
               description={debouncedSearch ? t("activity.tasks.broadenSearch") : t("activity.tasks.emptyDescription")}
-              action={!debouncedSearch && filter !== "completed" ? <Button onClick={() => setEditorOpen(true)}>{t("activity.tasks.add")}</Button> : undefined}
+              action={!debouncedSearch && filter !== "completed" ? <Button onClick={() => {
+                setEditorTask(null);
+                setEditorDraft(null);
+                setEditorOpen(true);
+              }}>{t("activity.tasks.add")}</Button> : undefined}
             />
           </div>
         ) : (
@@ -754,6 +817,7 @@ export function ActivityTaskPanel({
                       icon={<Pencil size={16} aria-hidden="true" />}
                       onClick={() => {
                         setEditorTask(task);
+                        setEditorDraft(null);
                         setEditorOpen(true);
                       }}
                     >
@@ -790,6 +854,7 @@ export function ActivityTaskPanel({
       <TaskEditor
         open={editorOpen}
         task={editorTask}
+        draft={editorDraft}
         timezone={timezone}
         currentUserId={currentUserId}
         canManage={canManage}
@@ -797,10 +862,12 @@ export function ActivityTaskPanel({
         onClose={() => {
           setEditorOpen(false);
           setEditorTask(null);
+          setEditorDraft(null);
         }}
         onSaved={(savedTask) => {
           setEditorOpen(false);
           setEditorTask(null);
+          setEditorDraft(null);
           notify.success(editorTask ? t("activity.tasks.updatedNotice") : t("activity.tasks.addedNotice"), { description: savedTask.title });
           void load();
         }}
@@ -808,6 +875,7 @@ export function ActivityTaskPanel({
           await load();
           setEditorOpen(false);
           setEditorTask(null);
+          setEditorDraft(null);
           notify.warning(t("activity.tasks.latestLoaded"), { description: t("activity.tasks.latestLoadedDescription") });
         }}
       />

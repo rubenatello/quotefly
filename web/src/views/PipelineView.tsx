@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ChevronDown, Search } from "lucide-react";
 import { CallIcon, ClockIcon, CustomerIcon, EmailIcon, QuoteIcon } from "../components/Icons";
-import { ActivityTaskPanel } from "../components/activity/ActivityTaskPanel";
+import { ActivityTaskPanel, type ActivityTaskDraft } from "../components/activity/ActivityTaskPanel";
 import { Alert, Badge, Button, Card, EmptyState, Input, LoadingState, PageHeader, PaginationControls, Select, type PageSize } from "../components/ui";
 import { FollowUpPill, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
@@ -21,6 +21,39 @@ type ActivitySurface = "mine" | "team" | "leads";
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON", "LOST"];
 const JOB_STATUSES: QuoteJobStatus[] = ["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"];
 const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = ["NOT_READY", "DUE", "COMPLETED"];
+
+const ACTIVITY_TYPE_VALUES = new Set(["FOLLOW_UP", "PREPARE_QUOTE", "SEND_QUOTE", "CHECK_IN", "CUSTOM"]);
+const ACTIVITY_PRIORITY_VALUES = new Set(["LOW", "NORMAL", "HIGH", "URGENT"]);
+
+function getRouteString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseKodyActivityDraftState(state: unknown): ActivityTaskDraft | null {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const draft = (state as { kodyActivityDraft?: unknown }).kodyActivityDraft;
+  if (!draft || typeof draft !== "object" || Array.isArray(draft)) return null;
+  const record = draft as Record<string, unknown>;
+  const customerId = getRouteString(record.customerId);
+  const customerName = getRouteString(record.customerName);
+  const type = getRouteString(record.type);
+  const priority = getRouteString(record.priority);
+  const title = getRouteString(record.title);
+  const dueAtUtc = getRouteString(record.dueAtUtc);
+  if (!customerId || !customerName || !type || !priority || !title || !dueAtUtc) return null;
+  if (!ACTIVITY_TYPE_VALUES.has(type) || !ACTIVITY_PRIORITY_VALUES.has(priority)) return null;
+  if (Number.isNaN(new Date(dueAtUtc).getTime())) return null;
+  return {
+    customerId,
+    customerName,
+    quoteId: getRouteString(record.quoteId),
+    quoteTitle: getRouteString(record.quoteTitle),
+    type: type as ActivityTaskDraft["type"],
+    priority: priority as ActivityTaskDraft["priority"],
+    title,
+    dueAtUtc,
+  };
+}
 
 function followUpLabel(status: LeadFollowUpStatus, t: TFunction): string {
   if (status === "NEEDS_FOLLOW_UP") return t("activity.status.needsFollowUp");
@@ -460,6 +493,7 @@ export function PipelineView() {
     selectedQuoteId,
   } = useDashboard();
   const canManageAssignments = session?.role === "owner" || session?.role === "admin";
+  const kodyActivityDraft = useMemo(() => parseKodyActivityDraftState(location.state), [location.state]);
   const [activitySurface, setActivitySurface] = useState<ActivitySurface>("mine");
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [queueItems, setQueueItems] = useState<PipelineLead[]>([]);
@@ -516,6 +550,10 @@ export function PipelineView() {
   useEffect(() => {
     void loadQueuePage();
   }, [loadQueuePage]);
+
+  useEffect(() => {
+    if (kodyActivityDraft) setActivitySurface("mine");
+  }, [kodyActivityDraft]);
 
   const nextAttentionCount = queueTotals.newLeads + queueTotals.quotedLeads;
   const activeCustomerCount =
@@ -644,6 +682,7 @@ export function PipelineView() {
           timezone={session?.timezone ?? "UTC"}
           navigateToQuote={navigateToQuote}
           initialTaskId={(location.state as { activityTaskId?: string } | null)?.activityTaskId}
+          initialDraft={kodyActivityDraft}
         />
       ) : <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.45fr)_320px]">
         <div className="space-y-4">

@@ -623,6 +623,8 @@ export type AiAssistantRequestedTool =
   | "OUT_OF_SCOPE"
   | "NAVIGATE_WORKSPACE"
   | "FOLLOW_UP_QUEUE"
+  | "LIST_MY_ACTIVITIES"
+  | "PRIORITIZE_MY_DAY"
   | "CUSTOMERS_WITHOUT_QUOTES"
   | "PIPELINE_SCENARIO"
   | "SEARCH_CUSTOMERS"
@@ -632,6 +634,7 @@ export type AiAssistantRequestedTool =
   | "DRAFT_CUSTOMER"
   | "DRAFT_PRODUCT"
   | "DRAFT_QUOTE"
+  | "PREPARE_ACTIVITY"
   | "PREPARE_QUOTE_SEND";
 
 export type AiAssistantTool = Exclude<AiAssistantRequestedTool, "AUTO">;
@@ -651,7 +654,7 @@ export type AiAssistantConversationState = {
 };
 
 export type AiAssistantContext = {
-  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard";
+  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up";
   customerId?: string;
   quoteId?: string;
   search?: string;
@@ -663,7 +666,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ACTIVITY_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;

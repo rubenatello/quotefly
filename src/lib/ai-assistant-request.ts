@@ -9,7 +9,7 @@ import type { AiAssistantContext } from "./ai-assistant";
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 
 export const AssistantContextSchema = z.object({
-  currentPage: z.enum(["quotes", "customers", "analytics", "products", "dashboard"]).optional(),
+  currentPage: z.enum(["quotes", "customers", "analytics", "products", "dashboard", "follow-up"]).optional(),
   customerId: z.string().trim().min(1).optional(),
   quoteId: z.string().trim().min(1).optional(),
   search: z.string().trim().min(1).max(120).optional(),

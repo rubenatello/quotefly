@@ -1,8 +1,8 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phase 1 implemented, database-backed, and independently approved; pending BCP and deployment authorization
+Status: Phase 1 implemented locally, including Kody Activity tools; pending BCP and deployment authorization
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 Owners: Product, Engineering, Security, Operations
 
@@ -66,7 +66,7 @@ Implementation checklist:
 - [x] My work, Team, and preserved Lead queue UI with 25/50/100 pagination.
 - [x] Mobile create, complete, Undo/reopen, light/dark, overflow, and accessibility evidence.
 - [x] Home `My day` prefers assigned task summary and safely falls back to derived CRM signals.
-- [ ] Read-only Kody task listing and prepare-task confirmation tools.
+- [x] Read-only Kody task listing and prepare-task confirmation tools.
 - [x] Full exact-candidate `verify:ci`, security re-review, and Opera approval.
 
 Database requirements:

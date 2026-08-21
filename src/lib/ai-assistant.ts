@@ -1,5 +1,8 @@
 import {
   Prisma,
+  type ActivityTaskPriority,
+  type ActivityTaskStatus,
+  type ActivityTaskType,
   type AiPurpose,
   type AiUsageEventType,
   type DataClassification,
@@ -37,7 +40,17 @@ import { buildGovernedQuoteAiContext, type AiRetrievalResult } from "./ai-retrie
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import { formatUsPhone, normalizePhoneSearchDigits, normalizeUsPhoneDigits } from "./phone";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope } from "./query-scope";
+import {
+  shiftTenantLocalDate,
+  tenantActivityWindows,
+  tenantLocalDateParts,
+  tenantWallTimeToUtc,
+} from "./tenant-time";
 import { withTenantRlsContext } from "./tenant-rls";
+import {
+  summarizeAssistantActivityAgenda,
+  type AssistantActivityTaskProjection,
+} from "../services/activity-tasks";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import type { SupportedLocale } from "./supported-locale";
 
@@ -45,7 +58,7 @@ export { AI_ASSISTANT_TOOLS } from "./ai-assistant-contract";
 export type { AiAssistantRequestedTool, AiAssistantTool } from "./ai-assistant-contract";
 
 export type AiAssistantContext = Readonly<{
-  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard";
+  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up";
   customerId?: string;
   quoteId?: string;
   search?: string;
@@ -61,6 +74,7 @@ export type AiAssistantAction = Readonly<{
     | "OPEN_CUSTOMER"
     | "OPEN_CUSTOMER_DRAFT"
     | "OPEN_PRODUCT_DRAFT"
+    | "OPEN_ACTIVITY_DRAFT"
     | "OPEN_QUOTE_DRAFT"
     | "OPEN_QUOTE_SEND"
     | "OPEN_ANALYTICS"
@@ -127,7 +141,10 @@ const DEFAULT_CUSTOMER_LIMIT = 5;
 const MAX_CUSTOMER_LIMIT = 8;
 const DEFAULT_PRODUCT_LIMIT = 5;
 const MAX_PRODUCT_LIMIT = 8;
+const DEFAULT_ACTIVITY_LIMIT = 5;
+const MAX_ACTIVITY_LIMIT = 8;
 const OPEN_PIPELINE_STATUSES = ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER"] as const;
+const ACTIVE_ACTIVITY_STATUSES: ActivityTaskStatus[] = ["OPEN", "IN_PROGRESS"];
 const ZERO_AI_TELEMETRY: AiUsageTelemetry = Object.freeze({
   requestCount: 0,
   promptTokens: 0,
@@ -164,9 +181,16 @@ function highestClassification(...values: readonly DataClassification[]) {
 const STOP_CUSTOMER_SEARCH_PREFIX =
   /^(?:please\s+|por\s+favor\s+)?(?:find|search|look\s+up|show|show\s+me|open|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|abrir|abre)\s+(?:a\s+|al\s+|el\s+|la\s+|los\s+|las\s+|un\s+|una\s+)?(?:customer|client|contact|customers|clients|contacts|cliente|clientes|contacto|contactos)\s*(?:named|called|for|matching|with|llamado|llamada|que\s+se\s+llama|con)?\s*/i;
 const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin|ganancia|ganancias|rentabilidad|rentable|margen|margenes|costo|costos|clasificar|clasifica|ordenar|ordena)\b/i;
-const PIPELINE_INTENT_PATTERN = /\b(pipeline|sales|revenue|win\s*rate|accepted|sent|open\s+quotes?|follow[-\s]*up|ventas|ingresos|tasa\s+de\s+cierre|aceptad[ao]s?|enviad[ao]s?|cotizaci(?:on|ones)\s+abiertas?|seguimiento)\b/i;
+const PIPELINE_INTENT_PATTERN = /\b(pipeline|sales|revenue|win\s*rate|accepted|sent|open\s+quotes?|follow[-\s]*up|forecast|projection|projected|ventas|ingresos|tasa\s+de\s+cierre|aceptad[ao]s?|enviad[ao]s?|cotizaci(?:on|ones)\s+abiertas?|seguimiento|pronostico|proyecci(?:on|ones)|proyectad[ao]s?)\b/i;
 const CUSTOMER_INTENT_PATTERN = /\b(customer|client|contact|phone|email|find|search|look\s+up|cliente|clientes|contacto|contactos|telefono|correo|buscar|busca|encontrar|encuentra)\b/i;
 const QUOTE_DRAFT_INTENT_PATTERN = /\b(quote|estimate|draft|bid|proposal|new\s+job|sq\s*ft|sqft|roof|roofing|floor|flooring|hvac|plumb|plumbing|landscap|construction|cotizacion|presupuesto|estimado|propuesta|borrador|nuevo\s+trabajo|pies?\s+cuadrados?|techo|techado|piso|pisos|plomeria|jardineria|paisajismo|construccion)\b/i;
+const ACTIVITY_TASK_INTENT_PATTERN =
+  /\b(?:my\s+(?:day|tasks?|to[-\s]*dos?|work|activities|follow[-\s]*ups?)|(?:active|open|due)\s+tasks?|tasks?\s+(?:assigned|due|open|active)|tasks?.{0,24}assigned\s+to\s+me|to[-\s]*dos?|activity|activities|work\s+assigned|assigned\s+(?:work|tasks?)|mis\s+(?:tareas|seguimientos|actividades)|mi\s+dia|trabajo\s+asignado|tareas?\s+(?:activas?|asignadas?|pendientes?|para\s+hoy)|tareas?.{0,24}asignadas?|que\s+tengo\s+que\s+hacer|seguimientos?\s+asignados?)\b/i;
+const PRIORITIZE_MY_DAY_PATTERN =
+  /\b(?:prioriti[sz]e|what\s+should\s+i\s+do\s+first|where\s+should\s+i\s+start|plan\s+my\s+day|organize\s+my\s+day|organise\s+my\s+day|my\s+day|top\s+priorit(?:y|ies)|prioriza|priorizar|que\s+hago\s+primero|por\s+donde\s+empiezo|organiza\s+mi\s+dia|mis\s+prioridades|prioridades\s+de\s+hoy)\b/i;
+const PREPARE_ACTIVITY_INTENT_PATTERN =
+  /(?:\b(?:add|create|make|schedule|set\s+up|remind|reminder|agregar|agrega|crear|crea|hacer|programar|programa|recordar|recordatorio)\b.{0,96}\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b)|(?:\b(?:follow\s+up\s+with|call|dar\s+seguimiento\s+a|llamar)\b.{0,96}\b[\p{L}\p{N}][\p{L}\p{N}\s.'-]{1,80})|(?:\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b.{0,96}\b(?:for|with|to|para|con|a)\b)/iu;
+const ACTIVITY_TODAY_INTENT_PATTERN = /\b(?:today|this\s+morning|this\s+afternoon|tonight|hoy|esta\s+ma(?:n|ñ)ana|esta\s+tarde|esta\s+noche)\b/i;
 const FOLLOW_UP_INTENT_PATTERN = /\bfollow(?:ed|ing)?[-\s]+up\b|\bfollow[-\s]*up\b|\b(?:dar|hacer|necesita|necesitan|requiere|requieren|pendiente(?:s)?\s+de)\s+seguimiento\b|\bseguimiento(?:s)?\b/i;
 const CUSTOMERS_WITHOUT_QUOTES_PATTERN =
   /\b(?:customers?|clients?|clientes?)\b.{0,64}\b(?:do\s+not\s+have|does\s+not\s+have|don't\s+have|doesn't\s+have|have\s+no|has\s+no|without|missing|no\s+tienen?|sin|les?\s+falta)\b.{0,40}\b(?:quotes?|estimates?|proposals?|cotizaci(?:on|ones)|presupuestos?|estimados?|propuestas?)\b/i;
@@ -194,7 +218,7 @@ const INSTRUCTION_OVERRIDE_PATTERN =
 const SENSITIVE_SCOPE_ESCAPE_PATTERN =
   /\b(?:system\s+prompt|developer\s+message|hidden\s+prompt|jailbreak|bypass\s+(?:the\s+)?(?:tenant|policy|guardrails?)|cross[-\s]*tenant|(?:another|other)\s+tenant(?:'s|s)?|api\s+key|secret\s+token|prompt\s+del\s+sistema|mensaje\s+del\s+desarrollador|prompt\s+oculto|evita(?:r)?\s+(?:el\s+)?(?:tenant|inquilino|espacio\s+de\s+trabajo|politica|protecciones?)|datos?\s+de\s+(?:otro|otra)\s+(?:tenant|inquilino|cuenta|empresa|espacio\s+de\s+trabajo)|(?:otro|otra)\s+(?:tenant|inquilino|cuenta|empresa|espacio\s+de\s+trabajo)|clave\s+(?:de\s+)?api|token\s+secreto|contrasena|secreto)\b/i;
 const OUTSIDE_KNOWLEDGE_PATTERN =
-  /\b(?:weather|forecast|headline|news|politics|election|sports?|celebrity|movie|television|recipe|cooking|joke|poem|story|homework|medical\s+advice|diagnos(?:e|is)|legal\s+advice|stock\s+tip|invest(?:ment|ing)|cryptocurrency|write\s+code|programming|clima|pronostico|noticias?|politica|elecciones?|deportes?|celebridad|pelicula|television|receta|cocina|chiste|poema|cuento|tarea|consejo\s+medico|diagnostico|consejo\s+legal|acciones?|inversiones?|criptomoneda|escribe\s+codigo|programacion)\b/i;
+  /\b(?:weather|weather\s+forecast|headline|news|politics|election|sports?|celebrity|movie|television|recipe|cooking|joke|poem|story|homework|medical\s+advice|diagnos(?:e|is)|legal\s+advice|stock\s+tip|invest(?:ment|ing)|cryptocurrency|write\s+code|programming|clima|pronostico\s+del\s+clima|noticias?|politica|elecciones?|deportes?|celebridad|pelicula|television|receta|cocina|chiste|poema|cuento|tareas?\s+escolares?|consejo\s+medico|diagnostico|consejo\s+legal|acciones?|inversiones?|criptomoneda|escribe\s+codigo|programacion)\b/i;
 const CONTEXTUAL_ENTITY_QUERY_PATTERN =
   /^(?!.*\b(?:what|why|how|when|where|who|tell|explain|write|give|could|would|should)\b)[\p{L}\p{N}][\p{L}\p{N}\s.'@()+&/-]{0,80}$/iu;
 
@@ -227,7 +251,15 @@ function normalizeAssistantRoutingText(value: string) {
 
 function assistantTopic(tool: AiAssistantTool): AssistantTopic {
   if (tool === "ASSISTANT_HELP" || tool === "OUT_OF_SCOPE") return "HELP";
-  if (["SEARCH_CUSTOMERS", "FOLLOW_UP_QUEUE", "CUSTOMERS_WITHOUT_QUOTES", "DRAFT_CUSTOMER"].includes(tool)) return "CRM";
+  if ([
+    "SEARCH_CUSTOMERS",
+    "FOLLOW_UP_QUEUE",
+    "CUSTOMERS_WITHOUT_QUOTES",
+    "DRAFT_CUSTOMER",
+    "LIST_MY_ACTIVITIES",
+    "PRIORITIZE_MY_DAY",
+    "PREPARE_ACTIVITY",
+  ].includes(tool)) return "CRM";
   if (tool === "DRAFT_QUOTE") return "QUOTING";
   if (tool === "PREPARE_QUOTE_SEND") return "SENDING";
   if (tool === "DRAFT_PRODUCT" || tool === "SEARCH_PRODUCTS") return "PRODUCTS";
@@ -499,6 +531,270 @@ function parseCustomerDraft(message: string): CustomerDraftPreview {
   };
 }
 
+const ACTIVITY_SEARCH_STOP_WORDS = new Set([
+  ...SEARCH_STOP_WORDS,
+  "activity",
+  "assigned",
+  "call",
+  "create",
+  "due",
+  "follow",
+  "followup",
+  "make",
+  "me",
+  "my",
+  "remind",
+  "reminder",
+  "schedule",
+  "task",
+  "today",
+  "tomorrow",
+  "todo",
+  "with",
+  "actividad",
+  "asignada",
+  "asignadas",
+  "crear",
+  "crea",
+  "hoy",
+  "llamar",
+  "manana",
+  "mañana",
+  "para",
+  "programar",
+  "programa",
+  "recordatorio",
+  "seguimiento",
+  "tarea",
+  "tareas",
+]);
+
+type ActivityDraftPreview = Readonly<{
+  type: ActivityTaskType;
+  priority: ActivityTaskPriority;
+  title: string;
+  dueAtUtc: Date;
+  dueTimeSource: "EXPLICIT" | "DEFAULT";
+  dueTimeWarning: "NONEXISTENT_LOCAL_TIME" | null;
+  customerSearch: string;
+}>;
+
+type ActivityDueTimeResult = Readonly<{
+  dueAtUtc: Date;
+  source: "EXPLICIT" | "DEFAULT";
+  warning: "NONEXISTENT_LOCAL_TIME" | null;
+}>;
+
+function activityCustomerSearch(message: string, contextSearch?: string) {
+  const explicit = contextSearch?.trim();
+  if (explicit) return explicit.slice(0, 120);
+  const match = message.match(
+    /\b(?:for|with|to|customer|client|contact|para|con|a|cliente|contacto)\s+([\p{L}\p{M}0-9][\p{L}\p{M}0-9 .'-]{1,80}?)(?=\s+(?:today|tomorrow|next\s+week|in\s+\d+|about|on|at|hoy|ma(?:n|ñ)ana|proxima\s+semana|en\s+\d+|sobre|acerca|por)\b|[,.;]|$)/iu,
+  )?.[1];
+  const candidate = (match ?? message)
+    .replace(CUSTOMER_DRAFT_EMAIL_PATTERN, " ")
+    .replace(CUSTOMER_DRAFT_PHONE_PATTERN, " ")
+    .split(/[,.!?;\n]/, 1)[0]
+    ?.trim() ?? "";
+  const tokens = candidate
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .split(/[^\p{L}\p{N}@._+-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 && !ACTIVITY_SEARCH_STOP_WORDS.has(token.toLowerCase()))
+    .slice(0, 6);
+  return tokens.join(" ").slice(0, 120);
+}
+
+function parseActivityType(message: string): ActivityTaskType {
+  const normalized = normalizeAssistantRoutingText(message).toLowerCase();
+  if (/\b(?:send|email|text|share|enviar|envia|mandar|manda|correo|texto|compartir)\b/.test(normalized)) {
+    return "SEND_QUOTE";
+  }
+  if (/\b(?:quote|estimate|proposal|cotizacion|presupuesto|estimado|propuesta)\b/.test(normalized)) {
+    return "PREPARE_QUOTE";
+  }
+  if (/\b(?:check[-\s]*in|post[-\s]*job|after[-\s]*sale|completed\s+job|revision|revisar|trabajo\s+terminado|post[-\s]*venta)\b/.test(normalized)) {
+    return "CHECK_IN";
+  }
+  if (/\b(?:follow[-\s]*up|call|remind|seguimiento|llamar|recordatorio)\b/.test(normalized)) {
+    return "FOLLOW_UP";
+  }
+  return "CUSTOM";
+}
+
+function parseActivityPriority(message: string): ActivityTaskPriority {
+  const normalized = normalizeAssistantRoutingText(message).toLowerCase();
+  if (/\b(?:urgent|asap|immediately|critical|urgente|ya|inmediato|critico)\b/.test(normalized)) return "URGENT";
+  if (/\b(?:high|important|priority|importante|prioridad|alta)\b/.test(normalized)) return "HIGH";
+  if (/\b(?:low|whenever|baja|cuando\s+se\s+pueda)\b/.test(normalized)) return "LOW";
+  return "NORMAL";
+}
+
+function parseActivityClockTime(message: string): { hour: number; minute: number } | null {
+  const normalized = normalizeAssistantRoutingText(message).toLowerCase();
+  const match = normalized.match(
+    /\b(?:at|@|a\s+las|para\s+las)\s+(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?|am|pm)?\b/i,
+  ) ?? normalized.match(/\b(\d{1,2})(?::(\d{2}))\s*(a\.?m\.?|p\.?m\.?|am|pm)\b/i);
+  if (!match?.[1]) return null;
+  const rawHour = Number(match[1]);
+  const minute = match[2] ? Number(match[2]) : 0;
+  const meridiem = match[3]?.replace(/\./g, "").toLowerCase();
+  if (!Number.isInteger(rawHour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (meridiem === "am") {
+    if (rawHour < 1 || rawHour > 12) return null;
+    return { hour: rawHour === 12 ? 0 : rawHour, minute };
+  }
+  if (meridiem === "pm") {
+    if (rawHour < 1 || rawHour > 12) return null;
+    return { hour: rawHour === 12 ? 12 : rawHour + 12, minute };
+  }
+  if (rawHour < 0 || rawHour > 23) return null;
+  if (rawHour >= 1 && rawHour <= 6) return { hour: rawHour + 12, minute };
+  return { hour: rawHour, minute };
+}
+
+function activityDueDate(
+  message: string,
+  generatedAtUtc: Date,
+  windows: { todayStartUtc: Date; tomorrowStartUtc: Date; timeZone: string },
+) {
+  return activityDueTime(message, generatedAtUtc, windows).dueAtUtc;
+  const normalized = normalizeAssistantRoutingText(message).toLowerCase();
+  const explicitTime = parseActivityClockTime(message);
+  const oneHourFromNow = new Date(generatedAtUtc.getTime() + 60 * 60 * 1_000);
+  const today = tenantLocalDateParts(generatedAtUtc, windows.timeZone);
+  const dueFromLocal = (
+    date: Pick<typeof today, "year" | "month" | "day">,
+    fallback: Date,
+    defaultHour = today.hour,
+    defaultMinute = today.minute,
+  ) => tenantWallTimeToUtc({
+    ...date,
+    hour: explicitTime?.hour ?? defaultHour,
+    minute: explicitTime?.minute ?? defaultMinute,
+  }, windows.timeZone) ?? fallback;
+  const inDays = normalized.match(/\b(?:in|en)\s+(\d{1,2})\s+(?:days?|dias?)\b/);
+  if (inDays?.[1]) {
+    const days = Math.min(Math.max(Number(inDays?.[1] ?? 0), 0), 30);
+    return dueFromLocal(shiftTenantLocalDate(today, days), oneHourFromNow);
+  }
+  if (/\b(?:next\s+week|proxima\s+semana)\b/.test(normalized)) {
+    return dueFromLocal(shiftTenantLocalDate(today, 7), oneHourFromNow);
+  }
+  if (/\b(?:tomorrow|manana|mañana)\b/.test(normalized)) {
+    return dueFromLocal(shiftTenantLocalDate(today, 1), oneHourFromNow, 9, 0);
+  }
+  if (ACTIVITY_TODAY_INTENT_PATTERN.test(normalized)) {
+    const dueAt = dueFromLocal(today, oneHourFromNow, 9, 0);
+    return dueAt > generatedAtUtc ? dueAt : oneHourFromNow;
+  }
+  return new Date(generatedAtUtc.getTime() + 60 * 60 * 1_000);
+}
+
+function activityDueTime(
+  message: string,
+  generatedAtUtc: Date,
+  windows: { timeZone: string },
+): ActivityDueTimeResult {
+  const normalized = normalizeAssistantRoutingText(message).toLowerCase();
+  const explicitTime = parseActivityClockTime(message);
+  const oneHourFromNow = new Date(generatedAtUtc.getTime() + 60 * 60 * 1_000);
+  const today = tenantLocalDateParts(generatedAtUtc, windows.timeZone);
+  const wallTime = (
+    date: Pick<typeof today, "year" | "month" | "day">,
+    hour: number,
+    minute: number,
+  ) => tenantWallTimeToUtc({ ...date, hour, minute }, windows.timeZone);
+  const defaultForDate = (date: Pick<typeof today, "year" | "month" | "day">) =>
+    wallTime(date, 9, 0) ?? oneHourFromNow;
+  const explicitForDate = (date: Pick<typeof today, "year" | "month" | "day">) => {
+    if (!explicitTime) return null;
+    return wallTime(date, explicitTime.hour, explicitTime.minute);
+  };
+  const exactOrDefault = (date: Pick<typeof today, "year" | "month" | "day">): ActivityDueTimeResult => {
+    const exact = explicitForDate(date);
+    if (exact) return { dueAtUtc: exact, source: "EXPLICIT", warning: null };
+    return {
+      dueAtUtc: defaultForDate(date),
+      source: "DEFAULT",
+      warning: explicitTime ? "NONEXISTENT_LOCAL_TIME" : null,
+    };
+  };
+  const inDays = normalized.match(/\b(?:in|en)\s+(\d{1,2})\s+(?:days?|dias?)\b/);
+  if (inDays?.[1]) {
+    const targetDate = shiftTenantLocalDate(today, Math.min(Math.max(Number(inDays?.[1] ?? 0), 0), 30));
+    if (explicitTime) return exactOrDefault(targetDate);
+    return {
+      dueAtUtc: wallTime(targetDate, today.hour, today.minute) ?? oneHourFromNow,
+      source: "DEFAULT",
+      warning: null,
+    };
+  }
+  if (/\b(?:next\s+week|proxima\s+semana)\b/.test(normalized)) {
+    const targetDate = shiftTenantLocalDate(today, 7);
+    if (explicitTime) return exactOrDefault(targetDate);
+    return {
+      dueAtUtc: wallTime(targetDate, today.hour, today.minute) ?? oneHourFromNow,
+      source: "DEFAULT",
+      warning: null,
+    };
+  }
+  if (/\b(?:tomorrow|manana|maÃ±ana)\b/.test(normalized)) {
+    const targetDate = shiftTenantLocalDate(today, 1);
+    if (explicitTime) return exactOrDefault(targetDate);
+    return { dueAtUtc: defaultForDate(targetDate), source: "DEFAULT", warning: null };
+  }
+  if (explicitTime) {
+    const exactToday = explicitForDate(today);
+    if (exactToday && exactToday > generatedAtUtc) {
+      return { dueAtUtc: exactToday, source: "EXPLICIT", warning: null };
+    }
+    const exactTomorrow = explicitForDate(shiftTenantLocalDate(today, 1));
+    if (exactTomorrow) return { dueAtUtc: exactTomorrow, source: "EXPLICIT", warning: null };
+    return { dueAtUtc: oneHourFromNow, source: "DEFAULT", warning: "NONEXISTENT_LOCAL_TIME" };
+  }
+  if (ACTIVITY_TODAY_INTENT_PATTERN.test(normalized)) {
+    const dueAtUtc = defaultForDate(today);
+    return { dueAtUtc: dueAtUtc > generatedAtUtc ? dueAtUtc : oneHourFromNow, source: "DEFAULT", warning: null };
+  }
+  return { dueAtUtc: oneHourFromNow, source: "DEFAULT", warning: null };
+}
+
+function parseActivityDraft(
+  message: string,
+  generatedAtUtc: Date,
+  windows: { todayStartUtc: Date; tomorrowStartUtc: Date; timeZone: string },
+  locale: SupportedLocale,
+  contextSearch?: string,
+): ActivityDraftPreview {
+  const type = parseActivityType(message);
+  const priority = parseActivityPriority(message);
+  const customerSearch = activityCustomerSearch(message, contextSearch);
+  const fallbackTitle = locale === "es-US"
+    ? type === "SEND_QUOTE" ? "Enviar cotizaciÃ³n"
+      : type === "PREPARE_QUOTE" ? "Preparar cotizaciÃ³n"
+        : type === "CHECK_IN" ? "Revisar con el cliente"
+          : type === "FOLLOW_UP" ? "Dar seguimiento al cliente"
+            : "Tarea del espacio"
+    : type === "SEND_QUOTE" ? "Send quote"
+      : type === "PREPARE_QUOTE" ? "Prepare quote"
+        : type === "CHECK_IN" ? "Customer check-in"
+          : type === "FOLLOW_UP" ? "Follow up with customer"
+            : "Workspace task";
+  const quotedTitle = message.match(/["“]([^"”]{3,120})["”]/)?.[1]?.trim();
+  const dueTime = activityDueTime(message, generatedAtUtc, windows);
+  return {
+    type,
+    priority,
+    title: (quotedTitle ?? fallbackTitle).slice(0, 160),
+    dueAtUtc: dueTime.dueAtUtc,
+    dueTimeSource: dueTime.source,
+    dueTimeWarning: dueTime.warning,
+    customerSearch,
+  };
+}
+
 function quoteSendSearchTokens(message: string) {
   return message
     .normalize("NFKD")
@@ -585,6 +881,9 @@ export function resolveAssistantTool(
   // selection. This also protects older clients that opened Kody from a
   // customer-specific button and then replaced the suggested prompt.
   if (PRODUCT_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_PRODUCT";
+  if (PREPARE_ACTIVITY_INTENT_PATTERN.test(routingMessage)) return "PREPARE_ACTIVITY";
+  if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage)) return "PRIORITIZE_MY_DAY";
+  if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMER_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_CUSTOMER";
   if (QUOTE_SEND_INTENT_PATTERN.test(routingMessage)) return "PREPARE_QUOTE_SEND";
   const lower = routingMessage.toLowerCase();
@@ -599,6 +898,9 @@ export function resolveAssistantTool(
     if (ASSISTANT_HELP_PATTERN.test(routingMessage)) return "ASSISTANT_HELP";
     const hasQuoteFlyIntent =
       PIPELINE_SCENARIO_PATTERN.test(lower)
+      || PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)
+      || PRIORITIZE_MY_DAY_PATTERN.test(lower)
+      || ACTIVITY_TASK_INTENT_PATTERN.test(lower)
       || CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)
       || FOLLOW_UP_INTENT_PATTERN.test(lower)
       || Boolean(navigationTarget(lower))
@@ -614,6 +916,9 @@ export function resolveAssistantTool(
   }
 
   if (PIPELINE_SCENARIO_PATTERN.test(lower)) return "PIPELINE_SCENARIO";
+  if (PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)) return "PREPARE_ACTIVITY";
+  if (PRIORITIZE_MY_DAY_PATTERN.test(lower)) return "PRIORITIZE_MY_DAY";
+  if (ACTIVITY_TASK_INTENT_PATTERN.test(lower)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
   if (FOLLOW_UP_INTENT_PATTERN.test(lower)) return "FOLLOW_UP_QUEUE";
   if (navigationTarget(lower)) return "NAVIGATE_WORKSPACE";
@@ -661,11 +966,14 @@ export function inferAssistantRelativeDateRange(message: string, now: Date) {
 export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
   return ![
     "NAVIGATE_WORKSPACE",
+    "LIST_MY_ACTIVITIES",
+    "PRIORITIZE_MY_DAY",
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "PIPELINE_SCENARIO",
     "DRAFT_CUSTOMER",
     "DRAFT_PRODUCT",
+    "PREPARE_ACTIVITY",
     "SEARCH_PRODUCTS",
     "PREPARE_QUOTE_SEND",
     "ASSISTANT_HELP",
@@ -1914,6 +2222,393 @@ async function createDeniedCustomerToolResult(
   };
 }
 
+type ActivityDueBucket = "OVERDUE" | "TODAY" | "UPCOMING";
+
+function activityDueBucket(
+  task: Pick<AssistantActivityTaskProjection, "dueAtUtc">,
+  windows: { todayStartUtc: Date; tomorrowStartUtc: Date },
+): ActivityDueBucket {
+  if (task.dueAtUtc < windows.todayStartUtc) return "OVERDUE";
+  if (task.dueAtUtc < windows.tomorrowStartUtc) return "TODAY";
+  return "UPCOMING";
+}
+
+function activityTaskResult(
+  task: AssistantActivityTaskProjection,
+  index: number,
+  windows: { todayStartUtc: Date; tomorrowStartUtc: Date },
+) {
+  return {
+    activityTaskId: task.id,
+    activityTaskVersion: task.version,
+    activityRank: index + 1,
+    title: task.title,
+    taskType: task.type,
+    priority: task.priority,
+    status: task.status,
+    dueBucket: activityDueBucket(task, windows),
+    dueAtUtc: task.dueAtUtc.toISOString(),
+    customerName: task.customer.fullName,
+    quoteTitle: task.quote?.title ?? null,
+  };
+}
+
+function activityTaskNoun(count: number, locale: SupportedLocale) {
+  if (locale === "es-US") return count === 1 ? "tarea activa" : "tareas activas";
+  return count === 1 ? "active task" : "active tasks";
+}
+
+function shouldLimitActivityToToday(message: string, tool: "LIST_MY_ACTIVITIES" | "PRIORITIZE_MY_DAY") {
+  return tool === "PRIORITIZE_MY_DAY" || ACTIVITY_TODAY_INTENT_PATTERN.test(normalizeAssistantRoutingText(message));
+}
+
+async function runActivityAgenda(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+  tool: "LIST_MY_ACTIVITIES" | "PRIORITIZE_MY_DAY",
+): Promise<AiAssistantRunResult> {
+  const limit = clampLimit(params.context?.limit, MAX_ACTIVITY_LIMIT, DEFAULT_ACTIVITY_LIMIT);
+  const locale = assistantLocale(params);
+  const todayScope = shouldLimitActivityToToday(params.message, tool);
+  const activityData = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
+    const tenant = await transaction.tenant.findFirst({
+      where: { id: params.access.tenantId, deletedAtUtc: null },
+      select: { timezone: true },
+    });
+    const windows = tenantActivityWindows(generatedAtUtc, tenant?.timezone ?? "UTC");
+    const agenda = await summarizeAssistantActivityAgenda(transaction, params.access, windows, {
+      limit,
+      prioritizeTodayOnly: todayScope,
+    });
+
+    return {
+      timeZone: windows.timeZone,
+      windows,
+      summary: agenda.counts,
+      activeTotal: agenda.activeTotal,
+      matchingTotal: agenda.matchingTotal,
+      rankedTasks: agenda.tasks,
+    };
+  });
+
+  const results = activityData.rankedTasks.map((task, index) =>
+    activityTaskResult(task, index, activityData.windows),
+  );
+  const top = results[0] ?? null;
+  const counts = activityData.summary;
+  const listedTotal = todayScope ? activityData.matchingTotal : activityData.activeTotal;
+  const countSummary = locale === "es-US"
+    ? `${counts.overdue} vencida${counts.overdue === 1 ? "" : "s"}, ${counts.today} para hoy y ${counts.upcoming} prÃ³xima${counts.upcoming === 1 ? "" : "s"}`
+    : `${counts.overdue} overdue, ${counts.today} due today, and ${counts.upcoming} upcoming`;
+
+  const answer = top
+    ? tool === "PRIORITIZE_MY_DAY"
+      ? locale === "es-US"
+        ? `EmpezarÃ­a con "${top.title}"${top.customerName ? ` para ${top.customerName}` : ""}. Tu lista tiene ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)}: ${countSummary}. UsÃ© solo tus tareas activas asignadas.`
+        : `I would start with "${top.title}"${top.customerName ? ` for ${top.customerName}` : ""}. Today's list has ${activityData.matchingTotal} ${activityTaskNoun(activityData.matchingTotal, locale)}: ${countSummary}. I only used your assigned active tasks.`
+      : locale === "es-US"
+        ? `EncontrÃ© ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} en tu lista: ${countSummary}. Se muestran las ${results.length} mÃ¡s importantes.`
+        : `I found ${listedTotal} ${activityTaskNoun(listedTotal, locale)} on your list: ${countSummary}. Showing ${results.length}.`
+    : activityData.activeTotal > 0
+      ? locale === "es-US"
+        ? `No encontrÃ© tareas vencidas ni tareas para hoy asignadas a ti. Tienes ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} programadas para mÃ¡s adelante.`
+        : `I did not find overdue tasks or tasks due today assigned to you. You have ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} scheduled later.`
+    : locale === "es-US"
+      ? `No encontrÃ© tareas activas asignadas a ti. Completaste ${counts.completed} en la ventana reciente.`
+      : `I did not find active tasks assigned to you. You completed ${counts.completed} in the recent window.`;
+
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: localeText(params, "Assigned active activity tasks", "Tareas activas asignadas"),
+    sourceType: "ActivityTask + Customer + Quote",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["ActivityTask", "Customer", "Quote"],
+    sourceLabels: [citations[0].label],
+    customerId: activityData.rankedTasks[0]?.customerId ?? null,
+    quoteId: activityData.rankedTasks[0]?.quoteId ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic assigned activity summary",
+    riskNote: "Activity lookup used the same tenant-scoped visibility predicate and RLS context as the authenticated activities API. Task notes, contact details, deleted rows, and archived linked records were excluded from the assistant result.",
+    insightReasons: [tool === "PRIORITIZE_MY_DAY" ? "assigned activity prioritization" : "assigned activity listing"],
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool,
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions: [{
+        type: "OPEN_WORKSPACE_PAGE",
+        label: localeText(params, "Open activity", "Abrir actividad"),
+        requiresConfirmation: false,
+        payload: { page: "follow-up" },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "task notes",
+        "customer phone numbers",
+        "customer email addresses",
+        "archived linked customers",
+        "archived linked quotes",
+        "deleted activity tasks",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: tool,
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: results.length
+          ? null
+          : activityData.activeTotal > 0
+            ? "Visible active tasks exist, but none are overdue or due today for the day-prioritization view."
+            : "No visible active tasks were assigned to the signed-in user.",
+        archivePolicy: "Only active tasks with active linked customers and quotes are considered.",
+        filters: {
+          mine: true,
+          statuses: ACTIVE_ACTIVITY_STATUSES.join(","),
+          overdue: counts.overdue,
+          today: counts.today,
+          upcoming: counts.upcoming,
+          completedRecent: counts.completed,
+          totalActiveAssigned: activityData.activeTotal,
+          matchingActiveAssigned: activityData.matchingTotal,
+          dueWindow: todayScope ? "overdue_or_today" : "active",
+          timeZone: activityData.timeZone,
+          limit,
+        },
+      }),
+    },
+  };
+}
+
+async function runActivityDraftPreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const locale = assistantLocale(params);
+  const draftData = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
+    const tenant = await transaction.tenant.findFirst({
+      where: { id: params.access.tenantId, deletedAtUtc: null },
+      select: { timezone: true },
+    });
+    const windows = tenantActivityWindows(generatedAtUtc, tenant?.timezone ?? "UTC");
+    const draft = parseActivityDraft(params.message, generatedAtUtc, windows, locale, params.context?.search);
+    const customerScope: Prisma.CustomerWhereInput = {
+      ...tenantActiveCustomerScope(params.access.tenantId),
+      ...assignedCustomerScope(params.access),
+    };
+    const contextCustomerId = params.context?.customerId?.trim();
+    const customerFilters: Prisma.CustomerWhereInput[] = [];
+    if (draft.customerSearch.length >= 2) {
+      customerFilters.push({ fullName: { contains: draft.customerSearch, mode: "insensitive" } });
+      for (const token of searchableTokens(draft.customerSearch)) {
+        customerFilters.push({ fullName: { contains: token, mode: "insensitive" } });
+      }
+    }
+    const customerMatches = contextCustomerId
+      ? await transaction.customer.findMany({
+          where: { ...customerScope, id: contextCustomerId },
+          select: { id: true, fullName: true },
+          take: 1,
+        })
+      : customerFilters.length
+        ? await transaction.customer.findMany({
+            where: { ...customerScope, OR: customerFilters },
+            orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+            select: { id: true, fullName: true },
+            take: 4,
+          })
+        : [];
+    const exactCustomer = customerMatches.length === 1 ? customerMatches[0] : null;
+    const quote = exactCustomer
+      ? await transaction.quote.findFirst({
+          where: {
+            ...tenantActiveQuoteScope(params.access.tenantId),
+            ...assignedQuoteScope(params.access),
+            customerId: exactCustomer.id,
+            ...(params.context?.quoteId ? { id: params.context.quoteId } : {}),
+          },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          select: { id: true, title: true },
+        })
+      : null;
+    return {
+      timeZone: windows.timeZone,
+      draft,
+      customerMatches,
+      exactCustomer,
+      quote,
+    };
+  });
+
+  const hasExactCustomer = Boolean(draftData.exactCustomer);
+  const results = hasExactCustomer
+    ? [{
+        customerId: draftData.exactCustomer!.id,
+        fullName: draftData.exactCustomer!.fullName,
+        quoteId: draftData.quote?.id ?? null,
+        quoteTitle: draftData.quote?.title ?? null,
+        taskType: draftData.draft.type,
+        priority: draftData.draft.priority,
+        title: draftData.draft.title,
+        dueAtUtc: draftData.draft.dueAtUtc.toISOString(),
+      }]
+    : draftData.customerMatches.map((customer) => ({
+        customerId: customer.id,
+        fullName: customer.fullName,
+      }));
+  const baseDueTimeNote = draftData.draft.dueTimeSource === "EXPLICIT"
+    ? localeText(params, "I used the due time from your request.", "UsÃƒÂ© la hora de vencimiento de tu solicitud.")
+    : localeText(
+        params,
+        "I used a reviewable default due time because no exact time was included.",
+        "UsÃƒÂ© una hora predeterminada revisable porque no incluiste una hora exacta.",
+      );
+  const dueTimeNote = draftData.draft.dueTimeWarning === "NONEXISTENT_LOCAL_TIME"
+    ? localeText(
+        params,
+        "The requested local time is not valid in your workspace timezone, so I used a reviewable default due time.",
+        "La hora local solicitada no es valida en la zona horaria del espacio, asi que use una hora predeterminada revisable.",
+      )
+    : baseDueTimeNote;
+  const baseAnswer = hasExactCustomer
+    ? localeText(
+        params,
+        `I prepared an activity task preview for ${draftData.exactCustomer!.fullName}. ${dueTimeNote} Review it before saving; nothing has been created yet.`,
+        `PreparÃ© una vista previa de tarea para ${draftData.exactCustomer!.fullName}. RevÃ­sala antes de guardar; todavÃ­a no se ha creado nada.`,
+      )
+    : draftData.customerMatches.length
+      ? localeText(
+          params,
+          `I found ${draftData.customerMatches.length} possible customers. Choose the right customer before creating the activity task.`,
+          `EncontrÃ© ${draftData.customerMatches.length} clientes posibles. Elige el cliente correcto antes de crear la tarea.`,
+        )
+      : localeText(
+          params,
+        "I need one active customer before preparing an activity task. Open Activity and choose the customer, or ask again with the customer name.",
+        "Necesito un cliente activo antes de preparar una tarea. Abre Actividad y elige el cliente, o vuelve a pedirlo con el nombre del cliente.",
+      );
+  const answer = hasExactCustomer && locale === "es-US"
+    ? `Prepare una vista previa de tarea para ${draftData.exactCustomer!.fullName}. ${dueTimeNote} Revisala antes de guardar; todavia no se ha creado nada.`
+    : baseAnswer;
+  const citations: AiAssistantCitation[] = draftData.customerMatches.length
+    ? [{
+        key: "A1",
+        label: localeText(params, "Active tenant customer lookup for task preview", "BÃºsqueda de cliente activo para vista previa de tarea"),
+        sourceType: "Customer",
+        classification: "C2_CUSTOMER_CONFIDENTIAL",
+      }]
+    : [];
+  const actions: AiAssistantAction[] = hasExactCustomer
+    ? [{
+        type: "OPEN_ACTIVITY_DRAFT",
+        label: localeText(params, "Review activity task", "Revisar tarea"),
+        requiresConfirmation: true,
+        payload: {
+          customerId: draftData.exactCustomer!.id,
+          customerName: draftData.exactCustomer!.fullName,
+          quoteId: draftData.quote?.id ?? null,
+          quoteTitle: draftData.quote?.title ?? null,
+          type: draftData.draft.type,
+          priority: draftData.draft.priority,
+          title: draftData.draft.title,
+          dueAtUtc: draftData.draft.dueAtUtc.toISOString(),
+        },
+      }]
+    : draftData.customerMatches.map((customer) => ({
+        type: "OPEN_CUSTOMER",
+        label: localeText(params, `Open ${customer.fullName}`, `Abrir a ${customer.fullName}`),
+        requiresConfirmation: false,
+        payload: { customerId: customer.id },
+      }));
+  if (!actions.length) {
+    actions.push({
+      type: "OPEN_WORKSPACE_PAGE",
+      label: localeText(params, "Open activity", "Abrir actividad"),
+      requiresConfirmation: false,
+      payload: { page: "follow-up" },
+    });
+  }
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["ActivityTask", "Customer", "Quote"],
+    sourceLabels: citations.length ? [citations[0].label] : ["Activity task preview without customer match"],
+    customerId: draftData.exactCustomer?.id ?? null,
+    quoteId: draftData.quote?.id ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: hasExactCustomer ? "high" : "medium",
+    confidenceLabel: "Deterministic activity task preview",
+    insightReasons: ["review-only activity task preview", hasExactCustomer ? "one active customer resolved" : "customer selection required"],
+    riskNote: "Activity preview creates no task rows or activity events. The save action must go through POST /v1/activities, which revalidates tenant membership, assignment, linked records, and idempotency.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "PREPARE_ACTIVITY",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "task notes",
+        "customer phone numbers",
+        "customer email addresses",
+        "assignee emails",
+        "source keys",
+        "idempotency keys",
+        "created tasks",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "PREPARE_ACTIVITY",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: results.length ? null : "No active customer could be resolved for the activity preview.",
+        archivePolicy: "Only active customers and active linked quotes are eligible for activity previews.",
+        filters: {
+          customerSearchProvided: Boolean(draftData.draft.customerSearch),
+          customerMatchCount: draftData.customerMatches.length,
+          exactCustomer: hasExactCustomer,
+          taskType: draftData.draft.type,
+          priority: draftData.draft.priority,
+          dueAtUtc: draftData.draft.dueAtUtc.toISOString(),
+          timeZone: draftData.timeZone,
+        },
+      }),
+    },
+  };
+}
+
 async function runCustomersWithoutQuotes(
   prisma: PrismaClient,
   params: AiAssistantInput,
@@ -2888,6 +3583,10 @@ export async function runAiAssistant(
     result = await runProductDraftPreview(prisma, params, generatedAtUtc);
   } else if (tool === "PREPARE_QUOTE_SEND") {
     result = await runPrepareQuoteSend(prisma, params, generatedAtUtc);
+  } else if (tool === "LIST_MY_ACTIVITIES" || tool === "PRIORITIZE_MY_DAY") {
+    result = await runActivityAgenda(prisma, params, generatedAtUtc, tool);
+  } else if (tool === "PREPARE_ACTIVITY") {
+    result = await runActivityDraftPreview(prisma, params, generatedAtUtc);
   } else if (tool === "FOLLOW_UP_QUEUE") {
     result = await runFollowUpQueue(prisma, params, generatedAtUtc);
   } else if (tool === "CUSTOMERS_WITHOUT_QUOTES") {
