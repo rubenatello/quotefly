@@ -21,15 +21,15 @@ jobs:
       OPENAI_COST_OUTPUT_PER_1M_USD: "0.60"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Require the provider evaluation secret
         run: test -n "$OPENAI_API_KEY" || { echo "Repository secret OPENAI_API_KEY is required."; exit 1; }
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
