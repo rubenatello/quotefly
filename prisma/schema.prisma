@@ -222,6 +222,42 @@ enum QuickBooksInvoiceSyncStatus {
   FAILED
 }
 
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+}
+
+enum InvoicePaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELED
+}
+
+enum InvoicePaymentProvider {
+  MANUAL
+  STRIPE
+  SQUARE
+  QUICKBOOKS
+  OTHER
+}
+
+enum InvoiceEventType {
+  CREATED
+  CREATE_REPLAYED
+  UPDATED
+  SENT
+  PAYMENT_RECORDED
+  PAYMENT_UPDATED
+  VOIDED
+  DELETED
+}
+
 model TenantBranding {
   id                      String    @id @default(cuid())
   tenantId                String    @unique
@@ -286,6 +322,9 @@ model Tenant {
   jobAppointments                   JobAppointment[]
   jobNotes                          JobNote[]
   jobEvents                         JobEvent[]
+  invoices                          Invoice[]
+  invoicePayments                   InvoicePayment[]
+  invoiceEvents                     InvoiceEvent[]
   activityTasks                     ActivityTask[]
   activityTaskEvents                ActivityTaskEvent[]
   customerActivityEvents            CustomerActivityEvent[]
@@ -409,6 +448,7 @@ model TenantUser {
   createdJobAppointments  JobAppointment[]     @relation("JobAppointmentCreator")
   jobNotes                JobNote[]            @relation("JobNoteCreator")
   jobEvents               JobEvent[]
+  invoiceEvents           InvoiceEvent[]
   assignedActivityTasks   ActivityTask[]       @relation("ActivityTaskAssignee")
   createdActivityTasks    ActivityTask[]       @relation("ActivityTaskCreator")
   completedActivityTasks  ActivityTask[]       @relation("ActivityTaskCompleter")
@@ -455,6 +495,7 @@ model Customer {
   assignedTenantUser     TenantUser?             @relation("CustomerAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   quotes                 Quote[]
   jobs                   Job[]
+  invoices               Invoice[]
   activityTasks          ActivityTask[]
   activityEvents         CustomerActivityEvent[]
   revisions              QuoteRevision[]
@@ -546,6 +587,7 @@ model Quote {
   quickBooksInvoiceSyncs          QuickBooksInvoiceSync[]
   activityTasks                   ActivityTask[]
   job                             Job?                    @relation("QuoteJobSource")
+  invoices                        Invoice[]
 
   @@unique([id, tenantId])
   @@unique([id, customerId, tenantId])
@@ -593,10 +635,12 @@ model Job {
   appointments           JobAppointment[]
   notes                  JobNote[]
   events                 JobEvent[]
+  invoices               Invoice[]
 
   @@unique([id, tenantId])
   @@unique([tenantId, sourceQuoteId])
   @@unique([sourceQuoteId, customerId, tenantId])
+  @@unique([id, sourceQuoteId, customerId, tenantId])
   @@unique([tenantId, jobNumber])
   @@index([tenantId, assignedTenantUserId, deletedAtUtc, archivedAtUtc, status, updatedAt(sort: Desc), id(sort: Desc)], map: "Job_assignee_status_updated_idx")
   @@index([tenantId, deletedAtUtc, archivedAtUtc, status, updatedAt(sort: Desc), id(sort: Desc)], map: "Job_status_updated_idx")
@@ -670,6 +714,103 @@ model JobEvent {
   @@unique([tenantId, commandKeyHash])
   @@index([tenantId, jobId, createdAt, id], map: "JobEvent_job_created_idx")
   @@index([tenantId, actorTenantUserId, createdAt], map: "JobEvent_actor_created_idx")
+}
+
+model Invoice {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  customerId         String
+  jobId              String
+  sourceQuoteId      String
+  invoiceNumber      Int
+  status             InvoiceStatus        @default(DRAFT)
+  paymentStatus      InvoicePaymentStatus @default(PENDING)
+  titleSnapshot      String               @db.VarChar(191)
+  scopeSnapshot      String?
+  documentLocale     String               @default("en-US") @db.VarChar(5)
+  currency           String               @default("USD") @db.VarChar(3)
+  subtotalAmount     Decimal              @db.Decimal(10, 2)
+  taxAmount          Decimal              @db.Decimal(10, 2)
+  totalAmount        Decimal              @db.Decimal(10, 2)
+  amountPaid         Decimal              @default(0) @db.Decimal(10, 2)
+  balanceDue         Decimal              @db.Decimal(10, 2)
+  issuedAtUtc        DateTime?            @db.Timestamptz(3)
+  dueAtUtc           DateTime?            @db.Timestamptz(3)
+  sentAtUtc          DateTime?            @db.Timestamptz(3)
+  paidAtUtc          DateTime?            @db.Timestamptz(3)
+  voidedAtUtc        DateTime?            @db.Timestamptz(3)
+  version            Int                  @default(1)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
+  archivedAtUtc      DateTime?            @db.Timestamptz(3)
+  deletedAtUtc       DateTime?            @db.Timestamptz(3)
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  job                Job                  @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
+  sourceQuote        Quote                @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
+  payments           InvoicePayment[]
+  events             InvoiceEvent[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, jobId])
+  @@unique([tenantId, sourceQuoteId])
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, customerId, deletedAtUtc, archivedAtUtc], map: "Invoice_customer_lifecycle_idx")
+  @@index([tenantId, status, paymentStatus, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Invoice_status_updated_idx")
+  @@index([tenantId, dueAtUtc, status, deletedAtUtc, id], map: "Invoice_due_status_idx")
+}
+
+model InvoicePayment {
+  id                String                 @id @default(cuid())
+  tenantId          String
+  invoiceId         String
+  provider          InvoicePaymentProvider
+  providerPaymentId String?                @db.VarChar(191)
+  providerInvoiceId String?                @db.VarChar(191)
+  status            InvoicePaymentStatus
+  amount            Decimal                @db.Decimal(10, 2)
+  currency          String                 @default("USD") @db.VarChar(3)
+  paidAtUtc         DateTime?              @db.Timestamptz(3)
+  failedAtUtc       DateTime?              @db.Timestamptz(3)
+  refundedAtUtc     DateTime?              @db.Timestamptz(3)
+  receiptUrl        String?                @db.VarChar(2048)
+  failureCode       String?                @db.VarChar(191)
+  createdAt         DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime               @updatedAt @db.Timestamptz(3)
+  deletedAtUtc      DateTime?              @db.Timestamptz(3)
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice           Invoice                @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, provider, providerPaymentId])
+  @@index([tenantId, invoiceId, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)], map: "InvoicePayment_invoice_created_idx")
+  @@index([tenantId, status, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "InvoicePayment_status_updated_idx")
+}
+
+model InvoiceEvent {
+  id                    String                @id @default(cuid())
+  tenantId              String
+  invoiceId             String
+  actorTenantUserId     String?
+  type                  InvoiceEventType
+  fromStatus            InvoiceStatus?
+  toStatus              InvoiceStatus?
+  fromPaymentStatus     InvoicePaymentStatus?
+  toPaymentStatus       InvoicePaymentStatus?
+  requestId             String?               @db.VarChar(191)
+  commandKeyHash        String?               @db.VarChar(64)
+  commandPayloadHash    String?               @db.VarChar(64)
+  providerEventId       String?               @db.VarChar(191)
+  createdAt             DateTime              @default(now()) @db.Timestamptz(3)
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice               Invoice               @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  actorTenantUser       TenantUser?           @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, commandKeyHash])
+  @@unique([tenantId, providerEventId])
+  @@index([tenantId, invoiceId, createdAt, id], map: "InvoiceEvent_invoice_created_idx")
+  @@index([tenantId, actorTenantUserId, createdAt], map: "InvoiceEvent_actor_created_idx")
 }
 
 model AiUsageEvent {

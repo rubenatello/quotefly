@@ -5,7 +5,7 @@ import type { TFunction } from "i18next";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
-import { publishKodyOutcome } from "../components/ai/kody-events";
+import { openKody, publishKodyOutcome } from "../components/ai/kody-events";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
@@ -938,6 +938,21 @@ export function QuoteBuilderView() {
     setAiModalOpen(true);
   }
 
+  function openBuilderKodyDraft() {
+    if (!canUseChatToQuote) {
+      setError(t("quoteBuilder.errors.aiUnavailable"));
+      return;
+    }
+    openKody({
+      prompt: buildBuilderAiAssistPrompt({ kind: "quote" }),
+      tool: "DRAFT_QUOTE",
+      context: {
+        currentPage: "quotes",
+        customerId: quoteForm.customerId || undefined,
+      },
+    });
+  }
+
   async function handleAiDraftSubmit(event: React.FormEvent) {
     event.preventDefault();
 
@@ -1644,7 +1659,7 @@ export function QuoteBuilderView() {
                 <KodyFieldAssistButton
                   label={t("quoteBuilder.kodyAssist.fullQuote")}
                   className="hidden xl:inline-flex"
-                  onClick={() => openBuilderAiAssist({ kind: "quote" })}
+                  onClick={openBuilderKodyDraft}
                   disabled={!canUseChatToQuote}
                 />
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
@@ -1654,8 +1669,14 @@ export function QuoteBuilderView() {
             }
           >
             {!activeCustomer ? (
-              <div className="rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
-                {t("quoteBuilder.selectToStart")}
+              <div className="space-y-3 rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
+                <p>{t("quoteBuilder.selectToStart")}</p>
+                <KodyFieldAssistButton
+                  label={t("quoteBuilder.kodyAssist.fullQuote")}
+                  onClick={openBuilderKodyDraft}
+                  disabled={!canUseChatToQuote}
+                  className="w-full justify-center"
+                />
               </div>
             ) : null}
 
@@ -1685,7 +1706,7 @@ export function QuoteBuilderView() {
               <Button
                 variant="outline"
                 icon={<Sparkles size={15} />}
-                onClick={() => openBuilderAiAssist({ kind: "quote" })}
+                onClick={openBuilderKodyDraft}
                 disabled={!canUseChatToQuote}
                 aria-label={t("quoteBuilder.kodyAssist.fullQuote")}
                 title={t("quoteBuilder.kodyAssist.fullQuote")}

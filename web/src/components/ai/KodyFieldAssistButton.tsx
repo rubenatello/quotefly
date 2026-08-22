@@ -22,7 +22,7 @@ export function KodyFieldAssistButton({
       type="button"
       variant="kodyTrigger"
       size="sm"
-      className={cn("min-h-11 shrink-0 rounded-full px-3 text-xs sm:min-h-9", className)}
+      className={cn("qf-kody-context-action min-h-11 shrink-0 rounded-full px-3 text-xs sm:min-h-9", className)}
       icon={<KodySparkIcon size={22} />}
       onClick={onClick}
       disabled={disabled}

@@ -167,7 +167,7 @@ test.describe("mobile launch smoke", () => {
     await quickQuote.click();
     await expect(page).toHaveURL(/\/app\/build$/);
     await expect(page.getByTestId("quote-builder")).toBeVisible();
-    await page.getByRole("button", { name: "Draft with Kody" }).click();
+    await page.getByRole("button", { name: "Draft quote with Kody" }).click();
     const builderKodyPanel = page.getByTestId("kody-chat-panel");
     await expect(builderKodyPanel).toHaveClass(/qf-kody-chat-panel--with-dock/);
     await builderKodyPanel.getByRole("button", { name: "Close Kody" }).click();

@@ -3,6 +3,7 @@ import { ArrowLeft, BriefcaseBusiness, CalendarClock, CheckCircle2, ExternalLink
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { KodyButton } from "../components/ai/KodyButton";
+import { InvoicePanel } from "../components/invoices/InvoicePanel";
 import { api, ApiError, type Job, type JobAppointment, type JobAppointmentStatus, type JobNote, type JobScheduleAppointment, type JobStatus, type OrgUserRole } from "../lib/api";
 import { localizedApiError } from "../lib/localized-api-error";
 import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../lib/tenant-time";
@@ -1065,6 +1066,17 @@ function JobDetail({
           <p className="mt-2 truncate text-base font-semibold text-[var(--qf-text)]">{job.sourceQuote.title}</p>
           <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{t(`domain.quoteStatus.${job.sourceQuote.status}`)}</p>
         </div>
+      </div>
+
+      <div className="mt-6">
+        <InvoicePanel
+          key={`job:${job.id}`}
+          jobId={job.id}
+          sourceLabel={t("jobs.jobNumber", { number: job.jobNumber })}
+          sourceAmount={job.sourceQuote.totalAmount}
+          canCreate={canManageJobs}
+          createBlockedReason={job.status === "COMPLETED" ? null : t("invoices.completeJobFirst")}
+        />
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,.45fr)]">

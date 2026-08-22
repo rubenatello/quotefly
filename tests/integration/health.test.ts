@@ -15,6 +15,9 @@ const FORCED_RLS_ROWS = [
   { tableName: "JobAppointment", enabled: true, forced: true },
   { tableName: "JobEvent", enabled: true, forced: true },
   { tableName: "JobNote", enabled: true, forced: true },
+  { tableName: "Invoice", enabled: true, forced: true },
+  { tableName: "InvoiceEvent", enabled: true, forced: true },
+  { tableName: "InvoicePayment", enabled: true, forced: true },
   { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
   { tableName: "TenantSequence", enabled: true, forced: true },
 ];
@@ -151,6 +154,9 @@ describe("health and readiness routes", () => {
         { tableName: "JobAppointment", enabled: true, forced: true },
         { tableName: "JobEvent", enabled: true, forced: true },
         { tableName: "JobNote", enabled: true, forced: true },
+        { tableName: "Invoice", enabled: true, forced: true },
+        { tableName: "InvoiceEvent", enabled: true, forced: true },
+        { tableName: "InvoicePayment", enabled: true, forced: true },
         { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
         { tableName: "TenantSequence", enabled: true, forced: true },
       ];

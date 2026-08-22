@@ -1,6 +1,6 @@
 # QuoteFly API Documentation
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 This document describes the QuoteFly backend API, recommended usage patterns, and production integration practices. The live API is a Fastify service with all application routes mounted under `/v1`. Swagger UI is also available at `/docs` when the API server is running.
 
@@ -576,6 +576,77 @@ Body:
 ### `DELETE /v1/jobs/:jobId/notes/:noteId`
 
 Soft-deletes a note. The note creator or an owner/admin can remove it.
+
+## Invoice Ledger And Internal Invoice API
+
+QuoteFly stores tenant-scoped invoice records for completed jobs or accepted quote snapshots. These endpoints create only QuoteFly-owned ledger records; they do not create Stripe, Square, or QuickBooks provider invoices and do not process payments.
+
+Workspace behavior:
+
+- Accepted Quote detail can create or display its linked internal invoice.
+- Completed Job detail can create or display the same linked invoice. Incomplete jobs remain read-only until completion.
+- Owners/admins can create invoices. Assigned members can read an invoice only when the linked job, customer, and accepted source quote remain assigned and visible to them.
+- The optional due date is chosen in tenant-local calendar time and persisted as UTC.
+- The UI confirmation explicitly states that this action does not send the invoice, charge the customer, or create anything in QuickBooks, Stripe, or Square.
+
+Current data foundation:
+
+- `Invoice` links one tenant invoice to one `Job`, one accepted source `Quote`, and one `Customer`.
+- `InvoicePayment` stores provider-safe payment status records. Payment processing remains in Stripe, Square, QuickBooks, or another payment provider; QuoteFly does not store card or bank details.
+- `InvoiceEvent` is immutable transition/idempotency evidence. Runtime access is SELECT/INSERT only.
+- All three tables use forced PostgreSQL RLS and are included in readiness checks.
+- Invoice amounts, payment records, and provider identifiers are excluded from RAG/vector indexing until explicit Kody invoice tools are designed and reviewed.
+
+### `GET /v1/invoices?limit=25&offset=0&status=DRAFT&paymentStatus=PENDING&mine=true`
+
+Lists visible tenant invoices. Owners/admins can view all active tenant invoices; members only see invoices tied to jobs, customers, and source quotes assigned to them.
+
+Supported query parameters:
+
+- `limit`, `offset`
+- `mine=true|false`
+- `status`
+- `paymentStatus`
+- `customerId`
+- `jobId`
+- `sourceQuoteId`
+- `search` across invoice number, invoice title snapshot, customer name, job title, and source quote title
+
+### `GET /v1/invoices/:invoiceId`
+
+Returns one visible invoice with minimized customer, job, and accepted source quote summaries. Tenant identifiers, provider payment identifiers, internal costs, margins, and stored scope narrative are not included.
+
+### `POST /v1/invoices`
+
+Creates an internal QuoteFly invoice from either an accepted quote or a completed job. Requires owner/admin permissions and an `Idempotency-Key` header. Amounts, title, scope, and document language are copied from the accepted quote/job snapshot; the browser cannot supply invoice amounts.
+
+Body from accepted quote:
+
+```json
+{
+  "sourceQuoteId": "quote_id",
+  "dueAtUtc": "2026-09-01T17:00:00.000Z"
+}
+```
+
+Body from completed job:
+
+```json
+{
+  "jobId": "job_id"
+}
+```
+
+Responses:
+
+- `201` creates a new invoice.
+- `200` with `"duplicate": true` replays the same idempotency key or returns the existing active invoice for the same job/source quote.
+- `403 INVOICE_FORBIDDEN` for non-manager creation attempts.
+- `409 INVOICE_QUOTE_NOT_ACCEPTED` when the source quote is not accepted.
+- `409 INVOICE_JOB_NOT_COMPLETED` when creating from a job that is not completed.
+- `409 INVOICE_IDEMPOTENCY_KEY_REUSED` when the same idempotency key is reused for a different payload.
+
+Provider invoice creation remains behind the existing QuickBooks routes for now. Before Jobs-to-QuickBooks or Jobs-to-Stripe invoice creation is exposed, add a durable `PROCESSING` claim/reconciliation path so concurrent clicks or uncertain provider timeouts cannot create duplicate external invoices.
 
 ## AI Quote Endpoints
 

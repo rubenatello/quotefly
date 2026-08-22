@@ -111,6 +111,27 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     assert.equal(fields.get(scheduleField)?.classification, "C2_CUSTOMER_CONFIDENTIAL", scheduleField);
     assert.equal(fields.get(scheduleField)?.ragStatus, "EXCLUDED", scheduleField);
   }
+
+  for (const invoiceField of [
+    "Invoice.totalAmount",
+    "Invoice.amountPaid",
+    "Invoice.balanceDue",
+  ]) {
+    assert.equal(fields.get(invoiceField)?.classification, "C2_CUSTOMER_CONFIDENTIAL", invoiceField);
+    assert.equal(fields.get(invoiceField)?.ragStatus, "EXCLUDED", invoiceField);
+  }
+  assert.equal(fields.get("InvoicePayment.amount")?.classification, "C3_FINANCIAL_CONFIDENTIAL");
+  assert.equal(fields.get("InvoicePayment.amount")?.ragStatus, "EXCLUDED");
+
+  for (const providerField of [
+    "InvoicePayment.providerPaymentId",
+    "InvoicePayment.providerInvoiceId",
+    "InvoicePayment.receiptUrl",
+    "InvoiceEvent.providerEventId",
+  ]) {
+    assert.equal(fields.get(providerField)?.classification, "C4_RESTRICTED", providerField);
+    assert.equal(fields.get(providerField)?.ragStatus, "EXCLUDED", providerField);
+  }
 });
 
 test("the RAG catalog exactly reflects fields with implemented source adapters", () => {

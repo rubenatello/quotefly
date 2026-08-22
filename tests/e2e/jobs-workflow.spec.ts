@@ -52,6 +52,8 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
 
   const jobReady = page.getByRole("status").filter({ hasText: /Job #\d+ is ready from this accepted quote\./ });
   await expect(jobReady).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("invoice-panel")).toContainText("Create a draft invoice from this accepted quote.");
+  await expect(page.getByRole("button", { name: "Create draft invoice", exact: true })).toBeVisible();
   await jobReady.getByRole("button", { name: "Open job", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/jobs\/[^/?#]+$/);
   const jobId = page.url().match(/\/app\/jobs\/([^/?#]+)/)?.[1];
@@ -80,7 +82,7 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   await expect(assigneeSelect).toContainText("Jobs Field Member");
   await assigneeSelect.selectOption(member.membershipId);
   await expect(page.getByText("Access instructions", { exact: true }).last()).toBeVisible();
-  const instructions = () => page.locator("main textarea").last();
+  const instructions = () => page.getByRole("textbox", { name: "Access instructions", exact: true });
   await instructions().fill("Gate code 4321. Park on the right side of the driveway.");
   await page.getByRole("button", { name: "Save job", exact: true }).click();
 
@@ -110,14 +112,29 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
     .toBe("Final saved instruction after stale reload.");
 
   await expect(page.getByText("Schedule and dispatch", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Add booking", exact: true }).click();
   await page.getByLabel("Start time", { exact: true }).fill("2026-08-24T09:00");
   await page.getByLabel("End time", { exact: true }).fill("2026-08-24T11:00");
   await page.getByLabel("Booking instructions", { exact: true }).fill("Crew arrival window confirmed with customer.");
   await page.getByRole("button", { name: "Create booking", exact: true }).click();
-  await expect(page.getByText("Booking saved.", { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Crew arrival window confirmed with customer.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Dispatch", exact: true }).click();
-  await expect(page.getByText("Dispatched", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Dispatched", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Mark arrived", exact: true }).click();
+  await expect(page.getByText("Arrived", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Complete visit", exact: true }).click();
+  await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+
+  const invoicePanel = page.getByTestId("invoice-panel");
+  await expect(invoicePanel.getByLabel("Invoice due date", { exact: true })).toBeVisible();
+  await invoicePanel.getByRole("button", { name: "Create draft invoice", exact: true }).click();
+  const invoiceConfirmation = page.getByRole("dialog", { name: "Create this draft invoice?" });
+  await expect(invoiceConfirmation).toContainText("does not send an invoice, charge the customer, or create anything in QuickBooks, Stripe, or Square");
+  await invoiceConfirmation.getByRole("button", { name: "Create draft invoice", exact: true }).click();
+  await expect(invoicePanel.getByText("Invoice #1", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(invoicePanel.getByText("Draft", { exact: true })).toBeVisible();
+  await expect(invoicePanel.getByText("Payment pending", { exact: true })).toBeVisible();
+  await expect(invoicePanel).toContainText("No payment or provider action has occurred.");
 
   await page.getByLabel("Note", { exact: true }).fill("Crew has materials staged and customer confirmed gate access.");
   await page.getByRole("button", { name: "Add note", exact: true }).click();
@@ -158,12 +175,145 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
 
   await context.clearCookies();
   await addSessionCookie(context, member);
-  await page.goto("/app/jobs");
-  const memberJobCard = page.getByRole("article").filter({ hasText: "Jobs Workflow Roof Repair" });
-  await expect(memberJobCard).toBeVisible({ timeout: 20_000 });
-  await memberJobCard.getByRole("button", { name: "Open job", exact: true }).click();
+  await page.goto(`/app/jobs/${jobId}`);
   await expect(page.locator("p").filter({ hasText: "Final saved instruction after stale reload." })).toBeVisible();
+  await expect(page.getByTestId("invoice-panel").getByText("Invoice #1", { exact: true })).toBeVisible();
   await expect(page.getByText("Manage assignment", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Save job", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Assignee", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Create draft invoice", exact: true })).toHaveCount(0);
+});
+
+test("invoice panel ignores a late response after the selected quote changes", async ({
+  context,
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+
+  const owner = await signUpViaApi(request, "invoice-panel-race");
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: "Invoice Panel Race Customer",
+    phone: "555-014-7788",
+    email: "invoice-panel-race@example.com",
+  });
+  const firstQuote = await createQuoteViaApi(request, owner, customer.id, {
+    title: "Slow first invoice source",
+  });
+  const secondQuote = await createQuoteViaApi(request, owner, customer.id, {
+    title: "Current second invoice source",
+  });
+  for (const quoteId of [firstQuote.id, secondQuote.id]) {
+    const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quoteId}`, {
+      headers: { Cookie: owner.cookieHeader },
+      data: { status: "ACCEPTED" },
+    });
+    expect(accepted.status()).toBe(200);
+  }
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: owner.cookieHeader,
+      "Idempotency-Key": `invoice-panel-race-${Date.now()}`,
+    },
+    data: { sourceQuoteId: firstQuote.id },
+  });
+  expect(created.status()).toBe(201);
+  const firstInvoice = (await created.json()) as { invoice: Record<string, unknown> };
+
+  let markStarted!: () => void;
+  let releaseFirst!: () => void;
+  let markFulfilled!: () => void;
+  const firstRequestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+  const releaseFirstRequest = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstRequestFulfilled = new Promise<void>((resolve) => { markFulfilled = resolve; });
+  await page.route("**/v1/invoices?**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("sourceQuoteId") !== firstQuote.id) {
+      await route.continue();
+      return;
+    }
+    markStarted();
+    await releaseFirstRequest;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [firstInvoice.invoice],
+        pagination: { limit: 1, offset: 0, total: 1 },
+        scope: { mine: false },
+      }),
+    });
+    markFulfilled();
+  });
+
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/quotes/${firstQuote.id}`);
+  await firstRequestStarted;
+  await page.evaluate((quoteId) => {
+    window.history.pushState({}, "", `/app/quotes/${quoteId}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, secondQuote.id);
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${secondQuote.id}$`));
+  await expect(page.getByTestId("quote-desk")).toContainText("Current second invoice source");
+  const currentPanel = page.getByTestId("invoice-panel");
+  await expect(currentPanel).toContainText("Create a draft invoice from this accepted quote.");
+
+  releaseFirst();
+  await firstRequestFulfilled;
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expect(currentPanel).toContainText("Create a draft invoice from this accepted quote.");
+  await expect(currentPanel.getByText("Invoice #1", { exact: true })).toHaveCount(0);
+
+  let markCreateStarted!: () => void;
+  let releaseCreate!: () => void;
+  let markCreateFulfilled!: () => void;
+  const createStarted = new Promise<void>((resolve) => { markCreateStarted = resolve; });
+  const releaseCreateRequest = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  const createFulfilled = new Promise<void>((resolve) => { markCreateFulfilled = resolve; });
+  await page.route("**/v1/invoices", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    markCreateStarted();
+    await releaseCreateRequest;
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        duplicate: false,
+        invoice: {
+          ...firstInvoice.invoice,
+          id: "stale-second-source-invoice",
+          sourceQuoteId: secondQuote.id,
+          invoiceNumber: 99,
+        },
+      }),
+    });
+    markCreateFulfilled();
+  });
+
+  await currentPanel.getByRole("button", { name: "Create draft invoice", exact: true }).click();
+  await page.getByRole("dialog", { name: "Create this draft invoice?" })
+    .getByRole("button", { name: "Create draft invoice", exact: true })
+    .click();
+  await createStarted;
+  await page.evaluate((quoteId) => {
+    window.history.pushState({}, "", `/app/quotes/${quoteId}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, firstQuote.id);
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${firstQuote.id}$`));
+  const firstPanel = page.getByTestId("invoice-panel");
+  await expect(firstPanel.getByText("Invoice #1", { exact: true })).toBeVisible();
+
+  releaseCreate();
+  await createFulfilled;
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expect(firstPanel.getByText("Invoice #1", { exact: true })).toBeVisible();
+  await expect(firstPanel.getByText("Invoice #99", { exact: true })).toHaveCount(0);
 });

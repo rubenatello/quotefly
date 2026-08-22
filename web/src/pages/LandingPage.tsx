@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ArrowRight, Check, FileCheck2, ShieldCheck, Smartphone, UsersRound } from "lucide-react";
+import { ArrowRight, Check } from "lucide-react";
 import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingProductShowcase } from "../components/marketing/LandingProductShowcase";
@@ -13,13 +13,6 @@ import { setPublicSEOMetadata } from "../lib/seo";
 interface LandingPageProps {
   onOpenAuth: () => void;
 }
-
-const PROOF_POINTS = [
-  { icon: Smartphone, value: `${BASIC_PLAN.trialDays} days`, label: "Free on mobile and desktop" },
-  { icon: UsersRound, value: `${BASIC_PLAN.teamMembers} users`, label: "Included with Basic" },
-  { icon: FileCheck2, value: "Branded PDFs", label: "Preview before sharing" },
-  { icon: ShieldCheck, value: "You approve", label: "Before Kody creates or sends" },
-] as const;
 
 const WORKFLOW = [
   ["01", "Capture the customer", "Add or find the customer while the conversation and job details are still fresh."],
@@ -70,22 +63,6 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           </div>
 
           <LandingProductDemo />
-        </div>
-      </section>
-
-      <section aria-label="QuoteFly plan and workflow highlights" className="border-b border-slate-200 bg-white px-4 py-5 sm:px-6 lg:px-8">
-        <div className="mx-auto grid max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {PROOF_POINTS.map(({ icon: Icon, value, label }) => (
-            <div key={value} className="flex min-h-16 items-center gap-3 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3">
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-quotefly-blue/[0.09] text-quotefly-blue">
-                <Icon size={19} aria-hidden="true" />
-              </span>
-              <span>
-                <strong className="block text-sm text-slate-950">{value}</strong>
-                <span className="block text-xs leading-5 text-slate-600">{label}</span>
-              </span>
-            </div>
-          ))}
         </div>
       </section>
 

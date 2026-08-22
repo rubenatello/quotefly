@@ -692,7 +692,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await page.getByLabel("Quote title").fill("Existing mobile draft should stay");
   await expect(page.locator(".qf-mobile-action-dock")).toBeVisible();
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
-  const contextualDraftAction = page.getByRole("button", { name: "Draft with Kody" });
+  const contextualDraftAction = page.getByRole("button", { name: "Draft quote with Kody" });
   await expect(contextualDraftAction).toBeVisible();
   await contextualDraftAction.click();
   const draftDialog = page.getByTestId("kody-chat-panel");
@@ -851,7 +851,7 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
 
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
-  const contextualDraftAction = page.getByRole("button", { name: "Draft with Kody" });
+  const contextualDraftAction = page.getByRole("button", { name: "Draft quote with Kody" });
   await expect(contextualDraftAction).toBeVisible();
   await contextualDraftAction.click();
   const kodyDialog = page.getByTestId("kody-chat-panel");

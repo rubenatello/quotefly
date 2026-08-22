@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
 import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
+import { InvoicePanel } from "../components/invoices/InvoicePanel";
 import {
   FeatureLockedCard,
   HistoryEventPill,
@@ -430,6 +431,7 @@ export function QuoteDeskView() {
     navigateToBuilder,
     navigateToQuote,
   } = useDashboard();
+  const canCreateInvoices = session?.role === "owner" || session?.role === "admin";
 
   useEffect(() => {
     setAcceptedJobAction(null);
@@ -1681,6 +1683,15 @@ export function QuoteDeskView() {
             {t("quoteDesk.lifecycle.openJob")}
           </Button>
         </div>
+      ) : null}
+      {selectedQuote.status === "ACCEPTED" ? (
+        <InvoicePanel
+          key={`quote:${selectedQuote.id}`}
+          sourceQuoteId={selectedQuote.id}
+          sourceLabel={t("invoices.sourceQuoteLabel", { title: selectedQuote.title })}
+          sourceAmount={selectedQuote.totalAmount}
+          canCreate={canCreateInvoices}
+        />
       ) : null}
       {canManageAssignments || selectedQuote.assignedTenantUser ? (
         <Card variant="blue" padding="md" className="xl:hidden">

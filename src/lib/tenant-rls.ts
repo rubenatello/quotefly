@@ -23,6 +23,9 @@ export const FORCED_TENANT_RLS_TABLES = [
   "JobAppointment",
   "JobNote",
   "JobEvent",
+  "Invoice",
+  "InvoicePayment",
+  "InvoiceEvent",
 ] as const;
 
 // Backward-compatible export for existing AI worker/readiness imports. The

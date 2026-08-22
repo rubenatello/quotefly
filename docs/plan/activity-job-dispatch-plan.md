@@ -1,8 +1,8 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phase 3A booking/dispatch backend foundation and first job-detail schedule/dispatch UI implemented locally; exact DB-backed jobs gate pending; BCP pending
+Status: Phase 3A booking/dispatch and Phase 4A internal invoicing implemented locally; external invoice delivery and payment-provider reconciliation remain gated; BCP pending
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 Owners: Product, Engineering, Security, Operations
 
@@ -146,17 +146,29 @@ Phase 3A local evidence:
 - Appointment create/update/delete synchronizes the parent `Job` operational status and `scheduledAtUtc` from active appointments.
 - `GET /v1/jobs/schedule` returns visible appointments across jobs for a bounded schedule window.
 - `web/src/pages/JobsPage.tsx` exposes today/next-7-days schedule overview, booking creation, dispatch transitions, cancellation, internal notes, tenant-local time entry, and safe localized API errors in the Jobs workspace.
-- Focused evidence: non-DB local gates pass on the Phase 3A candidate; the jobs integration suite now contains 13 tests and still needs an exact rerun with a valid guarded `TEST_DATABASE_URL`.
+- Exact-candidate evidence: the jobs integration suite contains 14 tests, focused Jobs browser coverage passes, and the database-backed `verify:ci` gate passes against the migrated disposable database.
 
 ## Phase 4 — Invoicing and payments
 
-Status: Partial accounting export exists; QuoteFly invoice ledger is not implemented
+Status: Partial accounting export exists; Phase 4A invoice/payment ledger, internal API, and responsive Quote/Job workflow implemented locally; provider-safe creation/reconciliation still pending
 
 - [x] QuickBooks CSV export and QuickBooks Online connection/sync foundation.
+- [x] Add tenant-scoped QuoteFly `Invoice`, `InvoicePayment`, and immutable `InvoiceEvent` ledger tables with forced RLS, provider-safe identifiers, and governance classification.
+- [x] Add Invoice API/service creation from completed jobs or accepted quotes, including tenant-local invoice numbering, idempotency, member read scope, and immutable event writes.
+- [x] Add responsive English/Spanish invoice panels to accepted Quote and completed Job detail, with tenant-local due dates, explicit confirmation, assigned-member read scope, and a clear no-provider/no-charge boundary.
 - [ ] Add a durable PROCESSING claim and uncertain-result reconciliation before exposing concurrent Jobs-to-QuickBooks invoice creation.
-- [ ] Add QuoteFly invoice/payment-status ledger linked to Job and accepted Quote.
 - [ ] Keep provider payment handling in Stripe/Square/QuickBooks; QuoteFly stores only provider-safe identifiers and status.
 - [ ] Add webhook idempotency, refunds/disputes policy, tenant permissions, and reconciliation tests.
+
+Phase 4A local evidence:
+
+- The checked migration adds tenant-scoped numbering plus forced-RLS `Invoice`, `InvoicePayment`, and immutable `InvoiceEvent` records; provider credentials and payment instruments are never stored.
+- Every accepted idempotency key is durably bound, including a duplicate-source response, so a later request cannot reuse that key for another customer, quote, or job.
+- Public invoice responses omit tenant identifiers, provider identifiers, internal costs, margins, and stored scope narrative. Customer-facing totals are C2 and remain excluded from RAG; payment ledger amounts are C3; provider identifiers are C4.
+- Accepted Quote detail and completed Job detail expose the same internal invoice record. Only owners/admins can create it; assigned members receive a read-only view after the normal job/customer/quote authorization checks.
+- Creation confirmation states that QuoteFly is not sending, charging, or creating a record in QuickBooks, Stripe, or Square. External delivery remains unavailable until durable provider claims and reconciliation exist.
+- Exact-candidate evidence covers all 50 fresh-schema migrations, six Invoice integration cases, runtime-role RLS/immutability, duplicate-source concurrency, English/Spanish UI, 390px mobile layout, dark mode, and assigned-member visibility.
+- Full `verify:ci` passes with 109/109 route declarations inventoried, 169/169 integration tests, 72/72 Kody assistant evals, 12/12 retrieval evals, and 13/13 quote-parser evals.
 
 ## Kody contract
 
@@ -204,6 +216,7 @@ Rules:
 3. Read-only Kody activity tools, then preview/confirm task creation.
 4. Phase 2 Job model and accepted-quote service.
 5. Phase 3 schedule/dispatch UI and conflict enforcement.
-6. Durable notifications and optional provider integrations only after consent, deliverability, and retention policies are approved.
+6. Phase 4 internal invoice ledger and reviewed Quote/Job creation workflow.
+7. Durable notifications and optional provider integrations only after consent, deliverability, reconciliation, and retention policies are approved.
 
 Migrations run through the isolated Railway migration service with `DIRECT_DATABASE_URL`; the long-running API retains only the least-privileged pooled runtime URL.

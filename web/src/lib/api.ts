@@ -1394,6 +1394,57 @@ export type JobNote = {
   };
 };
 
+export type InvoiceStatus = "DRAFT" | "OPEN" | "PAID" | "VOID" | "UNCOLLECTIBLE";
+export type InvoicePaymentStatus =
+  | "PENDING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "REFUNDED"
+  | "PARTIALLY_REFUNDED"
+  | "CANCELED";
+
+export type Invoice = {
+  id: string;
+  customerId: string;
+  jobId: string;
+  sourceQuoteId: string;
+  invoiceNumber: number;
+  status: InvoiceStatus;
+  paymentStatus: InvoicePaymentStatus;
+  titleSnapshot: string;
+  documentLocale: SupportedLocale;
+  currency: string;
+  subtotalAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+  issuedAtUtc: string | null;
+  dueAtUtc: string | null;
+  sentAtUtc: string | null;
+  paidAtUtc: string | null;
+  voidedAtUtc: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  customer: {
+    id: string;
+    fullName: string;
+  };
+  job: {
+    id: string;
+    jobNumber: number;
+    status: JobStatus;
+    title: string;
+  };
+  sourceQuote: {
+    id: string;
+    title: string;
+    status: QuoteStatus;
+    totalAmount: number;
+  };
+};
+
 export type QuoteAcceptedJobSummary = {
   id: string;
   jobNumber: number;
@@ -2234,6 +2285,46 @@ export const api = {
           method: "DELETE",
         }),
     },
+  },
+
+  invoices: {
+    list: (query?: {
+      mine?: boolean;
+      status?: InvoiceStatus;
+      paymentStatus?: InvoicePaymentStatus;
+      customerId?: string;
+      jobId?: string;
+      sourceQuoteId?: string;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
+      request<{
+        items: Invoice[];
+        pagination: Pagination;
+        scope: { mine: boolean };
+      }>(`/v1/invoices${toQueryString({
+        mine: query?.mine,
+        status: query?.status,
+        paymentStatus: query?.paymentStatus,
+        customerId: query?.customerId,
+        jobId: query?.jobId,
+        sourceQuoteId: query?.sourceQuoteId,
+        search: query?.search,
+        limit: query?.limit,
+        offset: query?.offset,
+      })}`),
+
+    get: (invoiceId: string) => request<{ invoice: Invoice }>(`/v1/invoices/${invoiceId}`),
+
+    create: (
+      body: { jobId?: string; sourceQuoteId?: string; dueAtUtc?: string | null },
+      idempotencyKey: string,
+    ) => request<{ invoice: Invoice; duplicate: boolean }>("/v1/invoices", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(body),
+    }),
   },
 
   products: {

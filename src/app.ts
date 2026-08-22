@@ -18,6 +18,7 @@ import { tenantRoutes } from "./routes/tenants";
 import { customerRoutes } from "./routes/customers";
 import { quoteRoutes } from "./routes/quotes";
 import { jobRoutes } from "./routes/jobs";
+import { invoiceRoutes } from "./routes/invoices";
 import { quoteDraftRoutes } from "./routes/quote-drafts";
 import { smsRoutes } from "./routes/sms";
 import { authRoutes } from "./routes/auth";
@@ -80,6 +81,7 @@ const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
   "/v1/customers",
   "/v1/activities",
   "/v1/jobs",
+  "/v1/invoices",
   "/v1/quotes",
   "/v1/products",
   "/v1/ai",
@@ -377,6 +379,7 @@ export function buildServer() {
   app.register(workspaceRoutes, { prefix: "/v1" });
   app.register(activityRoutes, { prefix: "/v1" });
   app.register(jobRoutes, { prefix: "/v1" });
+  app.register(invoiceRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });
   app.register(customerRoutes, { prefix: "/v1" });
   app.register(quoteRoutes, { prefix: "/v1" });
