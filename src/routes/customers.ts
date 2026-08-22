@@ -32,6 +32,7 @@ import {
   validateActiveTenantAssignee,
 } from "../lib/workspace-assignment";
 import { SupportedLocaleSchema } from "../lib/supported-locale";
+import { countActiveJobsForCustomer } from "../services/jobs";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -1504,6 +1505,14 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         return { kind: "active_tasks" as const, activeTaskCount };
       }
 
+      const activeJobCount = await countActiveJobsForCustomer(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+      });
+      if (activeJobCount > 0) {
+        return { kind: "active_jobs" as const, activeJobCount };
+      }
+
       const relatedQuotes = await tx.quote.findMany({
         where: {
           customerId: existing.id,
@@ -1573,6 +1582,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         activeTaskCount: archived.activeTaskCount,
       });
     }
+    if (archived.kind === "active_jobs") {
+      return reply.code(409).send({
+        code: "ACTIVE_JOBS",
+        error: `Complete or cancel ${archived.activeJobCount} active job(s) before archiving this customer.`,
+        activeJobCount: archived.activeJobCount,
+      });
+    }
 
     return reply.code(204).send();
   });
@@ -1608,6 +1624,14 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       });
       if (activeTaskCount > 0) {
         return { kind: "active_tasks" as const, activeTaskCount };
+      }
+
+      const activeJobCount = await countActiveJobsForCustomer(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+      });
+      if (activeJobCount > 0) {
+        return { kind: "active_jobs" as const, activeJobCount };
       }
 
       const relatedQuotes = await tx.quote.findMany({
@@ -1692,6 +1716,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         code: "ACTIVE_ACTIVITY_TASKS",
         error: `Complete, cancel, or remove ${deleted.activeTaskCount} active task(s) before deleting this customer.`,
         activeTaskCount: deleted.activeTaskCount,
+      });
+    }
+    if (deleted.kind === "active_jobs") {
+      return reply.code(409).send({
+        code: "ACTIVE_JOBS",
+        error: `Complete or cancel ${deleted.activeJobCount} active job(s) before deleting this customer.`,
+        activeJobCount: deleted.activeJobCount,
       });
     }
 

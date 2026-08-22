@@ -27,6 +27,34 @@ export type QuoteJobStatus =
   | "IN_PROGRESS"
   | "COMPLETED";
 
+export type JobStatus =
+  | "UNSCHEDULED"
+  | "SCHEDULED"
+  | "DISPATCHED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELED";
+
+export type JobAppointmentStatus =
+  | "SCHEDULED"
+  | "DISPATCHED"
+  | "ARRIVED"
+  | "COMPLETED"
+  | "CANCELED";
+
+export type JobEventType =
+  | "CREATED"
+  | "UPDATED"
+  | "ASSIGNED"
+  | "APPOINTMENT_CREATED"
+  | "APPOINTMENT_UPDATED"
+  | "APPOINTMENT_CANCELED"
+  | "NOTE_ADDED"
+  | "NOTE_DELETED"
+  | "CANCELED"
+  | "ARCHIVED"
+  | "DELETED";
+
 export type AfterSaleFollowUpStatus =
   | "NOT_READY"
   | "DUE"
@@ -156,6 +184,15 @@ export interface TenantUserRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface TenantSequenceRow {
+  id: string;
+  tenantId: string;
+  key: string;
+  nextValue: number;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+}
+
 export interface TenantPhoneNumberRow {
   id: string;
   tenantId: string;
@@ -247,6 +284,46 @@ export interface QuoteRow {
   updatedAt: UtcDate;
   archivedAtUtc: UtcDate | null;
   deletedAtUtc: UtcDate | null;
+}
+
+export interface JobRow {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  sourceQuoteId: string;
+  assignedTenantUserId: string | null;
+  jobNumber: number;
+  status: JobStatus;
+  title: string;
+  scopeSnapshot: string;
+  serviceType: ServiceCategory;
+  serviceAddressSnapshot: string | null;
+  accessInstructions: string | null;
+  acceptedAtUtc: UtcDate;
+  scheduledAtUtc: UtcDate | null;
+  dispatchedAtUtc: UtcDate | null;
+  startedAtUtc: UtcDate | null;
+  completedAtUtc: UtcDate | null;
+  canceledAtUtc: UtcDate | null;
+  version: number;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  archivedAtUtc: UtcDate | null;
+  deletedAtUtc: UtcDate | null;
+}
+
+export interface JobEventRow {
+  id: string;
+  tenantId: string;
+  jobId: string;
+  actorTenantUserId: string;
+  type: JobEventType;
+  fromStatus: JobStatus | null;
+  toStatus: JobStatus | null;
+  requestId: string;
+  commandKeyHash: string;
+  commandPayloadHash: string;
+  createdAt: UtcDate;
 }
 
 export interface QuoteLineItemRow {
@@ -453,6 +530,9 @@ export const TABLE_RELATION_MAP = {
       "QuickBooksItemMap",
       "QuickBooksInvoiceSync",
       "QuickBooksWebhookEvent",
+      "TenantSequence",
+      "Job",
+      "JobEvent",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -461,13 +541,14 @@ export const TABLE_RELATION_MAP = {
   },
   TenantUser: {
     belongsTo: ["Tenant", "User"],
+    hasMany: ["Job", "JobEvent"],
   },
   TenantPhoneNumber: {
     belongsTo: ["Tenant"],
   },
   Customer: {
     belongsTo: ["Tenant"],
-    hasMany: ["Quote", "CustomerActivityEvent", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksCustomerMap"],
+    hasMany: ["Quote", "CustomerActivityEvent", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksCustomerMap", "Job"],
   },
   PricingProfile: {
     belongsTo: ["Tenant"],
@@ -477,7 +558,17 @@ export const TABLE_RELATION_MAP = {
   },
   Quote: {
     belongsTo: ["Tenant", "Customer"],
-    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksInvoiceSync"],
+    hasMany: ["QuoteLineItem", "QuoteDecisionSession", "QuoteRevision", "QuoteOutboundEvent", "QuickBooksInvoiceSync", "Job"],
+  },
+  TenantSequence: {
+    belongsTo: ["Tenant"],
+  },
+  Job: {
+    belongsTo: ["Tenant", "Customer", "Quote", "TenantUser"],
+    hasMany: ["JobEvent"],
+  },
+  JobEvent: {
+    belongsTo: ["Tenant", "Job", "TenantUser"],
   },
   QuoteLineItem: {
     belongsTo: ["Tenant", "Quote"],

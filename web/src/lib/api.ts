@@ -1241,6 +1241,8 @@ export type ActivityTaskType = "FOLLOW_UP" | "PREPARE_QUOTE" | "SEND_QUOTE" | "C
 export type ActivityTaskStatus = "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
 export type ActivityTaskPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type ActivityTaskDueFilter = "active" | "overdue" | "today" | "upcoming" | "completed";
+export type JobStatus = "UNSCHEDULED" | "SCHEDULED" | "DISPATCHED" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
+export type JobAppointmentStatus = "SCHEDULED" | "DISPATCHED" | "ARRIVED" | "COMPLETED" | "CANCELED";
 
 export type ActivityTask = {
   id: string;
@@ -1263,8 +1265,6 @@ export type ActivityTask = {
   customer: {
     id: string;
     fullName: string;
-    phone: string;
-    email: string | null;
   };
   quote: {
     id: string;
@@ -1284,6 +1284,119 @@ export type ActivityTaskInput = {
   title: string;
   notes?: string | null;
   dueAtUtc: string;
+};
+
+export type Job = {
+  id: string;
+  customerId: string;
+  sourceQuoteId: string;
+  assignedTenantUserId: string | null;
+  jobNumber: number;
+  status: JobStatus;
+  title: string;
+  scopeSnapshot: string;
+  serviceType: ServiceType;
+  serviceAddressSnapshot: string | null;
+  accessInstructions: string | null;
+  acceptedAtUtc: string;
+  scheduledAtUtc: string | null;
+  dispatchedAtUtc: string | null;
+  startedAtUtc: string | null;
+  completedAtUtc: string | null;
+  canceledAtUtc: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  customer: {
+    id: string;
+    fullName: string;
+  };
+  sourceQuote: {
+    id: string;
+    title: string;
+    status: QuoteStatus;
+    totalAmount: number;
+  };
+  assignedTenantUser: {
+    id: string;
+    role: OrgUserRole;
+    user: {
+      id: string;
+      fullName: string;
+    };
+  } | null;
+};
+
+export type JobAppointment = {
+  id: string;
+  jobId: string;
+  assignedTenantUserId: string;
+  createdByTenantUserId: string;
+  status: JobAppointmentStatus;
+  startsAtUtc: string;
+  endsAtUtc: string;
+  timeZone: string;
+  instructions: string | null;
+  dispatchedAtUtc: string | null;
+  arrivedAtUtc: string | null;
+  completedAtUtc: string | null;
+  canceledAtUtc: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  assignedTenantUser: {
+    id: string;
+    role: OrgUserRole;
+    user: {
+      id: string;
+      fullName: string;
+    };
+  };
+  createdByTenantUser: {
+    id: string;
+    user: {
+      id: string;
+      fullName: string;
+    };
+  };
+};
+
+export type JobScheduleAppointment = JobAppointment & {
+  job: {
+    id: string;
+    jobNumber: number;
+    status: JobStatus;
+    title: string;
+    serviceAddressSnapshot: string | null;
+    customer: {
+      id: string;
+      fullName: string;
+    };
+    sourceQuote: {
+      id: string;
+      title: string;
+    };
+  };
+};
+
+export type JobNote = {
+  id: string;
+  jobId: string;
+  createdByTenantUserId: string;
+  body: string;
+  createdAt: string;
+  createdByTenantUser: {
+    id: string;
+    user: {
+      id: string;
+      fullName: string;
+    };
+  };
+};
+
+export type QuoteAcceptedJobSummary = {
+  id: string;
+  jobNumber: number;
 };
 
 function activityCommandHeaders(idempotencyKey?: string): HeadersInit {
@@ -1999,6 +2112,130 @@ export const api = {
       }),
   },
 
+  jobs: {
+    list: (query?: {
+      mine?: boolean;
+      status?: JobStatus;
+      customerId?: string;
+      assignedTenantUserId?: string;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
+      request<{
+        items: Job[];
+        pagination: Pagination;
+        scope: { mine: boolean };
+      }>(`/v1/jobs${toQueryString({
+        mine: query?.mine,
+        status: query?.status,
+        customerId: query?.customerId,
+        assignedTenantUserId: query?.assignedTenantUserId,
+        search: query?.search,
+        limit: query?.limit,
+        offset: query?.offset,
+      })}`),
+
+    schedule: (query: {
+      fromUtc: string;
+      toUtc: string;
+      mine?: boolean;
+      assignedTenantUserId?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
+      request<{ items: JobScheduleAppointment[]; pagination: Pagination }>(`/v1/jobs/schedule${toQueryString({
+        fromUtc: query.fromUtc,
+        toUtc: query.toUtc,
+        mine: query.mine,
+        assignedTenantUserId: query.assignedTenantUserId,
+        limit: query.limit,
+        offset: query.offset,
+      })}`),
+
+    get: (jobId: string) => request<{ job: Job }>(`/v1/jobs/${jobId}`),
+
+    update: (
+      jobId: string,
+      body: {
+        version: number;
+        assignedTenantUserId?: string | null;
+        accessInstructions?: string | null;
+      },
+    ) => request<{ job: Job }>(`/v1/jobs/${jobId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+    appointments: {
+      list: (jobId: string, query?: { limit?: number; offset?: number }) =>
+        request<{ items: JobAppointment[]; pagination: Pagination }>(
+          `/v1/jobs/${jobId}/appointments${toQueryString({
+            limit: query?.limit,
+            offset: query?.offset,
+          })}`,
+        ),
+
+      create: (
+        jobId: string,
+        body: {
+          assignedTenantUserId: string;
+          startsAtUtc: string;
+          endsAtUtc: string;
+          timeZone: string;
+          instructions?: string | null;
+        },
+      ) => request<{ appointment: JobAppointment }>(`/v1/jobs/${jobId}/appointments`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+      update: (
+        jobId: string,
+        appointmentId: string,
+        body: {
+          version: number;
+          assignedTenantUserId?: string;
+          startsAtUtc?: string;
+          endsAtUtc?: string;
+          timeZone?: string;
+          instructions?: string | null;
+          status?: JobAppointmentStatus;
+        },
+      ) => request<{ appointment: JobAppointment }>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+      remove: (jobId: string, appointmentId: string, version: number) =>
+        request<void>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
+          method: "DELETE",
+          body: JSON.stringify({ version }),
+        }),
+    },
+
+    notes: {
+      list: (jobId: string, query?: { limit?: number; offset?: number }) =>
+        request<{ items: JobNote[]; pagination: Pagination }>(
+          `/v1/jobs/${jobId}/notes${toQueryString({
+            limit: query?.limit,
+            offset: query?.offset,
+          })}`,
+        ),
+
+      create: (jobId: string, body: { body: string }) =>
+        request<{ note: JobNote }>(`/v1/jobs/${jobId}/notes`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+
+      remove: (jobId: string, noteId: string) =>
+        request<void>(`/v1/jobs/${jobId}/notes/${noteId}`, {
+          method: "DELETE",
+        }),
+    },
+  },
+
   products: {
     list: (query?: {
       serviceType?: ServiceType;
@@ -2399,13 +2636,13 @@ export const api = {
         documentLocale?: SupportedLocale;
       },
     ) =>
-      request<{ quote: Quote }>(`/v1/quotes/${quoteId}`, {
+      request<{ quote: Quote; job?: QuoteAcceptedJobSummary | null }>(`/v1/quotes/${quoteId}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
 
     saveSheet: (quoteId: string, body: SaveQuoteSheetInput) =>
-      request<{ quote: Quote }>(`/v1/quotes/${quoteId}/sheet`, {
+      request<{ quote: Quote; job?: QuoteAcceptedJobSummary | null }>(`/v1/quotes/${quoteId}/sheet`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),

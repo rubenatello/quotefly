@@ -96,6 +96,21 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
   assert.equal(fields.get("QuoteDraftRecovery.payload")?.ragStatus, "EXCLUDED");
   assert.equal(fields.get("WorkPreset.catalogContentHash")?.classification, "C3_FINANCIAL_CONFIDENTIAL");
   assert.equal(fields.get("WorkPreset.catalogContentHash")?.ragStatus, "EXCLUDED");
+  for (const scheduleField of [
+    "Job.scheduledAtUtc",
+    "Job.dispatchedAtUtc",
+    "Job.startedAtUtc",
+    "Job.completedAtUtc",
+    "JobAppointment.startsAtUtc",
+    "JobAppointment.endsAtUtc",
+    "JobAppointment.timeZone",
+    "JobAppointment.dispatchedAtUtc",
+    "JobAppointment.arrivedAtUtc",
+    "JobAppointment.completedAtUtc",
+  ]) {
+    assert.equal(fields.get(scheduleField)?.classification, "C2_CUSTOMER_CONFIDENTIAL", scheduleField);
+    assert.equal(fields.get(scheduleField)?.ragStatus, "EXCLUDED", scheduleField);
+  }
 });
 
 test("the RAG catalog exactly reflects fields with implemented source adapters", () => {

@@ -1,6 +1,6 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phase 1 implemented locally, including Kody Activity tools; pending BCP and deployment authorization
+Status: Phase 3A booking/dispatch backend foundation and first job-detail schedule/dispatch UI implemented locally; exact DB-backed jobs gate pending; BCP pending
 
 Last updated: 2026-08-21
 
@@ -97,11 +97,13 @@ Permissions:
 
 ## Phase 2 — Accepted Quote to Job
 
-Status: Planned after Phase 1 evidence
+Status: Implemented locally; backend and UX reviews approved with full `verify:ci` and focused Jobs browser evidence
 
-- [ ] Centralize quote acceptance in one transactional service.
-- [ ] Add locked tenant job-number sequence and one-job-per-accepted-quote invariant.
-- [ ] Add Job API, permissions, UI, audit events, and migration tests.
+- [x] Centralize quote acceptance in one transactional service.
+- [x] Add locked tenant job-number sequence and one-job-per-accepted-quote invariant.
+- [x] Add Job API, permissions, UI, audit events, and migration skeleton.
+- [x] Add database-backed migration, concurrency, RLS, and member-permission tests.
+- [ ] Replace remaining legacy quote job-status UI writes with Job-authoritative state after Phase 2A BCP.
 
 Add a separate `Job` with:
 
@@ -116,11 +118,14 @@ Acceptance must call one shared transactional service. The unique `(tenantId, so
 
 ## Phase 3 — Booking and dispatch
 
-Status: Planned after Job state-machine evidence
+Status: Phase 3A backend data/API foundation and job-detail scheduling/dispatch UI implemented locally; day/week schedule views, external notifications, and provider delivery are still pending
 
-- [ ] Add job appointments, notes, and immutable events.
-- [ ] Add overlap-safe booking and day/week schedule UI.
-- [ ] Add dispatch/arrival/completion state transitions and assigned-member mobile views.
+- [x] Add job appointments, notes, and immutable events.
+- [x] Add overlap-safe booking API with tenant/member advisory locking.
+- [x] Add dispatch, arrival, completion, and cancellation appointment transitions in the API.
+- [x] Add job-detail booking, dispatch status, and internal notes UI with assigned-member mobile visibility.
+- [x] Add bounded today/next-7-days schedule overview UI backed by `/v1/jobs/schedule`.
+- [ ] Add full day/week calendar grid and reschedule controls.
 - [ ] Add durable notification outbox before enabling optional email/SMS delivery.
 
 Add `JobAppointment`, `JobNote`, and immutable `JobEvent`.
@@ -133,6 +138,15 @@ Appointments store:
 - bounded instructions, optimistic version, and soft-delete fields
 
 Prevent double booking with a transaction-level advisory lock on tenant + assignee, followed by an overlap query and insert. Email/SMS providers never run inside the booking transaction. Notifications begin in-app; external delivery later uses a durable tenant-scoped outbox with retry and idempotency.
+
+Phase 3A local evidence:
+
+- `prisma/migrations/20260821210000_add_job_booking_foundation` creates `JobAppointment` and `JobNote` with forced tenant RLS, runtime grants, tenant/member/job integrity, bounded appointment windows, optimistic versions, soft-delete fields, and content-minimal events.
+- `GET/POST/PATCH/DELETE /v1/jobs/:jobId/appointments` and `GET/POST/DELETE /v1/jobs/:jobId/notes` are implemented behind tenant RLS and live membership/assignment checks.
+- Appointment create/update/delete synchronizes the parent `Job` operational status and `scheduledAtUtc` from active appointments.
+- `GET /v1/jobs/schedule` returns visible appointments across jobs for a bounded schedule window.
+- `web/src/pages/JobsPage.tsx` exposes today/next-7-days schedule overview, booking creation, dispatch transitions, cancellation, internal notes, tenant-local time entry, and safe localized API errors in the Jobs workspace.
+- Focused evidence: non-DB local gates pass on the Phase 3A candidate; the jobs integration suite now contains 13 tests and still needs an exact rerun with a valid guarded `TEST_DATABASE_URL`.
 
 ## Phase 4 — Invoicing and payments
 

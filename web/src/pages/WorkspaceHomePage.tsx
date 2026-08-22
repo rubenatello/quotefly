@@ -313,7 +313,7 @@ export function WorkspaceHomePage() {
               hint={t("home.activeJobs", { count: overview.metrics.activeJobs })}
               icon={<BriefcaseBusiness size={19} />}
               tone="emerald"
-              onClick={() => navigate("/app/analytics")}
+              onClick={() => navigate("/app/jobs")}
             />
           </section>
 

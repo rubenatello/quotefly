@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Copy,
   Eye,
+  ExternalLink,
   FileOutput,
   Lock,
   Mail,
@@ -15,12 +16,11 @@ import {
   Plus,
   RotateCcw,
   Save,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
-import { KodyButton } from "../components/ai/KodyButton";
+import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import {
   FeatureLockedCard,
   HistoryEventPill,
@@ -54,7 +54,7 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
@@ -79,6 +79,7 @@ import {
   makeEditableQuoteLine,
   quoteLineAmount,
   quoteLineCostTotal,
+  splitQuoteLineDescription,
   toEditableQuoteLine,
   type EditableQuoteLine,
 } from "../lib/quote-lines";
@@ -147,6 +148,12 @@ type DeskTab = "quote" | "send" | "history" | "log";
 type DeskPane = "editor" | "preview";
 type PendingOutboundAction = "send-tab" | "email" | "sms" | "copy" | "pdf" | "pdf-preview";
 type KodyQuoteSendHandoff = { quoteId: string; channel: SendChannel };
+type QuoteDeskAiAssistTarget =
+  | { kind: "quote" }
+  | { kind: "title" }
+  | { kind: "overview" }
+  | { kind: "lineDescription"; lineId: string }
+  | { kind: "newLineDescription" };
 type StoredDeskDraft = {
   version: 1;
   savedAtUtc: string;
@@ -349,6 +356,7 @@ export function QuoteDeskView() {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiAssistTarget, setAiAssistTarget] = useState<QuoteDeskAiAssistTarget>({ kind: "quote" });
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
@@ -361,6 +369,7 @@ export function QuoteDeskView() {
   const [restoreRevisionTarget, setRestoreRevisionTarget] = useState<QuoteRevision | null>(null);
   const [restoreRevisionSaving, setRestoreRevisionSaving] = useState(false);
   const [pendingLifecycleStatus, setPendingLifecycleStatus] = useState<PendingLifecycleStatus>(null);
+  const [acceptedJobAction, setAcceptedJobAction] = useState<QuoteAcceptedJobSummary | null>(null);
   const [lifecyclePreparationSaving, setLifecyclePreparationSaving] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
@@ -421,6 +430,10 @@ export function QuoteDeskView() {
     navigateToBuilder,
     navigateToQuote,
   } = useDashboard();
+
+  useEffect(() => {
+    setAcceptedJobAction(null);
+  }, [selectedQuote?.id]);
   const formatLocalDateTime = (value: string | null | undefined) => value ? formatDateTime(value, locale, session?.timezone) : "—";
   const { quoteId } = useParams<{ quoteId: string }>();
   const deskDraftStorageKey = useMemo(
@@ -1125,7 +1138,7 @@ export function QuoteDeskView() {
     void runOutboundAction(action, selectedQuote, origin);
   }
 
-  function requestLifecycleUpdate(status: Quote["status"]) {
+  async function requestLifecycleUpdate(status: Quote["status"]) {
     if (!selectedQuote) return;
     if (hasUnsavedQuoteSheetChanges) {
       setPendingLifecycleStatus(status);
@@ -1133,7 +1146,8 @@ export function QuoteDeskView() {
       setMobilePane("editor");
       return;
     }
-    void updateQuoteLifecycle(selectedQuote.id, { status });
+    const result = await updateQuoteLifecycle(selectedQuote.id, { status });
+    setAcceptedJobAction(status === "ACCEPTED" && result?.job ? result.job : null);
   }
 
   function discardEditsAndContinueLifecycle() {
@@ -1141,7 +1155,9 @@ export function QuoteDeskView() {
     const status = pendingLifecycleStatus;
     revertQuoteSheetToLastSaved();
     setPendingLifecycleStatus(null);
-    void updateQuoteLifecycle(selectedQuote.id, { status });
+    void updateQuoteLifecycle(selectedQuote.id, { status }).then((result) => {
+      setAcceptedJobAction(status === "ACCEPTED" && result?.job ? result.job : null);
+    });
   }
 
   async function saveAndContinueLifecycle() {
@@ -1151,7 +1167,8 @@ export function QuoteDeskView() {
     const savedQuote = await handleSaveQuoteSheet({ offerPreset: false });
     if (savedQuote) {
       setPendingLifecycleStatus(null);
-      await updateQuoteLifecycle(savedQuote.id, { status });
+      const result = await updateQuoteLifecycle(savedQuote.id, { status });
+      setAcceptedJobAction(status === "ACCEPTED" && result?.job ? result.job : null);
     }
     setLifecyclePreparationSaving(false);
   }
@@ -1184,6 +1201,72 @@ export function QuoteDeskView() {
     } finally {
       setOutboundPreparationSaving(false);
     }
+  }
+
+  function buildDeskAiAssistPrompt(target: QuoteDeskAiAssistTarget) {
+    const trade = t(`domain.trade.${quoteEditForm.serviceType}`);
+    const title = quoteEditForm.title.trim() || selectedQuote?.title?.trim() || t("quoteDesk.currentQuote");
+    const overview = quoteEditForm.scopeText.trim();
+    const targetLine =
+      target.kind === "lineDescription"
+        ? editableLines.find((line) => line.id === target.lineId) ?? null
+        : target.kind === "newLineDescription"
+          ? newLine
+          : null;
+    const lineDescription = targetLine ? joinQuoteLineDescription(targetLine.title, targetLine.details).trim() : "";
+
+    if (target.kind === "title") {
+      return t("quoteDesk.assistPrompts.title", {
+        customer: customerName,
+        trade,
+        title,
+        overview: overview || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    if (target.kind === "overview") {
+      return t("quoteDesk.assistPrompts.overview", {
+        customer: customerName,
+        trade,
+        title,
+        overview: overview || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    if (target.kind === "lineDescription" || target.kind === "newLineDescription") {
+      return t("quoteDesk.assistPrompts.lineDescription", {
+        customer: customerName,
+        trade,
+        title,
+        line: lineDescription || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    return [
+      t("quoteDesk.kodyPrompt.help", { customer: customerName }),
+      t("quoteDesk.kodyPrompt.title", { title }),
+      selectedQuote ? t("quoteDesk.kodyPrompt.status", { status: t(`domain.quoteStatus.${selectedQuote.status}`) }) : "",
+      t("quoteDesk.kodyPrompt.guidance"),
+    ].filter(Boolean).join("\n");
+  }
+
+  function openDeskAiAssist(target: QuoteDeskAiAssistTarget) {
+    if (!selectedQuote) {
+      setError(t("quoteDesk.errors.openForAi"));
+      return;
+    }
+    if (isQuoteLocked) {
+      setUnlockConfirmOpen(true);
+      return;
+    }
+    if (!canUseChatToQuote) {
+      setError(t("quoteDesk.errors.aiUnavailable"));
+      return;
+    }
+    setAiAssistTarget(target);
+    setAiErrorMessage(null);
+    setChatPrompt(buildDeskAiAssistPrompt(target));
+    setAiModalOpen(true);
   }
 
   async function handleAiSuggestSubmit(event: React.FormEvent) {
@@ -1237,6 +1320,64 @@ export function QuoteDeskView() {
 
       setChatParsed(parsed);
       setChatPrompt("");
+
+      if (aiAssistTarget.kind !== "quote") {
+        if (aiAssistTarget.kind === "title") {
+          const nextTitle = suggestion.title.trim();
+          if (nextTitle) {
+            setQuoteEditForm((prev) => ({ ...prev, title: nextTitle }));
+          }
+          setNotice(t("quoteDesk.notices.aiTitleApplied"));
+        } else if (aiAssistTarget.kind === "overview") {
+          const nextOverview =
+            suggestion.scopeText.trim() ||
+            suggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
+          if (nextOverview) {
+            setQuoteEditForm((prev) => ({ ...prev, scopeText: nextOverview }));
+          }
+          setNotice(t("quoteDesk.notices.aiOverviewApplied"));
+        } else {
+          const targetLineId = aiAssistTarget.kind === "lineDescription" ? aiAssistTarget.lineId : null;
+          const targetedPatch = targetLineId
+            ? patch.lineChanges.find((change) => change.action !== "REMOVE" && change.targetLineId === targetLineId)
+            : null;
+          const nextDescription =
+            targetedPatch?.description.trim() ||
+            suggestion.lineItems[0]?.description?.trim() ||
+            suggestion.scopeText.trim();
+          if (nextDescription) {
+            const { title, details } = splitQuoteLineDescription(nextDescription);
+            if (aiAssistTarget.kind === "newLineDescription") {
+              setNewLine((line) => ({
+                ...line,
+                title: title.trim() || line.title,
+                details: details.trim() || title.trim() || line.details,
+              }));
+            } else {
+              setEditableLines((current) =>
+                current.map((line) =>
+                  line.id === aiAssistTarget.lineId
+                    ? {
+                        ...line,
+                        title: title.trim() || line.title,
+                        details: details.trim() || title.trim() || line.details,
+                      }
+                    : line,
+                ),
+              );
+            }
+          }
+          setNotice(t("quoteDesk.notices.aiLineApplied"));
+        }
+
+        setAiInsight(insight);
+        void loadAiRuns(selectedQuote.id);
+        setAiModalOpen(false);
+        setMobilePane("editor");
+        publishAiUsageUpdate(usage);
+        return;
+      }
+
       setQuoteEditForm((prev) => ({
         ...prev,
         serviceType: suggestion.serviceType,
@@ -1525,23 +1666,6 @@ export function QuoteDeskView() {
         subtitle={t("quoteDesk.subtitle")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <KodyButton
-              label={t("quoteDesk.actions.askKody")}
-              prompt={[
-                t("quoteDesk.kodyPrompt.help", { customer: customerName }),
-                t("quoteDesk.kodyPrompt.title", { title: quoteEditForm.title || selectedQuote.title }),
-                t("quoteDesk.kodyPrompt.status", { status: t(`domain.quoteStatus.${selectedQuote.status}`) }),
-                t("quoteDesk.kodyPrompt.guidance"),
-              ].join("\n")}
-              tool="DRAFT_QUOTE"
-              context={{
-                currentPage: "quotes",
-                quoteId: selectedQuote.id,
-                customerId: selectedQuote.customerId,
-                serviceType: quoteEditForm.serviceType,
-                limit: 6,
-              }}
-            />
             <QuoteStatusPill status={selectedQuote.status} />
           </div>
         }
@@ -1549,6 +1673,15 @@ export function QuoteDeskView() {
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
+      {acceptedJobAction ? (
+        <div role="status" className="flex flex-col gap-3 rounded-2xl border border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] px-4 py-3 text-sm text-[var(--qf-success-text)] sm:flex-row sm:items-center sm:justify-between">
+          <span>{t("quoteDesk.lifecycle.jobReady", { number: acceptedJobAction.jobNumber })}</span>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/app/jobs/${acceptedJobAction.id}`)}>
+            <ExternalLink size={15} />
+            {t("quoteDesk.lifecycle.openJob")}
+          </Button>
+        </div>
+      ) : null}
       {canManageAssignments || selectedQuote.assignedTenantUser ? (
         <Card variant="blue" padding="md" className="xl:hidden">
           {canManageAssignments ? (
@@ -1684,6 +1817,13 @@ export function QuoteDeskView() {
             <QuoteSheetEditor
               title={quoteEditForm.title}
               onTitleChange={(value) => setQuoteEditForm((prev) => ({ ...prev, title: value }))}
+              titleTools={
+                <KodyFieldAssistButton
+                  label={quoteEditForm.title.trim() ? t("quoteDesk.kodyAssist.improveTitle") : t("quoteDesk.kodyAssist.draftTitle")}
+                  onClick={() => openDeskAiAssist({ kind: "title" })}
+                  disabled={!canUseChatToQuote || isQuoteLocked}
+                />
+              }
               businessName={session?.tenantName ?? "QuoteFly"}
               businessHint={businessHint}
               customerName={customerName}
@@ -1717,6 +1857,13 @@ export function QuoteDeskView() {
               overview={quoteEditForm.scopeText}
               onOverviewChange={(value) => setQuoteEditForm((prev) => ({ ...prev, scopeText: value }))}
               overviewPlaceholder={t("quoteComponents.sheet.overviewPlaceholder")}
+              overviewTools={
+                <KodyFieldAssistButton
+                  label={quoteEditForm.scopeText.trim() ? t("quoteDesk.kodyAssist.improveOverview") : t("quoteDesk.kodyAssist.draftOverview")}
+                  onClick={() => openDeskAiAssist({ kind: "overview" })}
+                  disabled={!canUseChatToQuote || isQuoteLocked}
+                />
+              }
               logoUrl={branding?.logoUrl ?? null}
               logoPosition={branding?.logoPosition ?? "left"}
               templateId={branding?.templateId ?? "modern"}
@@ -1728,38 +1875,11 @@ export function QuoteDeskView() {
               readOnly={isQuoteLocked}
               actions={
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="md"
-                    className="h-11 w-11 min-h-[44px] rounded-full border-0 p-0 text-quotefly-blue hover:bg-transparent active:bg-transparent xl:hidden"
-                    icon={<Sparkles size={18} />}
-                    onClick={() => {
-                      if (isQuoteLocked) {
-                        setUnlockConfirmOpen(true);
-                        return;
-                      }
-                      setAiModalOpen(true);
-                    }}
-                    disabled={!canUseChatToQuote}
-                    aria-label={t("quoteDesk.actions.aiPrompt")}
-                    title={t("quoteDesk.actions.aiPrompt")}
+                  <KodyFieldAssistButton
+                    label={t("quoteDesk.kodyAssist.fullQuote")}
+                    onClick={() => openDeskAiAssist({ kind: "quote" })}
+                    disabled={!canUseChatToQuote || isQuoteLocked}
                   />
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="hidden xl:inline-flex"
-                    icon={<Sparkles size={14} />}
-                    onClick={() => {
-                      if (isQuoteLocked) {
-                        setUnlockConfirmOpen(true);
-                        return;
-                      }
-                      setAiModalOpen(true);
-                    }}
-                    disabled={!canUseChatToQuote}
-                  >
-                    {t("quoteDesk.actions.aiPrompt")}
-                  </Button>
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                     {t("quoteDesk.mobile.preview")}
                   </Button>
@@ -1912,6 +2032,8 @@ export function QuoteDeskView() {
                     onChange={updateEditableLine}
                     onSave={saveLine}
                     onDelete={() => setLineItemPendingDeleteId(line.id)}
+                    onAssistDescription={(lineId) => openDeskAiAssist({ kind: "lineDescription", lineId })}
+                    assistDisabled={!canUseChatToQuote || isQuoteLocked}
                     />
                   ))}
                   <div className="px-4 py-4">
@@ -1926,7 +2048,16 @@ export function QuoteDeskView() {
                           </p>
                         </div>
                       </div>
-                      <NewLineEditorRow line={newLine} onChange={setNewLine} onAdd={addNewLine} saving={saving} readOnly={isQuoteLocked} canViewInternalCosts={canViewInternalCosts} />
+                      <NewLineEditorRow
+                        line={newLine}
+                        onChange={setNewLine}
+                        onAdd={addNewLine}
+                        saving={saving}
+                        readOnly={isQuoteLocked}
+                        canViewInternalCosts={canViewInternalCosts}
+                        onAssistDescription={() => openDeskAiAssist({ kind: "newLineDescription" })}
+                        assistDisabled={!canUseChatToQuote || isQuoteLocked}
+                      />
                     </div>
                   </div>
                 </div>
@@ -2145,13 +2276,13 @@ export function QuoteDeskView() {
               <Card variant="default" padding="md">
                 <CardHeader title={t("quoteDesk.lifecycle.title")} subtitle={t("quoteDesk.lifecycle.description")} />
                 <div className="grid gap-2">
-                  <Button variant="outline" onClick={() => requestLifecycleUpdate("SENT_TO_CUSTOMER")}>
+                  <Button variant="outline" onClick={() => void requestLifecycleUpdate("SENT_TO_CUSTOMER")}>
                     {t("quoteDesk.lifecycle.sent")}
                   </Button>
-                  <Button variant="outline" onClick={() => requestLifecycleUpdate("ACCEPTED")}>
-                    {t("quoteDesk.lifecycle.won")}
+                  <Button variant="outline" onClick={() => void requestLifecycleUpdate("ACCEPTED")}>
+                    {t("quoteDesk.lifecycle.acceptAndCreateJob")}
                   </Button>
-                  <Button variant="outline" onClick={() => requestLifecycleUpdate("REJECTED")}>
+                  <Button variant="outline" onClick={() => void requestLifecycleUpdate("REJECTED")}>
                     {t("quoteDesk.lifecycle.lost")}
                   </Button>
                 </div>
@@ -2646,9 +2777,28 @@ export function QuoteDeskView() {
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiSuggestSubmit(event)}
-        title={t("quoteDesk.ai.reviseTitle")}
-        description={t("quoteDesk.ai.reviseDescription")}
-        submitLabel={t("quoteDesk.ai.apply")}
+        title={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteDesk.ai.reviseTitle")
+            : t("quoteDesk.kodyAssist.modalTitle", {
+                target:
+                  aiAssistTarget.kind === "title"
+                    ? t("quoteDesk.kodyAssist.targetTitle")
+                    : aiAssistTarget.kind === "overview"
+                      ? t("quoteDesk.kodyAssist.targetOverview")
+                      : t("quoteDesk.kodyAssist.targetLine"),
+              })
+        }
+        description={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteDesk.ai.reviseDescription")
+            : t("quoteDesk.kodyAssist.modalDescription")
+        }
+        submitLabel={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteDesk.ai.apply")
+            : t("quoteDesk.kodyAssist.applyField")
+        }
       />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel={t("quoteDesk.preview.ariaLabel")}>
@@ -2825,6 +2975,8 @@ function ExistingLineEditorRow({
   onChange,
   onSave,
   onDelete,
+  onAssistDescription,
+  assistDisabled,
   canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
@@ -2835,6 +2987,8 @@ function ExistingLineEditorRow({
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onSave: (lineId: string) => Promise<boolean>;
   onDelete: () => void;
+  onAssistDescription: (lineId: string) => void;
+  assistDisabled?: boolean;
   canViewInternalCosts: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -2895,6 +3049,13 @@ function ExistingLineEditorRow({
             </div>
             <div className="space-y-3">
               <Input label={t("quoteDesk.line.title")} aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })} value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
+              <div className="flex justify-end">
+                <KodyFieldAssistButton
+                  label={line.details.trim() ? t("quoteDesk.kodyAssist.improveLine") : t("quoteDesk.kodyAssist.draftLine")}
+                  onClick={() => onAssistDescription(line.id)}
+                  disabled={assistDisabled}
+                />
+              </div>
               <Textarea label={t("quoteDesk.line.description")} aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })} rows={3} value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
               <div className={`grid gap-2 ${canViewInternalCosts ? "grid-cols-3" : "grid-cols-2"}`}>
                 <Input label={t("quoteDesk.line.quantity")} aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
@@ -2924,7 +3085,17 @@ function ExistingLineEditorRow({
           </div>
           <Input aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })} className="min-h-[38px] rounded-lg" value={line.title} onChange={(event) => onChange(line.id, "title", event.target.value)} disabled={readOnly} />
         </div>
-        <Textarea aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+        <div className="space-y-1.5">
+          <div className="flex justify-end">
+            <KodyFieldAssistButton
+              label={line.details.trim() ? t("quoteDesk.kodyAssist.improveLine") : t("quoteDesk.kodyAssist.draftLine")}
+              onClick={() => onAssistDescription(line.id)}
+              className="px-2.5"
+              disabled={assistDisabled}
+            />
+          </div>
+          <Textarea aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })} rows={2} className="min-h-[64px] rounded-lg" value={line.details} onChange={(event) => onChange(line.id, "details", event.target.value)} disabled={readOnly} />
+        </div>
         <Input aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} disabled={readOnly} />
         {canViewInternalCosts ? <Input aria-label={t("quoteDesk.line.costAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label={t("quoteDesk.line.priceAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange(line.id, "unitPrice", event.target.value)} disabled={readOnly} />
@@ -2965,6 +3136,8 @@ function NewLineEditorRow({
   saving,
   readOnly,
   canViewInternalCosts,
+  onAssistDescription,
+  assistDisabled,
 }: {
   line: EditableQuoteLine;
   onChange: (line: EditableQuoteLine) => void;
@@ -2972,6 +3145,8 @@ function NewLineEditorRow({
   saving: boolean;
   readOnly?: boolean;
   canViewInternalCosts: boolean;
+  onAssistDescription: () => void;
+  assistDisabled?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const formatLineMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
@@ -2994,16 +3169,26 @@ function NewLineEditorRow({
           onChange={(event) => onChange({ ...line, title: event.target.value })}
           disabled={readOnly}
         />
-        <Textarea
-          label={t("quoteDesk.line.description")}
-          aria-label={t("quoteDesk.line.newDescriptionAria")}
-          rows={3}
-          className="rounded-lg lg:min-h-[64px]"
-          placeholder={t("quoteDesk.line.descriptionPlaceholder")}
-          value={line.details}
-          onChange={(event) => onChange({ ...line, details: event.target.value })}
-          disabled={readOnly}
-        />
+        <div className="space-y-1.5">
+          <div className="flex justify-end">
+            <KodyFieldAssistButton
+              label={line.details.trim() ? t("quoteDesk.kodyAssist.improveLine") : t("quoteDesk.kodyAssist.draftLine")}
+              onClick={onAssistDescription}
+              className="px-2.5"
+              disabled={assistDisabled}
+            />
+          </div>
+          <Textarea
+            label={t("quoteDesk.line.description")}
+            aria-label={t("quoteDesk.line.newDescriptionAria")}
+            rows={3}
+            className="rounded-lg lg:min-h-[64px]"
+            placeholder={t("quoteDesk.line.descriptionPlaceholder")}
+            value={line.details}
+            onChange={(event) => onChange({ ...line, details: event.target.value })}
+            disabled={readOnly}
+          />
+        </div>
         <Input aria-label={t("quoteDesk.line.newQuantityAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.quantity")} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange({ ...line, quantity: event.target.value })} disabled={readOnly} />
         {canViewInternalCosts ? <Input aria-label={t("quoteDesk.line.newCostAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.cost")} type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange({ ...line, unitCost: event.target.value })} disabled={readOnly} /> : <span aria-hidden="true" />}
         <Input aria-label={t("quoteDesk.line.newPriceAria")} className="min-h-[38px] rounded-lg text-right tabular-nums" label={t("quoteDesk.line.price")} type="number" min="0" step="0.01" value={line.unitPrice} onChange={(event) => onChange({ ...line, unitPrice: event.target.value })} disabled={readOnly} />

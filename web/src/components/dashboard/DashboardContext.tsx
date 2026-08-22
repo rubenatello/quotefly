@@ -13,6 +13,7 @@ import {
   type QuoteOutboundChannel,
   type QuoteOutboundEvent,
   type Quote,
+  type QuoteAcceptedJobSummary,
   type QuoteJobStatus,
   type QuoteRevision,
   type SaveQuoteSheetInput,
@@ -434,7 +435,7 @@ export interface DashboardContextValue {
     status?: QuoteStatus;
     jobStatus?: QuoteJobStatus;
     afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
-  }) => Promise<void>;
+  }) => Promise<{ quote: Quote; job?: QuoteAcceptedJobSummary | null } | null>;
   saveQuote: (event: FormEvent) => Promise<void>;
   sendDecision: (decision: "send" | "revise") => Promise<void>;
   openSendComposer: (channel: SendChannel, quoteOverride?: Quote, options?: { origin?: "kody" }) => void;
@@ -986,15 +987,17 @@ export function DashboardProvider({
     setSaving(true);
     setError(null);
     try {
-      await api.quotes.update(quoteId, patch);
+      const result = await api.quotes.update(quoteId, patch);
       await Promise.all([
         loadQuotes(),
         loadQuoteDetail(quoteId, { includeOutboundEvents: false }),
       ]);
       if (canViewQuoteHistory) void loadQuoteHistory();
-      setNotice(t("quoteFeedback.quote.lifecycleUpdated"));
+      setNotice(result.job ? null : t("quoteFeedback.quote.lifecycleUpdated"));
+      return result;
     } catch (err) {
       setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.lifecycleError" }));
+      return null;
     } finally {
       setSaving(false);
     }

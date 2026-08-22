@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ArrowRight, Pause, Play } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 type MarketingActionVariant = "primary" | "orange" | "secondary" | "dark-secondary" | "light";
@@ -136,55 +136,6 @@ export function MarketingCta({ title, description, actionLabel, onAction, suppor
         </MarketingAction>
         {supportingText ? <div className="relative mt-5 text-sm text-slate-400">{supportingText}</div> : null}
       </div>
-    </section>
-  );
-}
-
-interface MarketingMomentumStripProps {
-  items: readonly string[];
-  ariaLabel?: string;
-  tone?: "navy" | "blue";
-}
-
-export function MarketingMomentumStrip({
-  items,
-  ariaLabel = "QuoteFly workflow highlights",
-  tone = "navy",
-}: MarketingMomentumStripProps) {
-  const [paused, setPaused] = useState(false);
-  const list = (
-    <ul className="qf-momentum-list" role="list">
-      {items.map((item) => (
-        <li key={item} className="inline-flex items-center gap-4 whitespace-nowrap text-sm font-bold uppercase tracking-[0.16em] sm:text-base">
-          <span aria-hidden="true" className="h-2 w-2 rounded-full bg-quotefly-orange shadow-[0_0_16px_rgba(255,137,18,0.75)]" />
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-
-  return (
-    <section
-      aria-label={ariaLabel}
-      className={`qf-momentum-shell relative overflow-hidden border-y py-4 pr-14 text-white sm:pr-16 ${
-        tone === "blue"
-          ? "border-blue-400/30 bg-quotefly-blue"
-          : "border-white/10 bg-slate-950"
-      }`}
-    >
-      <div className={`qf-momentum-track ${paused ? "qf-momentum-track--paused" : ""}`}>
-        {list}
-        <div aria-hidden="true">{list}</div>
-      </div>
-      <button
-        type="button"
-        aria-pressed={paused}
-        aria-label={paused ? "Resume workflow highlights" : "Pause workflow highlights"}
-        onClick={() => setPaused((current) => !current)}
-        className="absolute right-2 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl border border-white/25 bg-slate-950/80 text-white shadow-lg backdrop-blur transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/35 sm:right-3"
-      >
-        {paused ? <Play size={17} aria-hidden="true" /> : <Pause size={17} aria-hidden="true" />}
-      </button>
     </section>
   );
 }

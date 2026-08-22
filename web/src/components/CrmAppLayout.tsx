@@ -24,6 +24,7 @@ const SuperuserAdminPage = lazy(() => import("../pages/SuperuserAdminPage").then
 const SuperuserAiPage = lazy(() => import("../pages/SuperuserAiPage").then((module) => ({ default: module.SuperuserAiPage })));
 const CustomersPage = lazy(() => import("../pages/CustomersPage").then((module) => ({ default: module.CustomersPage })));
 const QuotesPage = lazy(() => import("../pages/QuotesPage").then((module) => ({ default: module.QuotesPage })));
+const JobsPage = lazy(() => import("../pages/JobsPage").then((module) => ({ default: module.JobsPage })));
 const ProductsPage = lazy(() => import("../pages/ProductsPage").then((module) => ({ default: module.ProductsPage })));
 const AnalyticsPage = lazy(() => import("../pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const QuoteBuilderView = lazy(() => import("../views/QuoteBuilderView").then((module) => ({ default: module.QuoteBuilderView })));
@@ -187,6 +188,8 @@ export function CrmAppLayout({
               <Routes>
                 <Route index element={<WorkspaceHomePage />} />
                 <Route path="customers" element={<CustomersPage />} />
+                <Route path="jobs" element={<JobsPage />} />
+                <Route path="jobs/:jobId" element={<JobsPage />} />
                 <Route path="follow-up" element={<PipelineView />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
                 <Route path="setup" element={canManageCatalog ? <SetupPage session={session} onSetupSaved={onRefreshSession} /> : <Navigate to="/app/quotes" replace />} />

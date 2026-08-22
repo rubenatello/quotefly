@@ -35,6 +35,37 @@ enum QuoteJobStatus {
   COMPLETED
 }
 
+enum JobStatus {
+  UNSCHEDULED
+  SCHEDULED
+  DISPATCHED
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+}
+
+enum JobAppointmentStatus {
+  SCHEDULED
+  DISPATCHED
+  ARRIVED
+  COMPLETED
+  CANCELED
+}
+
+enum JobEventType {
+  CREATED
+  UPDATED
+  ASSIGNED
+  APPOINTMENT_CREATED
+  APPOINTMENT_UPDATED
+  APPOINTMENT_CANCELED
+  NOTE_ADDED
+  NOTE_DELETED
+  CANCELED
+  ARCHIVED
+  DELETED
+}
+
 enum AfterSaleFollowUpStatus {
   NOT_READY
   DUE
@@ -250,6 +281,11 @@ model Tenant {
   pricingProfiles                   PricingProfile[]
   quoteTemplates                    QuoteTemplate[]
   quotes                            Quote[]
+  tenantSequences                   TenantSequence[]
+  jobs                              Job[]
+  jobAppointments                   JobAppointment[]
+  jobNotes                          JobNote[]
+  jobEvents                         JobEvent[]
   activityTasks                     ActivityTask[]
   activityTaskEvents                ActivityTaskEvent[]
   customerActivityEvents            CustomerActivityEvent[]
@@ -287,6 +323,20 @@ model Tenant {
   @@index([deletedAtUtc])
   @@index([stripeCheckoutAttemptExpiresAtUtc], map: "Tenant_checkout_attempt_expiry_idx")
   @@index([stripeCheckoutSessionExpiresAtUtc], map: "Tenant_checkout_session_expiry_idx")
+}
+
+model TenantSequence {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String   @db.VarChar(64)
+  nextValue Int      @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, key])
+  @@index([tenantId, key])
 }
 
 model User {
@@ -344,21 +394,26 @@ model QuoteDraftRecovery {
 }
 
 model TenantUser {
-  id                     String               @id @default(cuid())
-  tenantId               String
-  userId                 String
-  role                   String               @default("owner")
-  createdAt              DateTime             @default(now()) @db.Timestamptz(3)
-  deletedAtUtc           DateTime?            @db.Timestamptz(3)
-  tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  assignedCustomers      Customer[]           @relation("CustomerAssignee")
-  assignedQuotes         Quote[]              @relation("QuoteAssignee")
-  assignedActivityTasks  ActivityTask[]       @relation("ActivityTaskAssignee")
-  createdActivityTasks   ActivityTask[]       @relation("ActivityTaskCreator")
-  completedActivityTasks ActivityTask[]       @relation("ActivityTaskCompleter")
-  activityTaskEvents     ActivityTaskEvent[]
-  quoteDrafts            QuoteDraftRecovery[]
+  id                      String               @id @default(cuid())
+  tenantId                String
+  userId                  String
+  role                    String               @default("owner")
+  createdAt               DateTime             @default(now()) @db.Timestamptz(3)
+  deletedAtUtc            DateTime?            @db.Timestamptz(3)
+  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedCustomers       Customer[]           @relation("CustomerAssignee")
+  assignedQuotes          Quote[]              @relation("QuoteAssignee")
+  assignedJobs            Job[]                @relation("JobAssignee")
+  assignedJobAppointments JobAppointment[]     @relation("JobAppointmentAssignee")
+  createdJobAppointments  JobAppointment[]     @relation("JobAppointmentCreator")
+  jobNotes                JobNote[]            @relation("JobNoteCreator")
+  jobEvents               JobEvent[]
+  assignedActivityTasks   ActivityTask[]       @relation("ActivityTaskAssignee")
+  createdActivityTasks    ActivityTask[]       @relation("ActivityTaskCreator")
+  completedActivityTasks  ActivityTask[]       @relation("ActivityTaskCompleter")
+  activityTaskEvents      ActivityTaskEvent[]
+  quoteDrafts             QuoteDraftRecovery[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId])
@@ -399,6 +454,7 @@ model Customer {
   tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignedTenantUser     TenantUser?             @relation("CustomerAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   quotes                 Quote[]
+  jobs                   Job[]
   activityTasks          ActivityTask[]
   activityEvents         CustomerActivityEvent[]
   revisions              QuoteRevision[]
@@ -489,6 +545,7 @@ model Quote {
   aiUsageEvents                   AiUsageEvent[]
   quickBooksInvoiceSyncs          QuickBooksInvoiceSync[]
   activityTasks                   ActivityTask[]
+  job                             Job?                    @relation("QuoteJobSource")
 
   @@unique([id, tenantId])
   @@unique([id, customerId, tenantId])
@@ -503,6 +560,116 @@ model Quote {
   @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, archivedAtUtc, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, customerId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
+}
+
+model Job {
+  id                     String           @id @default(cuid())
+  tenantId               String
+  customerId             String
+  sourceQuoteId          String
+  assignedTenantUserId   String?
+  jobNumber              Int
+  status                 JobStatus        @default(UNSCHEDULED)
+  title                  String           @db.VarChar(191)
+  scopeSnapshot          String
+  serviceType            ServiceCategory
+  serviceAddressSnapshot String?
+  accessInstructions     String?          @db.VarChar(2000)
+  acceptedAtUtc          DateTime         @db.Timestamptz(3)
+  scheduledAtUtc         DateTime?        @db.Timestamptz(3)
+  dispatchedAtUtc        DateTime?        @db.Timestamptz(3)
+  startedAtUtc           DateTime?        @db.Timestamptz(3)
+  completedAtUtc         DateTime?        @db.Timestamptz(3)
+  canceledAtUtc          DateTime?        @db.Timestamptz(3)
+  version                Int              @default(1)
+  createdAt              DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime         @updatedAt @db.Timestamptz(3)
+  archivedAtUtc          DateTime?        @db.Timestamptz(3)
+  deletedAtUtc           DateTime?        @db.Timestamptz(3)
+  tenant                 Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer               Customer         @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  sourceQuote            Quote            @relation("QuoteJobSource", fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
+  assignedTenantUser     TenantUser?      @relation("JobAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  appointments           JobAppointment[]
+  notes                  JobNote[]
+  events                 JobEvent[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, sourceQuoteId])
+  @@unique([sourceQuoteId, customerId, tenantId])
+  @@unique([tenantId, jobNumber])
+  @@index([tenantId, assignedTenantUserId, deletedAtUtc, archivedAtUtc, status, updatedAt(sort: Desc), id(sort: Desc)], map: "Job_assignee_status_updated_idx")
+  @@index([tenantId, deletedAtUtc, archivedAtUtc, status, updatedAt(sort: Desc), id(sort: Desc)], map: "Job_status_updated_idx")
+  @@index([tenantId, customerId, deletedAtUtc, archivedAtUtc], map: "Job_customer_lifecycle_idx")
+  @@index([tenantId, sourceQuoteId], map: "Job_source_quote_idx")
+}
+
+model JobAppointment {
+  id                    String               @id @default(cuid())
+  tenantId              String
+  jobId                 String
+  assignedTenantUserId  String
+  createdByTenantUserId String
+  status                JobAppointmentStatus @default(SCHEDULED)
+  startsAtUtc           DateTime             @db.Timestamptz(3)
+  endsAtUtc             DateTime             @db.Timestamptz(3)
+  timeZone              String               @db.VarChar(64)
+  instructions          String?              @db.VarChar(2000)
+  dispatchedAtUtc       DateTime?            @db.Timestamptz(3)
+  arrivedAtUtc          DateTime?            @db.Timestamptz(3)
+  completedAtUtc        DateTime?            @db.Timestamptz(3)
+  canceledAtUtc         DateTime?            @db.Timestamptz(3)
+  version               Int                  @default(1)
+  createdAt             DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAtUtc          DateTime?            @db.Timestamptz(3)
+  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job                   Job                  @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  assignedTenantUser    TenantUser           @relation("JobAppointmentAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  createdByTenantUser   TenantUser           @relation("JobAppointmentCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([id, tenantId])
+  @@index([tenantId, jobId, deletedAtUtc, startsAtUtc, id], map: "JobAppointment_job_start_idx")
+  @@index([tenantId, assignedTenantUserId, deletedAtUtc, status, startsAtUtc, id], map: "JobAppointment_assignee_status_start_idx")
+  @@index([tenantId, deletedAtUtc, startsAtUtc, id], map: "JobAppointment_tenant_start_idx")
+}
+
+model JobNote {
+  id                    String     @id @default(cuid())
+  tenantId              String
+  jobId                 String
+  createdByTenantUserId String
+  body                  String     @db.VarChar(4000)
+  createdAt             DateTime   @default(now()) @db.Timestamptz(3)
+  deletedAtUtc          DateTime?  @db.Timestamptz(3)
+  tenant                Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job                   Job        @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  createdByTenantUser   TenantUser @relation("JobNoteCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([id, tenantId])
+  @@index([tenantId, jobId, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)], map: "JobNote_job_created_idx")
+  @@index([tenantId, createdByTenantUserId, createdAt(sort: Desc), id(sort: Desc)], map: "JobNote_creator_created_idx")
+}
+
+model JobEvent {
+  id                 String       @id @default(cuid())
+  tenantId           String
+  jobId              String
+  actorTenantUserId  String
+  type               JobEventType
+  fromStatus         JobStatus?
+  toStatus           JobStatus?
+  requestId          String       @db.VarChar(191)
+  commandKeyHash     String       @db.VarChar(64)
+  commandPayloadHash String       @db.VarChar(64)
+  createdAt          DateTime     @default(now()) @db.Timestamptz(3)
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job                Job          @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  actorTenantUser    TenantUser   @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, commandKeyHash])
+  @@index([tenantId, jobId, createdAt, id], map: "JobEvent_job_created_idx")
+  @@index([tenantId, actorTenantUserId, createdAt], map: "JobEvent_actor_created_idx")
 }
 
 model AiUsageEvent {

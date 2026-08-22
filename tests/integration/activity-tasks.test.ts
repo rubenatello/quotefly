@@ -841,7 +841,7 @@ describe("activity task workflows", () => {
       payload: { role: "member" },
     });
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json()).toMatchObject({ code: "ROLE_CHANGE_ACTIVE_TASK_CONFLICT", activeTaskCount: 1 });
+    expect(blocked.json()).toMatchObject({ code: "ROLE_CHANGE_ACTIVE_WORK_CONFLICT", activeWorkCount: 1 });
     expect((await prisma.tenantUser.findUniqueOrThrow({ where: { id: admin.membershipId } })).role).toBe("admin");
 
     const alignedCustomer = await app.inject({
@@ -898,7 +898,7 @@ describe("activity task workflows", () => {
     await firstBlocker;
     expect(taskFirstResult.statusCode).toBe(201);
     expect(demotionSecondResult.statusCode).toBe(409);
-    expect(demotionSecondResult.json()).toMatchObject({ code: "ROLE_CHANGE_ACTIVE_TASK_CONFLICT" });
+    expect(demotionSecondResult.json()).toMatchObject({ code: "ROLE_CHANGE_ACTIVE_WORK_CONFLICT" });
 
     const demotionFirstAdmin = await addMember(owner, "Demotion First Admin", "admin");
     const demotionFirstCustomer = await createCustomer(owner, "Demotion First Role Customer");

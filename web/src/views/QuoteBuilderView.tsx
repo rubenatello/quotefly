@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import { KodyButton } from "../components/ai/KodyButton";
+import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import { publishKodyOutcome } from "../components/ai/kody-events";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -449,6 +449,12 @@ const QUOTE_BUILDER_LINE_GRID_COLUMNS =
   "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_108px_84px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_88px]";
 const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 
+type QuoteBuilderAiAssistTarget =
+  | { kind: "quote" }
+  | { kind: "title" }
+  | { kind: "overview" }
+  | { kind: "lineDescription"; lineId: string };
+
 export function QuoteBuilderView() {
   usePageView("quote_builder");
   const { t, i18n } = useTranslation();
@@ -482,6 +488,7 @@ export function QuoteBuilderView() {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiAssistTarget, setAiAssistTarget] = useState<QuoteBuilderAiAssistTarget>({ kind: "quote" });
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
@@ -874,6 +881,63 @@ export function QuoteBuilderView() {
     [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
   );
 
+  function buildBuilderAiAssistPrompt(target: QuoteBuilderAiAssistTarget) {
+    const customerName = activeCustomer?.fullName ?? t("quoteBuilder.customerGeneric");
+    const trade = t(`domain.trade.${quoteForm.serviceType}`);
+    const title = quoteForm.title.trim();
+    const overview = quoteForm.scopeText.trim();
+    const targetLine =
+      target.kind === "lineDescription"
+        ? draftLines.find((line) => line.id === target.lineId) ?? null
+        : null;
+    const lineDescription = targetLine ? joinQuoteLineDescription(targetLine.title, targetLine.details).trim() : "";
+
+    if (target.kind === "title") {
+      return t("quoteBuilder.assistPrompts.title", {
+        customer: customerName,
+        trade,
+        title: title || t("quoteBuilder.assistPrompts.blank"),
+        overview: overview || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    if (target.kind === "overview") {
+      return t("quoteBuilder.assistPrompts.overview", {
+        customer: customerName,
+        trade,
+        title: title || t("quoteBuilder.assistPrompts.blank"),
+        overview: overview || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    if (target.kind === "lineDescription") {
+      return t("quoteBuilder.assistPrompts.lineDescription", {
+        customer: customerName,
+        trade,
+        title: title || t("quoteBuilder.assistPrompts.blank"),
+        line: lineDescription || t("quoteBuilder.assistPrompts.blank"),
+      });
+    }
+
+    return [
+      activeCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
+      t("quoteBuilder.kodyPrompt.trade", { trade }),
+      title ? t("quoteBuilder.kodyPrompt.title", { title }) : "",
+      overview ? t("quoteBuilder.kodyPrompt.scope", { scope: overview }) : t("quoteBuilder.kodyPrompt.askMissing"),
+    ].filter(Boolean).join("\n");
+  }
+
+  function openBuilderAiAssist(target: QuoteBuilderAiAssistTarget) {
+    if (!canUseChatToQuote) {
+      setError(t("quoteBuilder.errors.aiUnavailable"));
+      return;
+    }
+    setAiAssistTarget(target);
+    setAiErrorMessage(null);
+    setChatPrompt(buildBuilderAiAssistPrompt(target));
+    setAiModalOpen(true);
+  }
+
   async function handleAiDraftSubmit(event: React.FormEvent) {
     event.preventDefault();
 
@@ -917,6 +981,65 @@ export function QuoteBuilderView() {
       if (customer) {
         selectQuoteCustomer(customer.id);
       }
+
+      if (aiAssistTarget.kind !== "quote") {
+        if (aiAssistTarget.kind === "title") {
+          const nextTitle = suggestion.title.trim();
+          if (nextTitle) {
+            setQuoteForm((prev) => ({
+              ...prev,
+              customerId: customer?.id ?? prev.customerId,
+              title: nextTitle,
+            }));
+          }
+          setNotice(t("quoteBuilder.notices.aiTitleApplied"));
+        } else if (aiAssistTarget.kind === "overview") {
+          const nextOverview =
+            suggestion.scopeText.trim() ||
+            suggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
+          if (nextOverview) {
+            setQuoteForm((prev) => ({
+              ...prev,
+              customerId: customer?.id ?? prev.customerId,
+              scopeText: nextOverview,
+            }));
+          }
+          setNotice(t("quoteBuilder.notices.aiOverviewApplied"));
+        } else {
+          const targetedPatch = patch.lineChanges.find(
+            (change) => change.action !== "REMOVE" && change.targetLineId === aiAssistTarget.lineId,
+          );
+          const nextDescription =
+            targetedPatch?.description.trim() ||
+            suggestion.lineItems[0]?.description?.trim() ||
+            suggestion.scopeText.trim();
+          if (nextDescription) {
+            const { title, details } = splitQuoteLineDescription(nextDescription);
+            setDraftLines((current) =>
+              current.map((line) =>
+                line.id === aiAssistTarget.lineId
+                  ? {
+                      ...line,
+                      title: title.trim() || line.title,
+                      details: details.trim() || title.trim() || line.details,
+                    }
+                  : line,
+              ),
+            );
+          }
+          setNotice(t("quoteBuilder.notices.aiLineApplied"));
+        }
+
+        setAiInsight(insight);
+        setLastAppliedAiRunId(aiRunId);
+        setKodyDraftHandoff(null);
+        void loadCustomers();
+        setAiModalOpen(false);
+        setMobilePane("editor");
+        publishAiUsageUpdate(usage);
+        return;
+      }
+
       setQuoteForm((prev) => ({
         ...prev,
         customerId: customer?.id ?? prev.customerId,
@@ -1250,23 +1373,6 @@ export function QuoteBuilderView() {
             {selectedQuoteId ? (
               <Button onClick={() => requestNavigation(() => navigateToQuote(selectedQuoteId))}>{t("quoteBuilder.openActive")}</Button>
             ) : null}
-            <KodyButton
-              label={t("quoteBuilder.draftWithKody")}
-              prompt={[
-                activeCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
-                t("quoteBuilder.kodyPrompt.trade", { trade: t(`domain.trade.${quoteForm.serviceType}`) }),
-                quoteForm.title.trim() ? t("quoteBuilder.kodyPrompt.title", { title: quoteForm.title.trim() }) : "",
-                quoteForm.scopeText.trim() ? t("quoteBuilder.kodyPrompt.scope", { scope: quoteForm.scopeText.trim() }) : t("quoteBuilder.kodyPrompt.askMissing"),
-              ].filter(Boolean).join("\n")}
-              tool="DRAFT_QUOTE"
-              context={{
-                currentPage: "quotes",
-                customerId: activeCustomer?.id,
-                serviceType: quoteForm.serviceType,
-                limit: 6,
-              }}
-              disabled={!canUseChatToQuote}
-            />
           </div>
         }
       />
@@ -1277,11 +1383,11 @@ export function QuoteBuilderView() {
         <Alert tone="warning" onDismiss={() => setDraftRecoveryMessage(null)}>{draftRecoveryMessage}</Alert>
       ) : null}
       {kodyDraftHandoff ? (
-        <KodyDraftHandoffBanner
+          <KodyDraftHandoffBanner
           handoff={kodyDraftHandoff}
           canViewInternalCosts={canViewInternalCosts}
           activeCustomerName={activeCustomer?.fullName ?? null}
-          onOpenAiDraft={() => setAiModalOpen(true)}
+          onOpenAiDraft={() => openBuilderAiAssist({ kind: "quote" })}
           onDismiss={() => setKodyDraftHandoff(null)}
         />
       ) : null}
@@ -1475,6 +1581,13 @@ export function QuoteBuilderView() {
             title={quoteForm.title}
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
             titlePlaceholder={t("quoteBuilder.titlePlaceholder")}
+            titleTools={
+              <KodyFieldAssistButton
+                label={quoteForm.title.trim() ? t("quoteBuilder.kodyAssist.improveTitle") : t("quoteBuilder.kodyAssist.draftTitle")}
+                onClick={() => openBuilderAiAssist({ kind: "title" })}
+                disabled={!canUseChatToQuote}
+              />
+            }
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
             customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
@@ -1511,6 +1624,13 @@ export function QuoteBuilderView() {
             overview={quoteForm.scopeText}
             onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
             overviewPlaceholder={t("quoteComponents.sheet.overviewPlaceholder")}
+            overviewTools={
+              <KodyFieldAssistButton
+                label={quoteForm.scopeText.trim() ? t("quoteBuilder.kodyAssist.improveOverview") : t("quoteBuilder.kodyAssist.draftOverview")}
+                onClick={() => openBuilderAiAssist({ kind: "overview" })}
+                disabled={!canUseChatToQuote}
+              />
+            }
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
             templateId={branding?.templateId ?? "modern"}
@@ -1521,33 +1641,10 @@ export function QuoteBuilderView() {
             documentLocale={quoteForm.documentLocale}
             actions={
               <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
+                <KodyFieldAssistButton
+                  label={t("quoteBuilder.kodyAssist.fullQuote")}
                   className="hidden xl:inline-flex"
-                  icon={<Sparkles size={14} />}
-                  onClick={() => setAiModalOpen(true)}
-                  disabled={!canUseChatToQuote}
-                >
-                  {t("quoteBuilder.aiPrompt")}
-                </Button>
-                <KodyButton
-                  label={t("quoteBuilder.improveScope")}
-                  size="sm"
-                  className="hidden xl:inline-flex"
-                  prompt={[
-                    activeCustomer ? t("quoteBuilder.kodyPrompt.improveCustomer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.improve"),
-                    t("quoteBuilder.kodyPrompt.trade", { trade: t(`domain.trade.${quoteForm.serviceType}`) }),
-                    quoteForm.title.trim() ? t("quoteBuilder.handoff.promptTitle", { title: quoteForm.title.trim() }) : "",
-                    quoteForm.scopeText.trim() ? t("quoteBuilder.handoff.promptScope", { scope: quoteForm.scopeText.trim() }) : t("quoteBuilder.kodyPrompt.cleanScope"),
-                  ].filter(Boolean).join("\n")}
-                  tool="DRAFT_QUOTE"
-                  context={{
-                    currentPage: "quotes",
-                    customerId: activeCustomer?.id,
-                    serviceType: quoteForm.serviceType,
-                    limit: 6,
-                  }}
+                  onClick={() => openBuilderAiAssist({ kind: "quote" })}
                   disabled={!canUseChatToQuote}
                 />
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
@@ -1588,12 +1685,12 @@ export function QuoteBuilderView() {
               <Button
                 variant="outline"
                 icon={<Sparkles size={15} />}
-                onClick={() => setAiModalOpen(true)}
+                onClick={() => openBuilderAiAssist({ kind: "quote" })}
                 disabled={!canUseChatToQuote}
-                aria-label={t("quoteBuilder.buildWithAi")}
-                title={t("quoteBuilder.buildWithAi")}
+                aria-label={t("quoteBuilder.kodyAssist.fullQuote")}
+                title={t("quoteBuilder.kodyAssist.fullQuote")}
               >
-                AI
+                Kody
               </Button>
             </div>
 
@@ -1688,6 +1785,8 @@ export function QuoteBuilderView() {
                     onChange={updateDraftLine}
                     onInsertBelow={addBlankLine}
                     onRemove={removeDraftLine}
+                    onAssistDescription={(lineId) => openBuilderAiAssist({ kind: "lineDescription", lineId })}
+                    assistDisabled={!canUseChatToQuote}
                   />
                 ))}
                 <div className="px-3 py-3 xl:hidden">
@@ -1844,7 +1943,28 @@ export function QuoteBuilderView() {
         loading={aiSubmitting}
         disabled={!canUseChatToQuote}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
-        submitLabel={t("quoteBuilder.applyAi")}
+        title={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteComponents.aiModal.title")
+            : t("quoteBuilder.kodyAssist.modalTitle", {
+                target:
+                  aiAssistTarget.kind === "title"
+                    ? t("quoteBuilder.kodyAssist.targetTitle")
+                    : aiAssistTarget.kind === "overview"
+                      ? t("quoteBuilder.kodyAssist.targetOverview")
+                      : t("quoteBuilder.kodyAssist.targetLine"),
+              })
+        }
+        description={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteComponents.aiModal.description")
+            : t("quoteBuilder.kodyAssist.modalDescription")
+        }
+        submitLabel={
+          aiAssistTarget.kind === "quote"
+            ? t("quoteBuilder.applyAi")
+            : t("quoteBuilder.kodyAssist.applyField")
+        }
       />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel={t("quoteBuilder.preview")}>
@@ -2071,6 +2191,8 @@ function DraftLineEditorRow({
   onChange,
   onInsertBelow,
   onRemove,
+  onAssistDescription,
+  assistDisabled,
   canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
@@ -2079,6 +2201,8 @@ function DraftLineEditorRow({
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onInsertBelow: (lineId?: string) => void;
   onRemove: (lineId: string) => void;
+  onAssistDescription: (lineId: string) => void;
+  assistDisabled?: boolean;
   canViewInternalCosts: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -2180,6 +2304,13 @@ function DraftLineEditorRow({
               </button>
               {advancedOpen ? (
                 <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
+                  <div className="flex justify-end">
+                    <KodyFieldAssistButton
+                      label={line.details.trim() ? t("quoteBuilder.kodyAssist.improveLine") : t("quoteBuilder.kodyAssist.draftLine")}
+                      onClick={() => onAssistDescription(line.id)}
+                      disabled={assistDisabled}
+                    />
+                  </div>
                   <Textarea
                     label={t("quoteDesk.line.description")}
                     aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
@@ -2236,14 +2367,24 @@ function DraftLineEditorRow({
             onChange={(event) => onChange(line.id, "title", event.target.value)}
           />
         </div>
-        <Textarea
-          aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
-          rows={2}
-          className="min-h-[64px] rounded-lg"
-          placeholder={t("quoteDesk.line.description")}
-          value={line.details}
-          onChange={(event) => onChange(line.id, "details", event.target.value)}
-        />
+        <div className="space-y-1.5">
+          <div className="flex justify-end">
+            <KodyFieldAssistButton
+              label={line.details.trim() ? t("quoteBuilder.kodyAssist.improveLine") : t("quoteBuilder.kodyAssist.draftLine")}
+              onClick={() => onAssistDescription(line.id)}
+              className="px-2.5"
+              disabled={assistDisabled}
+            />
+          </div>
+          <Textarea
+            aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
+            rows={2}
+            className="min-h-[64px] rounded-lg"
+            placeholder={t("quoteDesk.line.description")}
+            value={line.details}
+            onChange={(event) => onChange(line.id, "details", event.target.value)}
+          />
+        </div>
         <Input aria-label={t("quoteDesk.line.quantityAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => onChange(line.id, "quantity", event.target.value)} />
         {canViewInternalCosts ? (
           <Input aria-label={t("quoteDesk.line.costAria", { number: index + 1 })} className="min-h-[38px] rounded-lg text-right tabular-nums" type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => onChange(line.id, "unitCost", event.target.value)} />

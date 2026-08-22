@@ -1,6 +1,6 @@
 # QuoteFly API Documentation
 
-Last updated: 2026-06-10
+Last updated: 2026-08-21
 
 This document describes the QuoteFly backend API, recommended usage patterns, and production integration practices. The live API is a Fastify service with all application routes mounted under `/v1`. Swagger UI is also available at `/docs` when the API server is running.
 
@@ -293,12 +293,14 @@ Quote statuses:
 - `ACCEPTED`
 - `REJECTED`
 
-Job statuses:
+Legacy quote job statuses:
 
 - `NOT_STARTED`
 - `SCHEDULED`
 - `IN_PROGRESS`
 - `COMPLETED`
+
+Operational job execution state lives on `/v1/jobs` after a quote is accepted.
 
 After-sale follow-up statuses:
 
@@ -443,6 +445,137 @@ Body:
 ```
 
 Response: CSV file.
+
+## Jobs, Booking, And Dispatch
+
+Accepted quotes create separate job records. The quote remains the customer-approved commercial record; the job owns assignment, schedule, dispatch state, access instructions, and internal execution notes.
+
+Job statuses:
+
+- `UNSCHEDULED`
+- `SCHEDULED`
+- `DISPATCHED`
+- `IN_PROGRESS`
+- `COMPLETED`
+- `CANCELED`
+
+Appointment statuses:
+
+- `SCHEDULED`
+- `DISPATCHED`
+- `ARRIVED`
+- `COMPLETED`
+- `CANCELED`
+
+### `GET /v1/jobs?limit=25&offset=0&status=SCHEDULED&mine=true&search=roof`
+
+Lists visible jobs for the authenticated tenant. Owners/admins can view all visible tenant jobs; members only see self-assigned work linked to records they are allowed to access.
+
+Supported query parameters:
+
+- `limit`, `offset`
+- `mine=true|false`
+- `status`
+- `customerId`
+- `assignedTenantUserId` for owners/admins
+- `search` across job number, title, customer, and source quote title
+
+### `GET /v1/jobs/:jobId`
+
+Returns one visible job with customer, source quote, assignment, accepted scope snapshot, service address snapshot, and lifecycle timestamps.
+
+### `GET /v1/jobs/schedule?fromUtc=...&toUtc=...&mine=false&limit=25&offset=0`
+
+Lists visible job appointments across jobs for a bounded schedule window. The maximum schedule window is 35 days. Owners/admins can view all visible tenant appointments; members only see appointments attached to jobs they are allowed to access.
+
+Supported query parameters:
+
+- `fromUtc`, `toUtc`
+- `mine=true|false`
+- `assignedTenantUserId` for owners/admins
+- `limit`, `offset` (`offset` is capped at `1000`)
+
+### `PATCH /v1/jobs/:jobId`
+
+Updates job assignment and dispatch access instructions. Requires owner/admin permissions and the current optimistic `version`.
+
+Body:
+
+```json
+{
+  "version": 3,
+  "assignedTenantUserId": "tenant_user_id",
+  "accessInstructions": "Gate code 4321. Park on the right side."
+}
+```
+
+### `GET /v1/jobs/:jobId/appointments?limit=25&offset=0`
+
+Lists bookings for one visible job.
+
+### `POST /v1/jobs/:jobId/appointments`
+
+Creates an overlap-safe booking for the job's assigned member. Requires owner/admin permissions. The API stores `startsAtUtc` and `endsAtUtc` as UTC ISO strings and also stores the IANA `timeZone` used to create the booking. Appointment duration cannot exceed 14 days. Provider notifications are not sent from this transaction.
+
+Body:
+
+```json
+{
+  "assignedTenantUserId": "tenant_user_id",
+  "startsAtUtc": "2026-08-21T16:00:00.000Z",
+  "endsAtUtc": "2026-08-21T18:00:00.000Z",
+  "timeZone": "America/Los_Angeles",
+  "instructions": "Bring ladder and confirm access on arrival."
+}
+```
+
+### `PATCH /v1/jobs/:jobId/appointments/:appointmentId`
+
+Updates a booking with optimistic concurrency. Owners/admins can update assignment, schedule, instructions, and status. Assigned members can only perform status-only forward progress on their own booking; they cannot cancel, reschedule, reassign, or edit instructions. Status transitions are restricted to the dispatch flow:
+
+- `SCHEDULED -> DISPATCHED -> ARRIVED -> COMPLETED`
+- `SCHEDULED`, `DISPATCHED`, and `ARRIVED` may transition to `CANCELED`
+
+Body:
+
+```json
+{
+  "version": 2,
+  "status": "DISPATCHED"
+}
+```
+
+### `DELETE /v1/jobs/:jobId/appointments/:appointmentId`
+
+Soft-cancels a booking. Requires owner/admin permissions and the current `version`.
+
+Body:
+
+```json
+{
+  "version": 2
+}
+```
+
+### `GET /v1/jobs/:jobId/notes?limit=25&offset=0`
+
+Lists internal job notes. Notes are tenant-confidential execution data and are not shown on customer PDFs.
+
+### `POST /v1/jobs/:jobId/notes`
+
+Adds an internal job note.
+
+Body:
+
+```json
+{
+  "body": "Crew completed prep work; return tomorrow for finish coat."
+}
+```
+
+### `DELETE /v1/jobs/:jobId/notes/:noteId`
+
+Soft-deletes a note. The note creator or an owner/admin can remove it.
 
 ## AI Quote Endpoints
 

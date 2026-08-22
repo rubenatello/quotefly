@@ -7,6 +7,7 @@ import { loadTenantEntitlements } from "../lib/subscription";
 import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { lockJobAppointmentAssignee } from "../services/jobs";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -368,6 +369,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const outcome = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      await lockJobAppointmentAssignee(tx, { tenantId: claims.tenantId, assignedTenantUserId: tenantUserId });
       const memberships = await tx.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
         SELECT membership."id", membership."role"
         FROM "TenantUser" membership
@@ -384,35 +386,58 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       if (payload.role === "member" && normalizeRole(targetMembership.role) !== "member") {
         const conflicts = await tx.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
           SELECT COUNT(*)::bigint AS "count"
-          FROM "ActivityTask" task
+          FROM (
+            SELECT task."tenantId", task."customerId", task."quoteId" AS "sourceQuoteId"
+            FROM "ActivityTask" task
+            WHERE task."tenantId" = ${claims.tenantId}
+              AND task."assignedTenantUserId" = ${targetMembership.id}
+              AND task."deletedAtUtc" IS NULL
+              AND task."status" IN ('OPEN', 'IN_PROGRESS')
+            UNION ALL
+            SELECT job."tenantId", job."customerId", job."sourceQuoteId"
+            FROM "Job" job
+            WHERE job."tenantId" = ${claims.tenantId}
+              AND job."assignedTenantUserId" = ${targetMembership.id}
+              AND job."deletedAtUtc" IS NULL
+              AND job."archivedAtUtc" IS NULL
+              AND job."status" IN ('UNSCHEDULED', 'SCHEDULED', 'DISPATCHED', 'IN_PROGRESS')
+            UNION ALL
+            SELECT appointment."tenantId", job."customerId", job."sourceQuoteId"
+            FROM "JobAppointment" appointment
+            INNER JOIN "Job" job
+              ON job."id" = appointment."jobId"
+             AND job."tenantId" = appointment."tenantId"
+            WHERE appointment."tenantId" = ${claims.tenantId}
+              AND appointment."assignedTenantUserId" = ${targetMembership.id}
+              AND appointment."deletedAtUtc" IS NULL
+              AND appointment."status" IN ('SCHEDULED', 'DISPATCHED', 'ARRIVED')
+              AND job."deletedAtUtc" IS NULL
+              AND job."archivedAtUtc" IS NULL
+          ) assigned_work
           INNER JOIN "Customer" customer
-            ON customer."id" = task."customerId"
-           AND customer."tenantId" = task."tenantId"
+            ON customer."id" = assigned_work."customerId"
+           AND customer."tenantId" = assigned_work."tenantId"
           LEFT JOIN "Quote" quote
-            ON quote."id" = task."quoteId"
-           AND quote."tenantId" = task."tenantId"
-          WHERE task."tenantId" = ${claims.tenantId}
-            AND task."assignedTenantUserId" = ${targetMembership.id}
-            AND task."deletedAtUtc" IS NULL
-            AND task."status" IN ('OPEN', 'IN_PROGRESS')
-            AND (
-              customer."archivedAtUtc" IS NOT NULL
-              OR customer."deletedAtUtc" IS NOT NULL
-              OR customer."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
-              OR (
-                task."quoteId" IS NOT NULL
-                AND (
-                  quote."id" IS NULL
-                  OR quote."archivedAtUtc" IS NOT NULL
-                  OR quote."deletedAtUtc" IS NOT NULL
-                  OR quote."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
-                )
+            ON quote."id" = assigned_work."sourceQuoteId"
+           AND quote."tenantId" = assigned_work."tenantId"
+          WHERE (
+            customer."archivedAtUtc" IS NOT NULL
+            OR customer."deletedAtUtc" IS NOT NULL
+            OR customer."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
+            OR (
+              assigned_work."sourceQuoteId" IS NOT NULL
+              AND (
+                quote."id" IS NULL
+                OR quote."archivedAtUtc" IS NOT NULL
+                OR quote."deletedAtUtc" IS NOT NULL
+                OR quote."assignedTenantUserId" IS DISTINCT FROM ${targetMembership.id}
               )
             )
+          )
         `);
-        const activeTaskCount = Number(conflicts[0]?.count ?? 0);
-        if (activeTaskCount > 0) {
-          return { kind: "task_conflict" as const, activeTaskCount };
+        const activeWorkCount = Number(conflicts[0]?.count ?? 0);
+        if (activeWorkCount > 0) {
+          return { kind: "work_conflict" as const, activeWorkCount };
         }
       }
 
@@ -436,11 +461,11 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
     if (outcome.kind === "missing") {
       return reply.code(404).send({ error: "Member not found for organization." });
     }
-    if (outcome.kind === "task_conflict") {
+    if (outcome.kind === "work_conflict") {
       return reply.code(409).send({
-        code: "ROLE_CHANGE_ACTIVE_TASK_CONFLICT",
-        error: `Reassign ${outcome.activeTaskCount} active task(s), or align their customer and quote assignments, before changing this admin to a member.`,
-        activeTaskCount: outcome.activeTaskCount,
+        code: "ROLE_CHANGE_ACTIVE_WORK_CONFLICT",
+        error: `Reassign ${outcome.activeWorkCount} active task or job assignment(s), or align their customer and quote assignments, before changing this admin to a member.`,
+        activeWorkCount: outcome.activeWorkCount,
       });
     }
     const updated = outcome.updated;
@@ -478,6 +503,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const removal = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+      await lockJobAppointmentAssignee(tx, { tenantId: claims.tenantId, assignedTenantUserId: tenantUserId });
       const memberships = await tx.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
         SELECT membership."id", membership."role"
         FROM "TenantUser" membership
@@ -492,7 +518,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       if (!targetMembership) return { kind: "missing" as const };
       if (normalizeRole(targetMembership.role) === "owner") return { kind: "owner" as const };
 
-      const [customers, quotes, activities] = await Promise.all([
+      const [customers, quotes, activities, jobs, appointments] = await Promise.all([
         tx.customer.count({
           where: { tenantId: claims.tenantId, assignedTenantUserId: targetMembership.id, archivedAtUtc: null, deletedAtUtc: null },
         }),
@@ -507,9 +533,26 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
             status: { in: ["OPEN", "IN_PROGRESS"] },
           },
         }),
+        tx.job.count({
+          where: {
+            tenantId: claims.tenantId,
+            assignedTenantUserId: targetMembership.id,
+            archivedAtUtc: null,
+            deletedAtUtc: null,
+            status: { in: ["UNSCHEDULED", "SCHEDULED", "DISPATCHED", "IN_PROGRESS"] },
+          },
+        }),
+        tx.jobAppointment.count({
+          where: {
+            tenantId: claims.tenantId,
+            assignedTenantUserId: targetMembership.id,
+            deletedAtUtc: null,
+            status: { in: ["SCHEDULED", "DISPATCHED", "ARRIVED"] },
+          },
+        }),
       ]);
-      if (customers > 0 || quotes > 0 || activities > 0) {
-        return { kind: "assigned" as const, assignments: { customers, quotes, activities } };
+      if (customers > 0 || quotes > 0 || activities > 0 || jobs > 0 || appointments > 0) {
+        return { kind: "assigned" as const, assignments: { customers, quotes, activities, jobs, appointments } };
       }
 
       const result = await tx.tenantUser.updateMany({
@@ -529,7 +572,7 @@ export const orgUserRoutes: FastifyPluginAsync = async (app) => {
       const activeAssignments = removal.assignments;
       return reply.code(409).send({
         code: "MEMBER_HAS_ACTIVE_ASSIGNMENTS",
-        error: `Reassign ${activeAssignments.customers} customer(s), ${activeAssignments.quotes} quote(s), and ${activeAssignments.activities} task(s) before removing this member.`,
+        error: `Reassign ${activeAssignments.customers} customer(s), ${activeAssignments.quotes} quote(s), ${activeAssignments.activities} task(s), ${activeAssignments.jobs} job(s), and ${activeAssignments.appointments} appointment(s) before removing this member.`,
         assignments: activeAssignments,
       });
     }

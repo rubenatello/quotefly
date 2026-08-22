@@ -4,6 +4,21 @@ import { healthRoutes } from "../../src/routes/health";
 
 const openApps: Array<ReturnType<typeof Fastify>> = [];
 
+const FORCED_RLS_ROWS = [
+  { tableName: "ActivityTask", enabled: true, forced: true },
+  { tableName: "ActivityTaskEvent", enabled: true, forced: true },
+  { tableName: "AiIndexJob", enabled: true, forced: true },
+  { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
+  { tableName: "AiRetrievalChunk", enabled: true, forced: true },
+  { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+  { tableName: "Job", enabled: true, forced: true },
+  { tableName: "JobAppointment", enabled: true, forced: true },
+  { tableName: "JobEvent", enabled: true, forced: true },
+  { tableName: "JobNote", enabled: true, forced: true },
+  { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
+  { tableName: "TenantSequence", enabled: true, forced: true },
+];
+
 function buildHealthServer(
   queryRaw: (...args: unknown[]) => Promise<unknown>,
   nodeEnv: "test" | "production" = "test",
@@ -40,15 +55,7 @@ describe("health and readiness routes", () => {
   test("returns ready only after the database probe succeeds", async () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
-      return [
-        { tableName: "AiIndexJob", enabled: true, forced: true },
-        { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
-        { tableName: "AiRetrievalChunk", enabled: true, forced: true },
-        { tableName: "AiRetrievalDocument", enabled: true, forced: true },
-        { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
-        { tableName: "ActivityTask", enabled: true, forced: true },
-        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
-      ];
+      return FORCED_RLS_ROWS;
     });
     const app = buildHealthServer(queryRaw);
 
@@ -134,13 +141,18 @@ describe("health and readiness routes", () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       return [
+        { tableName: "ActivityTask", enabled: true, forced: true },
+        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
         { tableName: "AiIndexJob", enabled: true, forced: true },
         { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
         { tableName: "AiRetrievalChunk", enabled: true, forced: false },
         { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+        { tableName: "Job", enabled: true, forced: true },
+        { tableName: "JobAppointment", enabled: true, forced: true },
+        { tableName: "JobEvent", enabled: true, forced: true },
+        { tableName: "JobNote", enabled: true, forced: true },
         { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
-        { tableName: "ActivityTask", enabled: true, forced: true },
-        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
+        { tableName: "TenantSequence", enabled: true, forced: true },
       ];
     });
     const app = buildHealthServer(queryRaw);
@@ -153,19 +165,28 @@ describe("health and readiness routes", () => {
     expect(queryRaw).toHaveBeenCalledTimes(2);
   });
 
+  test("returns not ready when job foundation RLS is missing or not forced", async () => {
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      return FORCED_RLS_ROWS.map((row) =>
+        row.tableName === "JobEvent" ? { ...row, forced: false } : row,
+      );
+    });
+    const app = buildHealthServer(queryRaw);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("JobEvent");
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
+
   test("production readiness verifies the connected least-privileged runtime role", async () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       if (queryRaw.mock.calls.length === 2) {
-        return [
-          { tableName: "AiIndexJob", enabled: true, forced: true },
-          { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
-          { tableName: "AiRetrievalChunk", enabled: true, forced: true },
-          { tableName: "AiRetrievalDocument", enabled: true, forced: true },
-          { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
-          { tableName: "ActivityTask", enabled: true, forced: true },
-          { tableName: "ActivityTaskEvent", enabled: true, forced: true },
-        ];
+        return FORCED_RLS_ROWS;
       }
       return [{
         currentUser: "quotefly_runtime",
@@ -189,15 +210,7 @@ describe("health and readiness routes", () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
       if (queryRaw.mock.calls.length === 2) {
-        return [
-          { tableName: "AiIndexJob", enabled: true, forced: true },
-          { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
-          { tableName: "AiRetrievalChunk", enabled: true, forced: true },
-          { tableName: "AiRetrievalDocument", enabled: true, forced: true },
-          { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
-          { tableName: "ActivityTask", enabled: true, forced: true },
-          { tableName: "ActivityTaskEvent", enabled: true, forced: true },
-        ];
+        return FORCED_RLS_ROWS;
       }
       return [{
         currentUser: "quotefly_runtime",

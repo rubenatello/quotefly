@@ -61,6 +61,13 @@ import {
   applyQuoteSheetLineMutations,
   QuoteSheetLineNotFoundError,
 } from "../services/quote-sheet";
+import {
+  assertNoRetainedJobForQuote,
+  countActiveJobsForQuote,
+  ensureJobForAcceptedQuote,
+  JobServiceError,
+  type JobPublic,
+} from "../services/jobs";
 import { buildQuickBooksInvoiceCsv } from "../services/quickbooks-csv";
 import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "../services/work-preset-catalog";
 import {
@@ -460,6 +467,27 @@ async function getActiveQuoteForTenant(
       ...(assignedTenantUserId ? { assignedTenantUserId } : {}),
     },
   });
+}
+
+async function lockActiveQuoteForMutation(
+  tx: Prisma.TransactionClient,
+  input: { quoteId: string; tenantId: string; assignedTenantUserId?: string },
+) {
+  const assignmentScope = input.assignedTenantUserId
+    ? Prisma.sql`AND quote."assignedTenantUserId" = ${input.assignedTenantUserId}`
+    : Prisma.empty;
+  const [locked] = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT quote.id
+    FROM "Quote" AS quote
+    WHERE quote.id = ${input.quoteId}
+      AND quote."tenantId" = ${input.tenantId}
+      AND quote."archivedAtUtc" IS NULL
+      AND quote."deletedAtUtc" IS NULL
+      ${assignmentScope}
+    FOR UPDATE OF quote
+  `);
+  if (!locked) return null;
+  return getActiveQuoteForTenant(tx, input.quoteId, input.tenantId, input.assignedTenantUserId);
 }
 
 async function recalculateQuoteFromLineItems(
@@ -910,8 +938,15 @@ async function restoreQuoteRevision(
     actor?: ActivityActor;
   },
 ) {
-  const quote = await getActiveQuoteForTenant(tx, params.quoteId, params.tenantId);
+  const quote = await lockActiveQuoteForMutation(tx, {
+    quoteId: params.quoteId,
+    tenantId: params.tenantId,
+  });
   if (!quote) return { status: "quote_missing" as const };
+  await assertNoRetainedJobForQuote(tx, {
+    tenantId: params.tenantId,
+    quoteId: quote.id,
+  });
 
   const revision = await tx.quoteRevision.findFirst({
     where: {
@@ -1060,6 +1095,64 @@ async function restoreQuoteRevision(
 function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[] {
   const fields = Object.keys(payload);
   return fields.length ? fields : ["manual_update"];
+}
+
+type AcceptedJobSummary = {
+  id: string;
+  jobNumber: number;
+};
+
+function serializeAcceptedJobSummary(job: JobPublic | null | undefined): AcceptedJobSummary | null {
+  if (!job) return null;
+  return {
+    id: job.id,
+    jobNumber: job.jobNumber,
+  };
+}
+
+function decimalInputChanged(current: Prisma.Decimal | number | string, next: number | undefined): boolean {
+  return next !== undefined && Number(current) !== next;
+}
+
+async function assertAcceptedQuoteJobMutationAllowed(
+  tx: Prisma.TransactionClient,
+  params: {
+    tenantId: string;
+    quoteId: string;
+    existingQuote: {
+      customerId: string;
+      serviceType: z.infer<typeof ServiceTypeSchema>;
+      status: z.infer<typeof QuoteStatusSchema>;
+      jobStatus: z.infer<typeof QuoteJobStatusSchema>;
+      title: string;
+      scopeText: string;
+      internalCostSubtotal: Prisma.Decimal | number | string;
+      customerPriceSubtotal: Prisma.Decimal | number | string;
+      taxAmount: Prisma.Decimal | number | string;
+    };
+    payload: Partial<z.infer<typeof UpdateQuoteSchema>>;
+    lineItemsChanged?: boolean;
+  },
+) {
+  const payload = params.payload;
+  const wouldDivergeFromJob =
+    params.lineItemsChanged === true ||
+    (payload.customerId !== undefined && payload.customerId !== params.existingQuote.customerId) ||
+    (payload.serviceType !== undefined && payload.serviceType !== params.existingQuote.serviceType) ||
+    (payload.title !== undefined && payload.title !== params.existingQuote.title) ||
+    (payload.scopeText !== undefined && payload.scopeText !== params.existingQuote.scopeText) ||
+    decimalInputChanged(params.existingQuote.internalCostSubtotal, payload.internalCostSubtotal) ||
+    decimalInputChanged(params.existingQuote.customerPriceSubtotal, payload.customerPriceSubtotal) ||
+    decimalInputChanged(params.existingQuote.taxAmount, payload.taxAmount) ||
+    (payload.status !== undefined && payload.status !== params.existingQuote.status && payload.status !== "ACCEPTED") ||
+    (payload.jobStatus !== undefined && payload.jobStatus !== params.existingQuote.jobStatus);
+
+  if (!wouldDivergeFromJob) return;
+
+  await assertNoRetainedJobForQuote(tx, {
+    tenantId: params.tenantId,
+    quoteId: params.quoteId,
+  });
 }
 
 function resolveLifecycleUpdate(
@@ -4812,14 +4905,22 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ error: "Quote not found for tenant." });
       }
 
-      const result = await app.prisma.$transaction((tx) =>
-        restoreQuoteRevision(tx, {
-          tenantId: claims.tenantId,
-          quoteId,
-          revisionId,
-          actor,
-        }),
-      );
+      let result: Awaited<ReturnType<typeof restoreQuoteRevision>>;
+      try {
+        result = await app.prisma.$transaction((tx) =>
+          restoreQuoteRevision(tx, {
+            tenantId: claims.tenantId,
+            quoteId,
+            revisionId,
+            actor,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
+        throw error;
+      }
 
       if (result.status === "quote_missing") {
         return reply.code(404).send({ error: "Quote not found for tenant." });
@@ -5076,13 +5177,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const payload = SaveQuoteSheetSchema.parse(request.body);
 
     try {
-      const quote = await app.prisma.$transaction(async (tx) => {
-        const existingQuote = await getActiveQuoteForTenant(
-          tx,
+      const result = await app.prisma.$transaction(async (tx) => {
+        const existingQuote = await lockActiveQuoteForMutation(tx, {
           quoteId,
-          claims.tenantId,
-          assignedRecordScope(access).assignedTenantUserId,
-        );
+          tenantId: claims.tenantId,
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+        });
         if (!existingQuote) return null;
 
         if (
@@ -5092,6 +5192,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         ) {
           throw new QuoteDocumentLocaleLockedError();
         }
+
+        await assertAcceptedQuoteJobMutationAllowed(tx, {
+          tenantId: claims.tenantId,
+          quoteId: existingQuote.id,
+          existingQuote,
+          payload: payload.quote,
+          lineItemsChanged: payload.lineItems.length > 0 || payload.newLineItems.length > 0,
+        });
 
         const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload.quote);
         const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.quote.status);
@@ -5196,7 +5304,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quoteIds: [recalculatedQuote.id],
         });
 
-        return tx.quote.findFirst({
+        let acceptedJob: JobPublic | null = null;
+        if (recalculatedQuote.status === "ACCEPTED") {
+          acceptedJob = await ensureJobForAcceptedQuote(tx, access, {
+            quoteId: recalculatedQuote.id,
+            actorTenantUserId: access.tenantUserId,
+            requestId: request.id,
+          });
+        }
+
+        const quote = await tx.quote.findFirst({
           where: {
             id: recalculatedQuote.id,
             ...tenantActiveQuoteScope(claims.tenantId),
@@ -5209,13 +5326,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             },
           },
         });
+        return {
+          quote,
+          job: serializeAcceptedJobSummary(acceptedJob),
+        };
       });
 
-      if (!quote) {
+      if (!result?.quote) {
         return reply.code(404).send({ error: "Quote not found for tenant." });
       }
 
-      return reply.send({ quote });
+      return reply.send({ quote: result.quote, job: result.job });
     } catch (error) {
       if (error instanceof QuoteSheetLineNotFoundError) {
         return reply.code(404).send({ error: error.message });
@@ -5225,6 +5346,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           code: "QUOTE_DOCUMENT_LOCALE_LOCKED",
           error: error.message,
         });
+      }
+      if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
       }
       throw error;
     }
@@ -5287,107 +5411,161 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "Choose an active member from this workspace." });
     }
 
-    const nextCustomerPriceSubtotal =
-      payload.customerPriceSubtotal ?? Number(existingQuote.customerPriceSubtotal);
-    const nextTaxAmount = payload.taxAmount ?? Number(existingQuote.taxAmount);
+    let result: { quote: typeof existingQuote; job: AcceptedJobSummary | null } | null;
+    let inactiveAssignee = false;
+    try {
+      result = await app.prisma.$transaction(async (tx) => {
+        if (
+          assignee?.assignedTenantUserId
+          && !await lockActiveTenantAssignee(tx, {
+            tenantId: claims.tenantId,
+            tenantUserId: assignee.assignedTenantUserId,
+          })
+        ) {
+          inactiveAssignee = true;
+          return null;
+        }
 
-    const shouldRecalculateTotal =
-      payload.customerPriceSubtotal !== undefined || payload.taxAmount !== undefined;
-    const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload);
-
-    const revisionChangedFields = [
-      ...quoteChangedFields(payload),
-      ...(shouldRecalculateTotal ? ["totalAmount"] : []),
-      ...lifecycleUpdate.changedFields,
-      ...(payload.status ? ["sentAt"] : []),
-    ];
-    const revisionEventType: QuoteRevisionEventType =
-      payload.status !== undefined || payload.jobStatus !== undefined || payload.afterSaleFollowUpStatus !== undefined
-        ? "STATUS_CHANGED"
-        : "UPDATED";
-    const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
-
-    const quote = await app.prisma.$transaction(async (tx) => {
-      if (
-        assignee?.assignedTenantUserId
-        && !await lockActiveTenantAssignee(tx, {
+        const lockedQuote = await lockActiveQuoteForMutation(tx, {
+          quoteId: existingQuote.id,
           tenantId: claims.tenantId,
-          tenantUserId: assignee.assignedTenantUserId,
-        })
-      ) {
-        return null;
-      }
-      const updateData: Prisma.QuoteUncheckedUpdateInput = {
-        ...(payload.customerId ? { customerId: payload.customerId } : {}),
-        serviceType: payload.serviceType,
-        status: payload.status,
-        title: payload.title,
-        scopeText: payload.scopeText,
-        documentLocale: payload.documentLocale,
-        internalCostSubtotal: hasCapability(access, "viewInternalCosts")
-          ? payload.internalCostSubtotal
-          : undefined,
-        customerPriceSubtotal: payload.customerPriceSubtotal,
-        taxAmount: payload.taxAmount,
-        ...(shouldRecalculateTotal
-          ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
-          : {}),
-        ...(payload.status
-          ? {
-              sentAt:
-                payload.status === "SENT_TO_CUSTOMER"
-                  ? existingQuote.sentAt ?? new Date()
-                  : payload.status === "DRAFT" || payload.status === "READY_FOR_REVIEW"
-                    ? null
-                    : existingQuote.sentAt,
-            }
-          : {}),
-        ...lifecycleUpdate.data,
-        ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
-      };
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+        });
+        if (!lockedQuote) return null;
 
-      const updatedQuote = await tx.quote.update({
-        where: { id: existingQuote.id },
-        data: updateData,
+        if (
+          payload.documentLocale !== undefined &&
+          payload.documentLocale !== lockedQuote.documentLocale &&
+          !canEditQuoteDocumentLocale(lockedQuote.status)
+        ) {
+          throw new QuoteDocumentLocaleLockedError();
+        }
+
+        await assertAcceptedQuoteJobMutationAllowed(tx, {
+          tenantId: claims.tenantId,
+          quoteId: lockedQuote.id,
+          existingQuote: lockedQuote,
+          payload,
+        });
+
+        const nextCustomerPriceSubtotal =
+          payload.customerPriceSubtotal ?? Number(lockedQuote.customerPriceSubtotal);
+        const nextTaxAmount = payload.taxAmount ?? Number(lockedQuote.taxAmount);
+
+        const shouldRecalculateTotal =
+          payload.customerPriceSubtotal !== undefined || payload.taxAmount !== undefined;
+        const lifecycleUpdate = resolveLifecycleUpdate(lockedQuote, payload);
+
+        const revisionChangedFields = [
+          ...quoteChangedFields(payload),
+          ...(shouldRecalculateTotal ? ["totalAmount"] : []),
+          ...lifecycleUpdate.changedFields,
+          ...(payload.status ? ["sentAt"] : []),
+        ];
+        const revisionEventType: QuoteRevisionEventType =
+          payload.status !== undefined || payload.jobStatus !== undefined || payload.afterSaleFollowUpStatus !== undefined
+            ? "STATUS_CHANGED"
+            : "UPDATED";
+        const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
+
+        const updateData: Prisma.QuoteUncheckedUpdateInput = {
+          ...(payload.customerId ? { customerId: payload.customerId } : {}),
+          serviceType: payload.serviceType,
+          status: payload.status,
+          title: payload.title,
+          scopeText: payload.scopeText,
+          documentLocale: payload.documentLocale,
+          internalCostSubtotal: hasCapability(access, "viewInternalCosts")
+            ? payload.internalCostSubtotal
+            : undefined,
+          customerPriceSubtotal: payload.customerPriceSubtotal,
+          taxAmount: payload.taxAmount,
+          ...(shouldRecalculateTotal
+            ? { totalAmount: calculateQuoteTotal(nextCustomerPriceSubtotal, nextTaxAmount) }
+            : {}),
+          ...(payload.status
+            ? {
+                sentAt:
+                  payload.status === "SENT_TO_CUSTOMER"
+                    ? lockedQuote.sentAt ?? new Date()
+                    : payload.status === "DRAFT" || payload.status === "READY_FOR_REVIEW"
+                      ? null
+                      : lockedQuote.sentAt,
+              }
+            : {}),
+          ...lifecycleUpdate.data,
+          ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
+        };
+
+        const updatedQuote = await tx.quote.update({
+          where: { id: lockedQuote.id },
+          data: updateData,
+        });
+
+        await createQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId: updatedQuote.id,
+          eventType: revisionEventType,
+          actor,
+          changedFields: Array.from(new Set(revisionChangedFields)),
+        });
+
+        if (followUpStatusUpdate) {
+          await tx.customer.updateMany({
+            where: {
+              id: updatedQuote.customerId,
+              ...tenantActiveCustomerScope(claims.tenantId),
+            },
+            data: {
+              followUpStatus: followUpStatusUpdate,
+              followUpUpdatedAtUtc: new Date(),
+            },
+          });
+        }
+
+        await markQuoteAiRetrievalSourcesDeleted(tx, {
+          tenantId: claims.tenantId,
+          quoteIds: [updatedQuote.id],
+        });
+
+        let acceptedJob: JobPublic | null = null;
+        if (updatedQuote.status === "ACCEPTED") {
+          acceptedJob = await ensureJobForAcceptedQuote(tx, access, {
+            quoteId: updatedQuote.id,
+            actorTenantUserId: access.tenantUserId,
+            requestId: request.id,
+          });
+        }
+
+        return {
+          quote: updatedQuote,
+          job: serializeAcceptedJobSummary(acceptedJob),
+        };
       });
-
-      await createQuoteRevision(tx, {
-        tenantId: claims.tenantId,
-        quoteId: updatedQuote.id,
-        eventType: revisionEventType,
-        actor,
-        changedFields: Array.from(new Set(revisionChangedFields)),
-      });
-
-      if (followUpStatusUpdate) {
-        await tx.customer.updateMany({
-          where: {
-            id: updatedQuote.customerId,
-            ...tenantActiveCustomerScope(claims.tenantId),
-          },
-          data: {
-            followUpStatus: followUpStatusUpdate,
-            followUpUpdatedAtUtc: new Date(),
-          },
+    } catch (error) {
+      if (error instanceof QuoteDocumentLocaleLockedError) {
+        return reply.code(409).send({
+          code: "QUOTE_DOCUMENT_LOCALE_LOCKED",
+          error: error.message,
         });
       }
+      if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      throw error;
+    }
 
-      await markQuoteAiRetrievalSourcesDeleted(tx, {
-        tenantId: claims.tenantId,
-        quoteIds: [updatedQuote.id],
-      });
-
-      return updatedQuote;
-    });
-
-    if (!quote) {
+    if (!result) {
+      if (!inactiveAssignee) {
+        return reply.code(404).send({ error: "Quote not found for tenant." });
+      }
       return reply.code(409).send({
         code: "ASSIGNEE_INACTIVE",
         error: "That team member is no longer active. Choose another assignee.",
       });
     }
 
-    return { quote };
+    return result;
   });
 
   app.delete("/quotes/:quoteId", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -5421,6 +5599,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
       if (activeTaskCount > 0) {
         return { kind: "active_tasks" as const, activeTaskCount };
+      }
+
+      const activeJobCount = await countActiveJobsForQuote(tx, {
+        tenantId: claims.tenantId,
+        quoteId: quote.id,
+      });
+      if (activeJobCount > 0) {
+        return { kind: "active_jobs" as const, activeJobCount };
       }
 
       await createCustomerActivityEvent(tx, {
@@ -5484,6 +5670,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         activeTaskCount: deleted.activeTaskCount,
       });
     }
+    if (deleted.kind === "active_jobs") {
+      return reply.code(409).send({
+        code: "ACTIVE_JOBS",
+        error: `Complete or cancel ${deleted.activeJobCount} active job(s) before deleting this quote.`,
+        activeJobCount: deleted.activeJobCount,
+      });
+    }
 
     return reply.code(204).send();
   });
@@ -5519,6 +5712,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
       if (activeTaskCount > 0) {
         return { kind: "active_tasks" as const, activeTaskCount };
+      }
+
+      const activeJobCount = await countActiveJobsForQuote(tx, {
+        tenantId: claims.tenantId,
+        quoteId: quote.id,
+      });
+      if (activeJobCount > 0) {
+        return { kind: "active_jobs" as const, activeJobCount };
       }
 
       await createCustomerActivityEvent(tx, {
@@ -5566,6 +5767,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         activeTaskCount: archived.activeTaskCount,
       });
     }
+    if (archived.kind === "active_jobs") {
+      return reply.code(409).send({
+        code: "ACTIVE_JOBS",
+        error: `Complete or cancel ${archived.activeJobCount} active job(s) before archiving this quote.`,
+        activeJobCount: archived.activeJobCount,
+      });
+    }
 
     return reply.code(204).send();
   });
@@ -5581,9 +5789,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const sentAt = decision === "send" ? new Date() : null;
     const decisionStatus = decision === "send" ? "APPROVED" : "REVISION_REQUESTED";
 
-    const quote = await app.prisma.$transaction(async (tx) => {
-      const existingQuote = await getActiveQuoteForTenant(tx, quoteId, claims.tenantId, assignedRecordScope(access).assignedTenantUserId);
+    let quote: Awaited<ReturnType<typeof getActiveQuoteForTenant>>;
+    try {
+      quote = await app.prisma.$transaction(async (tx) => {
+      const existingQuote = await lockActiveQuoteForMutation(tx, {
+        quoteId,
+        tenantId: claims.tenantId,
+        assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+      });
       if (!existingQuote) return null;
+      await assertNoRetainedJobForQuote(tx, {
+        tenantId: claims.tenantId,
+        quoteId: existingQuote.id,
+      });
 
       const updatedQuote = await tx.quote.update({
         where: { id: existingQuote.id },
@@ -5626,7 +5844,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return updatedQuote;
-    });
+      });
+    } catch (error) {
+      if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      throw error;
+    }
 
     if (!quote) {
       return reply.code(404).send({ error: "Quote not found for tenant." });
@@ -5744,12 +5968,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               : null;
           }
 
+          const lockedQuote = await lockActiveQuoteForMutation(tx, {
+            quoteId,
+            tenantId: claims.tenantId,
+            assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+          });
+          if (!lockedQuote) return null;
+          await assertNoRetainedJobForQuote(tx, {
+            tenantId: claims.tenantId,
+            quoteId: lockedQuote.id,
+          });
+
           const existingQuote = await tx.quote.findFirst({
-            where: {
-              id: quoteId,
-              ...tenantActiveQuoteScope(claims.tenantId),
-              ...assignedRecordScope(access),
-            },
+            where: { id: lockedQuote.id },
             include: {
               customer: {
                 select: {
@@ -5841,6 +6072,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
         return reply.send(result);
       } catch (error) {
+        if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
           const existingEvent = await findConfirmedSend();
           if (existingEvent?.quoteId === quoteId) {
@@ -5943,14 +6177,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = CreateLineItemSchema.parse(request.body);
 
-    const result = await app.prisma.$transaction(async (tx) => {
-      const quote = await getActiveQuoteForTenant(
-        tx,
+    let result;
+    try {
+      result = await app.prisma.$transaction(async (tx) => {
+      const quote = await lockActiveQuoteForMutation(tx, {
         quoteId,
-        claims.tenantId,
-        assignedRecordScope(access).assignedTenantUserId,
-      );
+        tenantId: claims.tenantId,
+        assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+      });
       if (!quote) return null;
+      await assertNoRetainedJobForQuote(tx, {
+        tenantId: claims.tenantId,
+        quoteId: quote.id,
+      });
 
       const lastLineItem = await tx.quoteLineItem.findFirst({
         where: {
@@ -6004,7 +6243,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { lineItem, quote: updatedQuote };
-    });
+      });
+    } catch (error) {
+      if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      throw error;
+    }
 
     if (!result) {
       return reply.code(404).send({ error: "Quote not found for tenant." });
@@ -6023,14 +6268,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const payload = UpdateLineItemSchema.parse(request.body);
 
-      const result = await app.prisma.$transaction(async (tx) => {
-        const quote = await getActiveQuoteForTenant(
-          tx,
+      let result;
+      try {
+        result = await app.prisma.$transaction(async (tx) => {
+        const quote = await lockActiveQuoteForMutation(tx, {
           quoteId,
-          claims.tenantId,
-          assignedRecordScope(access).assignedTenantUserId,
-        );
+          tenantId: claims.tenantId,
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+        });
         if (!quote) return null;
+        await assertNoRetainedJobForQuote(tx, {
+          tenantId: claims.tenantId,
+          quoteId: quote.id,
+        });
 
         const lineItem = await tx.quoteLineItem.findFirst({
           where: {
@@ -6081,7 +6331,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
 
         return { lineItem: updatedLineItem, quote: updatedQuote };
-      });
+        });
+      } catch (error) {
+        if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
+        throw error;
+      }
 
       if (!result) {
         return reply.code(404).send({ error: "Quote or line item not found for tenant." });
@@ -6101,14 +6357,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       const { quoteId, lineItemId } = QuoteLineItemParamsSchema.parse(request.params);
       const now = new Date();
 
-      const deleted = await app.prisma.$transaction(async (tx) => {
-        const quote = await getActiveQuoteForTenant(
-          tx,
+      let deleted;
+      try {
+        deleted = await app.prisma.$transaction(async (tx) => {
+        const quote = await lockActiveQuoteForMutation(tx, {
           quoteId,
-          claims.tenantId,
-          assignedRecordScope(access).assignedTenantUserId,
-        );
+          tenantId: claims.tenantId,
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+        });
         if (!quote) return false;
+        await assertNoRetainedJobForQuote(tx, {
+          tenantId: claims.tenantId,
+          quoteId: quote.id,
+        });
 
         const lineItem = await tx.quoteLineItem.findFirst({
           where: {
@@ -6149,7 +6410,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
 
         return true;
-      });
+        });
+      } catch (error) {
+        if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
+        throw error;
+      }
 
       if (!deleted) {
         return reply.code(404).send({ error: "Quote or line item not found for tenant." });

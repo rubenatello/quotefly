@@ -438,12 +438,6 @@ textarea {
   }
 }
 
-@keyframes qf-momentum-scroll {
-  to {
-    transform: translateX(-50%);
-  }
-}
-
 .qf-marketing-grid {
   background-image:
     linear-gradient(rgba(47, 111, 214, 0.08) 1px, transparent 1px),
@@ -461,25 +455,6 @@ textarea {
 .qf-marketing-orbit--orange {
   animation-delay: -3.5s;
   animation-duration: 10s;
-}
-
-.qf-momentum-track {
-  display: flex;
-  width: max-content;
-  animation: qf-momentum-scroll 28s linear infinite;
-  will-change: transform;
-}
-
-.qf-momentum-track--paused {
-  animation-play-state: paused;
-}
-
-.qf-momentum-list {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 2rem;
-  padding-inline: 1rem;
 }
 
 .qf-hero-product {
@@ -530,7 +505,6 @@ textarea {
   .qf-demo-pane-enter,
   .qf-marketing-grid,
   .qf-marketing-orbit,
-  .qf-momentum-track,
   .qf-reveal-pending,
   .qf-reveal-pending.qf-reveal-visible {
     opacity: 1 !important;

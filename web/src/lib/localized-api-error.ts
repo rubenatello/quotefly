@@ -9,6 +9,7 @@ type ApiErrorTranslationOptions = {
 
 const DEFAULT_CODE_KEYS: Readonly<Record<string, string>> = {
   ACTIVE_ACTIVITY_TASKS: "apiErrors.activeTasks",
+  ACTIVE_JOBS: "apiErrors.activeJobs",
   ACTIVITY_ALREADY_ACTIVE: "apiErrors.activityAlreadyOpen",
   ACTIVITY_ALREADY_COMPLETED: "apiErrors.activityAlreadyCompleted",
   ACTIVITY_ALREADY_OPEN: "apiErrors.activityAlreadyOpen",
@@ -28,6 +29,22 @@ const DEFAULT_CODE_KEYS: Readonly<Record<string, string>> = {
   BILLING_REQUIRED: "apiErrors.billingRequired",
   BRANDING_ADMIN_REQUIRED: "apiErrors.permissionDenied",
   DUPLICATE_CANDIDATE: "apiErrors.customerDuplicate",
+  JOB_ASSIGNEE_NOT_FOUND: "apiErrors.assigneeInactive",
+  JOB_ASSIGNEE_RECORD_SCOPE_MISMATCH: "apiErrors.jobAssigneeScope",
+  JOB_APPOINTMENT_ASSIGNEE_MISMATCH: "apiErrors.jobAppointmentAssigneeMismatch",
+  JOB_APPOINTMENT_INVALID_TIME: "apiErrors.jobAppointmentInvalidTime",
+  JOB_APPOINTMENT_INVALID_TRANSITION: "apiErrors.jobAppointmentInvalidTransition",
+  JOB_APPOINTMENT_NOT_FOUND: "apiErrors.jobAppointmentNotFound",
+  JOB_APPOINTMENT_OVERLAP: "apiErrors.jobAppointmentOverlap",
+  JOB_APPOINTMENT_STALE_VERSION: "apiErrors.jobAppointmentStale",
+  JOB_APPOINTMENT_TOO_LONG: "apiErrors.jobAppointmentTooLong",
+  JOB_FORBIDDEN: "apiErrors.permissionDenied",
+  JOB_NOTE_NOT_FOUND: "apiErrors.jobNoteNotFound",
+  JOB_NOTE_STALE_VERSION: "apiErrors.conflict",
+  JOB_NOT_BOOKABLE: "apiErrors.jobNotBookable",
+  JOB_NOT_FOUND: "apiErrors.jobNotFound",
+  JOB_SEQUENCE_UNAVAILABLE: "apiErrors.serviceUnavailable",
+  JOB_STALE_VERSION: "apiErrors.jobStale",
   MEMBER_HAS_ACTIVE_ASSIGNMENTS: "apiErrors.memberHasAssignments",
   MERGE_CONTACT_CONFLICT: "apiErrors.customerContactConflict",
   PHONE_CONFLICT: "apiErrors.customerPhoneConflict",
@@ -35,9 +52,11 @@ const DEFAULT_CODE_KEYS: Readonly<Record<string, string>> = {
   PLAN_LIMIT_EXCEEDED: "apiErrors.planLimit",
   PRODUCT_CATALOG_LIMIT: "apiErrors.productCatalogLimit",
   PRODUCT_NAME_CONFLICT: "apiErrors.productNameConflict",
+  QUOTE_JOB_LOCKED: "apiErrors.quoteJobLocked",
   QUOTE_DOCUMENT_LOCALE_LOCKED: "apiErrors.documentLocaleLocked",
   REVIEW_REQUIRED: "apiErrors.reviewRequired",
   ROLE_CHANGE_ACTIVE_TASK_CONFLICT: "apiErrors.memberHasAssignments",
+  ROLE_CHANGE_ACTIVE_WORK_CONFLICT: "apiErrors.memberHasAssignments",
   STALE_DUPLICATE_TARGET: "apiErrors.customerDuplicateChanged",
   STANDARD_PRODUCT_ARCHIVE_FORBIDDEN: "apiErrors.standardProductArchive",
   STARTER_CATALOG_INVALID_SELECTION: "apiErrors.starterCatalogInvalid",
@@ -50,6 +69,8 @@ function errorTranslationValues(error: ApiError): Record<string, unknown> {
   const count =
     typeof details.activeTaskCount === "number"
       ? details.activeTaskCount
+      : typeof details.activeJobCount === "number"
+        ? details.activeJobCount
       : typeof details.count === "number"
         ? details.count
         : undefined;
@@ -76,7 +97,7 @@ export function localizedApiError(
     : undefined;
   if (codeKey) {
     const values = errorTranslationValues(error);
-    if (codeKey !== "apiErrors.activeTasks" || typeof values.count === "number") {
+    if (!["apiErrors.activeTasks", "apiErrors.activeJobs"].includes(codeKey) || typeof values.count === "number") {
       return t(codeKey, values);
     }
   }

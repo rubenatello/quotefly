@@ -2,6 +2,7 @@ export type WorkspacePage =
   | "home"
   | "customers"
   | "quotes"
+  | "jobs"
   | "products"
   | "build"
   | "quote-desk"
@@ -18,6 +19,7 @@ export type WorkspaceNavigationId =
   | "home"
   | "customers"
   | "quotes"
+  | "jobs"
   | "products"
   | "follow-up"
   | "analytics"
@@ -30,6 +32,7 @@ export type WorkspaceIconKey =
   | "home"
   | "customers"
   | "quotes"
+  | "jobs"
   | "products"
   | "follow-up"
   | "analytics"
@@ -50,6 +53,7 @@ export const WORKSPACE_OPERATIONS_LINKS: readonly WorkspaceNavigationItem[] = [
   { id: "home", label: "Home", labelKey: "navigation.home", path: "/app", icon: "home" },
   { id: "customers", label: "Customers", labelKey: "navigation.customers", path: "/app/customers", icon: "customers" },
   { id: "quotes", label: "Quotes", labelKey: "navigation.quotes", path: "/app/quotes", icon: "quotes" },
+  { id: "jobs", label: "Jobs", labelKey: "navigation.jobs", path: "/app/jobs", icon: "jobs" },
   { id: "products", label: "Products", labelKey: "navigation.products", path: "/app/products", icon: "products" },
   { id: "follow-up", label: "Activity", labelKey: "navigation.activity", path: "/app/follow-up", icon: "follow-up" },
   { id: "analytics", label: "Analytics", labelKey: "navigation.analytics", path: "/app/analytics", icon: "analytics" },
@@ -91,6 +95,13 @@ export const WORKSPACE_PAGE_META: Record<
     hint: "Review quote status, value, and the work that needs attention.",
     translationKey: "pages.quotes",
     activeNavigation: "quotes",
+    headingPlacement: "shell",
+  },
+  jobs: {
+    label: "Jobs",
+    hint: "Manage accepted quote work, assignments, and job status.",
+    translationKey: "pages.jobs",
+    activeNavigation: "jobs",
     headingPlacement: "shell",
   },
   products: {
@@ -177,6 +188,7 @@ export function workspacePageFromPath(pathname: string): WorkspacePage {
   if (pathname.startsWith("/app/analytics")) return "analytics";
   if (pathname.startsWith("/app/history")) return "analytics";
   if (pathname.startsWith("/app/customers")) return "customers";
+  if (pathname.startsWith("/app/jobs")) return "jobs";
   if (pathname === "/app/quotes" || pathname === "/app/quotes/") return "quotes";
   if (pathname.startsWith("/app/quotes/")) return "quote-desk";
   if (pathname.startsWith("/app/products")) return "products";

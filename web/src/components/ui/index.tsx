@@ -445,7 +445,7 @@ export function Alert({ tone, children, onDismiss }: AlertProps) {
 
   return (
     <div role={tone === "error" ? "alert" : "status"} className={`flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm ${ALERT_TONES[tone]}`}>
-      <span>{children}</span>
+      <div className="min-w-0 flex-1">{children}</div>
       {onDismiss && (
         <button
           type="button"

@@ -12,6 +12,7 @@ export function QuoteSheetEditor({
   title,
   onTitleChange,
   titlePlaceholder,
+  titleTools,
   businessName,
   businessHint,
   customerName,
@@ -23,6 +24,7 @@ export function QuoteSheetEditor({
   overview,
   onOverviewChange,
   overviewPlaceholder,
+  overviewTools,
   actions,
   logoUrl,
   logoPosition = "left",
@@ -38,6 +40,7 @@ export function QuoteSheetEditor({
   title: string;
   onTitleChange: (value: string) => void;
   titlePlaceholder?: string;
+  titleTools?: ReactNode;
   businessName: string;
   businessHint?: string;
   customerName: string;
@@ -49,6 +52,7 @@ export function QuoteSheetEditor({
   overview: string;
   onOverviewChange: (value: string) => void;
   overviewPlaceholder?: string;
+  overviewTools?: ReactNode;
   actions?: ReactNode;
   logoUrl?: string | null;
   logoPosition?: BrandingLogoPosition;
@@ -101,12 +105,13 @@ export function QuoteSheetEditor({
               <div className="flex items-start gap-4">
                 {logoPosition === "left" ? logo : null}
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accentColor }} />
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                       <span className="sm:hidden">{t("quoteComponents.sheet.details")}</span>
                       <span className="hidden sm:inline">{t("quoteComponents.sheet.editable")}</span>
                     </p>
+                    {titleTools}
                   </div>
                   <input
                     aria-label={t("quoteComponents.sheet.titleLabel")}
@@ -179,9 +184,12 @@ export function QuoteSheetEditor({
             </div>
 
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>
-                {copy.overview}
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: sectionLabelColor }}>
+                  {copy.overview}
+                </label>
+                {overviewTools}
+              </div>
               <textarea
                 aria-label={t("quoteComponents.sheet.overviewLabel")}
                 rows={3}

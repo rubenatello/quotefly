@@ -18,6 +18,11 @@ export const FORCED_TENANT_RLS_TABLES = [
   "QuoteDraftRecovery",
   "ActivityTask",
   "ActivityTaskEvent",
+  "TenantSequence",
+  "Job",
+  "JobAppointment",
+  "JobNote",
+  "JobEvent",
 ] as const;
 
 // Backward-compatible export for existing AI worker/readiness imports. The
