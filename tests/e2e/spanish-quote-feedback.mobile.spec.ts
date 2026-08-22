@@ -84,12 +84,13 @@ test("Spanish quote actions show localized, safe save, PDF, line, and send feedb
   await firstLineToggle.click();
   await expect(firstLineToggle).toHaveAttribute("aria-expanded", "true");
   const removeLineButton = firstLine.getByRole("button", { name: "Quitar", exact: true });
-  await removeLineButton.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
   await expect(removeLineButton).toBeVisible();
   const removeLineBox = await removeLineButton.boundingBox();
   expect(removeLineBox).not.toBeNull();
   expect(removeLineBox?.height ?? 0).toBeGreaterThanOrEqual(44);
-  await removeLineButton.click();
+  await removeLineButton.evaluate((element) => (element as HTMLButtonElement).focus({ preventScroll: true }));
+  await expect(removeLineButton).toBeFocused();
+  await removeLineButton.press("Enter");
   const deleteLineDialog = page.getByRole("dialog", { name: "Eliminar línea" });
   await expect(deleteLineDialog).toContainText("Esto quita la línea de la cotización y vuelve a calcular los totales.");
   await deleteLineDialog.getByRole("button", { name: "Eliminar línea", exact: true }).click();
