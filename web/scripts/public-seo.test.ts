@@ -95,6 +95,14 @@ test("publishes the current Basic price, trial, and introductory offer", () => {
   assert.match(PUBLIC_ROUTE_SEO["/pricing"].description, /first paid month 50% off/i);
 });
 
+test("pricing describes the paid-AI cap without hiding deterministic Kody tools", async () => {
+  const html = await readFile(join(distDir, "pricing", "index.html"), "utf8");
+  const text = decodeHtmlText(html);
+  assert.match(text, /AI drafting and analysis pause until the monthly reset/i);
+  assert.match(text, /schedule, task, product-catalog, navigation, and review actions remain available/i);
+  assert.doesNotMatch(text, /Kody and AI tools pause/i);
+});
+
 test("every public route has unique raw crawlable HTML", async () => {
   const titles = new Set<string>();
   const descriptions = new Set<string>();

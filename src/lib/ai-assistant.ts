@@ -51,6 +51,11 @@ import {
   summarizeAssistantActivityAgenda,
   type AssistantActivityTaskProjection,
 } from "../services/activity-tasks";
+import {
+  listAssistantSchedule,
+  prepareAssistantBooking,
+  prepareAssistantDispatch,
+} from "../services/ai-schedule-tools";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import type { SupportedLocale } from "./supported-locale";
 
@@ -58,9 +63,11 @@ export { AI_ASSISTANT_TOOLS } from "./ai-assistant-contract";
 export type { AiAssistantRequestedTool, AiAssistantTool } from "./ai-assistant-contract";
 
 export type AiAssistantContext = Readonly<{
-  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up";
+  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up" | "jobs";
   customerId?: string;
   quoteId?: string;
+  jobId?: string;
+  appointmentId?: string;
   search?: string;
   serviceType?: ServiceCategory;
   dateFrom?: Date | null;
@@ -75,6 +82,9 @@ export type AiAssistantAction = Readonly<{
     | "OPEN_CUSTOMER_DRAFT"
     | "OPEN_PRODUCT_DRAFT"
     | "OPEN_ACTIVITY_DRAFT"
+    | "OPEN_SCHEDULE"
+    | "OPEN_BOOKING_REVIEW"
+    | "OPEN_DISPATCH_REVIEW"
     | "OPEN_QUOTE_DRAFT"
     | "OPEN_QUOTE_SEND"
     | "OPEN_ANALYTICS"
@@ -143,6 +153,7 @@ const DEFAULT_PRODUCT_LIMIT = 5;
 const MAX_PRODUCT_LIMIT = 8;
 const DEFAULT_ACTIVITY_LIMIT = 5;
 const MAX_ACTIVITY_LIMIT = 8;
+const DEFAULT_SCHEDULE_LIMIT = 8;
 const OPEN_PIPELINE_STATUSES = ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER"] as const;
 const ACTIVE_ACTIVITY_STATUSES: ActivityTaskStatus[] = ["OPEN", "IN_PROGRESS"];
 const ZERO_AI_TELEMETRY: AiUsageTelemetry = Object.freeze({
@@ -190,6 +201,12 @@ const PRIORITIZE_MY_DAY_PATTERN =
   /\b(?:prioriti[sz]e|what\s+should\s+i\s+do\s+first|where\s+should\s+i\s+start|plan\s+my\s+day|organize\s+my\s+day|organise\s+my\s+day|my\s+day|top\s+priorit(?:y|ies)|prioriza|priorizar|que\s+hago\s+primero|por\s+donde\s+empiezo|organiza\s+mi\s+dia|mis\s+prioridades|prioridades\s+de\s+hoy)\b/i;
 const PREPARE_ACTIVITY_INTENT_PATTERN =
   /(?:\b(?:add|create|make|schedule|set\s+up|remind|reminder|agregar|agrega|crear|crea|hacer|programar|programa|recordar|recordatorio)\b.{0,96}\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b)|(?:\b(?:follow\s+up\s+with|call|dar\s+seguimiento\s+a|llamar)\b.{0,96}\b[\p{L}\p{N}][\p{L}\p{N}\s.'-]{1,80})|(?:\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b.{0,96}\b(?:for|with|to|para|con|a)\b)/iu;
+const PREPARE_DISPATCH_INTENT_PATTERN =
+  /(?:\b(?:dispatch|send\s+out|despachar|despacha|enviar\s+al\s+trabajo)\b.{0,96}\b(?:job|crew|technician|appointment|visit|trabajo|equipo|tecnico|cita|visita)\b)|(?:\b(?:job|appointment|visit|trabajo|cita|visita)\b.{0,96}\b(?:dispatch|despachar|despacha)\b)/i;
+const PREPARE_BOOKING_INTENT_PATTERN =
+  /(?:\b(?:book|schedule|reschedule|set\s+up|agendar|agenda|programar|programa|reagendar|reagenda)\b.{0,96}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,96}\b(?:book|schedule|reschedule|agendar|agenda|programar|programa|reagendar|reagenda)\b)/i;
+const LIST_SCHEDULE_INTENT_PATTERN =
+  /\b(?:my\s+schedule|our\s+schedule|team\s+schedule|today(?:'s)?\s+(?:schedule|appointments?|bookings?)|tomorrow(?:'s)?\s+(?:schedule|appointments?|bookings?)|schedule\s+(?:today|tomorrow|this\s+week|for\s+the\s+week)|appointments?\s+(?:today|tomorrow|this\s+week)|what(?:'s|\s+is)\s+(?:on\s+)?(?:my|our|the|today(?:'s)?|tomorrow(?:'s)?)?\s*schedule|mi\s+agenda|nuestro\s+calendario|agenda\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|citas?\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|que\s+(?:tengo|tenemos|hay)\s+(?:en\s+)?(?:mi|nuestra|la)?\s*(?:agenda|calendario))\b/i;
 const ACTIVITY_TODAY_INTENT_PATTERN = /\b(?:today|this\s+morning|this\s+afternoon|tonight|hoy|esta\s+ma(?:n|ñ)ana|esta\s+tarde|esta\s+noche)\b/i;
 const FOLLOW_UP_INTENT_PATTERN = /\bfollow(?:ed|ing)?[-\s]+up\b|\bfollow[-\s]*up\b|\b(?:dar|hacer|necesita|necesitan|requiere|requieren|pendiente(?:s)?\s+de)\s+seguimiento\b|\bseguimiento(?:s)?\b/i;
 const CUSTOMERS_WITHOUT_QUOTES_PATTERN =
@@ -222,7 +239,7 @@ const OUTSIDE_KNOWLEDGE_PATTERN =
 const CONTEXTUAL_ENTITY_QUERY_PATTERN =
   /^(?!.*\b(?:what|why|how|when|where|who|tell|explain|write|give|could|would|should)\b)[\p{L}\p{N}][\p{L}\p{N}\s.'@()+&/-]{0,80}$/iu;
 
-type AssistantTopic = "CRM" | "QUOTING" | "SENDING" | "PRODUCTS" | "INSIGHTS" | "NAVIGATION" | "HELP";
+type AssistantTopic = "CRM" | "QUOTING" | "SENDING" | "PRODUCTS" | "SCHEDULING" | "INSIGHTS" | "NAVIGATION" | "HELP";
 
 function assistantLocale(params: Pick<AiAssistantInput, "preferredLocale">): SupportedLocale {
   return params.preferredLocale === "es-US" ? "es-US" : "en-US";
@@ -262,6 +279,7 @@ function assistantTopic(tool: AiAssistantTool): AssistantTopic {
   ].includes(tool)) return "CRM";
   if (tool === "DRAFT_QUOTE") return "QUOTING";
   if (tool === "PREPARE_QUOTE_SEND") return "SENDING";
+  if (tool === "LIST_SCHEDULE" || tool === "PREPARE_BOOKING" || tool === "PREPARE_DISPATCH") return "SCHEDULING";
   if (tool === "DRAFT_PRODUCT" || tool === "SEARCH_PRODUCTS") return "PRODUCTS";
   if (tool === "NAVIGATE_WORKSPACE") return "NAVIGATION";
   return "INSIGHTS";
@@ -269,6 +287,7 @@ function assistantTopic(tool: AiAssistantTool): AssistantTopic {
 
 function assistantTopicLabel(topic: AssistantTopic, locale: SupportedLocale) {
   const spanish = locale === "es-US";
+  if (topic === "SCHEDULING") return spanish ? "la agenda de trabajos" : "job scheduling";
   if (topic === "CRM") return spanish ? "el seguimiento de clientes" : "customer follow-up";
   if (topic === "QUOTING") return spanish ? "la preparación de una cotización" : "building a quote";
   if (topic === "SENDING") return spanish ? "la preparación de una cotización para enviar" : "preparing a quote to send";
@@ -740,7 +759,7 @@ function activityDueTime(
       warning: null,
     };
   }
-  if (/\b(?:tomorrow|manana|maÃ±ana)\b/.test(normalized)) {
+  if (/\b(?:tomorrow|manana|mañana)\b/.test(normalized)) {
     const targetDate = shiftTenantLocalDate(today, 1);
     if (explicitTime) return exactOrDefault(targetDate);
     return { dueAtUtc: defaultForDate(targetDate), source: "DEFAULT", warning: null };
@@ -772,8 +791,8 @@ function parseActivityDraft(
   const priority = parseActivityPriority(message);
   const customerSearch = activityCustomerSearch(message, contextSearch);
   const fallbackTitle = locale === "es-US"
-    ? type === "SEND_QUOTE" ? "Enviar cotizaciÃ³n"
-      : type === "PREPARE_QUOTE" ? "Preparar cotizaciÃ³n"
+    ? type === "SEND_QUOTE" ? "Enviar cotización"
+      : type === "PREPARE_QUOTE" ? "Preparar cotización"
         : type === "CHECK_IN" ? "Revisar con el cliente"
           : type === "FOLLOW_UP" ? "Dar seguimiento al cliente"
             : "Tarea del espacio"
@@ -882,6 +901,9 @@ export function resolveAssistantTool(
   // customer-specific button and then replaced the suggested prompt.
   if (PRODUCT_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_PRODUCT";
   if (PREPARE_ACTIVITY_INTENT_PATTERN.test(routingMessage)) return "PREPARE_ACTIVITY";
+  if (PREPARE_DISPATCH_INTENT_PATTERN.test(routingMessage)) return "PREPARE_DISPATCH";
+  if (PREPARE_BOOKING_INTENT_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
+  if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
   if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage)) return "PRIORITIZE_MY_DAY";
   if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMER_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_CUSTOMER";
@@ -899,6 +921,9 @@ export function resolveAssistantTool(
     const hasQuoteFlyIntent =
       PIPELINE_SCENARIO_PATTERN.test(lower)
       || PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)
+      || PREPARE_DISPATCH_INTENT_PATTERN.test(lower)
+      || PREPARE_BOOKING_INTENT_PATTERN.test(lower)
+      || LIST_SCHEDULE_INTENT_PATTERN.test(lower)
       || PRIORITIZE_MY_DAY_PATTERN.test(lower)
       || ACTIVITY_TASK_INTENT_PATTERN.test(lower)
       || CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)
@@ -917,6 +942,9 @@ export function resolveAssistantTool(
 
   if (PIPELINE_SCENARIO_PATTERN.test(lower)) return "PIPELINE_SCENARIO";
   if (PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)) return "PREPARE_ACTIVITY";
+  if (PREPARE_DISPATCH_INTENT_PATTERN.test(lower)) return "PREPARE_DISPATCH";
+  if (PREPARE_BOOKING_INTENT_PATTERN.test(lower)) return "PREPARE_BOOKING";
+  if (LIST_SCHEDULE_INTENT_PATTERN.test(lower)) return "LIST_SCHEDULE";
   if (PRIORITIZE_MY_DAY_PATTERN.test(lower)) return "PRIORITIZE_MY_DAY";
   if (ACTIVITY_TASK_INTENT_PATTERN.test(lower)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
@@ -944,6 +972,7 @@ export function resolveAssistantTool(
     if (context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
     if (context?.currentPage === "quotes") return "DRAFT_QUOTE";
     if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
+    if (context?.currentPage === "jobs") return "LIST_SCHEDULE";
   }
 
   return "OUT_OF_SCOPE";
@@ -974,11 +1003,23 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "DRAFT_CUSTOMER",
     "DRAFT_PRODUCT",
     "PREPARE_ACTIVITY",
+    "LIST_SCHEDULE",
+    "PREPARE_BOOKING",
+    "PREPARE_DISPATCH",
     "SEARCH_PRODUCTS",
     "PREPARE_QUOTE_SEND",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ].includes(tool);
+}
+
+export function assistantRequestConsumesAiBudget(
+  message: string,
+  requestedTool?: AiAssistantRequestedTool,
+  context?: AiAssistantContext,
+  conversation?: readonly AiAssistantConversationTurn[],
+) {
+  return assistantToolConsumesAiBudget(resolveAssistantTool(message, requestedTool, context, conversation));
 }
 
 function defaultExcludedFields(financial = false) {
@@ -1065,6 +1106,7 @@ async function createAssistantUsageEvent(
     serviceType?: ServiceCategory | null;
     creditsConsumed?: number;
     riskNote?: string;
+    auditSummary?: string;
     confidenceLevel?: string;
     confidenceLabel?: string;
     insightReasons?: string[];
@@ -1092,7 +1134,7 @@ async function createAssistantUsageEvent(
     sensitiveValues: [params.message],
     retrievalAuditEventId: params.retrievalAuditEventId ?? null,
     trace: {
-      insightSummary: params.answer,
+      insightSummary: params.auditSummary ?? params.answer,
       insightReasons: [
         "assistant tool registry execution",
         `toolClassification=${params.classification}`,
@@ -2299,23 +2341,23 @@ async function runActivityAgenda(
   const counts = activityData.summary;
   const listedTotal = todayScope ? activityData.matchingTotal : activityData.activeTotal;
   const countSummary = locale === "es-US"
-    ? `${counts.overdue} vencida${counts.overdue === 1 ? "" : "s"}, ${counts.today} para hoy y ${counts.upcoming} prÃ³xima${counts.upcoming === 1 ? "" : "s"}`
+    ? `${counts.overdue} vencida${counts.overdue === 1 ? "" : "s"}, ${counts.today} para hoy y ${counts.upcoming} próxima${counts.upcoming === 1 ? "" : "s"}`
     : `${counts.overdue} overdue, ${counts.today} due today, and ${counts.upcoming} upcoming`;
 
   const answer = top
     ? tool === "PRIORITIZE_MY_DAY"
       ? locale === "es-US"
-        ? `EmpezarÃ­a con "${top.title}"${top.customerName ? ` para ${top.customerName}` : ""}. Tu lista tiene ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)}: ${countSummary}. UsÃ© solo tus tareas activas asignadas.`
+        ? `Empezaría con "${top.title}"${top.customerName ? ` para ${top.customerName}` : ""}. Tu lista tiene ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)}: ${countSummary}. Usé solo tus tareas activas asignadas.`
         : `I would start with "${top.title}"${top.customerName ? ` for ${top.customerName}` : ""}. Today's list has ${activityData.matchingTotal} ${activityTaskNoun(activityData.matchingTotal, locale)}: ${countSummary}. I only used your assigned active tasks.`
       : locale === "es-US"
-        ? `EncontrÃ© ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} en tu lista: ${countSummary}. Se muestran las ${results.length} mÃ¡s importantes.`
+        ? `Encontré ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} en tu lista: ${countSummary}. Se muestran las ${results.length} más importantes.`
         : `I found ${listedTotal} ${activityTaskNoun(listedTotal, locale)} on your list: ${countSummary}. Showing ${results.length}.`
     : activityData.activeTotal > 0
       ? locale === "es-US"
-        ? `No encontrÃ© tareas vencidas ni tareas para hoy asignadas a ti. Tienes ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} programadas para mÃ¡s adelante.`
+        ? `No encontré tareas vencidas ni tareas para hoy asignadas a ti. Tienes ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} programadas para más adelante.`
         : `I did not find overdue tasks or tasks due today assigned to you. You have ${activityData.activeTotal} ${activityTaskNoun(activityData.activeTotal, locale)} scheduled later.`
     : locale === "es-US"
-      ? `No encontrÃ© tareas activas asignadas a ti. Completaste ${counts.completed} en la ventana reciente.`
+      ? `No encontré tareas activas asignadas a ti. Completaste ${counts.completed} en la ventana reciente.`
       : `I did not find active tasks assigned to you. You completed ${counts.completed} in the recent window.`;
 
   const citations: AiAssistantCitation[] = [{
@@ -2476,30 +2518,30 @@ async function runActivityDraftPreview(
         fullName: customer.fullName,
       }));
   const baseDueTimeNote = draftData.draft.dueTimeSource === "EXPLICIT"
-    ? localeText(params, "I used the due time from your request.", "UsÃƒÂ© la hora de vencimiento de tu solicitud.")
+    ? localeText(params, "I used the due time from your request.", "Usé la hora de vencimiento de tu solicitud.")
     : localeText(
         params,
         "I used a reviewable default due time because no exact time was included.",
-        "UsÃƒÂ© una hora predeterminada revisable porque no incluiste una hora exacta.",
+        "Usé una hora predeterminada revisable porque no incluiste una hora exacta.",
       );
   const dueTimeNote = draftData.draft.dueTimeWarning === "NONEXISTENT_LOCAL_TIME"
     ? localeText(
         params,
         "The requested local time is not valid in your workspace timezone, so I used a reviewable default due time.",
-        "La hora local solicitada no es valida en la zona horaria del espacio, asi que use una hora predeterminada revisable.",
+        "La hora local solicitada no es válida en la zona horaria del espacio, así que usé una hora predeterminada revisable.",
       )
     : baseDueTimeNote;
   const baseAnswer = hasExactCustomer
     ? localeText(
         params,
         `I prepared an activity task preview for ${draftData.exactCustomer!.fullName}. ${dueTimeNote} Review it before saving; nothing has been created yet.`,
-        `PreparÃ© una vista previa de tarea para ${draftData.exactCustomer!.fullName}. RevÃ­sala antes de guardar; todavÃ­a no se ha creado nada.`,
+        `Preparé una vista previa de tarea para ${draftData.exactCustomer!.fullName}. Revísala antes de guardar; todavía no se ha creado nada.`,
       )
     : draftData.customerMatches.length
       ? localeText(
           params,
           `I found ${draftData.customerMatches.length} possible customers. Choose the right customer before creating the activity task.`,
-          `EncontrÃ© ${draftData.customerMatches.length} clientes posibles. Elige el cliente correcto antes de crear la tarea.`,
+          `Encontré ${draftData.customerMatches.length} clientes posibles. Elige el cliente correcto antes de crear la tarea.`,
         )
       : localeText(
           params,
@@ -2507,12 +2549,12 @@ async function runActivityDraftPreview(
         "Necesito un cliente activo antes de preparar una tarea. Abre Actividad y elige el cliente, o vuelve a pedirlo con el nombre del cliente.",
       );
   const answer = hasExactCustomer && locale === "es-US"
-    ? `Prepare una vista previa de tarea para ${draftData.exactCustomer!.fullName}. ${dueTimeNote} Revisala antes de guardar; todavia no se ha creado nada.`
+    ? `Preparé una vista previa de tarea para ${draftData.exactCustomer!.fullName}. ${dueTimeNote} Revísala antes de guardar; todavía no se ha creado nada.`
     : baseAnswer;
   const citations: AiAssistantCitation[] = draftData.customerMatches.length
     ? [{
         key: "A1",
-        label: localeText(params, "Active tenant customer lookup for task preview", "BÃºsqueda de cliente activo para vista previa de tarea"),
+        label: localeText(params, "Active tenant customer lookup for task preview", "Búsqueda de cliente activo para vista previa de tarea"),
         sourceType: "Customer",
         classification: "C2_CUSTOMER_CONFIDENTIAL",
       }]
@@ -2603,6 +2645,408 @@ async function runActivityDraftPreview(
           priority: draftData.draft.priority,
           dueAtUtc: draftData.draft.dueAtUtc.toISOString(),
           timeZone: draftData.timeZone,
+        },
+      }),
+    },
+  };
+}
+
+async function runScheduleList(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const schedule = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
+    const tenant = await transaction.tenant.findFirst({
+      where: { id: params.access.tenantId, deletedAtUtc: null },
+      select: { timezone: true },
+    });
+    return listAssistantSchedule(transaction, params.access, {
+      message: params.message,
+      now: generatedAtUtc,
+      timeZone: tenant?.timezone ?? "UTC",
+      limit: params.context?.limit ?? DEFAULT_SCHEDULE_LIMIT,
+    });
+  });
+  const count = schedule.items.length;
+  const rangeLabel = schedule.range === "TODAY"
+    ? localeText(params, "today", "hoy")
+    : schedule.range === "TOMORROW"
+      ? localeText(params, "tomorrow", "mañana")
+      : schedule.range === "WEEK"
+        ? localeText(params, "this week", "esta semana")
+        : localeText(params, "the next 7 days", "los próximos 7 días");
+  const scopeLabel = schedule.mine
+    ? localeText(params, "assigned to you", "asignadas a ti")
+    : localeText(params, "across the workspace", "en todo el espacio de trabajo");
+  const answer = count
+    ? localeText(
+        params,
+        `I found ${count} active booking${count === 1 ? "" : "s"} ${scopeLabel} for ${rangeLabel}${schedule.hasMore ? "; open Schedule to see the rest" : ""}.`,
+        `Encontré ${count} cita${count === 1 ? " activa" : "s activas"} ${scopeLabel} para ${rangeLabel}${schedule.hasMore ? "; abre Agenda para ver las demás" : ""}.`,
+      )
+    : localeText(
+        params,
+        `I did not find active bookings ${scopeLabel} for ${rangeLabel}.`,
+        `No encontré citas activas ${scopeLabel} para ${rangeLabel}.`,
+      );
+  const citations: AiAssistantCitation[] = [{
+    key: "S1",
+    label: localeText(params, "Visible active job schedule", "Agenda activa visible"),
+    sourceType: "JobAppointment + Job + Customer + TenantUser",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    auditSummary: `Deterministic schedule listing completed with ${count} result(s).`,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["JobAppointment", "Job", "Customer", "TenantUser"],
+    sourceLabels: ["Visible active job schedule"],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic tenant-scoped schedule lookup",
+    insightReasons: ["bounded schedule window", schedule.mine ? "self assignment scope" : "authorized workspace scope"],
+    riskNote: "The schedule query ran under tenant RLS and the authenticated job visibility policy. Address, instructions, contact details, quote data, and financial fields were neither selected nor returned.",
+  });
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "LIST_SCHEDULE",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results: schedule.items,
+      citations,
+      actions: [{
+        type: "OPEN_SCHEDULE",
+        label: localeText(params, "Open schedule", "Abrir agenda"),
+        requiresConfirmation: false,
+        payload: {
+          // NEXT_7_DAYS starts on the tenant-local date when Kody ran. Keep it
+          // distinct from a calendar week so opening Jobs does not move a
+          // Saturday/Sunday rolling interval back to the preceding Monday.
+          range: schedule.range === "TODAY" || schedule.range === "TOMORROW"
+            ? "day"
+            : schedule.range === "NEXT_7_DAYS"
+              ? "next7"
+              : "week",
+          date: schedule.date,
+          mine: schedule.mine,
+        },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "service addresses",
+        "job access instructions",
+        "appointment instructions",
+        "customer phone numbers",
+        "customer email addresses",
+        "source quote data",
+        "assignee email addresses",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "LIST_SCHEDULE",
+        resultCount: count,
+        citationCount: citations.length,
+        emptyReason: count ? null : "No visible active bookings overlap the selected tenant-local window.",
+        archivePolicy: "Only active appointments on active visible jobs with active linked records are included.",
+        filters: {
+          range: schedule.range,
+          fromUtc: schedule.fromUtc.toISOString(),
+          toUtc: schedule.toUtc.toISOString(),
+          timeZone: schedule.timeZone,
+          mine: schedule.mine,
+          limit: Math.min(params.context?.limit ?? DEFAULT_SCHEDULE_LIMIT, DEFAULT_SCHEDULE_LIMIT),
+          hasMore: schedule.hasMore,
+        },
+      }),
+    },
+  };
+}
+
+async function runBookingPreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const preview = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
+    const tenant = await transaction.tenant.findFirst({
+      where: { id: params.access.tenantId, deletedAtUtc: null },
+      select: { timezone: true },
+    });
+    return prepareAssistantBooking(transaction, params.access, {
+      message: params.message,
+      now: generatedAtUtc,
+      timeZone: tenant?.timezone ?? "UTC",
+      jobId: params.context?.jobId,
+      search: params.context?.search,
+    });
+  });
+  const job = preview.job;
+  const answer = preview.outcome === "FORBIDDEN"
+    ? localeText(params, "Only an owner or admin can prepare a job booking. Nothing changed.", "Solo un propietario o administrador puede preparar una cita de trabajo. No cambió nada.")
+    : preview.outcome === "JOB_NOT_FOUND"
+      ? localeText(params, "I could not resolve one active job you can see. Include the job number or open the job and ask again. Nothing changed.", "No pude identificar un trabajo activo que puedas ver. Incluye el número del trabajo o ábrelo e inténtalo de nuevo. No cambió nada.")
+      : preview.outcome === "JOB_AMBIGUOUS"
+        ? localeText(params, `I found ${preview.jobMatches.length} possible jobs. Include the job number so I can prepare the right booking. Nothing changed.`, `Encontré ${preview.jobMatches.length} trabajos posibles. Incluye el número del trabajo para preparar la cita correcta. No cambió nada.`)
+        : preview.outcome === "JOB_UNASSIGNED"
+          ? localeText(params, "Assign this job to an active workspace member before booking it. Nothing changed.", "Asigna este trabajo a un miembro activo antes de agendarlo. No cambió nada.")
+          : preview.outcome === "MISSING_DATE"
+            ? localeText(params, "Include an exact date, today, or tomorrow so I can prepare the booking. Nothing changed.", "Incluye una fecha exacta, hoy o mañana para preparar la cita. No cambió nada.")
+            : preview.outcome === "MISSING_TIME"
+              ? localeText(params, "Include an explicit start and end time, or a start time plus duration. Use AM/PM or 24-hour time so I do not guess. Nothing changed.", "Incluye una hora explícita de inicio y fin, o una hora de inicio y duración. Usa a. m./p. m. o formato de 24 horas para evitar suposiciones. No cambió nada.")
+              : preview.outcome === "INVALID_LOCAL_TIME"
+                ? localeText(params, "That local time does not exist in the workspace timezone because of a daylight-saving change. Choose another time. Nothing changed.", "Esa hora local no existe en la zona horaria del espacio debido al cambio de horario. Elige otra hora. No cambió nada.")
+                : preview.outcome === "PAST_TIME"
+                  ? localeText(params, "That booking window is already in the past. Choose a future time. Nothing changed.", "Ese horario ya pasó. Elige una hora futura. No cambió nada.")
+                  : preview.outcome === "ACTIVE_APPOINTMENT_LOCKED"
+                    ? localeText(params, "This job has a dispatched or arrived visit, so I will not move it. Ask for an additional visit or review the job first. Nothing changed.", "Este trabajo tiene una visita despachada o iniciada, así que no la moveré. Pide una visita adicional o revisa el trabajo primero. No cambió nada.")
+                    : preview.outcome === "APPOINTMENT_AMBIGUOUS"
+                      ? localeText(params, "This job has more than one scheduled visit. Open the job and choose the visit to reschedule. Nothing changed.", "Este trabajo tiene más de una visita programada. Abre el trabajo y elige la visita que quieres reprogramar. No cambió nada.")
+                      : preview.repeatedLocalTime
+                        ? localeText(
+                            params,
+                            `That local time occurs twice because daylight saving time ends. Review one of the two offset choices (${preview.options.map((option) => option.offsetLabel).join(" or ")}); nothing changed yet.`,
+                            `Esa hora local ocurre dos veces porque termina el horario de verano. Revisa una de las dos opciones de zona (${preview.options.map((option) => option.offsetLabel).join(" o ")}); todavía no cambió nada.`,
+                          )
+                        : localeText(
+                            params,
+                            `I prepared a ${preview.mode === "RESCHEDULE" ? "reschedule" : "booking"} review for job #${job!.jobNumber}, ${job!.customerName}. Review it in Jobs before saving; nothing changed yet.`,
+                            `Preparé una revisión de ${preview.mode === "RESCHEDULE" ? "reprogramación" : "cita"} para el trabajo #${job!.jobNumber}, ${job!.customerName}. Revísala en Trabajos antes de guardar; todavía no cambió nada.`,
+                          );
+  const results = preview.outcome === "READY"
+    ? preview.options.map((option, index) => ({
+        option: index + 1,
+        mode: preview.mode!,
+        jobId: job!.jobId,
+        jobNumber: job!.jobNumber,
+        jobStatus: job!.jobStatus,
+        jobTitle: job!.jobTitle,
+        customerId: job!.customerId,
+        customerName: job!.customerName,
+        assignedTenantUserId: job!.assignedTenantUserId!,
+        assigneeName: job!.assigneeName!,
+        appointmentId: preview.appointmentId,
+        appointmentVersion: preview.appointmentVersion,
+        startsAtUtc: option.startsAtUtc,
+        endsAtUtc: option.endsAtUtc,
+        timeZone: preview.timeZone,
+        offsetLabel: option.offsetLabel,
+      }))
+    : [...preview.jobMatches];
+  const actions: AiAssistantAction[] = preview.outcome === "READY"
+    ? preview.options.map((option) => ({
+        type: "OPEN_BOOKING_REVIEW",
+        label: preview.repeatedLocalTime
+          ? localeText(params, `Review ${option.offsetLabel} option`, `Revisar opción ${option.offsetLabel}`)
+          : localeText(params, preview.mode === "RESCHEDULE" ? "Review reschedule" : "Review booking", preview.mode === "RESCHEDULE" ? "Revisar reprogramación" : "Revisar cita"),
+        requiresConfirmation: false,
+        payload: {
+          mode: preview.mode,
+          jobId: job!.jobId,
+          jobNumber: job!.jobNumber,
+          jobTitle: job!.jobTitle,
+          customerId: job!.customerId,
+          customerName: job!.customerName,
+          assignedTenantUserId: job!.assignedTenantUserId,
+          assigneeName: job!.assigneeName,
+          startsAtUtc: option.startsAtUtc,
+          endsAtUtc: option.endsAtUtc,
+          timeZone: preview.timeZone,
+          ...(preview.appointmentId ? {
+            appointmentId: preview.appointmentId,
+            appointmentVersion: preview.appointmentVersion,
+            expectedStatus: "SCHEDULED",
+          } : {}),
+        },
+      }))
+    : preview.outcome === "FORBIDDEN"
+      ? [{
+          type: "REQUEST_ADMIN_ACCESS",
+          label: localeText(params, "Ask an admin to book this job", "Pedir a un administrador que agende el trabajo"),
+          requiresConfirmation: true,
+          payload: { capability: "manageAssignments" },
+        }]
+      : [];
+  const citations: AiAssistantCitation[] = preview.jobMatches.length
+    ? [{ key: "B1", label: localeText(params, "Visible active job booking lookup", "Búsqueda de trabajo activo visible"), sourceType: "Job + Customer + TenantUser + JobAppointment", classification: "C2_CUSTOMER_CONFIDENTIAL" }]
+    : [];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    auditSummary: `Deterministic booking preview completed with outcome ${preview.outcome}.`,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Job", "Customer", "TenantUser", "JobAppointment"],
+    sourceLabels: ["Review-only job booking lookup"],
+    customerId: preview.outcome === "READY" ? job?.customerId ?? null : null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: preview.outcome === "READY" ? "high" : "medium",
+    confidenceLabel: "Deterministic review-only booking preview",
+    insightReasons: ["no business write", `booking outcome=${preview.outcome}`],
+    riskNote: "The preview created no job, appointment, or job-event rows. Opening the review is navigation only; the existing booking API remains the sole write path and revalidates tenant access, assignment, overlap, timezone, and lifecycle state.",
+  });
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "PREPARE_BOOKING",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "service addresses",
+        "job scope",
+        "job access instructions",
+        "appointment instructions",
+        "customer contact details",
+        "source quote data",
+        "created or updated appointments",
+        "job events",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "PREPARE_BOOKING",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: preview.outcome === "READY" ? null : `Booking preview stopped with outcome ${preview.outcome}.`,
+        archivePolicy: "Only active visible jobs, active assignees, and active appointments are eligible for booking review.",
+        filters: {
+          outcome: preview.outcome,
+          mode: preview.mode,
+          jobMatchCount: preview.jobMatches.length,
+          timeZone: preview.timeZone,
+          optionCount: preview.options.length,
+          repeatedLocalTime: preview.repeatedLocalTime,
+          writesPerformed: false,
+        },
+      }),
+    },
+  };
+}
+
+async function runDispatchPreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  const preview = await withTenantRlsContext(prisma, params.access.tenantId, (transaction) =>
+    prepareAssistantDispatch(transaction, params.access, {
+      message: params.message,
+      now: generatedAtUtc,
+      jobId: params.context?.jobId,
+      appointmentId: params.context?.appointmentId,
+      search: params.context?.search,
+    }));
+  const item = preview.item;
+  const answer = preview.outcome === "READY"
+    ? localeText(
+        params,
+        `Job #${item!.jobNumber}, ${item!.customerName}, is scheduled and ready for dispatch review. Confirm dispatch in Jobs; nothing changed yet.`,
+        `El trabajo #${item!.jobNumber}, ${item!.customerName}, está programado y listo para revisar el despacho. Confirma el despacho en Trabajos; todavía no cambió nada.`,
+      )
+    : preview.outcome === "JOB_AMBIGUOUS"
+      ? localeText(params, `I found ${preview.jobMatches.length} possible jobs. Include the job number before dispatching. Nothing changed.`, `Encontré ${preview.jobMatches.length} trabajos posibles. Incluye el número del trabajo antes de despachar. No cambió nada.`)
+      : preview.outcome === "APPOINTMENT_AMBIGUOUS"
+        ? localeText(params, "This job has more than one scheduled visit. Open the job and choose the visit to dispatch. Nothing changed.", "Este trabajo tiene más de una visita programada. Abre el trabajo y elige la visita que quieres despachar. No cambió nada.")
+        : preview.outcome === "APPOINTMENT_NOT_FOUND"
+          ? localeText(params, "I could not find one scheduled visit you are allowed to dispatch. It may already be dispatched, arrived, completed, or outside your assignment. Nothing changed.", "No encontré una visita programada que puedas despachar. Puede que ya esté despachada, iniciada, terminada o fuera de tu asignación. No cambió nada.")
+          : localeText(params, "I could not resolve one active job you can see. Include the job number or ask to dispatch your next job. Nothing changed.", "No pude identificar un trabajo activo que puedas ver. Incluye el número o pide despachar tu próximo trabajo. No cambió nada.");
+  const results = item ? [item] : [...preview.jobMatches];
+  const actions: AiAssistantAction[] = item
+    ? [{
+        type: "OPEN_DISPATCH_REVIEW",
+        label: localeText(params, "Review dispatch", "Revisar despacho"),
+        requiresConfirmation: false,
+        payload: {
+          jobId: item.jobId,
+          jobNumber: item.jobNumber,
+          jobTitle: item.jobTitle,
+          customerId: item.customerId,
+          customerName: item.customerName,
+          appointmentId: item.appointmentId,
+          appointmentVersion: item.appointmentVersion,
+          expectedStatus: "SCHEDULED",
+          startsAtUtc: item.startsAtUtc,
+          endsAtUtc: item.endsAtUtc,
+          timeZone: item.timeZone,
+          assignedTenantUserId: item.assignedTenantUserId,
+          assigneeName: item.assigneeName,
+        },
+      }]
+    : [];
+  const citations: AiAssistantCitation[] = item || preview.jobMatches.length
+    ? [{ key: "D1", label: localeText(params, "Visible scheduled dispatch lookup", "Búsqueda de despacho programado visible"), sourceType: "JobAppointment + Job + Customer + TenantUser", classification: "C2_CUSTOMER_CONFIDENTIAL" }]
+    : [];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    auditSummary: `Deterministic dispatch preview completed with outcome ${preview.outcome}.`,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["JobAppointment", "Job", "Customer", "TenantUser"],
+    sourceLabels: ["Review-only scheduled dispatch lookup"],
+    customerId: item?.customerId ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: item ? "high" : "medium",
+    confidenceLabel: "Deterministic review-only dispatch preview",
+    insightReasons: ["scheduled appointment required", "no business write", `dispatch outcome=${preview.outcome}`],
+    riskNote: "The preview created no appointment or job-event rows. Opening the review is navigation only; the existing status-only appointment API remains the sole write path and revalidates tenant membership, assignment, version, and SCHEDULED lifecycle state.",
+  });
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "PREPARE_DISPATCH",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "service addresses",
+        "job scope",
+        "job access instructions",
+        "appointment instructions",
+        "customer contact details",
+        "source quote data",
+        "appointment status updates",
+        "job events",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "PREPARE_DISPATCH",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: item ? null : `Dispatch preview stopped with outcome ${preview.outcome}.`,
+        archivePolicy: "Only active visible jobs with exactly one visible SCHEDULED appointment are eligible for dispatch review.",
+        filters: {
+          outcome: preview.outcome,
+          jobMatchCount: preview.jobMatches.length,
+          expectedStatus: "SCHEDULED",
+          writesPerformed: false,
         },
       }),
     },
@@ -3587,6 +4031,12 @@ export async function runAiAssistant(
     result = await runActivityAgenda(prisma, params, generatedAtUtc, tool);
   } else if (tool === "PREPARE_ACTIVITY") {
     result = await runActivityDraftPreview(prisma, params, generatedAtUtc);
+  } else if (tool === "LIST_SCHEDULE") {
+    result = await runScheduleList(prisma, params, generatedAtUtc);
+  } else if (tool === "PREPARE_BOOKING") {
+    result = await runBookingPreview(prisma, params, generatedAtUtc);
+  } else if (tool === "PREPARE_DISPATCH") {
+    result = await runDispatchPreview(prisma, params, generatedAtUtc);
   } else if (tool === "FOLLOW_UP_QUEUE") {
     result = await runFollowUpQueue(prisma, params, generatedAtUtc);
   } else if (tool === "CUSTOMERS_WITHOUT_QUOTES") {

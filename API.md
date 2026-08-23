@@ -350,7 +350,11 @@ Returns a quote with customer and active line items.
 
 ### `PATCH /v1/quotes/:quoteId`
 
-Updates quote metadata, totals, lifecycle status, job status, or after-sale status. At least one field is required.
+Updates quote metadata, totals, commercial lifecycle status, or after-sale follow-up status. At least one field is required.
+
+`jobStatus` remains readable on Quote responses for one compatibility release, but it is no longer writable. Job scheduling, dispatch, progress, and completion are authoritative on the linked `Job`. A standalone attempt to write `jobStatus` returns `409 QUOTE_JOB_STATUS_MOVED`. Older quote-sheet clients may continue sending `quote.jobStatus`; the server accepts and ignores that field.
+
+`GET /v1/workspace/follow-up` likewise exposes a one-release flat `jobStatus` compatibility projection alongside the nested `job.status`. Both values are derived from the active authoritative `Job`; stale legacy `Quote.jobStatus` data is never used as Job state or accepted as Job write authority.
 
 Best practice: use line-item endpoints for pricing changes when possible so totals and revision history remain consistent.
 
@@ -408,7 +412,7 @@ Lists revisions for one quote.
 
 ### `POST /v1/quotes/:quoteId/history/:revisionId/restore`
 
-Restores a quote from a revision snapshot. Requires a plan with quote version history.
+Restores the commercial quote content from a revision snapshot. Requires a plan with quote version history. Historical job/dispatch and after-sale operational fields are ignored. Restoring an accepted snapshot creates or returns the single linked, initially `UNSCHEDULED` Job.
 
 ### `GET /v1/quotes/:quoteId/outbound-events?limit=25&offset=0`
 
@@ -450,6 +454,8 @@ Response: CSV file.
 
 Accepted quotes create separate job records. The quote remains the customer-approved commercial record; the job owns assignment, schedule, dispatch state, access instructions, and internal execution notes.
 
+Every newly created Job begins as `UNSCHEDULED`, including quotes that carry a legacy Quote `jobStatus`. When the first authoritative Job reaches `COMPLETED`, the source accepted quote moves from after-sale `NOT_READY` to `DUE` with a due time seven days after Job completion. Existing manual `DUE` or `COMPLETED` follow-up state is never overwritten.
+
 Job statuses:
 
 - `UNSCHEDULED`
@@ -486,7 +492,9 @@ Returns one visible job with customer, source quote, assignment, accepted scope 
 
 ### `GET /v1/jobs/schedule?fromUtc=...&toUtc=...&mine=false&limit=25&offset=0`
 
-Lists visible job appointments across jobs for a bounded schedule window. The maximum schedule window is 35 days. Owners/admins can view all visible tenant appointments; members only see appointments attached to jobs they are allowed to access.
+Lists a compact projection of visible job appointments across jobs for a bounded schedule window. The maximum schedule window is 35 days. Owners/admins can view all visible tenant appointments; members only see appointments attached to jobs they are allowed to access. `fromUtc` and `toUtc` must be ISO 8601 date-times with an explicit offset (`Z` or `+/-HH:MM`); offsetless local date-times are rejected.
+
+The schedule projection contains the appointment identity, assignee, status, start/end, timezone, optimistic version, and minimized job/customer/source-quote identity. It intentionally excludes booking instructions, creator identity, soft-delete fields, audit timestamps, and appointment lifecycle timestamps. Use the job appointment list/detail workflow when those fields are required.
 
 Supported query parameters:
 
@@ -498,6 +506,8 @@ Supported query parameters:
 ### `PATCH /v1/jobs/:jobId`
 
 Updates job assignment and dispatch access instructions. Requires owner/admin permissions and the current optimistic `version`.
+
+Member assignment is deliberately consistent across linked records. Before assigning a job to a member, assign the linked customer and source quote to that same member. A job with any active appointment cannot be reassigned or unassigned; cancel or complete its active bookings first. To move booked work to another member: cancel the booking, align the customer and source-quote assignments, update the job assignment, and then create a new booking for the new assignee.
 
 Body:
 
@@ -515,7 +525,7 @@ Lists bookings for one visible job.
 
 ### `POST /v1/jobs/:jobId/appointments`
 
-Creates an overlap-safe booking for the job's assigned member. Requires owner/admin permissions. The API stores `startsAtUtc` and `endsAtUtc` as UTC ISO strings and also stores the IANA `timeZone` used to create the booking. Appointment duration cannot exceed 14 days. Provider notifications are not sent from this transaction.
+Creates an overlap-safe booking for the job's assigned member. Requires owner/admin permissions. `startsAtUtc` and `endsAtUtc` must be ISO 8601 date-times with an explicit offset (`Z` or `+/-HH:MM`); the API normalizes and stores the instant in UTC. It also stores the IANA `timeZone` used to create the booking. Appointment duration cannot exceed 14 days. Content-minimal in-app notifications are committed atomically with the appointment event; no email, SMS, external provider, or background delivery worker is used in this release.
 
 Body:
 
@@ -529,9 +539,16 @@ Body:
 }
 ```
 
+Successful creation returns `201` with `{ appointment, notificationReceipt: { kind: "BOOKED", createdCount } }`. `createdCount` may be zero when the actor is the only active recipient or another candidate cannot currently view the linked Job.
+
 ### `PATCH /v1/jobs/:jobId/appointments/:appointmentId`
 
-Updates a booking with optimistic concurrency. Owners/admins can update assignment, schedule, instructions, and status. Assigned members can only perform status-only forward progress on their own booking; they cannot cancel, reschedule, reassign, or edit instructions. Status transitions are restricted to the dispatch flow:
+Updates a booking with optimistic concurrency. Each request is one of two command shapes:
+
+- A **status-only** change containing `version` and `status`. No schedule, assignment, or instruction fields may accompany a status change.
+- A manager edit. Rescheduling is allowed only while the current appointment status is `SCHEDULED` and must submit `startsAtUtc`, `endsAtUtc`, and `timeZone` together. Both timestamps require an explicit ISO 8601 offset. Instructions may be edited by an owner/admin.
+
+Assigned members can only perform status-only forward progress on their own booking; they cannot cancel, reschedule, reassign, or edit instructions. Status transitions are restricted to the dispatch flow:
 
 - `SCHEDULED -> DISPATCHED -> ARRIVED -> COMPLETED`
 - `SCHEDULED`, `DISPATCHED`, and `ARRIVED` may transition to `CANCELED`
@@ -545,6 +562,29 @@ Body:
 }
 ```
 
+Reschedule body:
+
+```json
+{
+  "version": 2,
+  "startsAtUtc": "2026-08-22T09:00:00-07:00",
+  "endsAtUtc": "2026-08-22T11:00:00-07:00",
+  "timeZone": "America/Los_Angeles",
+  "instructions": "Use the west gate."
+}
+```
+
+Successful status, schedule, or assignment changes return `{ appointment, notificationReceipt }`. The receipt is `{ kind, createdCount }` for `RESCHEDULED`, `DISPATCHED`, `ARRIVED`, `COMPLETED`, or `CANCELED`; an instructions-only edit returns `notificationReceipt: null`.
+
+Stable scheduling conflict codes include:
+
+- `JOB_APPOINTMENT_OVERLAP` (`409`) with the conflicting appointment ID and UTC start/end.
+- `JOB_APPOINTMENT_STALE_VERSION` (`409`) when optimistic concurrency loses a race.
+- `JOB_APPOINTMENT_RESCHEDULE_NOT_ALLOWED` (`409`) when the current appointment is no longer `SCHEDULED`.
+- `JOB_ACTIVE_APPOINTMENTS_REASSIGN_CONFLICT` (`409`) when a job assignment change would strand active bookings.
+- `JOB_APPOINTMENT_ASSIGNEE_MISMATCH` (`409`) when a booking assignee does not match the job assignee.
+- `JOB_ASSIGNEE_RECORD_SCOPE_MISMATCH` (`409`) when the linked customer and source quote are not assigned to the proposed job assignee.
+
 ### `DELETE /v1/jobs/:jobId/appointments/:appointmentId`
 
 Soft-cancels a booking. Requires owner/admin permissions and the current `version`.
@@ -556,6 +596,34 @@ Body:
   "version": 2
 }
 ```
+
+Successful deletion returns `200` with `{ appointmentId, notificationReceipt: { kind: "CANCELED", createdCount } }` after the soft-cancel, Job event, and notification rows commit atomically.
+
+## In-App Job Notifications
+
+Job appointment mutations create content-minimal in-app notifications in the same database transaction as their immutable Job event. Supported kinds are `BOOKED`, `RESCHEDULED`, `DISPATCHED`, `ARRIVED`, `COMPLETED`, and `CANCELED`. Recipients are derived on the server from active appointment assignment and original booking creator membership, with the actor and duplicates excluded. Browser input can never choose a recipient.
+
+Notification storage excludes customer contact details, addresses, instructions, notes, job scope, message bodies, free-form prose, and provider data. All endpoints use the authenticated live membership, forced tenant RLS, current Job visibility policy, and `Cache-Control: private, no-store`. A notification is hidden if its recipient no longer has access to the linked Job.
+
+### `GET /v1/notifications?filter=all&limit=25&cursor=...`
+
+Returns newest-first visible notifications. `filter` is `all` or `unread`; `limit` is capped at `100`; `cursor` is an opaque keyset cursor returned as `page.nextCursor`. This `GET` is read-only. New rows remain `AVAILABLE` until the recipient explicitly marks them read; that command records `DELIVERED` and `readAtUtc` together.
+
+### `GET /v1/notifications/summary`
+
+Returns `{ unreadCount, totalCount, latestCreatedAtUtc }` for visible notifications belonging to the authenticated recipient.
+
+### `POST /v1/notifications/:notificationId/read`
+
+Marks one visible recipient notification read. The command is idempotent and accepts no recipient or tenant identity. Inaccessible, cross-recipient, and cross-tenant IDs all return the same `404 NOTIFICATION_NOT_FOUND` response.
+
+### `POST /v1/notifications/read-all`
+
+Marks visible unread notifications through a server-owned transaction cutoff and returns `{ updatedCount, cutoffAtUtc }`. Notification producers and read-all serialize on a transaction-scoped tenant/recipient lock; the cutoff comes from the database clock only after the read-all transaction owns that lock. A producer that owns the lock first is included after it commits. A producer that obtains the lock after read-all remains unread, even if its transaction began earlier.
+
+Release operations must apply the checked migration before the API change and drain every pre-lock API/worker process before claiming this cutoff guarantee. During a mixed-version window, an older appointment writer can still bypass the recipient lock. For application rollback, drain the new writers before reverting and leave the additive table/migration in place; do not drop the notification table or its retained rows as part of an application rollback.
+
+Notification inbox retention is automated as a tenant-scoped soft archive: read rows become eligible 90 days after `readAtUtc`, while never-read rows remain available for 365 days after `createdAt`. The run-once worker is dry-run by default; an apply run additionally requires `ENABLE_NOTIFICATION_RETENTION_WORKER=true` and the `--apply` argument. It uses only the least-privileged runtime `DATABASE_URL`, forced tenant RLS, a tenant advisory lock, 250-row `SKIP LOCKED` batches, and a maximum of 5,000 rows per tenant/run. Logs contain aggregate counts only. Archived rows disappear from list, unread, pagination, and summary responses, but their content-minimal source rows remain for audit and backup compatibility. Runtime `DELETE` and `TRUNCATE` stay revoked; any future physical purge requires a separate backed-up, explicitly authorized policy and migration.
 
 ### `GET /v1/jobs/:jobId/notes?limit=25&offset=0`
 
@@ -576,6 +644,64 @@ Body:
 ### `DELETE /v1/jobs/:jobId/notes/:noteId`
 
 Soft-deletes a note. The note creator or an owner/admin can remove it.
+
+## Kody Schedule, Booking, And Dispatch Assistance
+
+### `POST /v1/ai/assistant`
+
+Kody supports deterministic schedule queries and reviewed booking/dispatch preparation through the existing authenticated assistant endpoint. These tools do not call an LLM, consume AI credits, or write a Job, appointment, or Job event.
+
+Example request:
+
+```json
+{
+  "message": "Show my schedule tomorrow",
+  "tool": "LIST_SCHEDULE",
+  "context": {
+    "currentPage": "jobs",
+    "jobId": "optional-visible-job-id",
+    "appointmentId": "optional-visible-appointment-id"
+  }
+}
+```
+
+Supported deterministic tools:
+
+- `LIST_SCHEDULE` returns a bounded tenant-local day, Monday-aligned week, or rolling next-seven-day schedule. Its `OPEN_SCHEDULE` handoff carries `range: "day" | "week" | "next7"` and the exact tenant-local start date, so a rolling window is not realigned to Monday. Members are always restricted to their own assigned work, even if the prompt or client context asks for another assignee. Owners/admins may query all visible tenant appointments or explicitly request their own schedule.
+- `PREPARE_BOOKING` is available only to owners/admins with assignment-management permission. It resolves one visible active Job and assignee and returns an `OPEN_BOOKING_REVIEW` action. Missing duration, ambiguous targets, nonexistent DST wall times, and unresolved AM/PM input fail closed. DST folds return explicit offset choices.
+- `PREPARE_DISPATCH` resolves one visible `SCHEDULED` appointment and returns an `OPEN_DISPATCH_REVIEW` action. Assigned members may prepare dispatch only for their own appointment; owners/admins may use the wider visible scope.
+
+Assistant schedule results intentionally exclude service addresses, booking instructions, customer contact details, quote content, prices, costs, margins, provider identifiers, and deleted/archived records. Tenant, role, capabilities, assignment, and data classification always come from live authenticated server state, never from the prompt or browser payload.
+
+Booking and dispatch actions are review handoffs, not mutations. The Jobs workspace refetches the current authorized record, validates the expected assignment/status/version, and uses the normal versioned Jobs appointment endpoint for the final write. Kody reports success only after that endpoint succeeds. The appointment endpoint atomically creates any eligible in-app technician/booking-creator notification; it never notifies the customer or calls email, SMS, AI, or another external provider.
+
+Deterministic tools remain available when the tenant has reached its paid Kody limit because they make no provider call, create no usage reservation, and record zero AI credits. Provider-backed drafting and analysis use the atomic paid-AI usage contract below and fail closed when capacity or accounting is unavailable.
+
+## Atomic Paid-AI Usage Contract
+
+Every OpenAI request is made through the backend provider gateway. The gateway disables implicit provider retries and requires a committed tenant-period reservation before each provider call. Database transactions remain short and never span the external request. Successful calls settle their observed token cost; a provider-started timeout, missing usage report, or other uncertain result is conservatively charged at its precomputed ceiling and is never automatically replayed.
+
+Paid user operations require an `Idempotency-Key` header containing 16–191 ASCII letters, digits, `.`, `_`, `:`, or `-`. This applies to provider-backed `POST /v1/ai/assistant` requests, `POST /v1/ai/business-insights`, `POST /v1/quotes/ai-suggest`, and the provider-capable internal AI quality test. Deterministic Kody tools do not require the header. Keys are hashed and unique per tenant and operation kind across billing period boundaries; request bodies and provider output are not retained for replay.
+
+For one rolling-client release only, the three public paid endpoints accept a completely absent `Idempotency-Key` from the previously deployed web client. The API synthesizes a unique request-correlated key, still performs the full atomic reservation/settlement/audit workflow, emits `X-QuoteFly-AI-Idempotency-Compatibility: synthesized-request-key`, and records only a content-free server warning. A synthesized key provides no retry deduplication guarantee. An explicitly supplied empty, short, oversized, multi-value, or otherwise malformed key still fails with `400 IDEMPOTENCY_KEY_REQUIRED`; the internal AI quality endpoint remains strict. Do not remove this fallback from the first rollout candidate. Retirement requires at least 14 days on the new web/API, seven consecutive days with zero compatibility hits on all three routes, a normal keyed success on every route, and proof that cached old clients have drained.
+
+Stable failures:
+
+- `400 IDEMPOTENCY_KEY_REQUIRED` when an explicit paid-request key is malformed (and for missing keys once the one-release public compatibility fallback is removed).
+- `402 AI_USAGE_LIMIT_REACHED` when completed plus in-progress usage has exhausted the applicable tenant limit. The response may include `renewsAtUtc`.
+- `409 AI_USAGE_REQUEST_IN_PROGRESS` when the same request key is active.
+- `409 AI_USAGE_REQUEST_ALREADY_PROCESSED` when the key is terminal or is reused with different input.
+- `503 AI_USAGE_ACCOUNTING_UNAVAILABLE` when reservation, settlement, pricing validation, or immutable usage-audit persistence cannot be proven. Generated output is suppressed in this state.
+
+Usage periods are half-open billing-cycle intervals. Paid tenants use Stripe subscription-item `[current_period_start,current_period_end)` exactly; active trials use `[trialStartsAtUtc,trialEndsAtUtc)`. QuoteFly never guesses a paid start by subtracting one month from the end, so prorated and anchored cycles retain their provider-authoritative boundaries. Superusers use UTC calendar months. A provider call crossing a boundary settles into the period where its root reserved.
+
+Paid runtime access also requires a stored Stripe customer, Stripe subscription, mapped QuoteFly plan, active status, and unexpired provider period. Orphan `active` rows fail closed and are mandatory reconciliation failures. A local QuoteFly trial remains valid with no Stripe subscription, including the normal customer-only state created when checkout is opened and abandoned. Once a trial has a Stripe subscription ID, its customer and mapped plan binding are mandatory and the reconciliation gate verifies its exact Stripe trial dates.
+
+During the one-release database/client transition, a paid/trial row missing an authoritative start remains readable through the already-backfilled UTC calendar bucket, labeled `periodSource: "UTC_CALENDAR_LEGACY"` and `billingCycleReconciliationPending: true`. Its normal calendar renewal claim is suppressed (the separately stored Stripe end may still be shown), and all paid provider authorization fails closed with `503 AI_USAGE_ACCOUNTING_UNAVAILABLE` until the full Stripe reconciliation command persists both bounds and rebuilds current-period totals. Session and paid-operation usage responses otherwise expose completed, in-progress, effective, and remaining percentages; `activeReservationCount`; `enforcementMode`; `limitReached`; period source; and renewal boundaries. Availability uses effective usage (completed plus active reservations). Raw spend and limit amounts are returned only to roles with internal-cost visibility.
+
+Stripe access revocations commit without waiting for usage aggregation, so cancellation, `past_due`, or another non-entitled state blocks the next protected mutation even while an older AI request is in flight. A delayed renewal does not wait for an active request reserved into the old period; that request remains old-period usage. If active work belongs to the exact target period, webhook synchronization commits the new billing bounds and defers only the aggregate rebuild until the request settles. The post-drain reconciliation command still fails that candidate until its target-period holds clear.
+
+`AiUsagePeriod` and `AiUsageReservation` are C3 financial-confidential, content-free, excluded from RAG/vector indexing, and protected by forced PostgreSQL RLS. Runtime access omits `DELETE` and `TRUNCATE`. During the rolling-deployment compatibility window, a database trigger accounts legacy unlinked `AiUsageEvent` inserts exactly once; new reservation-linked events bypass that bridge to prevent double counting. The trigger must remain in the first rollout because migrations run before old API/worker drain. A later additive migration may remove it only after every old API and AI worker is stopped, exact Stripe-period reconciliation is clean, and no unlinked positive-credit event has appeared since the new API start. Historical unlinked events remain part of reconciliation and are never rewritten into fabricated reservations.
 
 ## Invoice Ledger And Internal Invoice API
 
@@ -841,7 +967,7 @@ Returns tenant-level AI usage and quality metrics.
 ### Reliability
 
 - Run `npm run verify` before production handoff.
-- Use `npm run start:prod` for API startup so Prisma migrations deploy before the server starts.
+- Run `npm run prisma:migrate:deploy` from the isolated migration service with `DIRECT_DATABASE_URL` and wait for it to finish successfully before promoting the API. Start the long-running API with `npm run start:prod` using only the least-privileged runtime `DATABASE_URL`; `start:prod` does not run migrations.
 - Use `/v1/health` for process liveness and `/v1/ready` for deployment readiness.
 - Keep provider webhook event IDs persisted for idempotency.
 - Avoid external API calls inside long database transactions.

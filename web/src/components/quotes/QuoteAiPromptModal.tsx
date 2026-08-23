@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, CircleDashed, LoaderCircle, Sparkles, UserRound } from "lucide-react";
 import type { AiProgressEvent, ServiceType } from "../../lib/api";
-import { Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
+import { Alert, Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
 
 const AI_PROGRESS_STAGES = [
   {
@@ -111,6 +111,7 @@ export function QuoteAiPromptModal({
   customerContextDetails,
   customerContextBadge,
   usageHint,
+  usageLimitMessage,
   errorMessage,
   progressEvent,
   loading,
@@ -133,6 +134,7 @@ export function QuoteAiPromptModal({
   customerContextDetails?: string | null;
   customerContextBadge?: string | null;
   usageHint?: string | null;
+  usageLimitMessage?: string | null;
   errorMessage?: string | null;
   progressEvent?: AiProgressEvent | null;
   loading?: boolean;
@@ -235,6 +237,8 @@ export function QuoteAiPromptModal({
               </div>
             </div>
           </div>
+
+          {usageLimitMessage ? <Alert tone="warning">{usageLimitMessage}</Alert> : null}
 
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_200px]">
             <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel-subtle)] px-4 py-3.5 shadow-[var(--qf-shadow-sm)]">

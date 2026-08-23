@@ -62,7 +62,10 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   const fieldImage = page.getByRole("img", { name: /contractor inspecting field equipment/i });
   await fieldImage.scrollIntoViewIfNeeded();
   await expect(fieldImage).toBeVisible();
-  expect(await fieldImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1600);
+  await expect.poll(
+    () => fieldImage.evaluate((image: HTMLImageElement) => image.naturalWidth),
+    { message: "the lazy field image should finish decoding at its canonical width" },
+  ).toBe(1600);
   await expect(page.getByRole("img", { name: /carpenter measuring and marking/i })).toBeVisible();
 
   const solutionsOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

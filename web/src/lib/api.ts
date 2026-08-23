@@ -69,6 +69,10 @@ export function apiTelemetryRoute(path: string): string {
   if (pathname === "/v1/quotes/invoices/export-csv") return "/v1/quotes/invoices/export-csv";
   if (pathname.startsWith("/v1/quotes/")) return "/v1/quotes/:id";
   if (pathname === "/v1/quotes") return "/v1/quotes";
+  if (pathname === "/v1/notifications/summary") return "/v1/notifications/summary";
+  if (pathname === "/v1/notifications/read-all") return "/v1/notifications/read-all";
+  if (pathname.startsWith("/v1/notifications/") && pathname.endsWith("/read")) return "/v1/notifications/:id/read";
+  if (pathname === "/v1/notifications") return "/v1/notifications";
   if (pathname.startsWith("/v1/products/")) return "/v1/products/:id";
   if (pathname === "/v1/products") return "/v1/products";
   if (pathname.startsWith("/v1/internal/control-plane")) return maskPathIdentifiers(pathname);
@@ -291,6 +295,8 @@ export type TenantEntitlements = {
 export type TenantUsageSnapshot = {
   periodStartUtc: string;
   periodEndUtc: string;
+  periodSource?: AiUsagePeriodSource;
+  billingCycleReconciliationPending?: boolean;
   monthlyQuoteCount: number;
   monthlyAiQuoteCount: number;
   monthlyAiSpendUsd?: number;
@@ -300,7 +306,21 @@ export type TenantUsageSnapshot = {
   monthlyAiSpendWarningThresholdPercent?: 25 | 50 | 75 | 85 | 95 | 100 | null;
   monthlyAiLimitReached?: boolean;
   monthlyAiEstimatedPromptsRemaining?: number | null;
+  monthlyUsageCompletedPercent?: number | null;
+  monthlyUsageReservedPercent?: number | null;
+  monthlyUsageEffectivePercent?: number | null;
+  monthlyUsageRemainingPercent?: number | null;
+  activeReservationCount?: number;
+  enforcementMode?: "SPEND" | "CREDITS" | "UNLIMITED";
+  limitReached?: boolean;
 };
+
+export type AiUsagePeriodSource =
+  | "PAID_SUBSCRIPTION"
+  | "ACTIVE_TRIAL"
+  | "UTC_CALENDAR_SUPERUSER"
+  | "UTC_CALENDAR_LEGACY"
+  | "UTC_CALENDAR";
 
 export type AuthSessionPayload = {
   user: {
@@ -623,6 +643,7 @@ export type AiAssistantRequestedTool =
   | "OUT_OF_SCOPE"
   | "NAVIGATE_WORKSPACE"
   | "FOLLOW_UP_QUEUE"
+  | "LIST_SCHEDULE"
   | "LIST_MY_ACTIVITIES"
   | "PRIORITIZE_MY_DAY"
   | "CUSTOMERS_WITHOUT_QUOTES"
@@ -634,6 +655,8 @@ export type AiAssistantRequestedTool =
   | "DRAFT_CUSTOMER"
   | "DRAFT_PRODUCT"
   | "DRAFT_QUOTE"
+  | "PREPARE_BOOKING"
+  | "PREPARE_DISPATCH"
   | "PREPARE_ACTIVITY"
   | "PREPARE_QUOTE_SEND";
 
@@ -654,9 +677,11 @@ export type AiAssistantConversationState = {
 };
 
 export type AiAssistantContext = {
-  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up";
+  currentPage?: "quotes" | "customers" | "analytics" | "products" | "dashboard" | "follow-up" | "jobs";
   customerId?: string;
   quoteId?: string;
+  jobId?: string;
+  appointmentId?: string;
   search?: string;
   serviceType?: ServiceType;
   dateFrom?: string;
@@ -666,7 +691,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ACTIVITY_DRAFT" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ACTIVITY_DRAFT" | "OPEN_SCHEDULE" | "OPEN_BOOKING_REVIEW" | "OPEN_DISPATCH_REVIEW" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;
@@ -901,7 +926,6 @@ export type SaveQuoteSheetInput = {
   quote: {
     serviceType: ServiceType;
     status: QuoteStatus;
-    jobStatus: QuoteJobStatus;
     afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
     title: string;
     scopeText: string;
@@ -918,7 +942,8 @@ export type Quote = {
   customerId: string;
   serviceType: ServiceType;
   status: QuoteStatus;
-  jobStatus: QuoteJobStatus;
+  /** Legacy projection retained for read compatibility. Job is the workflow authority. */
+  readonly jobStatus: QuoteJobStatus;
   afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
@@ -1024,19 +1049,28 @@ export type ChatToQuoteParsed = {
 
 export type AiUsageSummary = {
   consumedCredits: number;
-  consumedSpendUsd: number;
+  consumedSpendUsd?: number;
   monthlyCreditsUsed: number;
   monthlyCreditsLimit: number | null;
   monthlyCreditsRemaining: number | null;
-  monthlySpendUsedUsd: number;
-  monthlySpendLimitUsd: number | null;
-  monthlySpendRemainingUsd: number | null;
-  monthlySpendUsagePercent: number | null;
+  monthlySpendUsedUsd?: number;
+  monthlySpendLimitUsd?: number | null;
+  monthlySpendReservedUsd?: number;
+  monthlySpendRemainingUsd?: number | null;
+  monthlySpendUsagePercent?: number | null;
+  monthlyUsageCompletedPercent?: number | null;
+  monthlyUsageReservedPercent?: number | null;
+  monthlyUsageEffectivePercent?: number | null;
+  monthlyUsageRemainingPercent?: number | null;
+  activeReservationCount?: number;
+  enforcementMode?: "SPEND" | "CREDITS" | "UNLIMITED";
+  periodSource?: AiUsagePeriodSource;
+  billingCycleReconciliationPending?: boolean;
   warningThresholdPercent?: 25 | 50 | 75 | 85 | 95 | 100 | null;
   limitReached?: boolean;
-  estimatedPromptCostUsd: number;
+  estimatedPromptCostUsd?: number;
   estimatedPromptsRemaining: number | null;
-  renewsAtUtc: string;
+  renewsAtUtc?: string | null;
 };
 
 export type AiQuoteSuggestion = {
@@ -1181,7 +1215,7 @@ export type AiProgressEvent = {
 type AiSuggestionStreamEvent =
   | AiProgressEvent
   | { type: "complete"; result: AiQuoteSuggestionResult }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string; code?: string };
 
 export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
 export type WorkPresetUnitType = "FLAT" | "SQ_FT" | "HOUR" | "EACH";
@@ -1243,6 +1277,61 @@ export type ActivityTaskPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type ActivityTaskDueFilter = "active" | "overdue" | "today" | "upcoming" | "completed";
 export type JobStatus = "UNSCHEDULED" | "SCHEDULED" | "DISPATCHED" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
 export type JobAppointmentStatus = "SCHEDULED" | "DISPATCHED" | "ARRIVED" | "COMPLETED" | "CANCELED";
+export type WorkspaceNotificationKind =
+  | "BOOKED"
+  | "RESCHEDULED"
+  | "DISPATCHED"
+  | "ARRIVED"
+  | "COMPLETED"
+  | "CANCELED";
+export type WorkspaceNotificationDeliveryStatus = "AVAILABLE" | "DELIVERED";
+
+export type WorkspaceNotification = {
+  id: string;
+  kind: WorkspaceNotificationKind;
+  appointmentId: string;
+  templateKey: string;
+  templateVersion: number;
+  sourceVersion: number;
+  startsAtUtc: string;
+  endsAtUtc: string;
+  timeZone: string;
+  deliveryStatus: WorkspaceNotificationDeliveryStatus;
+  deliveredAtUtc: string | null;
+  readAtUtc: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  job: {
+    id: string;
+    jobNumber: number;
+    title: string;
+    customer: {
+      id: string;
+      fullName: string;
+    };
+  };
+};
+
+export type WorkspaceNotificationListResponse = {
+  items: WorkspaceNotification[];
+  page: {
+    limit: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+};
+
+export type WorkspaceNotificationSummaryResponse = {
+  unreadCount: number;
+  totalCount: number;
+  latestCreatedAtUtc: string | null;
+};
+
+export type AppointmentNotificationReceipt = {
+  kind: WorkspaceNotificationKind;
+  createdCount: number;
+};
 
 export type ActivityTask = {
   id: string;
@@ -1361,7 +1450,23 @@ export type JobAppointment = {
   };
 };
 
-export type JobScheduleAppointment = JobAppointment & {
+export type JobScheduleAppointment = {
+  id: string;
+  jobId: string;
+  assignedTenantUserId: string;
+  status: JobAppointmentStatus;
+  startsAtUtc: string;
+  endsAtUtc: string;
+  timeZone: string;
+  version: number;
+  assignedTenantUser: {
+    id: string;
+    role: OrgUserRole;
+    user: {
+      id: string;
+      fullName: string;
+    };
+  };
   job: {
     id: string;
     jobNumber: number;
@@ -1647,7 +1752,6 @@ export type WorkspaceOverview = {
     id: string;
     title: string;
     status: QuoteStatus;
-    jobStatus: QuoteJobStatus;
     totalAmount: number;
     updatedAt: string;
     customer: { id: string; fullName: string };
@@ -1665,7 +1769,11 @@ export type WorkspaceFollowUpItem = {
   quoteTitle?: string;
   totalAmount?: number;
   status?: QuoteStatus;
-  jobStatus?: QuoteJobStatus;
+  job?: {
+    id: string;
+    jobNumber: number;
+    status: JobStatus;
+  };
   afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
   afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;
@@ -1782,8 +1890,9 @@ export const api = {
       tool?: AiAssistantRequestedTool;
       context?: AiAssistantContext;
       conversation?: AiAssistantConversationTurn[];
-    }) => request<AiAssistantResponse>("/v1/ai/assistant", {
+    }, options?: { idempotencyKey?: string }) => request<AiAssistantResponse>("/v1/ai/assistant", {
       method: "POST",
+      headers: activityCommandHeaders(options?.idempotencyKey),
       body: JSON.stringify(body),
     }),
 
@@ -1807,8 +1916,9 @@ export const api = {
       serviceType?: ServiceType;
       limit?: number;
       includeArchived?: boolean;
-    }) => request<{ insight: AiBusinessInsight; usage: AiUsageSummary }>("/v1/ai/business-insights", {
+    }, options?: { idempotencyKey?: string }) => request<{ insight: AiBusinessInsight; usage: AiUsageSummary }>("/v1/ai/business-insights", {
       method: "POST",
+      headers: activityCommandHeaders(options?.idempotencyKey),
       body: JSON.stringify(body),
     }),
   },
@@ -1863,6 +1973,7 @@ export const api = {
         conversation?: AiAssistantConversationTurn[];
       }) => request<AiAssistantResponse>("/v1/internal/ai-quality/assistant-test", {
         method: "POST",
+        headers: activityCommandHeaders(),
         body: JSON.stringify(body),
       }),
       summary: (query?: { days?: number }) =>
@@ -2236,7 +2347,7 @@ export const api = {
           timeZone: string;
           instructions?: string | null;
         },
-      ) => request<{ appointment: JobAppointment }>(`/v1/jobs/${jobId}/appointments`, {
+      ) => request<{ appointment: JobAppointment; notificationReceipt?: AppointmentNotificationReceipt }>(`/v1/jobs/${jobId}/appointments`, {
         method: "POST",
         body: JSON.stringify(body),
       }),
@@ -2253,13 +2364,13 @@ export const api = {
           instructions?: string | null;
           status?: JobAppointmentStatus;
         },
-      ) => request<{ appointment: JobAppointment }>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
+      ) => request<{ appointment: JobAppointment; notificationReceipt?: AppointmentNotificationReceipt | null }>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
 
       remove: (jobId: string, appointmentId: string, version: number) =>
-        request<void>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
+        request<{ appointmentId: string; notificationReceipt?: AppointmentNotificationReceipt } | undefined>(`/v1/jobs/${jobId}/appointments/${appointmentId}`, {
           method: "DELETE",
           body: JSON.stringify({ version }),
         }),
@@ -2285,6 +2396,31 @@ export const api = {
           method: "DELETE",
         }),
     },
+  },
+
+  notifications: {
+    list: (query?: {
+      filter?: "all" | "unread";
+      limit?: number;
+      cursor?: string;
+    }) => request<WorkspaceNotificationListResponse>(`/v1/notifications${toQueryString({
+      filter: query?.filter,
+      limit: query?.limit,
+      cursor: query?.cursor,
+    })}`),
+
+    summary: () => request<WorkspaceNotificationSummaryResponse>("/v1/notifications/summary"),
+
+    markRead: (notificationId: string) =>
+      request<{ notification: WorkspaceNotification }>(
+        `/v1/notifications/${encodeURIComponent(notificationId)}/read`,
+        { method: "POST" },
+      ),
+
+    markAllRead: () => request<{ updatedCount: number; cutoffAtUtc: string }>(
+      "/v1/notifications/read-all",
+      { method: "POST" },
+    ),
   },
 
   invoices: {
@@ -2628,10 +2764,12 @@ export const api = {
       }>;
     }, options?: {
       onProgress?: (event: AiProgressEvent) => void;
+      idempotencyKey?: string;
     }): Promise<AiQuoteSuggestionResult> =>
       (async () => {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
+          "Idempotency-Key": options?.idempotencyKey ?? `qf-ai-${crypto.randomUUID()}`,
         };
 
         const streamStartedAt = performance.now();
@@ -2716,7 +2854,6 @@ export const api = {
         customerId?: string;
         serviceType?: ServiceType;
         status?: QuoteStatus;
-        jobStatus?: QuoteJobStatus;
         afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
         title?: string;
         scopeText?: string;

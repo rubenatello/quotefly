@@ -138,6 +138,7 @@ test("superuser AI quality page can run a Kody response test with diagnostics", 
     context?: Record<string, unknown>;
   }> = [];
   await page.route(`${apiBaseUrl}/v1/internal/ai-quality/assistant-test`, async (route) => {
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^qf-ui-/);
     const body = route.request().postDataJSON() as {
       message?: string;
       tool?: string;

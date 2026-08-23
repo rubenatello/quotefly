@@ -11,10 +11,13 @@ const FORCED_RLS_ROWS = [
   { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
   { tableName: "AiRetrievalChunk", enabled: true, forced: true },
   { tableName: "AiRetrievalDocument", enabled: true, forced: true },
+  { tableName: "AiUsagePeriod", enabled: true, forced: true },
+  { tableName: "AiUsageReservation", enabled: true, forced: true },
   { tableName: "Job", enabled: true, forced: true },
   { tableName: "JobAppointment", enabled: true, forced: true },
   { tableName: "JobEvent", enabled: true, forced: true },
   { tableName: "JobNote", enabled: true, forced: true },
+  { tableName: "NotificationOutbox", enabled: true, forced: true },
   { tableName: "Invoice", enabled: true, forced: true },
   { tableName: "InvoiceEvent", enabled: true, forced: true },
   { tableName: "InvoicePayment", enabled: true, forced: true },
@@ -143,23 +146,9 @@ describe("health and readiness routes", () => {
   test("returns not ready when AI retrieval RLS is missing or not forced", async () => {
     const queryRaw = vi.fn(async () => {
       if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
-      return [
-        { tableName: "ActivityTask", enabled: true, forced: true },
-        { tableName: "ActivityTaskEvent", enabled: true, forced: true },
-        { tableName: "AiIndexJob", enabled: true, forced: true },
-        { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
-        { tableName: "AiRetrievalChunk", enabled: true, forced: false },
-        { tableName: "AiRetrievalDocument", enabled: true, forced: true },
-        { tableName: "Job", enabled: true, forced: true },
-        { tableName: "JobAppointment", enabled: true, forced: true },
-        { tableName: "JobEvent", enabled: true, forced: true },
-        { tableName: "JobNote", enabled: true, forced: true },
-        { tableName: "Invoice", enabled: true, forced: true },
-        { tableName: "InvoiceEvent", enabled: true, forced: true },
-        { tableName: "InvoicePayment", enabled: true, forced: true },
-        { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
-        { tableName: "TenantSequence", enabled: true, forced: true },
-      ];
+      return FORCED_RLS_ROWS.map((row) =>
+        row.tableName === "AiRetrievalChunk" ? { ...row, forced: false } : row,
+      );
     });
     const app = buildHealthServer(queryRaw);
 

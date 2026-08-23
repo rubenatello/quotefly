@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
+  CalendarClock,
+  CalendarPlus2,
   ChevronDown,
   Clock3,
   FilePlus2,
@@ -16,6 +18,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
+  Truck,
   UserPlus,
   X,
 } from "lucide-react";
@@ -32,8 +35,9 @@ import {
 import {
   formatAiRenewalDate,
   formatAiUsageNotice,
+  assistantToolConsumesAiBudget,
+  aiUsageUpdateFromApiError,
   publishAiUsageUpdate,
-  type AiUsageUpdateDetail,
 } from "../../lib/ai-credits";
 import { useTrack } from "../../lib/analytics";
 import { formatBackendLabel, isDateResultKey } from "../../lib/display-format";
@@ -43,8 +47,16 @@ import { Alert, Button, ConfirmModal, IconButton, LoadingState, Textarea } from 
 import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navigation";
 import { KodySparkIcon } from "./KodySparkIcon";
 import { visibleKodyResultEntries } from "./kody-result-display";
-import { KODY_OPEN_EVENT, KODY_OUTCOME_EVENT, type KodyOpenDetail, type KodyOutcomeDetail } from "./kody-events";
+import {
+  KODY_OPEN_EVENT,
+  KODY_OUTCOME_EVENT,
+  type KodyBookingReviewDetail,
+  type KodyDispatchReviewDetail,
+  type KodyOpenDetail,
+  type KodyOutcomeDetail,
+} from "./kody-events";
 import { normalizeKodyAssistantResponse } from "./kody-response-normalization";
+import { localizedApiError } from "../../lib/localized-api-error";
 
 type KodyMessage = {
   id: string;
@@ -81,6 +93,28 @@ function quickPrompts(t: TFunction): QuickPrompt[] {
     prompt: t("kody.quick.myTasks.prompt"),
     icon: <Clock3 size={15} />,
     submitImmediately: true,
+  },
+  {
+    tool: "LIST_SCHEDULE",
+    label: t("kody.quick.mySchedule.label"),
+    description: t("kody.quick.mySchedule.description"),
+    prompt: t("kody.quick.mySchedule.prompt"),
+    icon: <CalendarClock size={15} />,
+    submitImmediately: true,
+  },
+  {
+    tool: "PREPARE_BOOKING",
+    label: t("kody.quick.bookWork.label"),
+    description: t("kody.quick.bookWork.description"),
+    prompt: t("kody.quick.bookWork.prompt"),
+    icon: <CalendarPlus2 size={15} />,
+  },
+  {
+    tool: "PREPARE_DISPATCH",
+    label: t("kody.quick.dispatchWork.label"),
+    description: t("kody.quick.dispatchWork.description"),
+    prompt: t("kody.quick.dispatchWork.prompt"),
+    icon: <Truck size={15} />,
   },
   {
     tool: "DRAFT_CUSTOMER",
@@ -159,6 +193,7 @@ const QUICK_PROMPT_PRIORITY: Partial<Record<WorkspacePage, AiAssistantTool[]>> =
   products: ["SEARCH_PRODUCTS", "DRAFT_PRODUCT", "DRAFT_QUOTE"],
   build: ["DRAFT_QUOTE", "DRAFT_CUSTOMER", "DRAFT_PRODUCT"],
   "follow-up": ["PRIORITIZE_MY_DAY", "LIST_MY_ACTIVITIES", "PREPARE_ACTIVITY"],
+  jobs: ["LIST_SCHEDULE", "PREPARE_BOOKING", "PREPARE_DISPATCH"],
   analytics: ["SUMMARIZE_PIPELINE", "RANK_PROFITABLE_JOBS", "PRIORITIZE_MY_DAY"],
 };
 
@@ -178,17 +213,20 @@ function KodyQuickPromptButton({
   quickPrompt,
   selected,
   disabled,
+  disabledReason,
   onSelect,
 }: {
   quickPrompt: QuickPrompt;
   selected: boolean;
   disabled: boolean;
+  disabledReason?: string;
   onSelect: (quickPrompt: QuickPrompt) => void;
 }) {
   return (
     <button
       type="button"
-      title={quickPrompt.description}
+      title={disabledReason ?? quickPrompt.description}
+      aria-description={disabledReason}
       onClick={() => onSelect(quickPrompt)}
       disabled={disabled}
       data-testid={`kody-quick-${quickPrompt.tool.toLowerCase()}`}
@@ -207,12 +245,20 @@ function KodyQuickPromptButton({
   );
 }
 
-function assistantContextFromPage(page: WorkspacePage): "quotes" | "customers" | "analytics" | "products" | "dashboard" {
+function assistantContextFromPage(page: WorkspacePage): "quotes" | "customers" | "analytics" | "products" | "dashboard" | "jobs" {
   if (page === "customers") return "customers";
   if (page === "products") return "products";
   if (page === "analytics" || page === "follow-up") return "analytics";
+  if (page === "jobs") return "jobs";
   if (page === "quotes" || page === "build" || page === "quote-desk") return "quotes";
   return "dashboard";
+}
+
+function jobIdFromPath(pathname: string) {
+  const match = pathname.match(/^\/app\/jobs\/([^/?#]+)$/);
+  if (!match?.[1]) return null;
+  try { return decodeURIComponent(match[1]); }
+  catch { return null; }
 }
 
 function makeMessageId() {
@@ -246,6 +292,7 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
     if (tool === "SEARCH_PRODUCTS") return t("kody.loading.products");
     if (tool === "NAVIGATE_WORKSPACE") return t("kody.loading.navigation");
     if (tool === "FOLLOW_UP_QUEUE") return t("kody.loading.followUps");
+    if (tool === "LIST_SCHEDULE") return t("kody.loading.schedule");
     if (tool === "LIST_MY_ACTIVITIES") return t("kody.loading.activities");
     if (tool === "PRIORITIZE_MY_DAY") return t("kody.loading.prioritizeDay");
     if (tool === "CUSTOMERS_WITHOUT_QUOTES") return t("kody.loading.unquoted");
@@ -253,6 +300,8 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
     if (tool === "DRAFT_CUSTOMER") return t("kody.loading.customerDraft");
     if (tool === "DRAFT_PRODUCT") return t("kody.loading.productDraft");
     if (tool === "DRAFT_QUOTE") return t("kody.loading.quoteDraft");
+    if (tool === "PREPARE_BOOKING") return t("kody.loading.bookingReview");
+    if (tool === "PREPARE_DISPATCH") return t("kody.loading.dispatchReview");
     if (tool === "PREPARE_ACTIVITY") return t("kody.loading.activityDraft");
     if (tool === "PREPARE_QUOTE_SEND") return t("kody.loading.quoteSend");
     if (tool === "SUMMARIZE_PIPELINE") return t("kody.loading.pipeline");
@@ -271,11 +320,22 @@ function getString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function getFiniteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function getIsoDateTime(value: unknown) {
+  const stringValue = getString(value);
+  return stringValue && Number.isFinite(new Date(stringValue).getTime()) ? stringValue : null;
+}
+
 function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
   const labels: Record<AiAssistantTool, string> = {
     NAVIGATE_WORKSPACE: t("kody.tools.navigate"), DRAFT_CUSTOMER: t("kody.tools.draftCustomer"),
     SEARCH_CUSTOMERS: t("kody.tools.searchCustomers"), CUSTOMERS_WITHOUT_QUOTES: t("kody.tools.customersWithoutQuotes"),
     DRAFT_PRODUCT: t("kody.tools.draftProduct"), SEARCH_PRODUCTS: t("kody.tools.searchProducts"),
+    LIST_SCHEDULE: t("kody.tools.listSchedule"), PREPARE_BOOKING: t("kody.tools.prepareBooking"),
+    PREPARE_DISPATCH: t("kody.tools.prepareDispatch"),
     LIST_MY_ACTIVITIES: t("kody.tools.listActivities"), PRIORITIZE_MY_DAY: t("kody.tools.prioritizeDay"),
     PREPARE_ACTIVITY: t("kody.tools.prepareActivity"),
     DRAFT_QUOTE: t("kody.tools.draftQuote"), PREPARE_QUOTE_SEND: t("kody.tools.prepareQuoteSend"),
@@ -291,6 +351,8 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
     OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
     OPEN_PRODUCT_DRAFT: t("kody.actions.reviewProduct"), OPEN_QUOTE_DRAFT: t("kody.actions.reviewQuote"),
     OPEN_QUOTE_SEND: t("kody.actions.reviewSend"), OPEN_ACTIVITY_DRAFT: t("kody.actions.reviewActivity"),
+    OPEN_SCHEDULE: t("kody.actions.openSchedule"), OPEN_BOOKING_REVIEW: t("kody.actions.reviewBooking"),
+    OPEN_DISPATCH_REVIEW: t("kody.actions.reviewDispatch"),
     OPEN_ANALYTICS: t("kody.actions.openAnalytics"),
     OPEN_WORKSPACE_PAGE: t("kody.actions.openPage"), REQUEST_ADMIN_ACCESS: t("kody.actions.requestAccess"),
   };
@@ -311,6 +373,9 @@ function localizedResultField(key: string, t: TFunction) {
     activityRank: t("kody.resultFields.activityRank"), taskType: t("kody.resultFields.taskType"),
     priority: t("kody.resultFields.priority"), dueBucket: t("kody.resultFields.dueBucket"),
     dueAtUtc: t("kody.resultFields.dueAt"),
+    jobNumber: t("kody.resultFields.jobNumber"), jobTitle: t("kody.resultFields.jobTitle"),
+    startsAtUtc: t("kody.resultFields.startsAt"), endsAtUtc: t("kody.resultFields.endsAt"),
+    assigneeName: t("kody.resultFields.assignee"),
     assignedTo: t("kody.resultFields.assignedTo"), description: t("kody.resultFields.description"), notes: t("kody.resultFields.notes"),
     createdAtUtc: t("kody.resultFields.created"), updatedAtUtc: t("kody.resultFields.updated"),
   };
@@ -333,7 +398,8 @@ function localizedKnownValue(value: string, t: TFunction) {
     ACTIVE: t("kody.values.active"), ARCHIVED: t("kody.values.archived"), DELETED: t("kody.values.deleted"),
     QUOTED: t("kody.values.quoted"), CLOSED: t("kody.values.closed"), POST_JOB: t("kody.values.postJob"),
     SCHEDULED: t("kody.values.scheduled"), DISPATCHED: t("kody.values.dispatched"),
-    IN_PROGRESS: t("kody.values.inProgress"), COMPLETED: t("kody.values.completed"), CANCELED: t("kody.values.canceled"),
+    ARRIVED: t("kody.values.arrived"), IN_PROGRESS: t("kody.values.inProgress"),
+    COMPLETED: t("kody.values.completed"), CANCELED: t("kody.values.canceled"),
     OVERDUE: t("kody.values.overdue"), TODAY: t("kody.values.today"), UPCOMING: t("kody.values.upcoming"),
     EMAIL: t("kody.values.email"), SMS: t("kody.values.text"), COPY: t("kody.values.copy"),
     CONSTRUCTION: t("domain.trade.CONSTRUCTION"), HVAC: t("domain.trade.HVAC"), PLUMBING: t("domain.trade.PLUMBING"),
@@ -347,10 +413,12 @@ function localizedKnownValue(value: string, t: TFunction) {
   return values[value] ?? value;
 }
 
-function formatKodyDate(value: string, locale: string, displayTimeZone?: string | null) {
+function formatKodyDate(value: string, locale: string, displayTimeZone?: string | null, includeTime = false) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return null;
-  const options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
+  const options: Intl.DateTimeFormatOptions = includeTime
+    ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", year: "numeric" };
   if (displayTimeZone) options.timeZone = displayTimeZone;
   try { return new Intl.DateTimeFormat(locale, options).format(date); }
   catch { delete options.timeZone; return new Intl.DateTimeFormat(locale, options).format(date); }
@@ -365,14 +433,17 @@ function formatResultValue(key: string, value: string | number | boolean | null,
     return value.toLocaleString(locale);
   }
   if (isDateResultKey(key)) {
-    const formattedDate = formatKodyDate(value, locale, displayTimeZone);
+    const formattedDate = /(?:starts|ends|due)AtUtc$/i.test(key)
+      ? formatKodyDate(value, locale, displayTimeZone, true)
+      : formatKodyDate(value, locale, displayTimeZone);
     if (formattedDate) return formattedDate;
   }
   return localizedKnownValue(value, t);
 }
 
 function resultTitle(result: Record<string, string | number | boolean | null>, fallback: string, t: TFunction) {
-  const tenantTitle = getString(result.fullName) ?? getString(result.name) ?? getString(result.title) ?? getString(result.item);
+  const tenantTitle = getString(result.fullName) ?? getString(result.name) ?? getString(result.title)
+    ?? getString(result.customerName) ?? getString(result.jobTitle) ?? getString(result.item);
   if (tenantTitle) return tenantTitle;
   const enumTitle = getString(result.serviceType) ?? getString(result.status);
   return enumTitle ? localizedKnownValue(enumTitle, t) : fallback;
@@ -416,6 +487,81 @@ function compactHiddenList(fieldsExcluded: string[], t: TFunction) {
   return `${visible.join(", ")}${remaining > 0 ? t("kody.safety.moreHidden", { count: remaining }) : ""}`;
 }
 
+function bookingReviewFromAction(action: AiAssistantAction): KodyBookingReviewDetail | null {
+  if (action.type !== "OPEN_BOOKING_REVIEW") return null;
+  const mode = action.payload.mode === "CREATE" || action.payload.mode === "RESCHEDULE" ? action.payload.mode : null;
+  const jobId = getString(action.payload.jobId);
+  const jobNumber = getFiniteNumber(action.payload.jobNumber);
+  const jobTitle = getString(action.payload.jobTitle);
+  const customerId = getString(action.payload.customerId);
+  const customerName = getString(action.payload.customerName);
+  const assignedTenantUserId = getString(action.payload.assignedTenantUserId);
+  const assigneeName = getString(action.payload.assigneeName);
+  const startsAtUtc = getIsoDateTime(action.payload.startsAtUtc);
+  const endsAtUtc = getIsoDateTime(action.payload.endsAtUtc);
+  const timeZone = getString(action.payload.timeZone);
+  if (!mode || !jobId || jobNumber === null || !Number.isInteger(jobNumber) || !jobTitle || !customerId || !customerName
+    || !assignedTenantUserId || !assigneeName || !startsAtUtc || !endsAtUtc || !timeZone
+    || new Date(startsAtUtc) >= new Date(endsAtUtc)) return null;
+  if (mode === "CREATE") {
+    return { mode, jobId, jobNumber, jobTitle, customerId, customerName, assignedTenantUserId, assigneeName, startsAtUtc, endsAtUtc, timeZone };
+  }
+  const appointmentId = getString(action.payload.appointmentId);
+  const appointmentVersion = getFiniteNumber(action.payload.appointmentVersion);
+  if (!appointmentId || appointmentVersion === null || !Number.isInteger(appointmentVersion) || action.payload.expectedStatus !== "SCHEDULED") return null;
+  return {
+    mode,
+    jobId,
+    jobNumber,
+    jobTitle,
+    customerId,
+    customerName,
+    assignedTenantUserId,
+    assigneeName,
+    startsAtUtc,
+    endsAtUtc,
+    timeZone,
+    appointmentId,
+    appointmentVersion,
+    expectedStatus: "SCHEDULED",
+  };
+}
+
+function dispatchReviewFromAction(action: AiAssistantAction): KodyDispatchReviewDetail | null {
+  if (action.type !== "OPEN_DISPATCH_REVIEW") return null;
+  const jobId = getString(action.payload.jobId);
+  const jobNumber = getFiniteNumber(action.payload.jobNumber);
+  const jobTitle = getString(action.payload.jobTitle);
+  const customerId = getString(action.payload.customerId);
+  const customerName = getString(action.payload.customerName);
+  const appointmentId = getString(action.payload.appointmentId);
+  const appointmentVersion = getFiniteNumber(action.payload.appointmentVersion);
+  const startsAtUtc = getIsoDateTime(action.payload.startsAtUtc);
+  const endsAtUtc = getIsoDateTime(action.payload.endsAtUtc);
+  const timeZone = getString(action.payload.timeZone);
+  const assignedTenantUserId = getString(action.payload.assignedTenantUserId);
+  const assigneeName = getString(action.payload.assigneeName);
+  if (!jobId || jobNumber === null || !Number.isInteger(jobNumber) || !jobTitle || !customerId || !customerName
+    || !appointmentId || appointmentVersion === null || !Number.isInteger(appointmentVersion)
+    || action.payload.expectedStatus !== "SCHEDULED" || !startsAtUtc || !endsAtUtc || !timeZone
+    || !assignedTenantUserId || !assigneeName || new Date(startsAtUtc) >= new Date(endsAtUtc)) return null;
+  return {
+    jobId,
+    jobNumber,
+    jobTitle,
+    customerId,
+    customerName,
+    appointmentId,
+    appointmentVersion,
+    expectedStatus: "SCHEDULED",
+    startsAtUtc,
+    endsAtUtc,
+    timeZone,
+    assignedTenantUserId,
+    assigneeName,
+  };
+}
+
 function formatVisibleAnswer(answer: string) {
   return answer
     .replace(/\s*\[(?:[A-Z]\d+(?:\s*,\s*)?)+\]/g, "")
@@ -423,7 +569,12 @@ function formatVisibleAnswer(answer: string) {
     .trim();
 }
 
-function actionConfirmationCopy(action: AiAssistantAction, t: TFunction) {
+function actionConfirmationCopy(
+  action: AiAssistantAction,
+  t: TFunction,
+  locale: string,
+  displayTimeZone?: string | null,
+) {
   if (action.type === "OPEN_CUSTOMER_DRAFT") {
     const fullName = getString(action.payload.fullName) ?? t("kody.confirm.thisCustomer");
     const phone = getString(action.payload.phone);
@@ -470,6 +621,28 @@ function actionConfirmationCopy(action: AiAssistantAction, t: TFunction) {
       confirmLabel: t("kody.confirm.activityButton"),
     };
   }
+  if (action.type === "OPEN_BOOKING_REVIEW") {
+    const customerName = getString(action.payload.customerName) ?? t("kody.confirm.theCustomer");
+    const startsAtUtc = getIsoDateTime(action.payload.startsAtUtc);
+    const timeZone = getString(action.payload.timeZone) ?? displayTimeZone;
+    const startsAt = startsAtUtc ? formatKodyDate(startsAtUtc, locale, timeZone, true) : t("kody.confirm.proposedTime");
+    return {
+      title: t("kody.confirm.bookingTitle", { customer: customerName }),
+      description: t("kody.confirm.bookingDescription", { start: startsAt }),
+      confirmLabel: t("kody.confirm.bookingButton"),
+    };
+  }
+  if (action.type === "OPEN_DISPATCH_REVIEW") {
+    const customerName = getString(action.payload.customerName) ?? t("kody.confirm.theCustomer");
+    const startsAtUtc = getIsoDateTime(action.payload.startsAtUtc);
+    const timeZone = getString(action.payload.timeZone) ?? displayTimeZone;
+    const startsAt = startsAtUtc ? formatKodyDate(startsAtUtc, locale, timeZone, true) : t("kody.confirm.proposedTime");
+    return {
+      title: t("kody.confirm.dispatchTitle", { customer: customerName }),
+      description: t("kody.confirm.dispatchDescription", { start: startsAt }),
+      confirmLabel: t("kody.confirm.dispatchButton"),
+    };
+  }
   if (action.type === "REQUEST_ADMIN_ACCESS") {
     return {
       title: t("kody.confirm.accessTitle"),
@@ -495,7 +668,58 @@ function KodyResultCard({
 }) {
   const { t } = useTranslation();
   const { locale } = useLocale();
-  const entries = visibleKodyResultEntries(result);
+  const isScheduleResult = "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result);
+  const protectedScheduleFields = /(?:address|instruction|phone|email|contact|cost|margin)/i;
+  const entries = visibleKodyResultEntries(result)
+    .filter(([key]) => !isScheduleResult || !protectedScheduleFields.test(key));
+  if (isScheduleResult) {
+    const timeZone = getString(result.timeZone) ?? displayTimeZone ?? "UTC";
+    const startsAtUtc = getString(result.startsAtUtc);
+    const endsAtUtc = getString(result.endsAtUtc);
+    const start = startsAtUtc ? formatKodyDate(startsAtUtc, locale, timeZone, true) : null;
+    const end = endsAtUtc ? formatKodyDate(endsAtUtc, locale, timeZone, true) : null;
+    const customerName = getString(result.customerName) ?? t("kody.confirm.theCustomer");
+    const jobTitle = getString(result.jobTitle);
+    const jobNumber = getFiniteNumber(result.jobNumber);
+    const assigneeName = getString(result.assigneeName);
+    const status = getString(result.appointmentStatus) ?? getString(result.status);
+    return (
+      <div data-testid="kody-schedule-card" className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3 transition-colors hover:border-[var(--qf-info-border)]">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--qf-info-surface)] text-[11px] font-bold text-[var(--qf-info-text)]">
+            {index + 1}
+          </span>
+          <p className="min-w-0 text-sm font-semibold text-[var(--qf-text)]">{customerName}</p>
+        </div>
+        <dl className="mt-2 grid gap-1.5 text-xs text-[var(--qf-text-soft)]">
+          {start && end ? (
+            <div className="flex items-start justify-between gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.scheduleCard.window", { timeZone })}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{t("kody.scheduleCard.windowValue", { start, end })}</dd>
+            </div>
+          ) : null}
+          {jobNumber !== null || jobTitle ? (
+            <div className="flex items-start justify-between gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.jobTitle")}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{t("kody.scheduleCard.job", { number: jobNumber ?? "—", title: jobTitle ?? "—" })}</dd>
+            </div>
+          ) : null}
+          {assigneeName ? (
+            <div className="flex items-start justify-between gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.assignee")}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{assigneeName}</dd>
+            </div>
+          ) : null}
+          {status ? (
+            <div className="flex items-start justify-between gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.status")}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{localizedKnownValue(status, t)}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </div>
+    );
+  }
   return (
     <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3 transition-colors hover:border-[var(--qf-info-border)]">
       <div className="flex items-start gap-2">
@@ -538,6 +762,11 @@ function KodyResponse({
   const [feedbackNote, setFeedbackNote] = useState("");
   const [showFeedbackNote, setShowFeedbackNote] = useState(false);
   const [lastFeedbackSave, setLastFeedbackSave] = useState<"rating" | "note" | null>(null);
+  const isScheduleResponse = response.diagnostics.resolvedTool === "LIST_SCHEDULE"
+    || response.diagnostics.resolvedTool === "PREPARE_BOOKING"
+    || response.diagnostics.resolvedTool === "PREPARE_DISPATCH"
+    || response.results.some((result) => "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result));
+  const shownResultCount = Math.min(response.results.length, 4);
 
   async function submitFeedback(rating: AiAssistantFeedbackRating, nextNote?: string | null) {
     if (feedbackStatus === "saving" || response.auditEventId === "audit-unavailable") return;
@@ -732,6 +961,11 @@ function KodyResponse({
                 displayTimeZone={displayTimeZone}
               />
             ))}
+            {isScheduleResponse && response.results.length > shownResultCount ? (
+              <p className="text-xs font-medium text-[var(--qf-text-muted)]" data-testid="kody-results-count">
+                {t("kody.results.showing", { shown: shownResultCount, total: response.results.length })}
+              </p>
+            ) : null}
           </div>
         </details>
       ) : null}
@@ -771,13 +1005,17 @@ function KodyResponse({
 export function KodyAssistant({
   currentPage,
   canViewInternalCosts = false,
-  aiUsageLimitReached = false,
+  aiPaidActionsUnavailable = false,
+  aiUsageReconciliationPending = false,
+  aiUsageAccountingUnavailable = false,
   aiUsageRenewsAtUtc,
   displayTimeZone,
 }: {
   currentPage?: WorkspacePage;
   canViewInternalCosts?: boolean;
-  aiUsageLimitReached?: boolean;
+  aiPaidActionsUnavailable?: boolean;
+  aiUsageReconciliationPending?: boolean;
+  aiUsageAccountingUnavailable?: boolean;
   aiUsageRenewsAtUtc?: string | null;
   displayTimeZone?: string | null;
 }) {
@@ -809,9 +1047,13 @@ export function KodyAssistant({
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc, locale);
-  const aiUsageLimitMessage = aiUsageRenewalLabel
-    ? t("kody.usage.pausedUntil", { date: aiUsageRenewalLabel })
-    : t("kody.usage.paused");
+  const aiUsageUnavailableMessage = aiUsageReconciliationPending
+    ? t("billing.aiUsage.reconciliationDescription")
+    : aiUsageAccountingUnavailable
+      ? t("kody.usage.accountingUnavailable")
+    : aiUsageRenewalLabel
+      ? t("kody.usage.paidPausedUntil", { date: aiUsageRenewalLabel })
+      : t("kody.usage.paidPaused");
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
   const allQuickPrompts = useMemo(() => quickPrompts(t), [t]);
   const availableQuickPrompts = canViewInternalCosts
@@ -820,6 +1062,10 @@ export function KodyAssistant({
   const orderedQuickPrompts = orderQuickPrompts(workspacePage, availableQuickPrompts);
   const primaryQuickPrompts = orderedQuickPrompts.slice(0, 3);
   const additionalQuickPrompts = orderedQuickPrompts.slice(3);
+
+  useEffect(() => {
+    if (aiPaidActionsUnavailable && assistantToolConsumesAiBudget(selectedTool)) setSelectedTool("AUTO");
+  }, [aiPaidActionsUnavailable, selectedTool]);
 
   const starterText = useMemo(() => {
     if (messages.length) return t("kody.starter.followUp");
@@ -872,13 +1118,33 @@ export function KodyAssistant({
     const handleKodyOutcome = (event: Event) => {
       const detail = (event as CustomEvent<KodyOutcomeDetail>).detail;
       if (!detail) return;
-      const text = detail.type === "CUSTOMER_CREATED"
-        ? t("kody.outcomes.customerCreated", { customer: detail.customerName })
-        : detail.type === "QUOTE_CREATED"
-          ? detail.customerName
-            ? t("kody.outcomes.quoteCreatedFor", { quote: detail.quoteTitle, customer: detail.customerName })
-            : t("kody.outcomes.quoteCreated", { quote: detail.quoteTitle })
-          : t("kody.outcomes.quoteSent", { quote: detail.quoteTitle, customer: detail.customerName });
+      let text: string;
+      if (detail.type === "CUSTOMER_CREATED") {
+        text = t("kody.outcomes.customerCreated", { customer: detail.customerName });
+      } else if (detail.type === "QUOTE_CREATED") {
+        text = detail.customerName
+          ? t("kody.outcomes.quoteCreatedFor", { quote: detail.quoteTitle, customer: detail.customerName })
+          : t("kody.outcomes.quoteCreated", { quote: detail.quoteTitle });
+      } else if (detail.type === "QUOTE_MARKED_SENT") {
+        text = t("kody.outcomes.quoteSent", { quote: detail.quoteTitle, customer: detail.customerName });
+      } else if (detail.type === "BOOKING_CREATED") {
+        text = t("kody.outcomes.bookingCreated", {
+          job: detail.jobNumber,
+          customer: detail.customerName,
+          start: formatKodyDate(detail.startsAtUtc, locale, displayTimeZone, true),
+        });
+      } else if (detail.type === "BOOKING_RESCHEDULED") {
+        text = t("kody.outcomes.bookingRescheduled", {
+          job: detail.jobNumber,
+          customer: detail.customerName,
+          start: formatKodyDate(detail.startsAtUtc, locale, displayTimeZone, true),
+        });
+      } else {
+        text = t("kody.outcomes.bookingDispatched", { job: detail.jobNumber, customer: detail.customerName });
+      }
+      if (detail.type === "BOOKING_CREATED" || detail.type === "BOOKING_RESCHEDULED" || detail.type === "BOOKING_DISPATCHED") {
+        text = `${text} ${t(detail.inAppNotificationCreated ? "kody.outcomes.inAppAvailable" : "kody.outcomes.noInAppCreated")}`;
+      }
       setMessages((current) => current.length
         ? [...current, { id: makeMessageId(), role: "kody", text }]
         : current);
@@ -886,7 +1152,7 @@ export function KodyAssistant({
     };
     window.addEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
     return () => window.removeEventListener(KODY_OUTCOME_EVENT, handleKodyOutcome);
-  }, [t, track]);
+  }, [displayTimeZone, locale, t, track]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -987,14 +1253,16 @@ export function KodyAssistant({
   async function submitPrompt(options?: { prompt?: string; tool?: AiAssistantTool | "AUTO" }) {
     const messageText = (options?.prompt ?? prompt).trim();
     if (!messageText || loading) return;
-    if (aiUsageLimitReached) {
-      setError(aiUsageLimitMessage);
+    const tool = options?.tool ?? selectedTool;
+    if (aiPaidActionsUnavailable && assistantToolConsumesAiBudget(tool)) {
+      setError(aiUsageUnavailableMessage);
       return;
     }
-    const tool = options?.tool ?? selectedTool;
+    const routeJobId = workspacePage === "jobs" ? jobIdFromPath(location.pathname) : null;
     const context = {
       ...(contextOverride ?? {}),
       currentPage: contextOverride?.currentPage ?? currentContextPage,
+      ...(contextOverride?.jobId ? {} : routeJobId ? { jobId: routeJobId } : {}),
       limit: contextOverride?.limit ?? 8,
     };
     const conversation = recentConversation(messages);
@@ -1028,6 +1296,8 @@ export function KodyAssistant({
         tool,
         context,
         conversation,
+      }, {
+        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
       });
       const assistantResponse = normalizeKodyAssistantResponse(response.assistant);
       track("kody_response", {
@@ -1060,15 +1330,20 @@ export function KodyAssistant({
         err instanceof ApiError && err.details && typeof err.details === "object"
           ? (err.details as { code?: unknown }).code
           : null;
-      if (errorCode === "AI_USAGE_LIMIT_REACHED") {
-        const usage = (err as ApiError).details as { usage?: AiUsageUpdateDetail };
-        if (usage.usage) publishAiUsageUpdate(usage.usage);
-      }
+      const usageUpdate = aiUsageUpdateFromApiError(err);
+      if (usageUpdate) publishAiUsageUpdate(usageUpdate);
       const message = errorCode === "AI_USAGE_LIMIT_REACHED"
-        ? aiUsageLimitMessage
-        : err instanceof ApiError
-          ? err.message
-          : t("kody.errors.requestFailed");
+        ? t("kody.usage.paidNotRun")
+        : errorCode === "AI_USAGE_REQUEST_ALREADY_PROCESSED"
+          ? t("apiErrors.aiAlreadyProcessed")
+        : err instanceof ApiError && err.status === 409
+          ? t("kody.usage.requestInProgress")
+          : errorCode === "AI_USAGE_ACCOUNTING_UNAVAILABLE"
+            ? t("kody.usage.accountingUnavailable")
+            : err instanceof ApiError && err.status === 503
+              ? t("kody.errors.temporaryFailure")
+            : localizedApiError(err, t, { fallbackKey: "kody.errors.requestFailed" });
+      setPrompt(messageText);
       setError(message);
       track("kody_response", {
         tool,
@@ -1221,6 +1496,44 @@ export function KodyAssistant({
       return;
     }
 
+    if (action.type === "OPEN_SCHEDULE") {
+      const range = action.payload.range === "day" || action.payload.range === "week" || action.payload.range === "next7"
+        ? action.payload.range
+        : null;
+      const date = getString(action.payload.date);
+      const mine = typeof action.payload.mine === "boolean" ? action.payload.mine : null;
+      if (!range || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || mine === null) {
+        return rejectInvalidAction(t("kody.errors.schedule"), action);
+      }
+      collapseForMobileHandoff(action.type);
+      navigate(`/app/jobs?${new URLSearchParams({ view: "schedule", range, date, assignee: mine ? "me" : "all" })}`);
+      return;
+    }
+
+    if (action.type === "OPEN_BOOKING_REVIEW") {
+      const review = bookingReviewFromAction(action);
+      if (!review) return rejectInvalidAction(t("kody.errors.bookingReview"), action);
+      // The Jobs workspace owns the actual create/reschedule request. Closing
+      // Kody avoids stacking its review dialog with the booking surface. The
+      // launcher persists across the route transition, so it is also a valid
+      // return target when a Kody-initiated reschedule is canceled.
+      originFocusRef.current = null;
+      setOpen(false);
+      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, {
+        state: { kodyBookingReview: review, kodyFocusReturnId: "kody-launcher" },
+      });
+      return;
+    }
+
+    if (action.type === "OPEN_DISPATCH_REVIEW") {
+      const review = dispatchReviewFromAction(action);
+      if (!review) return rejectInvalidAction(t("kody.errors.dispatchReview"), action);
+      originFocusRef.current = null;
+      setOpen(false);
+      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, { state: { kodyDispatchReview: review } });
+      return;
+    }
+
     if (action.type === "OPEN_ANALYTICS") {
       navigate("/app/analytics", { state: { kodyInsight: action.payload } });
       return;
@@ -1233,6 +1546,7 @@ export function KodyAssistant({
         quotes: "/app/quotes",
         products: "/app/products",
         "follow-up": "/app/follow-up",
+        jobs: "/app/jobs",
         analytics: "/app/analytics",
         build: "/app/build",
       };
@@ -1256,7 +1570,9 @@ export function KodyAssistant({
     executeAction(action, "direct");
   }
 
-  const pendingActionCopy = pendingAction ? actionConfirmationCopy(pendingAction, t) : null;
+  const pendingActionCopy = pendingAction
+    ? actionConfirmationCopy(pendingAction, t, locale, displayTimeZone)
+    : null;
 
   return (
     <>
@@ -1277,6 +1593,7 @@ export function KodyAssistant({
           )}
           aria-label={t("kody.button")}
           aria-expanded="false"
+          id="kody-launcher"
           data-testid="kody-launcher"
         >
           <KodySparkIcon size={46} />
@@ -1347,7 +1664,7 @@ export function KodyAssistant({
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 bg-[var(--qf-kody-shell)] p-3 sm:p-4">
-          {!aiUsageLimitReached ? <details
+          <details
             ref={quickPromptsRef}
             className="group shrink-0 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)]"
             data-testid="kody-quick-prompts"
@@ -1366,7 +1683,8 @@ export function KodyAssistant({
                     key={quickPrompt.label}
                     quickPrompt={quickPrompt}
                     selected={selectedTool === quickPrompt.tool}
-                    disabled={loading || aiUsageLimitReached}
+                    disabled={loading || (aiPaidActionsUnavailable && assistantToolConsumesAiBudget(quickPrompt.tool))}
+                    disabledReason={aiPaidActionsUnavailable && assistantToolConsumesAiBudget(quickPrompt.tool) ? aiUsageUnavailableMessage : undefined}
                     onSelect={handleQuickPrompt}
                   />
                 ))}
@@ -1386,7 +1704,8 @@ export function KodyAssistant({
                         key={quickPrompt.label}
                         quickPrompt={quickPrompt}
                         selected={selectedTool === quickPrompt.tool}
-                        disabled={loading || aiUsageLimitReached}
+                        disabled={loading || (aiPaidActionsUnavailable && assistantToolConsumesAiBudget(quickPrompt.tool))}
+                        disabledReason={aiPaidActionsUnavailable && assistantToolConsumesAiBudget(quickPrompt.tool) ? aiUsageUnavailableMessage : undefined}
                         onSelect={handleQuickPrompt}
                       />
                     ))}
@@ -1394,11 +1713,16 @@ export function KodyAssistant({
                 </details>
               ) : null}
             </div>
-          </details> : (
-            <Alert tone="warning">{aiUsageLimitMessage}</Alert>
-          )}
+          </details>
+          {aiPaidActionsUnavailable ? <Alert tone="warning">{aiUsageUnavailableMessage}</Alert> : null}
 
-          <div ref={conversationRef} className="qf-kody-thread min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-[var(--qf-border)] p-3 sm:p-4">
+          <div
+            ref={conversationRef}
+            role="log"
+            aria-label={t("kody.conversationLabel")}
+            tabIndex={0}
+            className="qf-kody-thread min-h-0 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-[var(--qf-border)] p-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] sm:p-4"
+          >
             {!messages.length ? (
               <div className="flex min-h-[160px] flex-col items-center justify-center px-4 text-center">
                 <p className="text-base font-semibold text-[var(--qf-text)]">{t("kody.empty.title")}</p>
@@ -1488,9 +1812,9 @@ export function KodyAssistant({
                 maxLength={2_000}
                 aria-label={t("kody.button")}
                 aria-describedby="kody-prompt-instructions"
-                placeholder={aiUsageLimitReached ? t("kody.usage.limitPlaceholder") : t("kody.composer.placeholder")}
+                placeholder={t("kody.composer.placeholder")}
                 className="max-h-32 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
-                disabled={loading || aiUsageLimitReached}
+                disabled={loading}
               />
               <IconButton
                 type="submit"
@@ -1498,7 +1822,7 @@ export function KodyAssistant({
                 icon={<Send size={17} />}
                 label={t("kody.composer.send")}
                 loading={loading}
-                disabled={!prompt.trim() || aiUsageLimitReached}
+                disabled={!prompt.trim()}
                 className="rounded-xl"
               />
             </form>

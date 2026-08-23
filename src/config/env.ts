@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 const DEFAULT_JWT_SECRET = "change-me-in-production-must-be-32-chars-min";
+const APPROVED_OPENAI_PRICING = {
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "text-embedding-3-small": { input: 0.02, output: 0 },
+} as const;
 
 const BooleanFromEnv = z.preprocess((value) => {
   if (typeof value === "boolean") return value;
@@ -29,6 +33,9 @@ const EnvSchema = z.object({
   OPENAI_ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(12_000),
   ENABLE_AI_INDEX_WORKER: BooleanFromEnv.default(false),
   AI_INDEX_INLINE_REFRESH: BooleanFromEnv.default(true),
+  ENABLE_NOTIFICATION_RETENTION_WORKER: BooleanFromEnv.default(false),
+  NOTIFICATION_RETENTION_READ_DAYS: z.coerce.number().int().min(30).max(3_650).default(90),
+  NOTIFICATION_RETENTION_UNREAD_DAYS: z.coerce.number().int().min(180).max(3_650).default(365),
   OPENAI_COST_INPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.15),
   OPENAI_COST_OUTPUT_PER_1M_USD: z.coerce.number().nonnegative().default(0.6),
   OPENAI_EMBEDDING_COST_PER_1M_USD: z.coerce.number().nonnegative().default(0.02),
@@ -61,6 +68,13 @@ const EnvSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().default(""),
   TWILIO_WEBHOOK_AUTH_TOKEN: z.string().default(""),
 }).superRefine((value, ctx) => {
+  if (value.NOTIFICATION_RETENTION_UNREAD_DAYS <= value.NOTIFICATION_RETENTION_READ_DAYS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["NOTIFICATION_RETENTION_UNREAD_DAYS"],
+      message: "Unread notification retention must be longer than read notification retention.",
+    });
+  }
   if (value.NODE_ENV !== "production") return;
 
   let runtimeDatabaseUrl: URL | null = null;
@@ -165,6 +179,40 @@ const EnvSchema = z.object({
       path: [value.RESEND_API_KEY ? "PASSWORD_RESET_EMAIL_FROM" : "RESEND_API_KEY"],
       message: "RESEND_API_KEY and PASSWORD_RESET_EMAIL_FROM must be configured together.",
     });
+  }
+
+  if (value.OPENAI_API_KEY.trim()) {
+    const chatModels = [value.OPENAI_MODEL, value.OPENAI_ASSISTANT_MODEL || value.OPENAI_MODEL];
+    for (const model of chatModels) {
+      const approved = APPROVED_OPENAI_PRICING[model as keyof typeof APPROVED_OPENAI_PRICING];
+      if (
+        !approved
+        || approved.output <= 0
+        || value.OPENAI_COST_INPUT_PER_1M_USD !== approved.input
+        || value.OPENAI_COST_OUTPUT_PER_1M_USD !== approved.output
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["OPENAI_MODEL"],
+          message: "Configured OpenAI chat models and rates must match the approved pricing catalog.",
+        });
+        break;
+      }
+    }
+    const embedding = APPROVED_OPENAI_PRICING[
+      value.OPENAI_EMBEDDING_MODEL as keyof typeof APPROVED_OPENAI_PRICING
+    ];
+    if (
+      !embedding
+      || embedding.input <= 0
+      || value.OPENAI_EMBEDDING_COST_PER_1M_USD !== embedding.input
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["OPENAI_EMBEDDING_MODEL"],
+        message: "Configured OpenAI embedding model and rate must match the approved pricing catalog.",
+      });
+    }
   }
 
   const quickBooksClientConfigured = Boolean(value.QUICKBOOKS_CLIENT_ID.trim());

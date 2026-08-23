@@ -1,9 +1,27 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://localhost:5432/quotefly_unit_test";
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? "unit-test-secret-that-is-long-enough-for-validation";
+
+test("Kody backend source contains no accidental UTF-8 mojibake", () => {
+  const source = readFileSync("src/lib/ai-assistant.ts", "utf8");
+  assert.doesNotMatch(source, /Â|â|Ã/);
+  for (const expected of [
+    "mañana",
+    "Enviar cotización",
+    "Empezaría",
+    "Encontré",
+    "Usé",
+    "Preparé",
+    "Revísala",
+    "Búsqueda",
+  ]) {
+    assert.match(source, new RegExp(expected));
+  }
+});
 
 test("routes operational Kody prompts before broad customer and quote intents", async () => {
   const { resolveAssistantTool } = await import("../../src/lib/ai-assistant");
@@ -13,6 +31,11 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("What active tasks are assigned to me?"), "LIST_MY_ACTIVITIES");
   assert.equal(resolveAssistantTool("Create a follow-up task for Robert tomorrow"), "PREPARE_ACTIVITY");
   assert.equal(resolveAssistantTool("Schedule a task for Robert California"), "PREPARE_ACTIVITY");
+  assert.equal(resolveAssistantTool("Show my schedule today"), "LIST_SCHEDULE");
+  assert.equal(resolveAssistantTool("What is on our schedule this week?"), "LIST_SCHEDULE");
+  assert.equal(resolveAssistantTool("Book job #12 tomorrow from 9 AM to 11 AM"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Reschedule the visit for job #12 tomorrow at 14:00 for 2 hours"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Dispatch next job"), "PREPARE_DISPATCH");
   assert.equal(resolveAssistantTool("Which customers do not have a quote?"), "CUSTOMERS_WITHOUT_QUOTES");
   assert.equal(resolveAssistantTool("If we close 30% of open quotes, what is the revenue boost?"), "PIPELINE_SCENARIO");
   assert.equal(resolveAssistantTool("Forecast my open quote revenue this month"), "SUMMARIZE_PIPELINE");
@@ -74,6 +97,10 @@ test("routes operational Kody prompts before broad customer and quote intents", 
 test("routes neutral Spanish QuoteFly workflows without changing canonical tool names", async () => {
   const { resolveAssistantTool } = await import("../../src/lib/ai-assistant");
 
+  assert.equal(resolveAssistantTool("Muestra mi agenda de mañana"), "LIST_SCHEDULE");
+  assert.equal(resolveAssistantTool("Programa el trabajo #12 mañana de 9 a. m. a 11 a. m."), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Despacha mi próximo trabajo"), "PREPARE_DISPATCH");
+
   assert.equal(resolveAssistantTool("Busca al cliente José Ramírez"), "SEARCH_CUSTOMERS");
   assert.equal(resolveAssistantTool("Agrega un cliente nuevo llamado María López"), "DRAFT_CUSTOMER");
   assert.equal(resolveAssistantTool("Prepara una cotización de techo para María"), "DRAFT_QUOTE");
@@ -128,6 +155,9 @@ test("deterministic operational tools do not consume the external AI budget", as
     "LIST_MY_ACTIVITIES",
     "PRIORITIZE_MY_DAY",
     "PREPARE_ACTIVITY",
+    "LIST_SCHEDULE",
+    "PREPARE_BOOKING",
+    "PREPARE_DISPATCH",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ] as const) {
@@ -202,7 +232,7 @@ test("relative business-insight dates are deterministic and bounded", async () =
 });
 
 test("tenant wall-time conversion keeps Activity due dates stable across DST", async () => {
-  const { tenantWallTimeToUtc } = await import("../../src/lib/tenant-time");
+  const { tenantWallTimeToUtc, tenantWallTimeUtcCandidates } = await import("../../src/lib/tenant-time");
   assert.equal(
     tenantWallTimeToUtc({ year: 2026, month: 3, day: 8, hour: 9, minute: 0 }, "America/Los_Angeles")?.toISOString(),
     "2026-03-08T16:00:00.000Z",
@@ -214,6 +244,15 @@ test("tenant wall-time conversion keeps Activity due dates stable across DST", a
   assert.equal(
     tenantWallTimeToUtc({ year: 2026, month: 3, day: 8, hour: 2, minute: 30 }, "America/Los_Angeles"),
     null,
+  );
+  assert.deepEqual(
+    tenantWallTimeUtcCandidates({ year: 2026, month: 3, day: 8, hour: 2, minute: 30 }, "America/Los_Angeles"),
+    [],
+  );
+  assert.deepEqual(
+    tenantWallTimeUtcCandidates({ year: 2026, month: 11, day: 1, hour: 1, minute: 30 }, "America/Los_Angeles")
+      .map((value) => value.toISOString()),
+    ["2026-11-01T08:30:00.000Z", "2026-11-01T09:30:00.000Z"],
   );
 });
 

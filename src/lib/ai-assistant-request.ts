@@ -9,9 +9,11 @@ import type { AiAssistantContext } from "./ai-assistant";
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 
 export const AssistantContextSchema = z.object({
-  currentPage: z.enum(["quotes", "customers", "analytics", "products", "dashboard", "follow-up"]).optional(),
+  currentPage: z.enum(["quotes", "customers", "analytics", "products", "dashboard", "follow-up", "jobs"]).optional(),
   customerId: z.string().trim().min(1).optional(),
   quoteId: z.string().trim().min(1).optional(),
+  jobId: z.string().trim().min(1).max(191).optional(),
+  appointmentId: z.string().trim().min(1).max(191).optional(),
   search: z.string().trim().min(1).max(120).optional(),
   serviceType: ServiceTypeSchema.optional(),
   dateFrom: z.coerce.date().optional(),
@@ -40,6 +42,8 @@ export function normalizeAssistantContext(
     currentPage: context.currentPage,
     customerId: context.customerId,
     quoteId: context.quoteId,
+    jobId: context.jobId,
+    appointmentId: context.appointmentId,
     search: context.search,
     serviceType: context.serviceType,
     dateFrom: context.dateFrom ?? null,

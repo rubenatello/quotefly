@@ -14,15 +14,20 @@ import {
   maxClassificationForQuotePurpose,
 } from "./ai-data-governance";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
-import type { TenantEntitlements } from "./subscription";
-import { startOfCurrentUtcMonth, startOfNextUtcMonth } from "./subscription";
+import type { TenantEntitlements, TenantUsagePeriod, TenantUsagePeriodSource } from "./subscription";
 import { withTenantRlsContext } from "./tenant-rls";
+import {
+  currentAiUsageRootReservation,
+  loadAiUsageLedgerTotals,
+} from "../services/ai-usage-ledger";
 
 type AiUsageClient = PrismaClient | Prisma.TransactionClient;
 
 export type MonthlyAiUsageSnapshot = {
   periodStartUtc: Date;
   periodEndUtc: Date;
+  periodSource: TenantUsagePeriodSource;
+  billingCycleReconciliationPending: boolean;
   monthlyCreditsUsed: number;
   monthlyCreditsLimit: number | null;
   monthlyCreditsRemaining: number | null;
@@ -34,6 +39,14 @@ export type MonthlyAiUsageSnapshot = {
   limitReached: boolean;
   estimatedPromptCostUsd: number;
   estimatedPromptsRemaining: number | null;
+  monthlyCreditsReserved: number;
+  monthlySpendReservedUsd: number;
+  monthlyUsageCompletedPercent: number | null;
+  monthlyUsageReservedPercent: number | null;
+  monthlyUsageEffectivePercent: number | null;
+  monthlyUsageRemainingPercent: number | null;
+  activeReservationCount: number;
+  enforcementMode: "SPEND" | "CREDITS" | "UNLIMITED";
 };
 
 export const AI_USAGE_WARNING_THRESHOLDS = [25, 50, 75, 85, 95, 100] as const;
@@ -107,77 +120,65 @@ function roundUsd(value: number) {
 }
 
 export async function loadMonthlyAiUsageSnapshot(
-  prisma: AiUsageClient,
+  prisma: PrismaClient,
   tenantId: string,
   limits: {
     credits?: number | null;
     spendUsd?: number | null;
   },
   now = new Date(),
+  options?: { userEmail?: string | null; usagePeriod?: TenantUsagePeriod },
 ): Promise<MonthlyAiUsageSnapshot> {
-  const periodStartUtc = startOfCurrentUtcMonth(now);
-  const periodEndUtc = startOfNextUtcMonth(now);
+  const ledger = await loadAiUsageLedgerTotals(prisma, tenantId, now, options);
+  const periodStartUtc = ledger.periodStartUtc;
+  const periodEndUtc = ledger.periodEndUtc;
+  const periodSource = ledger.periodSource;
+  const billingCycleReconciliationPending = periodSource === "UTC_CALENDAR_LEGACY";
 
-  const baseWhere: Prisma.AiUsageEventWhereInput = {
-    tenantId,
-    deletedAtUtc: null,
-    createdAt: {
-      gte: periodStartUtc,
-      lt: periodEndUtc,
-    },
-  };
-
-  const [aggregate, costedAggregate] = await Promise.all([
-    prisma.aiUsageEvent.aggregate({
-      where: baseWhere,
-      _sum: {
-        creditsConsumed: true,
-        estimatedCostUsd: true,
-      },
-    }),
-    prisma.aiUsageEvent.aggregate({
-      where: {
-        ...baseWhere,
-        estimatedCostUsd: {
-          gt: 0,
-        },
-      },
-      _sum: {
-        creditsConsumed: true,
-        estimatedCostUsd: true,
-      },
-      _count: {
-        _all: true,
-      },
-    }),
-  ]);
-
-  const monthlyCreditsUsed = aggregate._sum.creditsConsumed ?? 0;
+  const monthlyCreditsUsed = ledger.completedCredits;
+  const monthlyCreditsReserved = ledger.reservedCredits;
   const monthlyCreditsLimit = limits.credits ?? null;
   const monthlyCreditsRemaining =
-    monthlyCreditsLimit === null ? null : Math.max(monthlyCreditsLimit - monthlyCreditsUsed, 0);
+    monthlyCreditsLimit === null
+      ? null
+      : Math.max(monthlyCreditsLimit - monthlyCreditsUsed - monthlyCreditsReserved, 0);
 
-  const monthlySpendUsedUsd = roundUsd(Number(aggregate._sum.estimatedCostUsd ?? 0));
+  const monthlySpendUsedUsd = roundUsd(Number(ledger.completedCostMicros) / 1_000_000);
+  const monthlySpendReservedUsd = roundUsd(Number(ledger.reservedCostMicros) / 1_000_000);
   const monthlySpendLimitUsd = limits.spendUsd ?? null;
   const monthlySpendRemainingUsd =
-    monthlySpendLimitUsd === null ? null : roundUsd(Math.max(monthlySpendLimitUsd - monthlySpendUsedUsd, 0));
-  const monthlySpendUsagePercent =
-    monthlySpendLimitUsd !== null && monthlySpendLimitUsd > 0
-      ? Number(Math.min((monthlySpendUsedUsd / monthlySpendLimitUsd) * 100, 100).toFixed(2))
+    monthlySpendLimitUsd === null
+      ? null
+      : roundUsd(Math.max(monthlySpendLimitUsd - monthlySpendUsedUsd - monthlySpendReservedUsd, 0));
+  const enforcementMode = monthlySpendLimitUsd !== null
+    ? "SPEND" as const
+    : monthlyCreditsLimit !== null
+      ? "CREDITS" as const
+      : "UNLIMITED" as const;
+  const completedValue = enforcementMode === "SPEND" ? monthlySpendUsedUsd : monthlyCreditsUsed;
+  const reservedValue = enforcementMode === "SPEND" ? monthlySpendReservedUsd : monthlyCreditsReserved;
+  const limitValue = enforcementMode === "SPEND" ? monthlySpendLimitUsd : monthlyCreditsLimit;
+  const percentage = (value: number) =>
+    limitValue !== null && limitValue > 0
+      ? Number(Math.min((value / limitValue) * 100, 100).toFixed(2))
       : null;
+  const monthlyUsageCompletedPercent = percentage(completedValue);
+  const monthlyUsageReservedPercent = percentage(reservedValue);
+  const monthlyUsageEffectivePercent = percentage(completedValue + reservedValue);
+  const monthlyUsageRemainingPercent = monthlyUsageEffectivePercent === null
+    ? null
+    : Number(Math.max(100 - monthlyUsageEffectivePercent, 0).toFixed(2));
+  const monthlySpendUsagePercent = monthlyUsageEffectivePercent;
   const spendLimitReached =
-    monthlySpendLimitUsd !== null && monthlySpendUsedUsd >= monthlySpendLimitUsd;
+    monthlySpendLimitUsd !== null
+    && monthlySpendUsedUsd + monthlySpendReservedUsd >= monthlySpendLimitUsd;
   const creditsLimitReached =
     monthlySpendLimitUsd === null &&
     monthlyCreditsLimit !== null &&
-    monthlyCreditsUsed >= monthlyCreditsLimit;
-  const observedCostedSamples = costedAggregate._count._all ?? 0;
-  const observedCredits = Number(costedAggregate._sum.creditsConsumed ?? 0);
-  const observedSpendUsd = Number(costedAggregate._sum.estimatedCostUsd ?? 0);
-  const observedPromptCostUsd =
-    observedCostedSamples >= MIN_COST_SAMPLE_COUNT && observedCredits > 0
-      ? observedSpendUsd / observedCredits
-      : null;
+    monthlyCreditsUsed + monthlyCreditsReserved >= monthlyCreditsLimit;
+  const observedPromptCostUsd = monthlyCreditsUsed >= MIN_COST_SAMPLE_COUNT && monthlyCreditsUsed > 0
+    ? monthlySpendUsedUsd / monthlyCreditsUsed
+    : null;
   const estimatedPromptCostUsd = roundUsd(
     observedPromptCostUsd && Number.isFinite(observedPromptCostUsd) && observedPromptCostUsd > 0
       ? Math.max(
@@ -195,6 +196,8 @@ export async function loadMonthlyAiUsageSnapshot(
   return {
     periodStartUtc,
     periodEndUtc,
+    periodSource,
+    billingCycleReconciliationPending,
     monthlyCreditsUsed,
     monthlyCreditsLimit,
     monthlyCreditsRemaining,
@@ -206,11 +209,19 @@ export async function loadMonthlyAiUsageSnapshot(
     limitReached: spendLimitReached || creditsLimitReached,
     estimatedPromptCostUsd,
     estimatedPromptsRemaining,
+    monthlyCreditsReserved,
+    monthlySpendReservedUsd,
+    monthlyUsageCompletedPercent,
+    monthlyUsageReservedPercent,
+    monthlyUsageEffectivePercent,
+    monthlyUsageRemainingPercent,
+    activeReservationCount: ledger.activeReservationCount,
+    enforcementMode,
   };
 }
 
 export async function assertAiUsageAvailable(
-  prisma: AiUsageClient,
+  prisma: PrismaClient,
   tenantId: string,
   entitlements: TenantEntitlements,
   now = new Date(),
@@ -223,6 +234,7 @@ export async function assertAiUsageAvailable(
       spendUsd: entitlements.limits.aiSpendUsdPerMonth,
     },
     now,
+    { usagePeriod: entitlements.usagePeriod },
   );
   const spendBlocked =
     snapshot.monthlySpendLimitUsd !== null && snapshot.limitReached;
@@ -289,6 +301,10 @@ export async function createAiUsageEvent(
       : null,
   ].filter((value): value is { type: string; refHash: string } => value !== null);
   const retrievalAuditEventId = params.retrievalAuditEventId?.trim() || null;
+  const currentRoot = currentAiUsageRootReservation();
+  if (currentRoot && currentRoot.tenantId !== params.tenantId) {
+    throw new Error("AI usage reservation tenant mismatch.");
+  }
   return withTenantRlsContext(prisma, params.tenantId, async (tx) => {
   const existingRetrievalAuditEvent = retrievalAuditEventId
     ? await tx.aiRetrievalAuditEvent.findFirst({
@@ -369,6 +385,19 @@ export async function createAiUsageEvent(
               retentionExpiresAtUtc: governedPrompt.retentionExpiresAtUtc,
             },
           },
+      ...(currentRoot
+        ? {
+            rootReservation: {
+              connect: {
+                id_tenantId: {
+                  id: currentRoot.rootReservationId,
+                  tenantId: params.tenantId,
+                },
+              },
+            },
+            ledgerAccountedAtUtc: new Date(),
+          }
+        : {}),
     },
   });
   });
@@ -380,48 +409,39 @@ export function buildAiUsageResponse(
     consumedCredits?: number;
     consumedSpendUsd?: number;
   },
+  options: { viewInternalCosts?: boolean } = {},
 ) {
   const consumedCredits = consumed?.consumedCredits ?? 1;
   const consumedSpendUsd = roundUsd(consumed?.consumedSpendUsd ?? 0);
-  const monthlyCreditsUsed = snapshot.monthlyCreditsUsed + consumedCredits;
-  const monthlySpendUsedUsd = roundUsd(snapshot.monthlySpendUsedUsd + consumedSpendUsd);
-  const monthlyCreditsRemaining =
-    snapshot.monthlyCreditsLimit === null
-      ? null
-      : Math.max(snapshot.monthlyCreditsLimit - monthlyCreditsUsed, 0);
-  const monthlySpendRemainingUsd =
-    snapshot.monthlySpendLimitUsd === null
-      ? null
-      : roundUsd(Math.max(snapshot.monthlySpendLimitUsd - monthlySpendUsedUsd, 0));
-  const monthlySpendUsagePercent =
-    snapshot.monthlySpendLimitUsd !== null && snapshot.monthlySpendLimitUsd > 0
-      ? Number(Math.min((monthlySpendUsedUsd / snapshot.monthlySpendLimitUsd) * 100, 100).toFixed(2))
-      : null;
-  const spendLimitReached =
-    snapshot.monthlySpendLimitUsd !== null && monthlySpendUsedUsd >= snapshot.monthlySpendLimitUsd;
-  const creditsLimitReached =
-    snapshot.monthlySpendLimitUsd === null &&
-    snapshot.monthlyCreditsLimit !== null &&
-    monthlyCreditsUsed >= snapshot.monthlyCreditsLimit;
-  const estimatedPromptsRemaining =
-    monthlySpendRemainingUsd === null
-      ? null
-      : Math.max(Math.floor(monthlySpendRemainingUsd / snapshot.estimatedPromptCostUsd), 0);
-
   return {
     consumedCredits,
-    consumedSpendUsd,
-    monthlyCreditsUsed,
+    monthlyCreditsUsed: snapshot.monthlyCreditsUsed,
+    monthlyCreditsReserved: snapshot.monthlyCreditsReserved,
     monthlyCreditsLimit: snapshot.monthlyCreditsLimit,
-    monthlyCreditsRemaining,
-    monthlySpendUsedUsd,
-    monthlySpendLimitUsd: snapshot.monthlySpendLimitUsd,
-    monthlySpendRemainingUsd,
-    monthlySpendUsagePercent,
-    warningThresholdPercent: resolveAiUsageWarningThreshold(monthlySpendUsagePercent),
-    limitReached: spendLimitReached || creditsLimitReached,
-    estimatedPromptCostUsd: snapshot.estimatedPromptCostUsd,
-    estimatedPromptsRemaining,
-    renewsAtUtc: snapshot.periodEndUtc,
+    monthlyCreditsRemaining: snapshot.monthlyCreditsRemaining,
+    monthlyUsageCompletedPercent: snapshot.monthlyUsageCompletedPercent,
+    monthlyUsageReservedPercent: snapshot.monthlyUsageReservedPercent,
+    monthlyUsageEffectivePercent: snapshot.monthlyUsageEffectivePercent,
+    monthlyUsageRemainingPercent: snapshot.monthlyUsageRemainingPercent,
+    // Compatibility alias; the effective percentage includes active holds.
+    monthlySpendUsagePercent: snapshot.monthlyUsageEffectivePercent,
+    warningThresholdPercent: resolveAiUsageWarningThreshold(snapshot.monthlyUsageEffectivePercent),
+    activeReservationCount: snapshot.activeReservationCount,
+    enforcementMode: snapshot.enforcementMode,
+    periodSource: snapshot.periodSource,
+    billingCycleReconciliationPending: snapshot.billingCycleReconciliationPending,
+    limitReached: snapshot.limitReached,
+    estimatedPromptsRemaining: snapshot.estimatedPromptsRemaining,
+    renewsAtUtc: snapshot.billingCycleReconciliationPending ? null : snapshot.periodEndUtc,
+    ...(options.viewInternalCosts
+      ? {
+          consumedSpendUsd,
+          monthlySpendUsedUsd: snapshot.monthlySpendUsedUsd,
+          monthlySpendReservedUsd: snapshot.monthlySpendReservedUsd,
+          monthlySpendLimitUsd: snapshot.monthlySpendLimitUsd,
+          monthlySpendRemainingUsd: snapshot.monthlySpendRemainingUsd,
+          estimatedPromptCostUsd: snapshot.estimatedPromptCostUsd,
+        }
+      : {}),
   };
 }

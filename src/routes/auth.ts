@@ -4,6 +4,7 @@ import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
+import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { loadMonthlyAiUsageSnapshot } from "../lib/ai-usage";
 import { enqueueTenantWorkPresetAiIndexJobs } from "../lib/ai-index-jobs";
 import { BASIC_TRIAL_DAYS } from "../lib/billing-offer";
@@ -11,7 +12,7 @@ import { BrandLogoDataUrlSchema } from "../lib/brand-logo";
 import { CURRENT_PRIVACY_POLICY_VERSION, CURRENT_TERMS_VERSION } from "../lib/legal";
 import { isSuperuserEmail } from "../lib/superuser";
 import { SupportedLocaleSchema } from "../lib/supported-locale";
-import { buildTenantEntitlements, startOfCurrentUtcMonth, startOfNextUtcMonth } from "../lib/subscription";
+import { buildTenantEntitlements } from "../lib/subscription";
 import { applyOnboardingSetup } from "../services/onboarding";
 import {
   isTransactionalEmailConfigured,
@@ -518,6 +519,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   // GET /v1/auth/me  (protected)
   app.get("/auth/me", { ...AuthMeRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const canViewInternalCosts = hasCapability(access, "viewInternalCosts");
 
     const membership = request.liveAuthMembership;
 
@@ -528,13 +531,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const entitlements = buildTenantEntitlements({
       subscriptionStatus: membership.tenant.subscriptionStatus,
       subscriptionPlanCode: membership.tenant.subscriptionPlanCode,
+      stripeCustomerId: membership.tenant.stripeCustomerId,
+      stripeSubscriptionId: membership.tenant.stripeSubscriptionId,
       trialStartsAtUtc: membership.tenant.trialStartsAtUtc,
       trialEndsAtUtc: membership.tenant.trialEndsAtUtc,
+      subscriptionCurrentPeriodStartUtc: membership.tenant.subscriptionCurrentPeriodStartUtc,
       subscriptionCurrentPeriodEndUtc: membership.tenant.subscriptionCurrentPeriodEndUtc,
     }, new Date(), { userEmail: membership.user.email });
 
-    const periodStart = startOfCurrentUtcMonth();
-    const periodEnd = startOfNextUtcMonth();
+    const periodStart = entitlements.usagePeriod.periodStartUtc;
+    const periodEnd = entitlements.usagePeriod.periodEndUtc;
     const [monthlyQuoteCount, aiUsageSnapshot] = await Promise.all([
       app.prisma.quote.count({
         where: {
@@ -553,6 +559,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           credits: entitlements.limits.aiQuotesPerMonth,
           spendUsd: entitlements.limits.aiSpendUsdPerMonth,
         },
+        new Date(),
+        { userEmail: membership.user.email, usagePeriod: entitlements.usagePeriod },
       ),
     ]);
 
@@ -563,19 +571,44 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         effectivePlanCode: entitlements.planCode,
         effectivePlanName: entitlements.planName,
         isTrial: entitlements.isTrial,
-        entitlements,
+        entitlements: canViewInternalCosts
+          ? entitlements
+          : {
+              ...entitlements,
+              limits: {
+                ...entitlements.limits,
+                aiSpendUsdPerMonth: undefined,
+              },
+            },
         usage: {
           periodStartUtc: aiUsageSnapshot.periodStartUtc,
           periodEndUtc: aiUsageSnapshot.periodEndUtc,
+          periodSource: aiUsageSnapshot.periodSource,
+          billingCycleReconciliationPending: aiUsageSnapshot.billingCycleReconciliationPending,
           monthlyQuoteCount,
           monthlyAiQuoteCount: aiUsageSnapshot.monthlyCreditsUsed,
-          monthlyAiSpendUsd: aiUsageSnapshot.monthlySpendUsedUsd,
-          monthlyAiSpendLimitUsd: aiUsageSnapshot.monthlySpendLimitUsd,
-          monthlyAiSpendRemainingUsd: aiUsageSnapshot.monthlySpendRemainingUsd,
-          monthlyAiSpendUsagePercent: aiUsageSnapshot.monthlySpendUsagePercent,
+          monthlyUsageCompletedPercent: aiUsageSnapshot.monthlyUsageCompletedPercent,
+          monthlyUsageReservedPercent: aiUsageSnapshot.monthlyUsageReservedPercent,
+          monthlyUsageEffectivePercent: aiUsageSnapshot.monthlyUsageEffectivePercent,
+          monthlyUsageRemainingPercent: aiUsageSnapshot.monthlyUsageRemainingPercent,
+          activeReservationCount: aiUsageSnapshot.activeReservationCount,
+          enforcementMode: aiUsageSnapshot.enforcementMode,
+          monthlyAiSpendUsagePercent: aiUsageSnapshot.monthlyUsageEffectivePercent,
           monthlyAiSpendWarningThresholdPercent: aiUsageSnapshot.warningThresholdPercent,
           monthlyAiLimitReached: aiUsageSnapshot.limitReached,
-          monthlyAiEstimatedPromptsRemaining: aiUsageSnapshot.estimatedPromptsRemaining,
+          limitReached: aiUsageSnapshot.limitReached,
+          renewsAtUtc: aiUsageSnapshot.billingCycleReconciliationPending
+            ? membership.tenant.subscriptionCurrentPeriodEndUtc
+            : aiUsageSnapshot.periodEndUtc,
+          ...(canViewInternalCosts
+            ? {
+                monthlyAiSpendUsd: aiUsageSnapshot.monthlySpendUsedUsd,
+                monthlyAiSpendReservedUsd: aiUsageSnapshot.monthlySpendReservedUsd,
+                monthlyAiSpendLimitUsd: aiUsageSnapshot.monthlySpendLimitUsd,
+                monthlyAiSpendRemainingUsd: aiUsageSnapshot.monthlySpendRemainingUsd,
+                monthlyAiEstimatedPromptsRemaining: aiUsageSnapshot.estimatedPromptsRemaining,
+              }
+            : {}),
         },
       },
       role: membership.role,

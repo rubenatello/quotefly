@@ -14,7 +14,6 @@ import {
   type QuoteOutboundEvent,
   type Quote,
   type QuoteAcceptedJobSummary,
-  type QuoteJobStatus,
   type QuoteRevision,
   type SaveQuoteSheetInput,
   type QuoteStatus,
@@ -51,7 +50,6 @@ export type QuoteForm = {
 export type QuoteEditForm = {
   serviceType: ServiceType;
   status: QuoteStatus;
-  jobStatus: QuoteJobStatus;
   afterSaleFollowUpStatus: AfterSaleFollowUpStatus;
   title: string;
   scopeText: string;
@@ -108,7 +106,6 @@ export type LeadCardItem = {
   quoteTitle?: string;
   totalAmount?: number;
   status?: QuoteStatus;
-  jobStatus?: QuoteJobStatus;
   afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
   afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;
@@ -151,7 +148,6 @@ export const EMPTY_QUOTE: QuoteForm = {
 export const EMPTY_EDIT: QuoteEditForm = {
   serviceType: "HVAC",
   status: "DRAFT",
-  jobStatus: "NOT_STARTED",
   afterSaleFollowUpStatus: "NOT_READY",
   title: "",
   scopeText: "",
@@ -165,7 +161,6 @@ export const CHAT_PROMPT_EXAMPLE =
 const QUOTE_EDIT_FIELDS: Array<keyof QuoteEditForm> = [
   "serviceType",
   "status",
-  "jobStatus",
   "afterSaleFollowUpStatus",
   "title",
   "scopeText",
@@ -242,7 +237,6 @@ function toQuoteEditForm(quote: Quote): QuoteEditForm {
   return {
     serviceType: quote.serviceType,
     status: quote.status,
-    jobStatus: quote.jobStatus,
     afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus,
     title: quote.title,
     scopeText: quote.scopeText,
@@ -433,7 +427,6 @@ export interface DashboardContextValue {
   saveQuoteSheet: (input: SaveQuoteSheetInput) => Promise<Quote | null>;
   updateQuoteLifecycle: (quoteId: string, patch: {
     status?: QuoteStatus;
-    jobStatus?: QuoteJobStatus;
     afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
   }) => Promise<{ quote: Quote; job?: QuoteAcceptedJobSummary | null } | null>;
   saveQuote: (event: FormEvent) => Promise<void>;
@@ -941,7 +934,6 @@ export function DashboardProvider({
       await api.quotes.update(selectedQuote.id, {
         serviceType: quoteEditForm.serviceType,
         status: quoteEditForm.status,
-        jobStatus: quoteEditForm.jobStatus,
         afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
@@ -981,7 +973,6 @@ export function DashboardProvider({
 
   const updateQuoteLifecycle = useCallback(async (quoteId: string, patch: {
     status?: QuoteStatus;
-    jobStatus?: QuoteJobStatus;
     afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
   }) => {
     setSaving(true);
@@ -1320,7 +1311,6 @@ export function DashboardProvider({
         customerId: customer.id, customerName: customer.fullName, phone: customer.phone, email: customer.email ?? null,
         quoteId: latestQuote?.id, quoteTitle: latestQuote?.title, totalAmount: latestQuote ? Number(latestQuote.totalAmount) : undefined,
         status: latestQuote?.status,
-        jobStatus: latestQuote?.jobStatus,
         afterSaleFollowUpStatus: latestQuote?.afterSaleFollowUpStatus,
         afterSaleFollowUpDueAtUtc: latestQuote?.afterSaleFollowUpDueAtUtc ?? null,
         followUpStatus,
@@ -1368,20 +1358,6 @@ export function DashboardProvider({
     const byOldestFirst = (left: LeadCardItem, right: LeadCardItem) =>
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
 
-    const jobPriority: Record<QuoteJobStatus, number> = {
-      NOT_STARTED: 0,
-      SCHEDULED: 1,
-      IN_PROGRESS: 2,
-      COMPLETED: 3,
-    };
-
-    const byJobStageThenOldest = (left: LeadCardItem, right: LeadCardItem) => {
-      const leftPriority = jobPriority[left.jobStatus ?? "NOT_STARTED"];
-      const rightPriority = jobPriority[right.jobStatus ?? "NOT_STARTED"];
-      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-      return byOldestFirst(left, right);
-    };
-
     const byAfterSaleDueDate = (left: LeadCardItem, right: LeadCardItem) => {
       const leftDue = left.afterSaleFollowUpDueAtUtc ? new Date(left.afterSaleFollowUpDueAtUtc).getTime() : 0;
       const rightDue = right.afterSaleFollowUpDueAtUtc ? new Date(right.afterSaleFollowUpDueAtUtc).getTime() : 0;
@@ -1393,7 +1369,10 @@ export function DashboardProvider({
       recentLeads,
       newLeads: newLeads.sort(byFollowUpOldestFirst).slice(0, 12),
       quotedLeads: quotedLeads.sort(byFollowUpOldestFirst).slice(0, 12),
-      closedLeads: closedLeads.sort(byJobStageThenOldest).slice(0, 12),
+      // This collection-only fallback has no authoritative Job projection.
+      // Keep accepted work ordered by quote activity instead of inferring a Job stage
+      // from the legacy Quote.jobStatus field.
+      closedLeads: closedLeads.sort(byOldestFirst).slice(0, 12),
       afterSaleLeads: afterSaleLeads.sort(byAfterSaleDueDate).slice(0, 12),
       totals: {
         newLeads: newLeads.length,

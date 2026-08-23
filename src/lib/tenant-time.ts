@@ -126,6 +126,39 @@ export function tenantWallTimeToUtc(
   return new Date(candidate);
 }
 
+/**
+ * Returns every UTC instant that renders as the requested tenant wall time.
+ * Most wall times have one candidate, spring-forward gaps have none, and
+ * fall-back folds have two. Sampling the offsets around the local date keeps
+ * this deterministic without guessing which side of a DST fold the user meant.
+ */
+export function tenantWallTimeUtcCandidates(
+  value: Pick<LocalDateParts, "year" | "month" | "day" | "hour" | "minute"> & { second?: number },
+  requestedTimeZone: string,
+): Date[] {
+  const desired: LocalDateParts = {
+    year: value.year,
+    month: value.month,
+    day: value.day,
+    hour: value.hour,
+    minute: value.minute,
+    second: value.second ?? 0,
+  };
+  const timeZone = validTimeZone(requestedTimeZone);
+  const localEpoch = wallClockUtc(desired);
+  const possibleOffsets = new Set<number>();
+  for (let hours = -36; hours <= 36; hours += 6) {
+    possibleOffsets.add(offsetAt(new Date(localEpoch + hours * 60 * 60 * 1_000), timeZone));
+  }
+
+  const candidates = Array.from(possibleOffsets, (offset) => new Date(localEpoch - offset))
+    .filter((candidate) => wallClockUtc(localParts(candidate, timeZone)) === localEpoch)
+    .sort((left, right) => left.getTime() - right.getTime());
+  return candidates.filter((candidate, index) => (
+    index === 0 || candidate.getTime() !== candidates[index - 1]!.getTime()
+  ));
+}
+
 export function isValidIanaTimeZone(timeZone: string): boolean {
   const normalized = timeZone.trim();
   if (!normalized) return false;

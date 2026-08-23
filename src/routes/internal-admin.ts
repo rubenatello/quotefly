@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { resolveActivityActor } from "../lib/activity";
-import { runAiAssistant } from "../lib/ai-assistant";
+import { assistantRequestConsumesAiBudget, runAiAssistant } from "../lib/ai-assistant";
 import { hashSourceReference } from "../lib/ai-data-governance";
 import {
   AssistantRequestSchema,
@@ -15,6 +15,13 @@ import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { loadTenantEntitlements } from "../lib/subscription";
 import { recordSuperuserAuditEvent, requireSuperuserAccess } from "../lib/superuser-access";
+import {
+  AiUsageLedgerError,
+  aiUsageLedgerErrorResponse,
+  hashAiUsageRequest,
+  normalizeAiIdempotencyHeader,
+  runWithAiUsageOperation,
+} from "../services/ai-usage-ledger";
 
 const AiQualitySummaryQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(180).default(30),
@@ -90,34 +97,21 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const { blocked, blockedBy, snapshot } = await measureRequestPerformance(request, "db", () => assertAiUsageAvailable(
+    const { snapshot } = await measureRequestPerformance(request, "db", () => assertAiUsageAvailable(
       app.prisma,
       claims.tenantId,
       entitlements,
     ));
-    if (blocked) {
-      await recordSuperuserAuditEvent(app.prisma, {
-        actorUserId: claims.userId,
-        requestId: request.id,
-        action: "AI_QUALITY_ASSISTANT_TEST_BLOCKED",
-        targetType: "AiAssistantTest",
-        metadata: assistantTestAuditMetadata(payload, {
-          status: "BLOCKED",
-          blockedBy,
-        }),
-      });
-      return reply.code(402).send({
-        code: "AI_USAGE_LIMIT_REACHED",
-        error: "This workspace has reached its AI usage limit for the current billing period.",
-        feature: blockedBy,
-        usage: buildAiUsageResponse(snapshot, { consumedCredits: 0, consumedSpendUsd: 0 }),
-      });
-    }
 
     const actor = await measureRequestPerformance(request, "db", () => resolveActivityActor(app.prisma, claims));
+    const consumesBudget = assistantRequestConsumesAiBudget(payload.message, payload.tool, context, conversation);
+    const idempotencyKey = normalizeAiIdempotencyHeader(request.headers["idempotency-key"]);
+    if (consumesBudget && !idempotencyKey) {
+      return reply.code(400).send({ code: "IDEMPOTENCY_KEY_REQUIRED", error: "A valid Idempotency-Key header is required for paid AI requests." });
+    }
     let result;
     try {
-      result = await measureRequestPerformance(request, "ai", () => runAiAssistant(app.prisma, {
+      const execute = () => runAiAssistant(app.prisma, {
         access,
         actor,
         message: payload.message,
@@ -125,7 +119,19 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         context,
         conversation,
         usageSnapshot: snapshot,
-      }));
+      });
+      result = await measureRequestPerformance(request, "ai", () => consumesBudget
+        ? runWithAiUsageOperation(app.prisma, {
+            tenantId: claims.tenantId,
+            userEmail: claims.email,
+            actorTenantUserId: access.tenantUserId,
+            operation: "INTERNAL_AI_QUALITY_TEST",
+            idempotencyKey: idempotencyKey!,
+            requestHash: hashAiUsageRequest({ payload, context, conversation }),
+            credits: 1,
+            resolveSettledCredits: (assistantResult) => assistantResult.consumedCredits,
+          }, execute)
+        : execute());
     } catch (error) {
       await recordSuperuserAuditEvent(app.prisma, {
         actorUserId: claims.userId,
@@ -137,6 +143,9 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
           errorName: error instanceof Error ? error.name : "UnknownError",
         }),
       });
+      if (error instanceof AiUsageLedgerError) {
+        return reply.code(error.statusCode).send(aiUsageLedgerErrorResponse(error));
+      }
       throw error;
     }
 
@@ -162,12 +171,15 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    const finalEntitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, { userEmail: claims.email });
+    if (!finalEntitlements) return reply.code(503).send({ code: "AI_USAGE_ACCOUNTING_UNAVAILABLE", error: "AI usage accounting is temporarily unavailable." });
+    const finalSnapshot = (await assertAiUsageAvailable(app.prisma, claims.tenantId, finalEntitlements)).snapshot;
     return {
       assistant: result.assistant,
-      usage: buildAiUsageResponse(snapshot, {
+      usage: buildAiUsageResponse(finalSnapshot, {
         consumedCredits: result.consumedCredits,
         consumedSpendUsd: result.consumedSpendUsd,
-      }),
+      }, { viewInternalCosts: true }),
     };
   });
 

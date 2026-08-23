@@ -178,6 +178,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           subscriptionPlanCode: true,
           onboardingCompletedAtUtc: true,
           trialEndsAtUtc: true,
+          subscriptionCurrentPeriodStartUtc: true,
           subscriptionCurrentPeriodEndUtc: true,
           createdAt: true,
           updatedAt: true,

@@ -8,6 +8,8 @@ import { ApiError } from "../src/lib/api";
 import { localizedApiError } from "../src/lib/localized-api-error";
 import {
   aiUsageWarningCopy,
+  formatAiPaidUsagePause,
+  formatAiUsageBreakdown,
   formatAiUsageAvailability,
   formatAiRenewalDate,
 } from "../src/lib/ai-credits";
@@ -150,6 +152,26 @@ test("API failures use stable localized mappings and never render backend or pro
   assert.doesNotMatch(providerFailure, /Stripe|request_id|secret-provider-detail/i);
 
   const rawEnglishSentinel = "Raw English backend task failure must never be shown";
+  const aiUsageFailures = [
+    ["AI_USAGE_LIMIT_REACHED", esUS.apiErrors.aiLimit],
+    ["AI_USAGE_REQUEST_IN_PROGRESS", esUS.apiErrors.aiRequestInProgress],
+    ["AI_USAGE_REQUEST_ALREADY_PROCESSED", esUS.apiErrors.aiAlreadyProcessed],
+    ["AI_USAGE_ACCOUNTING_UNAVAILABLE", esUS.apiErrors.aiAccountingUnavailable],
+  ] as const;
+  for (const [code, expected] of aiUsageFailures) {
+    const message = localizedApiError(
+      new ApiError(rawEnglishSentinel, code === "AI_USAGE_LIMIT_REACHED" ? 402 : 503, { code }),
+      spanish,
+      { fallbackKey: "kody.errors.requestFailed" },
+    );
+    assert.equal(message, expected);
+    assert.doesNotMatch(message, /Raw English backend task failure/i);
+  }
+
+  const kodySource = readFileSync(new URL("../src/components/ai/KodyAssistant.tsx", import.meta.url), "utf8");
+  assert.match(kodySource, /errorCode === "AI_USAGE_REQUEST_ALREADY_PROCESSED"/);
+  assert.doesNotMatch(kodySource, /AI_USAGE_ALREADY_PROCESSED/);
+
   const staleTask = localizedApiError(
     new ApiError(rawEnglishSentinel, 409, { code: "ACTIVITY_STALE_VERSION" }),
     spanish,
@@ -260,7 +282,7 @@ test("AI budget warnings and dates use the requested locale", () => {
   const renewalDate = "2026-08-31T12:00:00.000Z";
   const spanishWarning = aiUsageWarningCopy(100, renewalDate, "es-US");
   assert.equal(spanishWarning.title, "Se alcanzó el límite mensual de IA");
-  assert.match(spanishWarning.description, /Kody y las herramientas de IA están en pausa/);
+  assert.match(spanishWarning.description, /redacción y el análisis con IA están en pausa/);
   assert.match(spanishWarning.description, /Se restablece/);
 
   const spanishAvailability = formatAiUsageAvailability({
@@ -273,6 +295,38 @@ test("AI budget warnings and dates use the requested locale", () => {
 
   assert.notEqual(formatAiRenewalDate(renewalDate, "en-US"), formatAiRenewalDate(renewalDate, "es-US"));
   assert.equal(formatAiRenewalDate("not-a-date", "es-US"), null);
+
+  const breakdown = formatAiUsageBreakdown({
+    monthlyUsageCompletedPercent: 70,
+    monthlyUsageReservedPercent: 8,
+    monthlyUsageEffectivePercent: 78,
+    monthlyUsageRemainingPercent: 22,
+    activeReservationCount: 2,
+    renewsAtUtc: renewalDate,
+  }, "en-US");
+  assert.equal(breakdown.headline, "78% used this billing cycle.");
+  assert.match(breakdown.detail, /70% completed · 8% in progress/);
+  assert.match(breakdown.detail, /22% available/);
+  assert.match(breakdown.detail, /2 active requests/);
+  assert.match(formatAiPaidUsagePause({ limitReached: true, renewsAtUtc: renewalDate }, "es-US"), /siguen disponibles/);
+  assert.equal(
+    formatAiUsageBreakdown({ monthlyUsageEffectivePercent: 42 }, "es-US").headline,
+    "Se usó el 42% en este ciclo de facturación.",
+  );
+
+  const reconciliation = formatAiUsageBreakdown({
+    periodSource: "UTC_CALENDAR_LEGACY",
+    billingCycleReconciliationPending: true,
+    monthlyUsageEffectivePercent: 78,
+    periodEndUtc: renewalDate,
+  }, "es-US");
+  assert.match(reconciliation.headline, /no está disponible temporalmente/);
+  assert.match(reconciliation.detail, /conciliando el ciclo de facturación/);
+  assert.doesNotMatch(`${reconciliation.headline} ${reconciliation.detail}`, /\d+%|este mes|se renueva|31 de agosto/i);
+  assert.doesNotMatch(
+    formatAiPaidUsagePause({ billingCycleReconciliationPending: true, renewsAtUtc: renewalDate }, "es-US"),
+    /mensual|se renueva|31 de agosto/i,
+  );
 });
 
 test("quote builder and quote desk keep rendered workflow copy behind locale keys", () => {

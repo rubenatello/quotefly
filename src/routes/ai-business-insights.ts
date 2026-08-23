@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { buildAccessContext } from "../lib/access-policy";
+import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import {
   AI_BUSINESS_INSIGHT_TOOLS,
   AiBusinessInsightForbiddenError,
@@ -11,6 +11,14 @@ import { resolveActivityActor } from "../lib/activity";
 import { getJwtClaims } from "../lib/auth";
 import { assertAiUsageAvailable, buildAiUsageResponse } from "../lib/ai-usage";
 import { loadTenantEntitlements } from "../lib/subscription";
+import {
+  AiUsageLedgerError,
+  AI_IDEMPOTENCY_COMPATIBILITY_HEADER,
+  aiUsageLedgerErrorResponse,
+  hashAiUsageRequest,
+  resolveAiRequestIdempotencyKey,
+  runWithAiUsageOperation,
+} from "../services/ai-usage-ledger";
 
 const ServiceTypeSchema = z.enum(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 
@@ -40,43 +48,58 @@ export const aiBusinessInsightRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const { blocked, blockedBy, snapshot } = await assertAiUsageAvailable(
-      app.prisma,
-      claims.tenantId,
-      entitlements,
-    );
-    if (blocked) {
-      return reply.code(402).send({
-        code: "AI_USAGE_LIMIT_REACHED",
-        error: "This workspace has reached its AI usage limit for the current billing period.",
-        feature: blockedBy,
-        usage: buildAiUsageResponse(snapshot, { consumedCredits: 0, consumedSpendUsd: 0 }),
-      });
+    const actor = await resolveActivityActor(app.prisma, claims);
+    const idempotency = resolveAiRequestIdempotencyKey(request.headers["idempotency-key"], request.id);
+    if (!idempotency) {
+      return reply.code(400).send({ code: "IDEMPOTENCY_KEY_REQUIRED", error: "A valid Idempotency-Key header is required for paid AI requests." });
+    }
+    if (idempotency.usedLegacyFallback) {
+      reply.header(AI_IDEMPOTENCY_COMPATIBILITY_HEADER, "synthesized-request-key");
+      request.log.warn(
+        { route: "/v1/ai/business-insights", requestId: request.id, compatibility: "legacy-missing-ai-idempotency-key" },
+        "Accepted a missing paid-AI Idempotency-Key through the one-release compatibility fallback.",
+      );
     }
 
-    const actor = await resolveActivityActor(app.prisma, claims);
-
     try {
-      const insight = await generateAiBusinessInsight(app.prisma, {
-        access,
-        actor,
-        prompt: payload.prompt,
-        tool: payload.tool,
-        dateFrom: payload.dateFrom ?? null,
-        dateTo: payload.dateTo ?? null,
-        serviceType: payload.serviceType ?? null,
-        limit: payload.limit,
-        includeArchived: payload.includeArchived,
+      const insight = await runWithAiUsageOperation(app.prisma, {
+        tenantId: claims.tenantId,
+        userEmail: claims.email,
+        actorTenantUserId: access.tenantUserId,
+        operation: "BUSINESS_INSIGHT",
+        idempotencyKey: idempotency.idempotencyKey,
+        requestHash: hashAiUsageRequest(payload),
+        credits: 1,
+      }, () => generateAiBusinessInsight(app.prisma, {
+          access,
+          actor,
+          prompt: payload.prompt,
+          tool: payload.tool,
+          dateFrom: payload.dateFrom ?? null,
+          dateTo: payload.dateTo ?? null,
+          serviceType: payload.serviceType ?? null,
+          limit: payload.limit,
+          includeArchived: payload.includeArchived,
+        }));
+      const finalEntitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
       });
+      if (!finalEntitlements) {
+        return reply.code(503).send({ code: "AI_USAGE_ACCOUNTING_UNAVAILABLE", error: "AI usage accounting is temporarily unavailable." });
+      }
+      const finalSnapshot = (await assertAiUsageAvailable(app.prisma, claims.tenantId, finalEntitlements)).snapshot;
 
       return {
         insight,
-        usage: buildAiUsageResponse(snapshot, {
+        usage: buildAiUsageResponse(finalSnapshot, {
           consumedCredits: 1,
           consumedSpendUsd: insight.telemetry?.estimatedCostUsd ?? 0,
-        }),
+        }, { viewInternalCosts: hasCapability(access, "viewInternalCosts") }),
       };
     } catch (error) {
+      if (error instanceof AiUsageLedgerError) {
+        return reply.code(error.statusCode).send(aiUsageLedgerErrorResponse(error));
+      }
       if (error instanceof AiBusinessInsightForbiddenError) {
         return reply.code(403).send({ error: error.message });
       }

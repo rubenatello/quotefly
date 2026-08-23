@@ -707,12 +707,14 @@ export function ProgressBar({
   value,
   label,
   hint,
+  valueText,
   tone = "default",
   className = "",
 }: {
   value: number;
   label?: string;
   hint?: string;
+  valueText?: string;
   tone?: "default" | "warning" | "danger";
   className?: string;
 }) {
@@ -739,10 +741,11 @@ export function ProgressBar({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Number(clampedValue.toFixed(2))}
+        aria-valuetext={valueText}
         className="h-2 overflow-hidden rounded-full bg-[var(--qf-interactive-active)]"
       >
         <div
-          className={`h-full rounded-full transition-[width,background-color] duration-500 ease-out ${barTone}`}
+          className={`h-full rounded-full motion-safe:transition-[width,background-color] motion-safe:duration-500 motion-safe:ease-out ${barTone}`}
           style={{ width: `${clampedValue}%` }}
         />
       </div>

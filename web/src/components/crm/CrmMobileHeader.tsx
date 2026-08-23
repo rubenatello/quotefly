@@ -6,6 +6,7 @@ import { CloseIcon, MenuIcon } from "../Icons";
 import { cn } from "../../lib/utils";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 import type { WorkspaceNavigationId } from "./workspace-navigation";
+import { NotificationBellButton } from "../notifications/NotificationCenter";
 
 interface CrmMobileHeaderProps {
   mobileOpen: boolean;
@@ -18,6 +19,9 @@ interface CrmMobileHeaderProps {
   onLogout: () => void;
   currentLabel: string;
   canManageWorkspace: boolean;
+  notificationButtonRef: Ref<HTMLButtonElement>;
+  notificationUnreadCount: number;
+  onOpenNotifications: () => void;
 }
 
 export function CrmMobileHeader({
@@ -31,6 +35,9 @@ export function CrmMobileHeader({
   onLogout,
   currentLabel,
   canManageWorkspace,
+  notificationButtonRef,
+  notificationUnreadCount,
+  onOpenNotifications,
 }: CrmMobileHeaderProps) {
   const { t } = useTranslation();
   return (
@@ -69,6 +76,11 @@ export function CrmMobileHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <NotificationBellButton
+            buttonRef={notificationButtonRef}
+            unreadCount={notificationUnreadCount}
+            onClick={onOpenNotifications}
+          />
           <button
             type="button"
             onClick={onOpenCommand}

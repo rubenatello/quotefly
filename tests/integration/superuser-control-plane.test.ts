@@ -41,6 +41,11 @@ async function signUp(email: string, label: string): Promise<Session> {
 describe("superuser data-governance control plane", () => {
   beforeAll(async () => {
     app = await buildServer();
+    app.addHook("onRequest", async (request) => {
+      if (request.method === "POST" && request.url === "/v1/internal/ai-quality/assistant-test" && !request.headers["idempotency-key"]) {
+        request.headers["idempotency-key"] = `integration-superuser-${request.id}-${Date.now()}`;
+      }
+    });
     await app.ready();
   });
 
@@ -399,8 +404,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 43,
-      fieldCount: 635,
+      modelCount: 46,
+      fieldCount: 696,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

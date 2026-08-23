@@ -75,6 +75,34 @@ test("accepts only a typed workspace navigation action", () => {
   assert.deepEqual(response.actions[0].payload, { page: "products" });
 });
 
+test("preserves only the typed rolling schedule handoff range", () => {
+  const response = normalizeKodyAssistantResponse({
+    tool: "LIST_SCHEDULE",
+    answer: "Here is the next seven days.",
+    actions: [{
+      type: "OPEN_SCHEDULE",
+      label: "Open schedule",
+      requiresConfirmation: false,
+      payload: {
+        range: "next7",
+        date: "2026-08-29",
+        mine: true,
+        serviceAddress: "must not travel through the handoff",
+      },
+    }, {
+      type: "OPEN_SCHEDULE",
+      label: "Invalid range",
+      requiresConfirmation: false,
+      payload: { range: "arbitrary", date: "2026-08-29", mine: true },
+    }],
+    diagnostics: { resolvedTool: "LIST_SCHEDULE" },
+  });
+
+  assert.equal(response.actions.length, 2);
+  assert.deepEqual(response.actions[0]?.payload, { range: "next7", date: "2026-08-29", mine: true });
+  assert.deepEqual(response.actions[1]?.payload, { date: "2026-08-29", mine: true });
+});
+
 test("accepts a review-only product draft action", () => {
   const response = normalizeKodyAssistantResponse({
     tool: "DRAFT_PRODUCT",

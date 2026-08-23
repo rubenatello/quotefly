@@ -35,6 +35,7 @@ import { aiBusinessInsightRoutes } from "./routes/ai-business-insights";
 import { feedbackRoutes } from "./routes/feedback";
 import { workspaceRoutes } from "./routes/workspace";
 import { activityRoutes } from "./routes/activities";
+import { notificationRoutes } from "./routes/notifications";
 import { swaggerPlugin } from "./plugins/swagger";
 import {
   applyRequestPerformanceHeaders,
@@ -378,6 +379,7 @@ export function buildServer() {
   app.register(feedbackRoutes, { prefix: "/v1" });
   app.register(workspaceRoutes, { prefix: "/v1" });
   app.register(activityRoutes, { prefix: "/v1" });
+  app.register(notificationRoutes, { prefix: "/v1" });
   app.register(jobRoutes, { prefix: "/v1" });
   app.register(invoiceRoutes, { prefix: "/v1" });
   app.register(tenantRoutes, { prefix: "/v1" });

@@ -20,7 +20,6 @@ import type {
   AfterSaleFollowUpStatus,
   LeadFollowUpStatus,
   QuoteOutboundChannel,
-  QuoteJobStatus,
   QuoteRevision,
   QuoteStatus,
 } from "../../lib/api";
@@ -37,7 +36,6 @@ export type LeadCardItem = {
   quoteTitle?: string;
   totalAmount?: number;
   status?: QuoteStatus;
-  jobStatus?: QuoteJobStatus;
   afterSaleFollowUpStatus?: AfterSaleFollowUpStatus;
   afterSaleFollowUpDueAtUtc?: string | null;
   followUpStatus: LeadFollowUpStatus;

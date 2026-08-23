@@ -148,13 +148,9 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   }
   expect((await assigneeSelect.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
 
-  let failDetailOnce = true;
+  let failedDetailRequests = 0;
   await page.route(`${apiBaseUrl}/v1/jobs/${jobId}`, async (route) => {
-    if (!failDetailOnce) {
-      await route.continue();
-      return;
-    }
-    failDetailOnce = false;
+    failedDetailRequests += 1;
     await route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -163,6 +159,7 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   });
   await page.goto(`/app/jobs/${jobId}`);
   await expect(page.getByText("Job could not be loaded.", { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(failedDetailRequests).toBeGreaterThanOrEqual(1);
   await page.unroute(`${apiBaseUrl}/v1/jobs/${jobId}`);
   await page.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(page.locator("p").filter({ hasText: "Final saved instruction after stale reload." })).toBeVisible();

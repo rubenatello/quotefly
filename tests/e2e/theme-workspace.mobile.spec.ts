@@ -10,6 +10,9 @@ const captureDirectory = process.env.E2E_THEME_CAPTURE_DIR
 const KODY_QUICK_PROMPT_TEST_IDS = [
   "kody-quick-prioritize_my_day",
   "kody-quick-list_my_activities",
+  "kody-quick-list_schedule",
+  "kody-quick-prepare_booking",
+  "kody-quick-prepare_dispatch",
   "kody-quick-draft_customer",
   "kody-quick-draft_quote",
   "kody-quick-prepare_quote_send",

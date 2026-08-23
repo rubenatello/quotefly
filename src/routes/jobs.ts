@@ -28,6 +28,32 @@ import {
 const JobStatusSchema = z.nativeEnum(JobStatus);
 const JobAppointmentStatusSchema = z.nativeEnum(JobAppointmentStatus);
 const BooleanQuerySchema = z.enum(["true", "false"]).transform((value) => value === "true");
+const EXPLICIT_OFFSET_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/i;
+
+function isValidExplicitOffsetDateTime(value: string): boolean {
+  const match = EXPLICIT_OFFSET_DATE_TIME.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[7]?.toUpperCase() === "Z" ? 0 : Number(match[9]);
+  const offsetMinute = match[7]?.toUpperCase() === "Z" ? 0 : Number(match[10]);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day >= 1 && day <= daysInMonth && Number.isFinite(Date.parse(value));
+}
+
+const ExplicitOffsetDateTimeSchema = z.string().trim().regex(
+  EXPLICIT_OFFSET_DATE_TIME,
+  "Use an ISO 8601 date-time with an explicit UTC offset.",
+).refine(
+  isValidExplicitOffsetDateTime,
+  "Use a valid ISO 8601 date-time.",
+).transform((value) => new Date(value));
 const JobParamsSchema = z.object({ jobId: z.string().trim().min(1).max(191) }).strict();
 const JobAppointmentParamsSchema = z.object({
   jobId: z.string().trim().min(1).max(191),
@@ -49,13 +75,15 @@ const JobChildListQuerySchema = PaginationQuerySchema;
 const ListJobScheduleQuerySchema = PaginationQuerySchema.extend({
   mine: BooleanQuerySchema.default(false),
   assignedTenantUserId: z.string().trim().min(1).max(191).optional(),
-  fromUtc: z.coerce.date(),
-  toUtc: z.coerce.date(),
+  fromUtc: ExplicitOffsetDateTimeSchema,
+  toUtc: ExplicitOffsetDateTimeSchema,
 }).strict().refine(
-  (payload) => payload.fromUtc < payload.toUtc,
+  (payload) => !(payload.fromUtc instanceof Date) || !(payload.toUtc instanceof Date) || payload.fromUtc < payload.toUtc,
   { path: ["toUtc"], message: "Schedule end must be after start." },
 ).refine(
-  (payload) => payload.toUtc.getTime() - payload.fromUtc.getTime() <= 35 * 24 * 60 * 60 * 1000,
+  (payload) => !(payload.fromUtc instanceof Date)
+    || !(payload.toUtc instanceof Date)
+    || payload.toUtc.getTime() - payload.fromUtc.getTime() <= 35 * 24 * 60 * 60 * 1000,
   { path: ["toUtc"], message: "Schedule window cannot exceed 35 days." },
 ).refine(
   (payload) => payload.offset <= 1000,
@@ -77,33 +105,71 @@ const AppointmentTimeZoneSchema = z.string().trim().min(1).max(64).refine(isVali
 
 const CreateJobAppointmentSchema = z.object({
   assignedTenantUserId: z.string().trim().min(1).max(191),
-  startsAtUtc: z.coerce.date(),
-  endsAtUtc: z.coerce.date(),
+  startsAtUtc: ExplicitOffsetDateTimeSchema,
+  endsAtUtc: ExplicitOffsetDateTimeSchema,
   timeZone: AppointmentTimeZoneSchema,
   instructions: z.string().trim().max(2000).nullable().optional(),
 }).strict().refine(
-  (payload) => payload.startsAtUtc < payload.endsAtUtc,
+  (payload) => !(payload.startsAtUtc instanceof Date)
+    || !(payload.endsAtUtc instanceof Date)
+    || payload.startsAtUtc < payload.endsAtUtc,
   { path: ["endsAtUtc"], message: "Appointment end must be after start." },
 ).refine(
-  (payload) => payload.endsAtUtc.getTime() - payload.startsAtUtc.getTime() <= 14 * 24 * 60 * 60 * 1000,
+  (payload) => !(payload.startsAtUtc instanceof Date)
+    || !(payload.endsAtUtc instanceof Date)
+    || payload.endsAtUtc.getTime() - payload.startsAtUtc.getTime() <= 14 * 24 * 60 * 60 * 1000,
   { path: ["endsAtUtc"], message: "Appointment duration cannot exceed 14 days." },
 );
 
 const UpdateJobAppointmentSchema = z.object({
   version: z.number().int().min(1),
   assignedTenantUserId: z.string().trim().min(1).max(191).optional(),
-  startsAtUtc: z.coerce.date().optional(),
-  endsAtUtc: z.coerce.date().optional(),
+  startsAtUtc: ExplicitOffsetDateTimeSchema.optional(),
+  endsAtUtc: ExplicitOffsetDateTimeSchema.optional(),
   timeZone: AppointmentTimeZoneSchema.optional(),
   instructions: z.string().trim().max(2000).nullable().optional(),
   status: JobAppointmentStatusSchema.optional(),
-}).strict().refine(
-  (payload) => Object.keys(payload).some((key) => key !== "version"),
-  { message: "At least one appointment field must be updated." },
-).refine(
-  (payload) => !payload.startsAtUtc || !payload.endsAtUtc || payload.startsAtUtc < payload.endsAtUtc,
-  { path: ["endsAtUtc"], message: "Appointment end must be after start." },
-);
+}).strict().superRefine((payload, context) => {
+  const hasAssignment = payload.assignedTenantUserId !== undefined;
+  const hasStartsAtUtc = payload.startsAtUtc !== undefined;
+  const hasEndsAtUtc = payload.endsAtUtc !== undefined;
+  const hasTimeZone = payload.timeZone !== undefined;
+  const hasInstructions = payload.instructions !== undefined;
+  const hasStatus = payload.status !== undefined;
+  const scheduleFieldCount = Number(hasStartsAtUtc) + Number(hasEndsAtUtc) + Number(hasTimeZone);
+
+  if (!hasAssignment && scheduleFieldCount === 0 && !hasInstructions && !hasStatus) {
+    context.addIssue({ code: "custom", message: "At least one appointment field must be updated." });
+  }
+  if (hasStatus && (hasAssignment || scheduleFieldCount > 0 || hasInstructions)) {
+    context.addIssue({
+      code: "custom",
+      path: ["status"],
+      message: "Appointment status changes must be submitted without other updates.",
+    });
+  }
+  if (scheduleFieldCount > 0 && scheduleFieldCount < 3) {
+    context.addIssue({
+      code: "custom",
+      path: ["startsAtUtc"],
+      message: "Rescheduling requires startsAtUtc, endsAtUtc, and timeZone together.",
+    });
+  }
+  if (
+    payload.startsAtUtc instanceof Date
+    && payload.endsAtUtc instanceof Date
+    && payload.startsAtUtc >= payload.endsAtUtc
+  ) {
+    context.addIssue({ code: "custom", path: ["endsAtUtc"], message: "Appointment end must be after start." });
+  }
+  if (
+    payload.startsAtUtc instanceof Date
+    && payload.endsAtUtc instanceof Date
+    && payload.endsAtUtc.getTime() - payload.startsAtUtc.getTime() > 14 * 24 * 60 * 60 * 1000
+  ) {
+    context.addIssue({ code: "custom", path: ["endsAtUtc"], message: "Appointment duration cannot exceed 14 days." });
+  }
+});
 
 const VersionBodySchema = z.object({
   version: z.number().int().min(1),
@@ -153,9 +219,10 @@ function serializeAppointment(appointment: JobAppointmentPublic) {
 }
 
 function serializeScheduleAppointment(appointment: JobScheduleAppointmentPublic) {
-  const serialized = serializeAppointment(appointment);
   return {
-    ...serialized,
+    ...appointment,
+    startsAtUtc: appointment.startsAtUtc.toISOString(),
+    endsAtUtc: appointment.endsAtUtc.toISOString(),
     job: appointment.job,
   };
 }
@@ -310,7 +377,7 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     const payload = CreateJobAppointmentSchema.parse(request.body);
 
     try {
-      const appointment = await measureRequestPerformance(request, "db", () =>
+      const result = await measureRequestPerformance(request, "db", () =>
         withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           createJobAppointment(transaction, access, {
             jobId,
@@ -323,7 +390,10 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
           }), { maxWait: 5_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }),
       );
       reply.header("Cache-Control", "private, no-store");
-      return reply.code(201).send({ appointment: serializeAppointment(appointment) });
+      return reply.code(201).send({
+        appointment: serializeAppointment(result.appointment),
+        notificationReceipt: result.notificationReceipt,
+      });
     } catch (error) {
       return sendJobError(reply, error);
     }
@@ -335,7 +405,7 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     const payload = UpdateJobAppointmentSchema.parse(request.body);
 
     try {
-      const appointment = await measureRequestPerformance(request, "db", () =>
+      const result = await measureRequestPerformance(request, "db", () =>
         withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           updateJobAppointment(transaction, access, {
             jobId,
@@ -351,7 +421,10 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
           }), { maxWait: 5_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }),
       );
       reply.header("Cache-Control", "private, no-store");
-      return { appointment: serializeAppointment(appointment) };
+      return {
+        appointment: serializeAppointment(result.appointment),
+        notificationReceipt: result.notificationReceipt,
+      };
     } catch (error) {
       return sendJobError(reply, error);
     }
@@ -363,7 +436,7 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     const payload = VersionBodySchema.parse(request.body);
 
     try {
-      await measureRequestPerformance(request, "db", () =>
+      const result = await measureRequestPerformance(request, "db", () =>
         withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           deleteJobAppointment(transaction, access, {
             jobId,
@@ -372,7 +445,11 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
             requestId: request.id,
           }), { maxWait: 5_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }),
       );
-      return reply.code(204).send();
+      reply.header("Cache-Control", "private, no-store");
+      return {
+        appointmentId: result.appointmentId,
+        notificationReceipt: result.notificationReceipt,
+      };
     } catch (error) {
       return sendJobError(reply, error);
     }

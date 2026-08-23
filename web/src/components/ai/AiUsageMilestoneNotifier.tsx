@@ -4,6 +4,7 @@ import {
   aiUsageWarningCopy,
   AI_USAGE_UPDATED_EVENT,
   resolveAiUsageWarningThreshold,
+  resolveAiUsagePresentation,
   type AiUsageUpdateDetail,
   type AiUsageWarningThreshold,
 } from "../../lib/ai-credits";
@@ -39,11 +40,13 @@ export function AiUsageMilestoneNotifier({
   usage?: TenantUsageSnapshot;
   onUsageChanged: () => Promise<void>;
 }) {
-  const usagePercent = usage?.monthlyAiSpendUsagePercent ?? null;
-  const threshold =
-    usage?.monthlyAiSpendWarningThresholdPercent ??
-    resolveAiUsageWarningThreshold(usagePercent);
-  const periodEndUtc = usage?.periodEndUtc ?? null;
+  const usagePresentation = resolveAiUsagePresentation(usage);
+  const usagePercent = usagePresentation.effectivePercent;
+  const threshold = usagePresentation.billingCycleReconciliationPending
+    ? null
+    : usage?.monthlyAiSpendWarningThresholdPercent ??
+      resolveAiUsageWarningThreshold(usagePercent);
+  const periodEndUtc = usagePresentation.renewsAtUtc;
 
   const showWarning = useCallback((nextThreshold: AiUsageWarningThreshold | null, renewsAtUtc: string | null) => {
     if (nextThreshold === null || !renewsAtUtc) return;
@@ -68,10 +71,16 @@ export function AiUsageMilestoneNotifier({
   useEffect(() => {
     const handleUsageUpdate = (event: Event) => {
       const detail = (event as CustomEvent<AiUsageUpdateDetail>).detail;
-      const nextThreshold =
-        detail?.warningThresholdPercent ??
-        resolveAiUsageWarningThreshold(detail?.monthlySpendUsagePercent);
-      showWarning(nextThreshold, detail?.renewsAtUtc ?? null);
+      const presentation = resolveAiUsagePresentation(detail);
+      const nextThreshold = presentation.billingCycleReconciliationPending
+        ? null
+        : detail?.warningThresholdPercent ??
+          resolveAiUsageWarningThreshold(presentation.effectivePercent);
+      showWarning(nextThreshold, presentation.renewsAtUtc);
+      // A canonical accounting failure is a client-side fail-closed pause.
+      // Do not immediately overwrite it with a concurrently fetched session;
+      // an explicit session refresh is the authoritative recovery path.
+      if (detail?.accountingUnavailable === true) return;
       void onUsageChanged().catch((error) => {
         console.warn("Could not refresh workspace AI usage after an AI request.", error);
       });

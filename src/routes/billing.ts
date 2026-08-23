@@ -9,7 +9,11 @@ import {
   isExpectedBasicIntroCouponForPrice,
   isExpectedBasicMonthlyPrice,
 } from "../lib/billing-offer";
-import { resolveSubscriptionItemBilling } from "../lib/subscription";
+import {
+  resolveReconciledSubscriptionUsagePeriod,
+  resolveSubscriptionItemBilling,
+} from "../lib/subscription";
+import { reconcileAuthoritativeAiUsagePeriod } from "../services/ai-usage-period-reconciliation";
 
 const PlanCodeSchema = z.enum(["starter", "professional", "enterprise"]);
 const SELLABLE_PLAN_CODES = new Set<PlanCode>(["starter"]);
@@ -49,7 +53,7 @@ type WebhookReservation =
   | { state: "PROCESS"; leaseToken: string }
   | { state: "DUPLICATE" }
   | { state: "BUSY" };
-type BillingDb = Pick<Prisma.TransactionClient, "tenant" | "billingWebhookEvent">;
+type BillingDb = Prisma.TransactionClient;
 type PreparedStripeEvent =
   | { kind: "NOOP"; tenantId: string | null }
   | { kind: "CHECKOUT_EXPIRED"; tenantId: string; checkoutSessionId: string }
@@ -162,7 +166,14 @@ function webhookAuditEnvelope(event: Stripe.Event): Prisma.InputJsonObject {
 async function findTenantByCustomerId(db: BillingDb, stripeCustomerId: string) {
   return db.tenant.findUnique({
     where: { stripeCustomerId, deletedAtUtc: null },
-    select: { id: true },
+    select: {
+      id: true,
+      subscriptionStatus: true,
+      subscriptionCurrentPeriodStartUtc: true,
+      subscriptionCurrentPeriodEndUtc: true,
+      trialStartsAtUtc: true,
+      trialEndsAtUtc: true,
+    },
   });
 }
 
@@ -184,12 +195,43 @@ async function syncTenantFromSubscription(
           deletedAtUtc: null,
           OR: [{ stripeCustomerId: null }, { stripeCustomerId }],
         },
-        select: { id: true },
+        select: {
+          id: true,
+          subscriptionStatus: true,
+          subscriptionCurrentPeriodStartUtc: true,
+          subscriptionCurrentPeriodEndUtc: true,
+          trialStartsAtUtc: true,
+          trialEndsAtUtc: true,
+        },
       })
     : await findTenantByCustomerId(db, stripeCustomerId);
   if (!tenant) return { tenantId: null, applied: false };
 
   const billing = resolveSubscriptionItemBilling(subscription, configuredPricePlans(app));
+  const reconciledUsagePeriod = billing.planCode
+    ? resolveReconciledSubscriptionUsagePeriod({
+        subscription,
+        expectedTenantId: tenant.id,
+        expectedCustomerId: stripeCustomerId,
+        expectedSubscriptionId: subscription.id,
+        expectedPlanCode: billing.planCode,
+        pricePlans: configuredPricePlans(app),
+      })
+    : null;
+  const previousUsageStart = subscription.status === "trialing"
+    ? tenant.trialStartsAtUtc
+    : tenant.subscriptionCurrentPeriodStartUtc;
+  const previousUsageEnd = subscription.status === "trialing"
+    ? tenant.trialEndsAtUtc
+    : tenant.subscriptionCurrentPeriodEndUtc;
+  const usagePeriodChanged = Boolean(
+    reconciledUsagePeriod
+    && (
+      tenant.subscriptionStatus !== subscription.status
+      || previousUsageStart?.getTime() !== reconciledUsagePeriod.currentPeriodStartUtc.getTime()
+      || previousUsageEnd?.getTime() !== reconciledUsagePeriod.currentPeriodEndUtc.getTime()
+    ),
+  );
   const incomingCanReplaceInactiveSubscription =
     subscription.status === "active" || subscription.status === "trialing";
   const subscriptionBindingWhere: Prisma.TenantWhereInput = {
@@ -215,11 +257,24 @@ async function syncTenantFromSubscription(
       subscriptionPlanCode: billing.planCode,
       trialStartsAtUtc: unixToDate(subscription.trial_start),
       trialEndsAtUtc: unixToDate(subscription.trial_end),
+      subscriptionCurrentPeriodStartUtc: billing.currentPeriodStartUtc,
       subscriptionCurrentPeriodEndUtc: billing.currentPeriodEndUtc,
       billingStateEventCreatedAtUtc: marker.eventCreatedAtUtc,
       billingStateEventId: marker.eventId,
     },
   });
+  // Access revocations must never wait for usage aggregation, and a routine
+  // same-cycle webhook must not fail merely because provider work is in flight.
+  // New/changed active or trial periods reconcile transactionally; same-cycle
+  // counter drift is handled by the explicit post-drain reconciliation gate.
+  if (updated.count === 1 && usagePeriodChanged && reconciledUsagePeriod) {
+    await reconcileAuthoritativeAiUsagePeriod(db, {
+      tenantId: tenant.id,
+      periodStartUtc: reconciledUsagePeriod.currentPeriodStartUtc,
+      periodEndUtc: reconciledUsagePeriod.currentPeriodEndUtc,
+      deferOnActiveReservations: true,
+    });
+  }
   if (completedCheckoutSessionId && updated.count === 1) {
     await db.tenant.updateMany({
       where: { id: tenant.id, stripeCheckoutSessionId: completedCheckoutSessionId },
@@ -776,7 +831,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
           },
         });
         if (completed.count !== 1) throw new WebhookLeaseLostError();
-      });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15_000 });
       return { received: true };
     } catch (error) {
       if (error instanceof WebhookLeaseLostError) {

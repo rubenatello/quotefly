@@ -66,6 +66,20 @@ enum JobEventType {
   DELETED
 }
 
+enum NotificationKind {
+  BOOKED
+  RESCHEDULED
+  DISPATCHED
+  ARRIVED
+  COMPLETED
+  CANCELED
+}
+
+enum NotificationDeliveryStatus {
+  AVAILABLE
+  DELIVERED
+}
+
 enum AfterSaleFollowUpStatus {
   NOT_READY
   DUE
@@ -141,6 +155,22 @@ enum AiUsageEventType {
   REVISE
   BUSINESS_INSIGHT
   INDEXING
+  ACCOUNTING
+}
+
+enum AiUsageReservationKind {
+  OPERATION
+  PROVIDER_CALL
+}
+
+enum AiUsageReservationState {
+  RESERVED
+  STARTED
+  SETTLED
+  VOIDED
+  AMBIGUOUS_CHARGED
+  EXPIRED_CHARGED
+  ACCOUNTING_INCIDENT
 }
 
 enum AiPurpose {
@@ -307,6 +337,7 @@ model Tenant {
   subscriptionPlanCode              String?
   trialStartsAtUtc                  DateTime?                @db.Timestamptz(3)
   trialEndsAtUtc                    DateTime?                @db.Timestamptz(3)
+  subscriptionCurrentPeriodStartUtc DateTime?                @db.Timestamptz(3)
   subscriptionCurrentPeriodEndUtc   DateTime?                @db.Timestamptz(3)
   createdAt                         DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt                         DateTime                 @updatedAt @db.Timestamptz(3)
@@ -322,6 +353,7 @@ model Tenant {
   jobAppointments                   JobAppointment[]
   jobNotes                          JobNote[]
   jobEvents                         JobEvent[]
+  notifications                     NotificationOutbox[]
   invoices                          Invoice[]
   invoicePayments                   InvoicePayment[]
   invoiceEvents                     InvoiceEvent[]
@@ -329,6 +361,8 @@ model Tenant {
   activityTaskEvents                ActivityTaskEvent[]
   customerActivityEvents            CustomerActivityEvent[]
   aiUsageEvents                     AiUsageEvent[]
+  aiUsagePeriods                    AiUsagePeriod[]
+  aiUsageReservations               AiUsageReservation[]
   aiRetrievalAuditEvents            AiRetrievalAuditEvent[]
   aiRetrievalDocuments              AiRetrievalDocument[]
   aiRetrievalChunks                 AiRetrievalChunk[]
@@ -370,12 +404,12 @@ model TenantSequence {
   key       String   @db.VarChar(64)
   nextValue Int      @default(1)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([id, tenantId])
   @@unique([tenantId, key])
-  @@index([tenantId, key])
+  @@index([tenantId, key], map: "TenantSequence_tenant_key_idx")
 }
 
 model User {
@@ -448,12 +482,15 @@ model TenantUser {
   createdJobAppointments  JobAppointment[]     @relation("JobAppointmentCreator")
   jobNotes                JobNote[]            @relation("JobNoteCreator")
   jobEvents               JobEvent[]
+  receivedNotifications   NotificationOutbox[] @relation("NotificationRecipient")
+  actedNotifications      NotificationOutbox[] @relation("NotificationActor")
   invoiceEvents           InvoiceEvent[]
   assignedActivityTasks   ActivityTask[]       @relation("ActivityTaskAssignee")
   createdActivityTasks    ActivityTask[]       @relation("ActivityTaskCreator")
   completedActivityTasks  ActivityTask[]       @relation("ActivityTaskCompleter")
   activityTaskEvents      ActivityTaskEvent[]
   quoteDrafts             QuoteDraftRecovery[]
+  aiUsageReservations     AiUsageReservation[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId])
@@ -511,9 +548,9 @@ model Customer {
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, phoneDigits, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
-  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc])
+  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc], map: "Customer_tenantId_assignee_lifecycle_idx")
   @@index([tenantId, updatedAt(sort: Desc), id(sort: Desc)])
-  @@index([tenantId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Customer_tenantId_archived_deleted_updated_id_idx")
 }
 
 model PricingProfile {
@@ -592,7 +629,7 @@ model Quote {
   @@unique([id, tenantId])
   @@unique([id, customerId, tenantId])
   @@index([tenantId, customerId])
-  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc])
+  @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc], map: "Quote_tenantId_assignee_lifecycle_idx")
   @@index([tenantId, status])
   @@index([tenantId, jobStatus])
   @@index([tenantId, afterSaleFollowUpStatus])
@@ -600,41 +637,42 @@ model Quote {
   @@index([tenantId, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
-  @@index([tenantId, archivedAtUtc, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)])
-  @@index([tenantId, customerId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, archivedAtUtc, deletedAtUtc, createdAt(sort: Desc), id(sort: Desc)], map: "Quote_tenantId_archived_deleted_created_id_idx")
+  @@index([tenantId, customerId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Quote_tenantId_customer_archived_deleted_updated_id_idx")
 }
 
 model Job {
-  id                     String           @id @default(cuid())
+  id                     String               @id @default(cuid())
   tenantId               String
   customerId             String
   sourceQuoteId          String
   assignedTenantUserId   String?
   jobNumber              Int
-  status                 JobStatus        @default(UNSCHEDULED)
-  title                  String           @db.VarChar(191)
+  status                 JobStatus            @default(UNSCHEDULED)
+  title                  String               @db.VarChar(191)
   scopeSnapshot          String
   serviceType            ServiceCategory
   serviceAddressSnapshot String?
-  accessInstructions     String?          @db.VarChar(2000)
-  acceptedAtUtc          DateTime         @db.Timestamptz(3)
-  scheduledAtUtc         DateTime?        @db.Timestamptz(3)
-  dispatchedAtUtc        DateTime?        @db.Timestamptz(3)
-  startedAtUtc           DateTime?        @db.Timestamptz(3)
-  completedAtUtc         DateTime?        @db.Timestamptz(3)
-  canceledAtUtc          DateTime?        @db.Timestamptz(3)
-  version                Int              @default(1)
-  createdAt              DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime         @updatedAt @db.Timestamptz(3)
-  archivedAtUtc          DateTime?        @db.Timestamptz(3)
-  deletedAtUtc           DateTime?        @db.Timestamptz(3)
-  tenant                 Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer               Customer         @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  sourceQuote            Quote            @relation("QuoteJobSource", fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
-  assignedTenantUser     TenantUser?      @relation("JobAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  accessInstructions     String?              @db.VarChar(2000)
+  acceptedAtUtc          DateTime             @db.Timestamptz(3)
+  scheduledAtUtc         DateTime?            @db.Timestamptz(3)
+  dispatchedAtUtc        DateTime?            @db.Timestamptz(3)
+  startedAtUtc           DateTime?            @db.Timestamptz(3)
+  completedAtUtc         DateTime?            @db.Timestamptz(3)
+  canceledAtUtc          DateTime?            @db.Timestamptz(3)
+  version                Int                  @default(1)
+  createdAt              DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
+  archivedAtUtc          DateTime?            @db.Timestamptz(3)
+  deletedAtUtc           DateTime?            @db.Timestamptz(3)
+  tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer               Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  sourceQuote            Quote                @relation("QuoteJobSource", fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
+  assignedTenantUser     TenantUser?          @relation("JobAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   appointments           JobAppointment[]
   notes                  JobNote[]
   events                 JobEvent[]
+  notifications          NotificationOutbox[]
   invoices               Invoice[]
 
   @@unique([id, tenantId])
@@ -665,14 +703,16 @@ model JobAppointment {
   canceledAtUtc         DateTime?            @db.Timestamptz(3)
   version               Int                  @default(1)
   createdAt             DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt             DateTime             @updatedAt @db.Timestamptz(3)
+  updatedAt             DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
   deletedAtUtc          DateTime?            @db.Timestamptz(3)
   tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   job                   Job                  @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
   assignedTenantUser    TenantUser           @relation("JobAppointmentAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   createdByTenantUser   TenantUser           @relation("JobAppointmentCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  notifications         NotificationOutbox[]
 
   @@unique([id, tenantId])
+  @@unique([id, jobId, tenantId])
   @@index([tenantId, jobId, deletedAtUtc, startsAtUtc, id], map: "JobAppointment_job_start_idx")
   @@index([tenantId, assignedTenantUserId, deletedAtUtc, status, startsAtUtc, id], map: "JobAppointment_assignee_status_start_idx")
   @@index([tenantId, deletedAtUtc, startsAtUtc, id], map: "JobAppointment_tenant_start_idx")
@@ -696,60 +736,104 @@ model JobNote {
 }
 
 model JobEvent {
-  id                 String       @id @default(cuid())
+  id                 String               @id @default(cuid())
   tenantId           String
   jobId              String
   actorTenantUserId  String
   type               JobEventType
   fromStatus         JobStatus?
   toStatus           JobStatus?
-  requestId          String       @db.VarChar(191)
-  commandKeyHash     String       @db.VarChar(64)
-  commandPayloadHash String       @db.VarChar(64)
-  createdAt          DateTime     @default(now()) @db.Timestamptz(3)
-  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  job                Job          @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  actorTenantUser    TenantUser   @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  requestId          String               @db.VarChar(191)
+  commandKeyHash     String               @db.VarChar(64)
+  commandPayloadHash String               @db.VarChar(64)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job                Job                  @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  actorTenantUser    TenantUser           @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  notifications      NotificationOutbox[]
 
+  @@unique([id, tenantId])
+  @@unique([id, jobId, tenantId])
   @@unique([tenantId, commandKeyHash])
   @@index([tenantId, jobId, createdAt, id], map: "JobEvent_job_created_idx")
   @@index([tenantId, actorTenantUserId, createdAt], map: "JobEvent_actor_created_idx")
 }
 
+model NotificationOutbox {
+  id                    String                     @id @default(cuid())
+  tenantId              String
+  recipientTenantUserId String
+  actorTenantUserId     String
+  jobId                 String
+  appointmentId         String
+  sourceJobEventId      String
+  kind                  NotificationKind
+  channel               String                     @default("IN_APP") @db.VarChar(16)
+  templateKey           String                     @db.VarChar(64)
+  templateVersion       Int                        @default(1)
+  sourceVersion         Int
+  startsAtUtc           DateTime                   @db.Timestamptz(3)
+  endsAtUtc             DateTime                   @db.Timestamptz(3)
+  timeZone              String                     @db.VarChar(64)
+  dedupeKeyHash         String                     @db.VarChar(64)
+  payloadHash           String                     @db.VarChar(64)
+  deliveryStatus        NotificationDeliveryStatus @default(AVAILABLE)
+  deliveredAtUtc        DateTime?                  @db.Timestamptz(3)
+  readAtUtc             DateTime?                  @db.Timestamptz(3)
+  version               Int                        @default(1)
+  createdAt             DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                   @default(now()) @updatedAt @db.Timestamptz(3)
+  archivedAtUtc         DateTime?                  @db.Timestamptz(3)
+  tenant                Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipientTenantUser   TenantUser                 @relation("NotificationRecipient", fields: [recipientTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  actorTenantUser       TenantUser                 @relation("NotificationActor", fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  job                   Job                        @relation(fields: [jobId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  appointment           JobAppointment             @relation(fields: [appointmentId, jobId, tenantId], references: [id, jobId, tenantId], onDelete: Cascade)
+  sourceJobEvent        JobEvent                   @relation(fields: [sourceJobEventId, jobId, tenantId], references: [id, jobId, tenantId], onDelete: Cascade)
+
+  @@unique([tenantId, dedupeKeyHash])
+  @@index([tenantId, recipientTenantUserId, archivedAtUtc, createdAt(sort: Desc), id(sort: Desc)], map: "NotificationOutbox_recipient_created_idx")
+  @@index([tenantId, recipientTenantUserId, readAtUtc, archivedAtUtc, createdAt(sort: Desc), id(sort: Desc)], map: "NotificationOutbox_recipient_unread_idx")
+  @@index([tenantId, jobId, createdAt(sort: Desc)], map: "NotificationOutbox_job_created_idx")
+  @@index([tenantId, appointmentId, sourceVersion], map: "NotificationOutbox_appointment_version_idx")
+  @@index([tenantId, sourceJobEventId], map: "NotificationOutbox_source_event_idx")
+  @@index([tenantId, archivedAtUtc, readAtUtc, createdAt, id], map: "NotificationOutbox_retention_idx")
+}
+
 model Invoice {
-  id                 String               @id @default(cuid())
-  tenantId           String
-  customerId         String
-  jobId              String
-  sourceQuoteId      String
-  invoiceNumber      Int
-  status             InvoiceStatus        @default(DRAFT)
-  paymentStatus      InvoicePaymentStatus @default(PENDING)
-  titleSnapshot      String               @db.VarChar(191)
-  scopeSnapshot      String?
-  documentLocale     String               @default("en-US") @db.VarChar(5)
-  currency           String               @default("USD") @db.VarChar(3)
-  subtotalAmount     Decimal              @db.Decimal(10, 2)
-  taxAmount          Decimal              @db.Decimal(10, 2)
-  totalAmount        Decimal              @db.Decimal(10, 2)
-  amountPaid         Decimal              @default(0) @db.Decimal(10, 2)
-  balanceDue         Decimal              @db.Decimal(10, 2)
-  issuedAtUtc        DateTime?            @db.Timestamptz(3)
-  dueAtUtc           DateTime?            @db.Timestamptz(3)
-  sentAtUtc          DateTime?            @db.Timestamptz(3)
-  paidAtUtc          DateTime?            @db.Timestamptz(3)
-  voidedAtUtc        DateTime?            @db.Timestamptz(3)
-  version            Int                  @default(1)
-  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
-  archivedAtUtc      DateTime?            @db.Timestamptz(3)
-  deletedAtUtc       DateTime?            @db.Timestamptz(3)
-  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer           Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  job                Job                  @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
-  sourceQuote        Quote                @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
-  payments           InvoicePayment[]
-  events             InvoiceEvent[]
+  id             String               @id @default(cuid())
+  tenantId       String
+  customerId     String
+  jobId          String
+  sourceQuoteId  String
+  invoiceNumber  Int
+  status         InvoiceStatus        @default(DRAFT)
+  paymentStatus  InvoicePaymentStatus @default(PENDING)
+  titleSnapshot  String               @db.VarChar(191)
+  scopeSnapshot  String?
+  documentLocale String               @default("en-US") @db.VarChar(5)
+  currency       String               @default("USD") @db.VarChar(3)
+  subtotalAmount Decimal              @db.Decimal(10, 2)
+  taxAmount      Decimal              @db.Decimal(10, 2)
+  totalAmount    Decimal              @db.Decimal(10, 2)
+  amountPaid     Decimal              @default(0) @db.Decimal(10, 2)
+  balanceDue     Decimal              @db.Decimal(10, 2)
+  issuedAtUtc    DateTime?            @db.Timestamptz(3)
+  dueAtUtc       DateTime?            @db.Timestamptz(3)
+  sentAtUtc      DateTime?            @db.Timestamptz(3)
+  paidAtUtc      DateTime?            @db.Timestamptz(3)
+  voidedAtUtc    DateTime?            @db.Timestamptz(3)
+  version        Int                  @default(1)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
+  archivedAtUtc  DateTime?            @db.Timestamptz(3)
+  deletedAtUtc   DateTime?            @db.Timestamptz(3)
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer       Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  job            Job                  @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
+  sourceQuote    Quote                @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
+  payments       InvoicePayment[]
+  events         InvoiceEvent[]
 
   @@unique([id, tenantId])
   @@unique([tenantId, jobId])
@@ -776,7 +860,7 @@ model InvoicePayment {
   receiptUrl        String?                @db.VarChar(2048)
   failureCode       String?                @db.VarChar(191)
   createdAt         DateTime               @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime               @updatedAt @db.Timestamptz(3)
+  updatedAt         DateTime               @default(now()) @updatedAt @db.Timestamptz(3)
   deletedAtUtc      DateTime?              @db.Timestamptz(3)
   tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoice           Invoice                @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
@@ -788,23 +872,23 @@ model InvoicePayment {
 }
 
 model InvoiceEvent {
-  id                    String                @id @default(cuid())
-  tenantId              String
-  invoiceId             String
-  actorTenantUserId     String?
-  type                  InvoiceEventType
-  fromStatus            InvoiceStatus?
-  toStatus              InvoiceStatus?
-  fromPaymentStatus     InvoicePaymentStatus?
-  toPaymentStatus       InvoicePaymentStatus?
-  requestId             String?               @db.VarChar(191)
-  commandKeyHash        String?               @db.VarChar(64)
-  commandPayloadHash    String?               @db.VarChar(64)
-  providerEventId       String?               @db.VarChar(191)
-  createdAt             DateTime              @default(now()) @db.Timestamptz(3)
-  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice               Invoice               @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  actorTenantUser       TenantUser?           @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  id                 String                @id @default(cuid())
+  tenantId           String
+  invoiceId          String
+  actorTenantUserId  String?
+  type               InvoiceEventType
+  fromStatus         InvoiceStatus?
+  toStatus           InvoiceStatus?
+  fromPaymentStatus  InvoicePaymentStatus?
+  toPaymentStatus    InvoicePaymentStatus?
+  requestId          String?               @db.VarChar(191)
+  commandKeyHash     String?               @db.VarChar(64)
+  commandPayloadHash String?               @db.VarChar(64)
+  providerEventId    String?               @db.VarChar(191)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  tenant             Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice            Invoice               @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  actorTenantUser    TenantUser?           @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@unique([id, tenantId])
   @@unique([tenantId, commandKeyHash])
@@ -848,6 +932,8 @@ model AiUsageEvent {
   retentionExpiresAtUtc  DateTime?              @db.Timestamptz(3)
   retrievalAuditEventId  String?
   retrievalAuditTenantId String?
+  rootReservationId      String?
+  ledgerAccountedAtUtc   DateTime?              @db.Timestamptz(3)
   createdAt              DateTime               @default(now()) @db.Timestamptz(3)
   deletedAtUtc           DateTime?              @db.Timestamptz(3)
   tenant                 Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -855,10 +941,12 @@ model AiUsageEvent {
   customer               Customer?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
   actorUser              User?                  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   retrievalAuditEvent    AiRetrievalAuditEvent? @relation(fields: [retrievalAuditEventId, retrievalAuditTenantId], references: [id, tenantId], onDelete: SetNull)
+  rootReservation        AiUsageReservation?    @relation(fields: [rootReservationId, tenantId], references: [id, tenantId], onDelete: Restrict)
   assistantFeedback      AiAssistantFeedback[]
 
   @@unique([id, tenantId])
   @@unique([retrievalAuditEventId, retrievalAuditTenantId])
+  @@unique([tenantId, rootReservationId])
   @@index([tenantId, createdAt])
   @@index([tenantId, eventType, createdAt])
   @@index([tenantId, actorUserId, createdAt])
@@ -867,6 +955,65 @@ model AiUsageEvent {
   @@index([tenantId, retentionExpiresAtUtc])
   @@index([tenantId, deletedAtUtc])
   @@index([retrievalAuditTenantId])
+}
+
+model AiUsagePeriod {
+  id                  String               @id @default(cuid())
+  tenantId            String
+  periodStartUtc      DateTime             @db.Timestamptz(3)
+  periodEndUtc        DateTime             @db.Timestamptz(3)
+  completedCredits    Int                  @default(0)
+  completedCostMicros BigInt               @default(0)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations        AiUsageReservation[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, periodStartUtc])
+  @@index([tenantId, periodEndUtc])
+}
+
+model AiUsageReservation {
+  id                   String                  @id @default(cuid())
+  tenantId             String
+  periodId             String
+  parentReservationId  String?
+  actorTenantUserId    String?
+  kind                 AiUsageReservationKind
+  state                AiUsageReservationState @default(RESERVED)
+  operation            String                  @db.VarChar(64)
+  model                String?                 @db.VarChar(191)
+  pricingVersion       String?                 @db.VarChar(64)
+  inputRateMicrosPerM  BigInt?
+  outputRateMicrosPerM BigInt?
+  idempotencyKeyHash   String                  @db.VarChar(64)
+  requestHash          String                  @db.VarChar(64)
+  reservedCredits      Int                     @default(0)
+  actualCredits        Int?
+  ceilingCostMicros    BigInt                  @default(0)
+  actualCostMicros     BigInt?
+  serializedInputBytes Int?
+  maxOutputTokens      Int?
+  providerStartedAtUtc DateTime?               @db.Timestamptz(3)
+  expiresAtUtc         DateTime                @db.Timestamptz(3)
+  finalizedAtUtc       DateTime?               @db.Timestamptz(3)
+  incidentCode         String?                 @db.VarChar(64)
+  createdAt            DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                @updatedAt @db.Timestamptz(3)
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  period               AiUsagePeriod           @relation(fields: [periodId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  parentReservation    AiUsageReservation?     @relation("AiUsageReservationChildren", fields: [parentReservationId, tenantId, periodId], references: [id, tenantId, periodId], onDelete: Restrict)
+  actorTenantUser      TenantUser?             @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  childReservations    AiUsageReservation[]    @relation("AiUsageReservationChildren")
+  usageEvents          AiUsageEvent[]
+
+  @@unique([id, tenantId])
+  @@unique([id, tenantId, periodId])
+  @@unique([tenantId, kind, idempotencyKeyHash])
+  @@index([tenantId, periodId, state, expiresAtUtc])
+  @@index([tenantId, parentReservationId, state])
+  @@index([tenantId, actorTenantUserId, createdAt])
 }
 
 model AiAssistantFeedback {
@@ -991,20 +1138,23 @@ model AiRetrievalChunk {
   indexedAtUtc         DateTime            @default(now()) @db.Timestamptz(3)
   deletedAtUtc         DateTime?           @db.Timestamptz(3)
   tenant               Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  document             AiRetrievalDocument @relation(fields: [documentId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  document             AiRetrievalDocument @relation(fields: [documentId, tenantId], references: [id, tenantId], onDelete: Cascade, map: "AiRetrievalChunk_documentId_fkey")
+  // The matching cache lookup index is intentionally partial
+  // (`WHERE embeddingContentHash IS NOT NULL`) and is maintained in SQL.
+  // Prisma cannot represent its predicate, so declaring a full index here
+  // would create a duplicate and permanent migration drift.
 
   @@unique([tenantId, documentId, chunkIndex])
   @@index([tenantId, classification, deletedAtUtc])
   @@index([tenantId, sourceType, sourceId, deletedAtUtc])
   @@index([tenantId, sourceField, deletedAtUtc])
-  @@index([tenantId, customerId, deletedAtUtc])
-  @@index([tenantId, quoteId, deletedAtUtc])
-  @@index([tenantId, assignedTenantUserId, deletedAtUtc])
-  @@index([tenantId, serviceType, lifecycle, recordStatus, deletedAtUtc])
-  @@index([tenantId, sourceCreatedAtUtc, deletedAtUtc])
+  @@index([tenantId, customerId, deletedAtUtc], map: "AiRetrievalChunk_tenant_customer_active_idx")
+  @@index([tenantId, quoteId, deletedAtUtc], map: "AiRetrievalChunk_tenant_quote_active_idx")
+  @@index([tenantId, assignedTenantUserId, deletedAtUtc], map: "AiRetrievalChunk_tenant_assignee_active_idx")
+  @@index([tenantId, serviceType, lifecycle, recordStatus, deletedAtUtc], map: "AiRetrievalChunk_tenant_service_lifecycle_status_idx")
+  @@index([tenantId, sourceCreatedAtUtc, deletedAtUtc], map: "AiRetrievalChunk_tenant_source_created_idx")
   @@index([tenantId, indexedAtUtc])
-  @@index([tenantId, classification, deletedAtUtc, policyVersion, embeddingDimensions, indexedAtUtc(sort: Desc)])
-  @@index([tenantId, embeddingContentHash, embeddingModel, embeddingDimensions, chunkerVersion, deletedAtUtc], map: "AiRetrievalChunk_embedding_cache_idx")
+  @@index([tenantId, classification, deletedAtUtc, policyVersion, embeddingDimensions, indexedAtUtc(sort: Desc)], map: "AiRetrievalChunk_tenant_class_deleted_policy_dims_indexed_idx")
 }
 
 model AiIndexJob {
@@ -1027,7 +1177,7 @@ model AiIndexJob {
   lastChunkCount             Int?
   lastEmbeddingCacheHitCount Int?
   createdAt                  DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt                  DateTime            @updatedAt @db.Timestamptz(3)
+  updatedAt                  DateTime            @default(now()) @updatedAt @db.Timestamptz(3)
   tenant                     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, sourceType, sourceId])
@@ -1169,7 +1319,7 @@ model ActivityTask {
   deletedAtUtc            DateTime?            @db.Timestamptz(3)
   tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer                Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  quote                   Quote?               @relation(fields: [quoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Cascade)
+  quote                   Quote?               @relation(fields: [quoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Cascade, map: "ActivityTask_quoteId_tenantId_fkey")
   assignedTenantUser      TenantUser           @relation("ActivityTaskAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   createdByTenantUser     TenantUser           @relation("ActivityTaskCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   completedByTenantUser   TenantUser?          @relation("ActivityTaskCompleter", fields: [completedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)

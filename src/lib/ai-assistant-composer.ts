@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { z } from "zod";
 import type { DataClassification } from "@prisma/client";
 import { env } from "../config/env";
@@ -6,6 +5,8 @@ import { redactAiPrompt } from "./ai-data-governance";
 import type { AiUsageTelemetry } from "./ai-usage";
 import type { AiAssistantConversationTurn } from "./ai-assistant-contract";
 import type { SupportedLocale } from "./supported-locale";
+import { createOpenAiChatCompletion } from "../services/ai-provider-gateway";
+import { AiUsageLedgerError } from "../services/ai-usage-ledger";
 
 export type AiAssistantAnswerMode = "DETERMINISTIC" | "LLM_COMPOSED";
 
@@ -203,19 +204,7 @@ const ComposerOutputSchema = z.object({
   safetyNotes: z.array(z.string().trim().max(160)).max(5),
 }).strict();
 
-let openaiClient: OpenAI | undefined;
 let providerForTest: AiAssistantCompositionProvider | null = null;
-
-function getOpenAI(): OpenAI {
-  if (!openaiClient) {
-    openaiClient = new OpenAI({
-      apiKey: env.OPENAI_API_KEY,
-      timeout: env.OPENAI_ASSISTANT_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-  return openaiClient;
-}
 
 export function setAssistantCompositionProviderForTest(provider: AiAssistantCompositionProvider | null) {
   if (env.NODE_ENV !== "test") {
@@ -654,7 +643,7 @@ function normalizedAnswer(answer: string) {
 async function defaultCompositionProvider(
   request: AiAssistantCompositionRequest,
 ): Promise<AiAssistantCompositionProviderResult> {
-  const completion = await getOpenAI().chat.completions.create({
+  const completion = await createOpenAiChatCompletion({
     model: request.model,
     store: false,
     temperature: 0.2,
@@ -667,7 +656,7 @@ async function defaultCompositionProvider(
         content: `Compose Kody's final answer from this authorized JSON only:\n${request.inputJson}`,
       },
     ],
-  });
+  }, { timeoutMs: env.OPENAI_ASSISTANT_TIMEOUT_MS });
 
   return {
     outputText: completion.choices[0]?.message?.content ?? "",
@@ -713,6 +702,7 @@ export async function composeAssistantAnswer(
       responseFormat: COMPOSER_RESPONSE_FORMAT,
     });
   } catch (error) {
+    if (error instanceof AiUsageLedgerError) throw error;
     console.warn(
       "[ai-assistant] LLM composition failed; using deterministic answer.",
       error instanceof Error ? error.name : "UnknownError",

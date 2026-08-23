@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import OpenAI from "openai";
 import {
   AiRetrievalAuditStatus,
   Prisma,
@@ -42,6 +41,7 @@ import {
 } from "./data-classification";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope, tenantActiveScope } from "./query-scope";
 import { withTenantRlsContext, type TenantRlsClient } from "./tenant-rls";
+import { createOpenAiEmbeddings } from "../services/ai-provider-gateway";
 
 const RETRIEVAL_AUDIT_RETENTION_DAYS = 90;
 const MAX_CANDIDATE_CHUNKS = 200;
@@ -165,19 +165,6 @@ export type AiRetrievalResult = Readonly<{
   telemetry: AiUsageTelemetry | null;
 }>;
 
-let openaiClient: OpenAI | undefined;
-
-function getOpenAI() {
-  if (!openaiClient) {
-    openaiClient = new OpenAI({
-      apiKey: env.OPENAI_API_KEY,
-      timeout: OPENAI_EMBEDDING_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-  return openaiClient;
-}
-
 function normalizeSourceText(value: string) {
   return normalizeAiSourceText(value);
 }
@@ -217,10 +204,10 @@ export async function createAiRetrievalEmbeddings(texts: readonly string[]): Pro
     return texts.map((text) => deterministicEmbedding(text));
   }
 
-  const response = await getOpenAI().embeddings.create({
+  const response = await createOpenAiEmbeddings({
     model: env.OPENAI_EMBEDDING_MODEL,
     input: [...texts],
-  });
+  }, { timeoutMs: OPENAI_EMBEDDING_TIMEOUT_MS });
   if (response.data.length !== texts.length || response.data.some((row) => !row.embedding.length)) {
     throw new Error("OpenAI returned an empty embedding.");
   }

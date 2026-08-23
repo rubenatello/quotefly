@@ -36,8 +36,6 @@ import {
 import {
   buildTenantEntitlements,
   loadTenantEntitlements,
-  startOfCurrentUtcMonth,
-  startOfNextUtcMonth,
 } from "../lib/subscription";
 import { parseChatToQuotePrompt, type ParsedChatToQuoteDraft } from "../services/chat-to-quote";
 import {
@@ -57,6 +55,14 @@ import {
   resolveQuoteBrandingLogoDataUrl,
   type QuoteBrandAssetReference,
 } from "../services/quote-brand-asset";
+import {
+  AiUsageLedgerError,
+  AI_IDEMPOTENCY_COMPATIBILITY_HEADER,
+  aiUsageLedgerErrorResponse,
+  hashAiUsageRequest,
+  resolveAiRequestIdempotencyKey,
+  runWithAiUsageOperation,
+} from "../services/ai-usage-ledger";
 import {
   applyQuoteSheetLineMutations,
   QuoteSheetLineNotFoundError,
@@ -234,7 +240,7 @@ const SaveQuoteSheetSchema = z
     quote: z.object({
       serviceType: ServiceTypeSchema,
       status: QuoteStatusSchema,
-      jobStatus: QuoteJobStatusSchema,
+      jobStatus: QuoteJobStatusSchema.optional(),
       afterSaleFollowUpStatus: AfterSaleFollowUpStatusSchema,
       title: z.string().min(3),
       scopeText: z.string().min(3),
@@ -684,8 +690,11 @@ async function getQuoteRevisionContext(
           timezone: true,
           subscriptionStatus: true,
           subscriptionPlanCode: true,
+          stripeCustomerId: true,
+          stripeSubscriptionId: true,
           trialStartsAtUtc: true,
           trialEndsAtUtc: true,
+          subscriptionCurrentPeriodStartUtc: true,
           subscriptionCurrentPeriodEndUtc: true,
           branding: {
             select: {
@@ -935,6 +944,8 @@ async function restoreQuoteRevision(
     tenantId: string;
     quoteId: string;
     revisionId: string;
+    access: AccessContext;
+    requestId: string;
     actor?: ActivityActor;
   },
 ) {
@@ -993,8 +1004,6 @@ async function restoreQuoteRevision(
       customerId: snapshot.customer.id,
       serviceType: snapshot.quote.serviceType,
       status: snapshot.quote.status,
-      jobStatus: snapshot.quote.jobStatus,
-      afterSaleFollowUpStatus: snapshot.quote.afterSaleFollowUpStatus,
       title: snapshot.quote.title,
       scopeText: snapshot.quote.scopeText,
       internalCostSubtotal: roundCurrency(snapshot.quote.internalCostSubtotal),
@@ -1004,13 +1013,6 @@ async function restoreQuoteRevision(
       documentLocale: normalizeSupportedLocale(snapshot.quote.documentLocale),
       sentAt,
       closedAtUtc: snapshot.quote.closedAtUtc ? new Date(snapshot.quote.closedAtUtc) : null,
-      jobCompletedAtUtc: snapshot.quote.jobCompletedAtUtc ? new Date(snapshot.quote.jobCompletedAtUtc) : null,
-      afterSaleFollowUpDueAtUtc: snapshot.quote.afterSaleFollowUpDueAtUtc
-        ? new Date(snapshot.quote.afterSaleFollowUpDueAtUtc)
-        : null,
-      afterSaleFollowUpCompletedAtUtc: snapshot.quote.afterSaleFollowUpCompletedAtUtc
-        ? new Date(snapshot.quote.afterSaleFollowUpCompletedAtUtc)
-        : null,
       archivedAtUtc: null,
       deletedAtUtc: null,
       updatedAt: now,
@@ -1071,8 +1073,6 @@ async function restoreQuoteRevision(
       `restoredFromRevisionId:${revision.id}`,
       "customerId",
       "status",
-      "jobStatus",
-      "afterSaleFollowUpStatus",
       "title",
       "scopeText",
       "lineItems",
@@ -1089,11 +1089,19 @@ async function restoreQuoteRevision(
     now,
   });
 
-  return { status: "ok" as const };
+  const acceptedJob = finalizedQuote.status === "ACCEPTED"
+    ? await ensureJobForAcceptedQuote(tx, params.access, {
+        quoteId: finalizedQuote.id,
+        actorTenantUserId: params.access.tenantUserId,
+        requestId: params.requestId,
+      })
+    : null;
+
+  return { status: "ok" as const, job: serializeAcceptedJobSummary(acceptedJob) };
 }
 
 function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[] {
-  const fields = Object.keys(payload);
+  const fields = Object.keys(payload).filter((field) => field !== "jobStatus");
   return fields.length ? fields : ["manual_update"];
 }
 
@@ -1123,7 +1131,6 @@ async function assertAcceptedQuoteJobMutationAllowed(
       customerId: string;
       serviceType: z.infer<typeof ServiceTypeSchema>;
       status: z.infer<typeof QuoteStatusSchema>;
-      jobStatus: z.infer<typeof QuoteJobStatusSchema>;
       title: string;
       scopeText: string;
       internalCostSubtotal: Prisma.Decimal | number | string;
@@ -1144,8 +1151,7 @@ async function assertAcceptedQuoteJobMutationAllowed(
     decimalInputChanged(params.existingQuote.internalCostSubtotal, payload.internalCostSubtotal) ||
     decimalInputChanged(params.existingQuote.customerPriceSubtotal, payload.customerPriceSubtotal) ||
     decimalInputChanged(params.existingQuote.taxAmount, payload.taxAmount) ||
-    (payload.status !== undefined && payload.status !== params.existingQuote.status && payload.status !== "ACCEPTED") ||
-    (payload.jobStatus !== undefined && payload.jobStatus !== params.existingQuote.jobStatus);
+    (payload.status !== undefined && payload.status !== params.existingQuote.status && payload.status !== "ACCEPTED");
 
   if (!wouldDivergeFromJob) return;
 
@@ -1158,10 +1164,8 @@ async function assertAcceptedQuoteJobMutationAllowed(
 function resolveLifecycleUpdate(
   existingQuote: {
     status: z.infer<typeof QuoteStatusSchema>;
-    jobStatus: z.infer<typeof QuoteJobStatusSchema>;
     afterSaleFollowUpStatus: z.infer<typeof AfterSaleFollowUpStatusSchema>;
     closedAtUtc: Date | null;
-    jobCompletedAtUtc: Date | null;
     afterSaleFollowUpDueAtUtc: Date | null;
     afterSaleFollowUpCompletedAtUtc: Date | null;
   },
@@ -1174,46 +1178,6 @@ function resolveLifecycleUpdate(
   if (payload.status === "ACCEPTED" && !existingQuote.closedAtUtc) {
     data.closedAtUtc = now;
     changedFields.push("closedAtUtc");
-  }
-
-  if (payload.jobStatus !== undefined) {
-    data.jobStatus = payload.jobStatus;
-    changedFields.push("jobStatus");
-
-    if (payload.jobStatus === "COMPLETED") {
-      if (!existingQuote.jobCompletedAtUtc) {
-        data.jobCompletedAtUtc = now;
-        changedFields.push("jobCompletedAtUtc");
-      }
-
-      if (
-        payload.afterSaleFollowUpStatus === undefined &&
-        existingQuote.afterSaleFollowUpStatus === "NOT_READY"
-      ) {
-        data.afterSaleFollowUpStatus = "DUE";
-        data.afterSaleFollowUpDueAtUtc = existingQuote.afterSaleFollowUpDueAtUtc ?? addDays(now, 7);
-        data.afterSaleFollowUpCompletedAtUtc = null;
-        changedFields.push(
-          "afterSaleFollowUpStatus",
-          "afterSaleFollowUpDueAtUtc",
-          "afterSaleFollowUpCompletedAtUtc",
-        );
-      }
-    } else {
-      data.jobCompletedAtUtc = null;
-      changedFields.push("jobCompletedAtUtc");
-
-      if (payload.afterSaleFollowUpStatus === undefined) {
-        data.afterSaleFollowUpStatus = "NOT_READY";
-        data.afterSaleFollowUpDueAtUtc = null;
-        data.afterSaleFollowUpCompletedAtUtc = null;
-        changedFields.push(
-          "afterSaleFollowUpStatus",
-          "afterSaleFollowUpDueAtUtc",
-          "afterSaleFollowUpCompletedAtUtc",
-        );
-      }
-    }
   }
 
   if (payload.afterSaleFollowUpStatus !== undefined) {
@@ -2104,6 +2068,40 @@ function startAiSuggestionStream(reply: FastifyReply) {
   };
 }
 
+function createAiSuggestionBuffer() {
+  const events: AiSuggestionStreamEvent[] = [];
+  const write = (event: AiSuggestionStreamEvent) => events.push(event);
+  return {
+    write,
+    progress(
+      step: AiProgressStep,
+      detail: string,
+      options?: {
+        sourceHints?: string[];
+        patchCounts?: { added: number; updated: number; removed: number };
+      },
+    ) {
+      const config = AI_PROGRESS_STEPS[step];
+      write({
+        type: "progress",
+        step,
+        value: config.value,
+        label: config.label,
+        detail,
+        ...(options?.sourceHints?.length ? { sourceHints: options.sourceHints } : {}),
+        ...(options?.patchCounts ? { patchCounts: options.patchCounts } : {}),
+      });
+    },
+    flushTo(reply: FastifyReply) {
+      const output = startAiSuggestionStream(reply);
+      for (const event of events) output.write(event);
+      return output;
+    },
+  };
+}
+
+class AiSuggestionInputError extends Error {}
+
 function resolveChatQuoteScopeText(
   parsedScopeText: string,
   rawPrompt: string,
@@ -2350,7 +2348,7 @@ type AiSuggestionStreamEvent =
         usage: ReturnType<typeof buildAiUsageResponse>;
       };
     }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string; code?: string };
 
 type SimilarQuoteContext = {
   id: string;
@@ -3481,34 +3479,46 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const { blocked, blockedBy, snapshot } = await assertAiUsageAvailable(
-      app.prisma,
-      claims.tenantId,
-      entitlements,
-    );
-
-    if (blocked) {
-      const requiredPlan =
-        entitlements.planCode === "starter" ? "professional" : "enterprise";
-      const blockedBySpend = blockedBy === "aiSpendUsdPerMonth";
-      return reply.code(403).send({
-        code: "PLAN_LIMIT_EXCEEDED",
-        error: blockedBySpend
-          ? `${entitlements.planName} includes up to $${formatUsdValue(snapshot.monthlySpendLimitUsd ?? 0)} AI usage per month. This workspace has used $${formatUsdValue(snapshot.monthlySpendUsedUsd)} this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`
-          : `${entitlements.planName} includes up to ${snapshot.monthlyCreditsLimit ?? entitlements.limits.aiQuotesPerMonth ?? 0} AI requests per month. This workspace has used ${snapshot.monthlyCreditsUsed} AI requests this month. AI usage renews on ${formatAiRenewalDate(snapshot.periodEndUtc)}.`,
-        feature: blockedBySpend ? "aiSpendUsdPerMonth" : "aiQuotesPerMonth",
-        currentPlan: entitlements.planCode,
-        requiredPlan,
-        limit: blockedBySpend ? snapshot.monthlySpendLimitUsd : entitlements.limits.aiQuotesPerMonth,
-        used: blockedBySpend ? snapshot.monthlySpendUsedUsd : snapshot.monthlyCreditsUsed,
-        renewsAtUtc: snapshot.periodEndUtc,
-        usage: buildAiUsageResponse(snapshot, { consumedCredits: 0, consumedSpendUsd: 0 }),
+    if (payload.quoteId) {
+      const visibleQuote = await app.prisma.quote.findFirst({
+        where: {
+          id: payload.quoteId,
+          ...tenantActiveQuoteScope(claims.tenantId),
+          ...assignedRecordScope(access),
+        },
+        select: { id: true },
+      });
+      if (!visibleQuote) return reply.code(404).send({ error: "Quote not found for tenant." });
+    }
+    const idempotency = resolveAiRequestIdempotencyKey(request.headers["idempotency-key"], request.id);
+    if (!idempotency) {
+      return reply.code(400).send({
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+        error: "A valid Idempotency-Key header is required for paid AI requests.",
       });
     }
+    if (idempotency.usedLegacyFallback) {
+      reply.header(AI_IDEMPOTENCY_COMPATIBILITY_HEADER, "synthesized-request-key");
+      // The successful NDJSON path hijacks Fastify's serializer, so mirror the
+      // additive compatibility signal onto the underlying response as well.
+      reply.raw.setHeader(AI_IDEMPOTENCY_COMPATIBILITY_HEADER, "synthesized-request-key");
+      request.log.warn(
+        { route: "/v1/quotes/ai-suggest", requestId: request.id, compatibility: "legacy-missing-ai-idempotency-key" },
+        "Accepted a missing paid-AI Idempotency-Key through the one-release compatibility fallback.",
+      );
+    }
 
-    const stream = startAiSuggestionStream(reply);
-
+    const stream = createAiSuggestionBuffer();
     try {
+      const operationResult = await runWithAiUsageOperation(app.prisma, {
+        tenantId: claims.tenantId,
+        userEmail: claims.email,
+        actorTenantUserId: access.tenantUserId,
+        operation: "QUOTE_SUGGESTION",
+        idempotencyKey: idempotency.idempotencyKey,
+        requestHash: hashAiUsageRequest(payload),
+        credits: 1,
+      }, async () => {
       const aiTelemetry = createAiTelemetryAccumulator();
       stream.progress(
         "analyzing_prompt",
@@ -3550,9 +3560,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         : null;
 
       if (payload.quoteId && !existingQuote) {
-        stream.write({ type: "error", error: "Quote not found for tenant." });
-        stream.end();
-        return reply;
+        throw new AiSuggestionInputError("Quote not found for tenant.");
       }
 
       const hadExplicitCustomerContext = Boolean(payload.customerId || existingQuote?.customerId);
@@ -3738,6 +3746,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       });
       accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
     } catch (retrievalErr) {
+      if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
       request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] governed retrieval context unavailable");
     }
 
@@ -3873,6 +3882,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
         accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
       } catch (retrievalErr) {
+        if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
         request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] customer-specific retrieval context unavailable");
       }
 
@@ -4063,6 +4073,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           );
         }
       } catch (retryErr) {
+        if (retryErr instanceof AiUsageLedgerError) throw retryErr;
         request.log.warn({ err: retryErr }, "[quotes/ai-suggest] guardrail retry failed");
       }
     }
@@ -4075,13 +4086,32 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         suggestion,
       })
     ) {
-      stream.write({
-        type: "error",
-        error:
-          "AI could not produce a concrete quote update from that prompt. Add explicit scope, quantities, or requested line edits and try again.",
+      await createAiUsageEvent(app.prisma, {
+        tenantId: claims.tenantId,
+        quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+        customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
+        actor,
+        eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
+        promptText: payload.prompt,
+        requestId: request.id,
+        serviceType: preliminaryServiceType,
+        sensitiveValues: selectedCustomer
+          ? [selectedCustomer.fullName, selectedCustomer.email, selectedCustomer.phone]
+          : [],
+        model: aiTelemetry.model,
+        telemetry: aiTelemetry,
+        trace: {
+          insightSummary: "No customer-visible suggestion was returned.",
+          insightReasons: ["provider output did not pass the concrete quote mutation guard"],
+          sourceTypes: ["QuoteAiGuardrail"],
+          riskNote: "Provider usage was accounted and audited; generated output was withheld.",
+        },
+        retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
       });
-      stream.end();
-      return reply;
+      return {
+        noResultError:
+          "AI could not produce a concrete quote update from that prompt. Add explicit scope, quantities, or requested line edits and try again.",
+      };
     }
 
     const insight = buildAiSuggestionInsight({
@@ -4129,9 +4159,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     );
 
-    let aiRunId = "untracked";
-    try {
-      const aiUsageEvent = await createAiUsageEvent(app.prisma, {
+    const aiUsageEvent = await createAiUsageEvent(app.prisma, {
         tenantId: claims.tenantId,
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
         customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
@@ -4151,16 +4179,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         }),
         retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
       });
-      aiRunId = aiUsageEvent.id;
-    } catch (eventErr) {
-      request.log.error(
-        { err: eventErr },
-        "[quotes/ai-suggest] failed to persist AI usage event; returning suggestion anyway",
-      );
-    }
 
-      stream.write({
-        type: "complete",
+      return {
         result: {
           customer: selectedCustomer,
           parsed: {
@@ -4177,24 +4197,48 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           suggestion,
           patch,
           insight,
-          aiRunId,
-          usage: buildAiUsageResponse(snapshot, {
+          aiRunId: aiUsageEvent.id,
+        },
+        telemetry: aiTelemetry,
+      };
+      });
+
+      if ("noResultError" in operationResult) {
+        return reply.code(422).send({ error: operationResult.noResultError });
+      }
+      const finalEntitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
+      });
+      if (!finalEntitlements) {
+        throw new AiUsageLedgerError(
+          "AI_USAGE_ACCOUNTING_UNAVAILABLE",
+          503,
+          "AI usage accounting is temporarily unavailable.",
+        );
+      }
+      const finalSnapshot = (await assertAiUsageAvailable(app.prisma, claims.tenantId, finalEntitlements)).snapshot;
+      const output = stream.flushTo(reply);
+      output.write({
+        type: "complete",
+        result: {
+          ...operationResult.result,
+          usage: buildAiUsageResponse(finalSnapshot, {
             consumedCredits: 1,
-            consumedSpendUsd: aiTelemetry.estimatedCostUsd,
-          }),
+            consumedSpendUsd: operationResult.telemetry.estimatedCostUsd,
+          }, { viewInternalCosts: includeFinancialContext }),
         },
       });
-      stream.end();
+      output.end();
       return reply;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed applying AI suggestion.";
-      try {
-        stream.write({ type: "error", error: message });
-      } finally {
-        stream.end();
+      if (err instanceof AiUsageLedgerError) {
+        return reply.code(err.statusCode).send(aiUsageLedgerErrorResponse(err));
       }
+      const message = err instanceof AiSuggestionInputError
+        ? err.message
+        : "AI could not prepare that quote update. Please try again.";
       request.log.error({ err }, "[quotes/ai-suggest] streamed AI suggestion failed");
-      return reply;
+      return reply.code(err instanceof AiSuggestionInputError ? 422 : 500).send({ error: message });
     }
   });
 
@@ -4225,8 +4269,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const periodStart = startOfCurrentUtcMonth();
-    const periodEnd = startOfNextUtcMonth();
+    const periodStart = entitlements.usagePeriod.periodStartUtc;
+    const periodEnd = entitlements.usagePeriod.periodEndUtc;
     const [monthlyQuoteCount, customer, actor] = await Promise.all([
       entitlements.limits.quotesPerMonth !== null
         ? app.prisma.quote.count({
@@ -4912,6 +4956,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             tenantId: claims.tenantId,
             quoteId,
             revisionId,
+            access,
+            requestId: request.id,
             actor,
           }),
         );
@@ -4962,6 +5008,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({
         message: "Quote restored from revision history.",
         quote: restoredQuote,
+        job: result.status === "ok" ? result.job : null,
       });
     },
   );
@@ -5269,7 +5316,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quoteId: recalculatedQuote.id,
           eventType:
             payload.quote.status !== existingQuote.status ||
-            payload.quote.jobStatus !== existingQuote.jobStatus ||
             payload.quote.afterSaleFollowUpStatus !== existingQuote.afterSaleFollowUpStatus
               ? "STATUS_CHANGED"
               : payload.lineItems.length > 0 || payload.newLineItems.length > 0
@@ -5360,6 +5406,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const { quoteId } = QuoteParamsSchema.parse(request.params);
     const payload = UpdateQuoteSchema.parse(request.body);
     const actor = await resolveActivityActor(app.prisma, claims);
+
+    if (payload.jobStatus !== undefined && Object.keys(payload).length === 1) {
+      return reply.code(409).send({
+        code: "QUOTE_JOB_STATUS_MOVED",
+        error: "Job status is managed from the Jobs workspace.",
+      });
+    }
 
     const existingQuote = await app.prisma.quote.findFirst({
       where: {
@@ -5463,7 +5516,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ...(payload.status ? ["sentAt"] : []),
         ];
         const revisionEventType: QuoteRevisionEventType =
-          payload.status !== undefined || payload.jobStatus !== undefined || payload.afterSaleFollowUpStatus !== undefined
+          payload.status !== undefined || payload.afterSaleFollowUpStatus !== undefined
             ? "STATUS_CHANGED"
             : "UPDATED";
         const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);

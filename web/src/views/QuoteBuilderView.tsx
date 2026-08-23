@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
+import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import { openKody, publishKodyOutcome } from "../components/ai/kody-events";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
@@ -32,8 +32,8 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
-import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
+import { api, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
+import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import {
   quoteBuilderDraftStorageKey,
   isQuoteDraftTimestampFresh,
@@ -526,17 +526,18 @@ export function QuoteBuilderView() {
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
     [customers, quoteForm.customerId],
   );
+  const aiUsage = useMemo(() => resolveAiUsagePresentation(session?.usage), [session?.usage]);
+  const aiUsageLimitMessage = useMemo(
+    () => formatAiPaidUsagePause(session?.usage ?? {}, locale),
+    [locale, session?.usage],
+  );
   const aiUsageHint = useMemo(
     () =>
       formatAiUsageAvailability({
-        usedUsd: session?.usage?.monthlyAiSpendUsd,
-        limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
-        renewsAtUtc: session?.usage?.periodEndUtc,
+        usage: session?.usage,
       }, locale),
     [
-      session?.entitlements?.limits.aiSpendUsdPerMonth,
-      session?.usage?.monthlyAiSpendUsd,
-      session?.usage?.periodEndUtc,
+      session?.usage,
       locale,
     ],
   );
@@ -928,7 +929,7 @@ export function QuoteBuilderView() {
   }
 
   function openBuilderAiAssist(target: QuoteBuilderAiAssistTarget) {
-    if (!canUseChatToQuote) {
+    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
     }
@@ -939,7 +940,7 @@ export function QuoteBuilderView() {
   }
 
   function openBuilderKodyDraft() {
-    if (!canUseChatToQuote) {
+    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
     }
@@ -956,7 +957,7 @@ export function QuoteBuilderView() {
   async function handleAiDraftSubmit(event: React.FormEvent) {
     event.preventDefault();
 
-    if (!canUseChatToQuote) {
+    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
     }
@@ -964,6 +965,11 @@ export function QuoteBuilderView() {
     const prompt = chatPrompt.trim();
     if (!prompt) {
       setError(t("quoteBuilder.errors.promptRequired"));
+      return;
+    }
+
+    if (aiUsage.paidActionsUnavailable) {
+      setAiErrorMessage(aiUsageLimitMessage);
       return;
     }
 
@@ -989,6 +995,7 @@ export function QuoteBuilderView() {
         })),
       }, {
         onProgress: setAiProgressEvent,
+        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
       });
 
       setChatParsed(parsed);
@@ -1089,10 +1096,8 @@ export function QuoteBuilderView() {
         }),
       );
     } catch (err) {
-      if (err instanceof ApiError && err.details && typeof err.details === "object") {
-        const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
-        if (usage) publishAiUsageUpdate(usage);
-      }
+      const usageUpdate = aiUsageUpdateFromApiError(err);
+      if (usageUpdate) publishAiUsageUpdate(usageUpdate);
       const message = localizedApiError(err, t, { fallbackKey: "quoteBuilder.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
@@ -1600,7 +1605,7 @@ export function QuoteBuilderView() {
               <KodyFieldAssistButton
                 label={quoteForm.title.trim() ? t("quoteBuilder.kodyAssist.improveTitle") : t("quoteBuilder.kodyAssist.draftTitle")}
                 onClick={() => openBuilderAiAssist({ kind: "title" })}
-                disabled={!canUseChatToQuote}
+                disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
               />
             }
             businessName={session?.tenantName ?? "QuoteFly"}
@@ -1643,7 +1648,7 @@ export function QuoteBuilderView() {
               <KodyFieldAssistButton
                 label={quoteForm.scopeText.trim() ? t("quoteBuilder.kodyAssist.improveOverview") : t("quoteBuilder.kodyAssist.draftOverview")}
                 onClick={() => openBuilderAiAssist({ kind: "overview" })}
-                disabled={!canUseChatToQuote}
+                disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
               />
             }
             logoUrl={branding?.logoUrl ?? null}
@@ -1655,16 +1660,20 @@ export function QuoteBuilderView() {
             showQuoteFlyAttribution={showQuoteFlyAttribution}
             documentLocale={quoteForm.documentLocale}
             actions={
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <KodyFieldAssistButton
                   label={t("quoteBuilder.kodyAssist.fullQuote")}
                   className="hidden xl:inline-flex"
                   onClick={openBuilderKodyDraft}
-                  disabled={!canUseChatToQuote}
+                  disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
+                  ariaDescribedBy={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-desktop" : undefined}
                 />
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                   {t("quoteBuilder.preview")}
                 </Button>
+                {aiUsage.paidActionsUnavailable ? (
+                  <AiPaidPauseNotice id="quote-builder-ai-pause-desktop" message={aiUsageLimitMessage} className="hidden basis-full xl:block" />
+                ) : null}
               </div>
             }
           >
@@ -1674,9 +1683,11 @@ export function QuoteBuilderView() {
                 <KodyFieldAssistButton
                   label={t("quoteBuilder.kodyAssist.fullQuote")}
                   onClick={openBuilderKodyDraft}
-                  disabled={!canUseChatToQuote}
+                  disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
+                  ariaDescribedBy={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-mobile-empty" : undefined}
                   className="w-full justify-center"
                 />
+                {aiUsage.paidActionsUnavailable ? <AiPaidPauseNotice id="quote-builder-ai-pause-mobile-empty" message={aiUsageLimitMessage} /> : null}
               </div>
             ) : null}
 
@@ -1707,12 +1718,14 @@ export function QuoteBuilderView() {
                 variant="outline"
                 icon={<Sparkles size={15} />}
                 onClick={openBuilderKodyDraft}
-                disabled={!canUseChatToQuote}
+                disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
+                aria-describedby={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-mobile" : undefined}
                 aria-label={t("quoteBuilder.kodyAssist.fullQuote")}
                 title={t("quoteBuilder.kodyAssist.fullQuote")}
               >
                 Kody
               </Button>
+              {aiUsage.paidActionsUnavailable ? <AiPaidPauseNotice id="quote-builder-ai-pause-mobile" message={aiUsageLimitMessage} className="col-span-3" /> : null}
             </div>
 
             <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:block">
@@ -1807,7 +1820,7 @@ export function QuoteBuilderView() {
                     onInsertBelow={addBlankLine}
                     onRemove={removeDraftLine}
                     onAssistDescription={(lineId) => openBuilderAiAssist({ kind: "lineDescription", lineId })}
-                    assistDisabled={!canUseChatToQuote}
+                    assistDisabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
                   />
                 ))}
                 <div className="px-3 py-3 xl:hidden">
@@ -1959,10 +1972,11 @@ export function QuoteBuilderView() {
         }
         customerContextBadge={activeCustomer ? t("quoteBuilder.usingCustomer") : null}
         usageHint={aiUsageHint}
+        usageLimitMessage={aiUsage.paidActionsUnavailable ? aiUsageLimitMessage : null}
         errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
-        disabled={!canUseChatToQuote}
+        disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
         title={
           aiAssistTarget.kind === "quote"

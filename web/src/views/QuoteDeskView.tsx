@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
-import { KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
+import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import { InvoicePanel } from "../components/invoices/InvoicePanel";
 import {
   FeatureLockedCard,
@@ -55,8 +55,8 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { ApiError, api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
-import { formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, type AiUsageUpdateDetail } from "../lib/ai-credits";
+import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
   isQuoteDraftTimestampFresh,
@@ -163,7 +163,6 @@ type StoredDeskDraft = {
   quote: {
     serviceType: Quote["serviceType"];
     status: Quote["status"];
-    jobStatus: Quote["jobStatus"];
     afterSaleFollowUpStatus: Quote["afterSaleFollowUpStatus"];
     title: string;
     scopeText: string;
@@ -178,7 +177,6 @@ type PendingLifecycleStatus = Quote["status"] | null;
 
 const SERVICE_TYPES = new Set(["HVAC", "PLUMBING", "FLOORING", "ROOFING", "GARDENING", "CONSTRUCTION"]);
 const QUOTE_STATUSES = new Set(["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"]);
-const JOB_STATUSES = new Set(["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"]);
 const FOLLOW_UP_STATUSES = new Set(["NOT_READY", "DUE", "COMPLETED"]);
 
 function canEditQuoteDocumentLocale(status: Quote["status"]): boolean {
@@ -255,7 +253,6 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
   if (
     !isBoundedString(quote.serviceType, 32) || !SERVICE_TYPES.has(quote.serviceType) ||
     !isBoundedString(quote.status, 32) || !QUOTE_STATUSES.has(quote.status) ||
-    !isBoundedString(quote.jobStatus, 32) || !JOB_STATUSES.has(quote.jobStatus) ||
     !isBoundedString(quote.afterSaleFollowUpStatus, 32) || !FOLLOW_UP_STATUSES.has(quote.afterSaleFollowUpStatus) ||
     !isBoundedString(quote.title, 1_000) ||
     !isBoundedString(quote.scopeText, 20_000) ||
@@ -279,7 +276,6 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
     quote: {
       serviceType: quote.serviceType as Quote["serviceType"],
       status: quote.status as Quote["status"],
-      jobStatus: quote.jobStatus as Quote["jobStatus"],
       afterSaleFollowUpStatus: quote.afterSaleFollowUpStatus as Quote["afterSaleFollowUpStatus"],
       title: quote.title,
       scopeText: quote.scopeText,
@@ -728,17 +724,18 @@ export function QuoteDeskView() {
     [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
   );
   const selectedQuoteTitle = selectedQuote?.title ?? t("quoteDesk.currentQuote");
+  const aiUsage = useMemo(() => resolveAiUsagePresentation(session?.usage), [session?.usage]);
+  const aiUsageLimitMessage = useMemo(
+    () => formatAiPaidUsagePause(session?.usage ?? {}, locale),
+    [locale, session?.usage],
+  );
   const aiUsageHint = useMemo(
     () =>
       formatAiUsageAvailability({
-        usedUsd: session?.usage?.monthlyAiSpendUsd,
-        limitUsd: session?.entitlements?.limits.aiSpendUsdPerMonth,
-        renewsAtUtc: session?.usage?.periodEndUtc,
+        usage: session?.usage,
       }, locale),
     [
-      session?.entitlements?.limits.aiSpendUsdPerMonth,
-      session?.usage?.monthlyAiSpendUsd,
-      session?.usage?.periodEndUtc,
+      session?.usage,
       locale,
     ],
   );
@@ -759,7 +756,6 @@ export function QuoteDeskView() {
     return (
       quoteEditForm.serviceType !== selectedQuote.serviceType ||
       quoteEditForm.status !== selectedQuote.status ||
-      quoteEditForm.jobStatus !== selectedQuote.jobStatus ||
       quoteEditForm.afterSaleFollowUpStatus !== selectedQuote.afterSaleFollowUpStatus ||
       quoteEditForm.title !== selectedQuote.title ||
       quoteEditForm.scopeText !== selectedQuote.scopeText ||
@@ -812,7 +808,6 @@ export function QuoteDeskView() {
       quote: {
         serviceType: quoteEditForm.serviceType,
         status: quoteEditForm.status,
-        jobStatus: quoteEditForm.jobStatus,
         afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
@@ -1063,7 +1058,6 @@ export function QuoteDeskView() {
       quote: {
         serviceType: quoteEditForm.serviceType,
         status: quoteEditForm.status,
-        jobStatus: quoteEditForm.jobStatus,
         afterSaleFollowUpStatus: quoteEditForm.afterSaleFollowUpStatus,
         title: quoteEditForm.title,
         scopeText: quoteEditForm.scopeText,
@@ -1261,7 +1255,7 @@ export function QuoteDeskView() {
       setUnlockConfirmOpen(true);
       return;
     }
-    if (!canUseChatToQuote) {
+    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteDesk.errors.aiUnavailable"));
       return;
     }
@@ -1284,7 +1278,7 @@ export function QuoteDeskView() {
       return;
     }
 
-    if (!canUseChatToQuote) {
+    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteDesk.errors.aiUnavailable"));
       return;
     }
@@ -1292,6 +1286,11 @@ export function QuoteDeskView() {
     const prompt = chatPrompt.trim();
     if (!prompt) {
       setError(t("quoteDesk.errors.promptRequired"));
+      return;
+    }
+
+    if (aiUsage.paidActionsUnavailable) {
+      setAiErrorMessage(aiUsageLimitMessage);
       return;
     }
 
@@ -1318,6 +1317,7 @@ export function QuoteDeskView() {
         })),
       }, {
         onProgress: setAiProgressEvent,
+        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
       });
 
       setChatParsed(parsed);
@@ -1410,10 +1410,8 @@ export function QuoteDeskView() {
         }),
       );
     } catch (err) {
-      if (err instanceof ApiError && err.details && typeof err.details === "object") {
-        const usage = (err.details as { usage?: AiUsageUpdateDetail }).usage;
-        if (usage) publishAiUsageUpdate(usage);
-      }
+      const usageUpdate = aiUsageUpdateFromApiError(err);
+      if (usageUpdate) publishAiUsageUpdate(usageUpdate);
       const message = localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
@@ -1459,7 +1457,6 @@ export function QuoteDeskView() {
     setQuoteEditForm({
       serviceType: selectedQuote.serviceType,
       status: selectedQuote.status,
-      jobStatus: selectedQuote.jobStatus,
       afterSaleFollowUpStatus: selectedQuote.afterSaleFollowUpStatus,
       title: selectedQuote.title,
       scopeText: selectedQuote.scopeText,
@@ -1832,7 +1829,7 @@ export function QuoteDeskView() {
                 <KodyFieldAssistButton
                   label={quoteEditForm.title.trim() ? t("quoteDesk.kodyAssist.improveTitle") : t("quoteDesk.kodyAssist.draftTitle")}
                   onClick={() => openDeskAiAssist({ kind: "title" })}
-                  disabled={!canUseChatToQuote || isQuoteLocked}
+                  disabled={!canUseChatToQuote || isQuoteLocked || aiUsage.paidActionsUnavailable}
                 />
               }
               businessName={session?.tenantName ?? "QuoteFly"}
@@ -1872,7 +1869,7 @@ export function QuoteDeskView() {
                 <KodyFieldAssistButton
                   label={quoteEditForm.scopeText.trim() ? t("quoteDesk.kodyAssist.improveOverview") : t("quoteDesk.kodyAssist.draftOverview")}
                   onClick={() => openDeskAiAssist({ kind: "overview" })}
-                  disabled={!canUseChatToQuote || isQuoteLocked}
+                  disabled={!canUseChatToQuote || isQuoteLocked || aiUsage.paidActionsUnavailable}
                 />
               }
               logoUrl={branding?.logoUrl ?? null}
@@ -1885,11 +1882,12 @@ export function QuoteDeskView() {
               documentLocale={quoteEditForm.documentLocale}
               readOnly={isQuoteLocked}
               actions={
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <KodyFieldAssistButton
                     label={t("quoteDesk.kodyAssist.fullQuote")}
                     onClick={() => openDeskAiAssist({ kind: "quote" })}
-                    disabled={!canUseChatToQuote || isQuoteLocked}
+                    disabled={!canUseChatToQuote || isQuoteLocked || aiUsage.paidActionsUnavailable}
+                    ariaDescribedBy={aiUsage.paidActionsUnavailable ? "quote-desk-ai-pause" : undefined}
                   />
                   <Button variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                     {t("quoteDesk.mobile.preview")}
@@ -1903,6 +1901,7 @@ export function QuoteDeskView() {
                   ) : (
                     <Badge tone="blue">{t("quoteDesk.editorLive")}</Badge>
                   )}
+                  {aiUsage.paidActionsUnavailable ? <AiPaidPauseNotice id="quote-desk-ai-pause" message={aiUsageLimitMessage} className="basis-full" /> : null}
                 </div>
               }
             >
@@ -2044,7 +2043,7 @@ export function QuoteDeskView() {
                     onSave={saveLine}
                     onDelete={() => setLineItemPendingDeleteId(line.id)}
                     onAssistDescription={(lineId) => openDeskAiAssist({ kind: "lineDescription", lineId })}
-                    assistDisabled={!canUseChatToQuote || isQuoteLocked}
+                    assistDisabled={!canUseChatToQuote || isQuoteLocked || aiUsage.paidActionsUnavailable}
                     />
                   ))}
                   <div className="px-4 py-4">
@@ -2067,7 +2066,7 @@ export function QuoteDeskView() {
                         readOnly={isQuoteLocked}
                         canViewInternalCosts={canViewInternalCosts}
                         onAssistDescription={() => openDeskAiAssist({ kind: "newLineDescription" })}
-                        assistDisabled={!canUseChatToQuote || isQuoteLocked}
+                        assistDisabled={!canUseChatToQuote || isQuoteLocked || aiUsage.paidActionsUnavailable}
                       />
                     </div>
                   </div>
@@ -2783,10 +2782,11 @@ export function QuoteDeskView() {
         customerContextText={`${customerName}${customerPhone ? ` | ${customerPhone}` : ""}${customerEmail ? ` | ${customerEmail}` : ""}`}
         customerContextBadge={t("quoteDesk.ai.usingCurrent")}
         usageHint={aiUsageHint}
+        usageLimitMessage={aiUsage.paidActionsUnavailable ? aiUsageLimitMessage : null}
         errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
-        disabled={!canUseChatToQuote}
+        disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
         onSubmit={(event) => void handleAiSuggestSubmit(event)}
         title={
           aiAssistTarget.kind === "quote"

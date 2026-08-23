@@ -7,8 +7,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { buildServer } from "../../src/app";
 import { env } from "../../src/config/env";
 import { prisma } from "../../src/lib/prisma";
+import { withTenantRlsContext } from "../../src/lib/tenant-rls";
 import {
   buildTenantEntitlements,
+  resolveReconciledSubscriptionBillingPeriod,
   resolveReconciledSubscriptionPeriod,
   resolveSubscriptionItemBilling,
 } from "../../src/lib/subscription";
@@ -170,23 +172,29 @@ function stripeSubscriptionFixture(input: {
   customerId: string;
   tenantId: string;
   status: Stripe.Subscription.Status;
+  periodStart?: number;
   periodEnd?: number;
+  trialStart?: number | null;
+  trialEnd?: number | null;
 }): Stripe.Subscription {
+  const periodEnd = input.periodEnd ?? Math.floor(Date.now() / 1000) + 86_400;
+  const periodStart = input.periodStart ?? periodEnd - 30 * 86_400;
   return {
     id: input.id,
     object: "subscription",
     customer: input.customerId,
     status: input.status,
     metadata: { tenantId: input.tenantId },
-    trial_start: null,
-    trial_end: null,
+    trial_start: input.trialStart ?? null,
+    trial_end: input.trialEnd ?? null,
     items: {
       data: [
         {
           id: `si_${input.id}`,
           object: "subscription_item",
           price: { id: process.env.STRIPE_PRICE_ID_STARTER! },
-          current_period_end: input.periodEnd ?? Math.floor(Date.now() / 1000) + 86_400,
+          current_period_start: periodStart,
+          current_period_end: periodEnd,
         },
       ],
     },
@@ -2375,26 +2383,32 @@ describe("QuoteFly API integration", () => {
   });
 
   test("uses the configured subscription item period and fails closed when it is absent", () => {
+    const periodStart = Math.floor(Date.now() / 1000) - 86_400;
     const periodEnd = Math.floor(Date.now() / 1000) + 86_400;
     const resolved = resolveSubscriptionItemBilling(
       {
         items: {
           data: [
-            { price: { id: "price_unrelated" }, current_period_end: periodEnd + 500 },
-            { price: { id: "price_starter" }, current_period_end: periodEnd },
+            { price: { id: "price_unrelated" }, current_period_start: periodStart, current_period_end: periodEnd + 500 },
+            { price: { id: "price_starter" }, current_period_start: periodStart, current_period_end: periodEnd },
           ],
         },
       } as Stripe.Subscription,
       new Map([["price_starter", "starter"]]),
     );
     expect(resolved.planCode).toBe("starter");
+    expect(resolved.currentPeriodStartUtc?.getTime()).toBe(periodStart * 1000);
     expect(resolved.currentPeriodEndUtc?.getTime()).toBe(periodEnd * 1000);
 
     const missingPeriod = resolveSubscriptionItemBilling(
       { items: { data: [{ price: { id: "price_starter" } }] } } as Stripe.Subscription,
       new Map([["price_starter", "starter"]]),
     );
-    expect(missingPeriod).toEqual({ planCode: "starter", currentPeriodEndUtc: null });
+    expect(missingPeriod).toEqual({
+      planCode: "starter",
+      currentPeriodStartUtc: null,
+      currentPeriodEndUtc: null,
+    });
 
     const entitlements = buildTenantEntitlements({
       subscriptionStatus: "active",
@@ -2417,13 +2431,377 @@ describe("QuoteFly API integration", () => {
     expect(activeBasicEntitlements.limits.quoteHistoryDays).toBe(30);
   });
 
+  test("Stripe sync persists both cycle bounds and idempotently reconciles tenant-scoped usage totals", async () => {
+    const session = await signUp("billing-cycle-reconcile");
+    const other = await signUp("billing-cycle-reconcile-other");
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const periodStart = nowSeconds - 5 * 86_400;
+    const periodEnd = nowSeconds + 25 * 86_400;
+    const customerId = `cus_cycle_${Date.now()}`;
+    const subscriptionId = `sub_cycle_${Date.now()}`;
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        subscriptionStatus: "inactive",
+        subscriptionPlanCode: null,
+        trialStartsAtUtc: null,
+        trialEndsAtUtc: null,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: null,
+        subscriptionCurrentPeriodStartUtc: null,
+        subscriptionCurrentPeriodEndUtc: null,
+      },
+    });
+    const usageCreatedAt = new Date((periodStart + 60) * 1000);
+    await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: session.tenant.id,
+        eventType: "BUSINESS_INSIGHT",
+        creditsConsumed: 3,
+        requestCount: 1,
+        estimatedCostUsd: "0.000321",
+        createdAt: usageCreatedAt,
+      },
+    });
+    await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: other.tenant.id,
+        eventType: "BUSINESS_INSIGHT",
+        creditsConsumed: 99,
+        requestCount: 1,
+        estimatedCostUsd: "0.999999",
+        createdAt: usageCreatedAt,
+      },
+    });
+    const subscription = stripeSubscriptionFixture({
+      id: subscriptionId,
+      customerId,
+      tenantId: session.tenant.id,
+      status: "active",
+      periodStart,
+      periodEnd,
+    });
+    stripeProviderMocks.retrieveSubscription.mockResolvedValue(subscription);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await injectSignedStripeEvent({
+        id: `evt_cycle_reconcile_${attempt}_${Date.now()}`,
+        type: "customer.subscription.updated",
+        created: nowSeconds + attempt,
+        data: { object: subscription },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const [tenant, period] = await Promise.all([
+      prisma.tenant.findUniqueOrThrow({ where: { id: session.tenant.id } }),
+      prisma.aiUsagePeriod.findUniqueOrThrow({
+        where: {
+          tenantId_periodStartUtc: {
+            tenantId: session.tenant.id,
+            periodStartUtc: new Date(periodStart * 1000),
+          },
+        },
+      }),
+    ]);
+    expect(tenant.subscriptionCurrentPeriodStartUtc).toEqual(new Date(periodStart * 1000));
+    expect(tenant.subscriptionCurrentPeriodEndUtc).toEqual(new Date(periodEnd * 1000));
+    expect(period).toMatchObject({
+      periodEndUtc: new Date(periodEnd * 1000),
+      completedCredits: 3,
+      completedCostMicros: 321n,
+    });
+    expect(await prisma.aiUsagePeriod.count({
+      where: { tenantId: other.tenant.id, periodStartUtc: new Date(periodStart * 1000) },
+    })).toBe(0);
+  });
+
+  test("Stripe trial sync reconciles exact trial bounds rather than subscription-item bounds", async () => {
+    const session = await signUp("billing-stripe-trial-cycle");
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const billingStart = nowSeconds - 7 * 86_400;
+    const billingEnd = nowSeconds + 23 * 86_400;
+    const trialStart = nowSeconds - 2 * 86_400;
+    const trialEnd = nowSeconds + 12 * 86_400;
+    const customerId = `cus_trial_cycle_${Date.now()}`;
+    const subscriptionId = `sub_trial_cycle_${Date.now()}`;
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: null,
+        subscriptionStatus: "inactive",
+        subscriptionPlanCode: null,
+        trialStartsAtUtc: null,
+        trialEndsAtUtc: null,
+      },
+    });
+    const subscription = stripeSubscriptionFixture({
+      id: subscriptionId,
+      customerId,
+      tenantId: session.tenant.id,
+      status: "trialing",
+      periodStart: billingStart,
+      periodEnd: billingEnd,
+      trialStart,
+      trialEnd,
+    });
+    stripeProviderMocks.retrieveSubscription.mockResolvedValue(subscription);
+    expect((await injectSignedStripeEvent({
+      id: `evt_trial_cycle_${Date.now()}`,
+      type: "customer.subscription.updated",
+      created: nowSeconds,
+      data: { object: subscription },
+    })).statusCode).toBe(200);
+
+    expect(await prisma.tenant.findUniqueOrThrow({ where: { id: session.tenant.id } })).toMatchObject({
+      subscriptionStatus: "trialing",
+      subscriptionPlanCode: "starter",
+      subscriptionCurrentPeriodStartUtc: new Date(billingStart * 1000),
+      subscriptionCurrentPeriodEndUtc: new Date(billingEnd * 1000),
+      trialStartsAtUtc: new Date(trialStart * 1000),
+      trialEndsAtUtc: new Date(trialEnd * 1000),
+    });
+    expect(await prisma.aiUsagePeriod.findUniqueOrThrow({
+      where: {
+        tenantId_periodStartUtc: {
+          tenantId: session.tenant.id,
+          periodStartUtc: new Date(trialStart * 1000),
+        },
+      },
+    })).toMatchObject({ periodEndUtc: new Date(trialEnd * 1000) });
+    expect(await prisma.aiUsagePeriod.findUnique({
+      where: {
+        tenantId_periodStartUtc: {
+          tenantId: session.tenant.id,
+          periodStartUtc: new Date(billingStart * 1000),
+        },
+      },
+    })).toBeNull();
+  });
+
+  test("a delayed renewal commits while an active request remains attributed to its old period", async () => {
+    const session = await signUp("billing-cycle-active-hold");
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oldStart = new Date((nowSeconds - 10 * 86_400) * 1000);
+    const oldEnd = new Date((nowSeconds + 20 * 86_400) * 1000);
+    const newStartSeconds = nowSeconds - 5 * 86_400;
+    const newEndSeconds = nowSeconds + 25 * 86_400;
+    const customerId = `cus_cycle_hold_${Date.now()}`;
+    const subscriptionId = `sub_cycle_hold_${Date.now()}`;
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        subscriptionStatus: "active",
+        subscriptionPlanCode: "starter",
+        trialStartsAtUtc: null,
+        trialEndsAtUtc: null,
+        subscriptionCurrentPeriodStartUtc: oldStart,
+        subscriptionCurrentPeriodEndUtc: oldEnd,
+      },
+    });
+    const root = await withTenantRlsContext(prisma, session.tenant.id, async (tx) => {
+      const period = await tx.aiUsagePeriod.create({
+        data: { tenantId: session.tenant.id, periodStartUtc: oldStart, periodEndUtc: oldEnd },
+      });
+      return tx.aiUsageReservation.create({
+        data: {
+          tenantId: session.tenant.id,
+          periodId: period.id,
+          kind: "OPERATION",
+          state: "RESERVED",
+          operation: "WEBHOOK_HOLD",
+          idempotencyKeyHash: "1".repeat(64),
+          requestHash: "2".repeat(64),
+          reservedCredits: 1,
+          ceilingCostMicros: 0n,
+          expiresAtUtc: new Date(Date.now() + 15 * 60_000),
+        },
+      });
+    });
+    const subscription = stripeSubscriptionFixture({
+      id: subscriptionId,
+      customerId,
+      tenantId: session.tenant.id,
+      status: "active",
+      periodStart: newStartSeconds,
+      periodEnd: newEndSeconds,
+    });
+    stripeProviderMocks.retrieveSubscription.mockResolvedValue(subscription);
+    const renewedEventId = `evt_cycle_hold_renewed_${Date.now()}`;
+    const renewed = await injectSignedStripeEvent({
+      id: renewedEventId,
+      type: "customer.subscription.updated",
+      created: nowSeconds,
+      data: { object: subscription },
+    });
+    expect(renewed.statusCode).toBe(200);
+    expect((await prisma.tenant.findUniqueOrThrow({ where: { id: session.tenant.id } })).subscriptionCurrentPeriodStartUtc)
+      .toEqual(new Date(newStartSeconds * 1000));
+    expect(await prisma.aiUsagePeriod.findUniqueOrThrow({
+      where: {
+        tenantId_periodStartUtc: {
+          tenantId: session.tenant.id,
+          periodStartUtc: new Date(newStartSeconds * 1000),
+        },
+      },
+    })).toMatchObject({ completedCredits: 0, completedCostMicros: 0n });
+    expect((await prisma.aiUsageReservation.findUniqueOrThrow({ where: { id: root.id } })).periodId)
+      .not.toBe((await prisma.aiUsagePeriod.findUniqueOrThrow({
+        where: {
+          tenantId_periodStartUtc: {
+            tenantId: session.tenant.id,
+            periodStartUtc: new Date(newStartSeconds * 1000),
+          },
+        },
+      })).id);
+    expect(await prisma.billingWebhookEvent.findUniqueOrThrow({ where: { stripeEventId: renewedEventId } }))
+      .toMatchObject({ status: "SUCCEEDED", lastError: null });
+
+    await withTenantRlsContext(prisma, session.tenant.id, (tx) => tx.aiUsageReservation.update({
+      where: { id: root.id },
+      data: { state: "VOIDED", finalizedAtUtc: new Date() },
+    }));
+    expect((await prisma.aiUsageReservation.findUniqueOrThrow({ where: { id: root.id } })).state)
+      .toBe("VOIDED");
+
+    const currentPeriod = await prisma.aiUsagePeriod.findUniqueOrThrow({
+      where: {
+        tenantId_periodStartUtc: {
+          tenantId: session.tenant.id,
+          periodStartUtc: new Date(newStartSeconds * 1000),
+        },
+      },
+    });
+    const currentRoot = await withTenantRlsContext(prisma, session.tenant.id, (tx) => (
+      tx.aiUsageReservation.create({
+        data: {
+          tenantId: session.tenant.id,
+          periodId: currentPeriod.id,
+          kind: "OPERATION",
+          state: "RESERVED",
+          operation: "SAME_PERIOD_HOLD",
+          idempotencyKeyHash: "5".repeat(64),
+          requestHash: "6".repeat(64),
+          reservedCredits: 1,
+          ceilingCostMicros: 0n,
+          expiresAtUtc: new Date(Date.now() + 15 * 60_000),
+        },
+      })
+    ));
+    const extendedEndSeconds = newEndSeconds + 86_400;
+    const extended = stripeSubscriptionFixture({
+      id: subscriptionId,
+      customerId,
+      tenantId: session.tenant.id,
+      status: "active",
+      periodStart: newStartSeconds,
+      periodEnd: extendedEndSeconds,
+    });
+    stripeProviderMocks.retrieveSubscription.mockResolvedValue(extended);
+    expect((await injectSignedStripeEvent({
+      id: `evt_cycle_hold_extended_${Date.now()}`,
+      type: "customer.subscription.updated",
+      created: nowSeconds + 1,
+      data: { object: extended },
+    })).statusCode).toBe(200);
+    expect((await prisma.tenant.findUniqueOrThrow({ where: { id: session.tenant.id } })).subscriptionCurrentPeriodEndUtc)
+      .toEqual(new Date(extendedEndSeconds * 1000));
+    expect(await prisma.aiUsagePeriod.findUniqueOrThrow({ where: { id: currentPeriod.id } }))
+      .toMatchObject({ periodEndUtc: new Date(extendedEndSeconds * 1000), completedCredits: 0 });
+    await withTenantRlsContext(prisma, session.tenant.id, (tx) => tx.aiUsageReservation.update({
+      where: { id: currentRoot.id },
+      data: { state: "VOIDED", finalizedAtUtc: new Date() },
+    }));
+  });
+
+  test("subscription cancellation revokes access immediately even with active AI work", async () => {
+    const session = await signUp("billing-cancel-active-ai");
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const periodStart = new Date((nowSeconds - 5 * 86_400) * 1000);
+    const periodEnd = new Date((nowSeconds + 25 * 86_400) * 1000);
+    const customerId = `cus_cancel_ai_${Date.now()}`;
+    const subscriptionId = `sub_cancel_ai_${Date.now()}`;
+    await prisma.tenant.update({
+      where: { id: session.tenant.id },
+      data: {
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        subscriptionStatus: "active",
+        subscriptionPlanCode: "starter",
+        trialStartsAtUtc: null,
+        trialEndsAtUtc: null,
+        subscriptionCurrentPeriodStartUtc: periodStart,
+        subscriptionCurrentPeriodEndUtc: periodEnd,
+      },
+    });
+    const root = await withTenantRlsContext(prisma, session.tenant.id, async (tx) => {
+      const period = await tx.aiUsagePeriod.create({
+        data: { tenantId: session.tenant.id, periodStartUtc: periodStart, periodEndUtc: periodEnd },
+      });
+      return tx.aiUsageReservation.create({
+        data: {
+          tenantId: session.tenant.id,
+          periodId: period.id,
+          kind: "OPERATION",
+          state: "STARTED",
+          operation: "CANCEL_IN_FLIGHT",
+          idempotencyKeyHash: "3".repeat(64),
+          requestHash: "4".repeat(64),
+          reservedCredits: 1,
+          ceilingCostMicros: 0n,
+          expiresAtUtc: new Date(Date.now() + 15 * 60_000),
+        },
+      });
+    });
+    const canceledSubscription = stripeSubscriptionFixture({
+      id: subscriptionId,
+      customerId,
+      tenantId: session.tenant.id,
+      status: "canceled",
+      periodStart: Math.floor(periodStart.getTime() / 1000),
+      periodEnd: Math.floor(periodEnd.getTime() / 1000),
+    });
+    stripeProviderMocks.retrieveSubscription.mockResolvedValue(canceledSubscription);
+    const event = {
+      id: `evt_cancel_active_ai_${Date.now()}`,
+      type: "customer.subscription.deleted",
+      created: nowSeconds,
+      data: { object: canceledSubscription },
+    };
+    const canceled = await injectSignedStripeEvent(event);
+    expect(canceled.statusCode).toBe(200);
+    expect(await injectSignedStripeEvent(event)).toMatchObject({ statusCode: 200 });
+    expect(await prisma.tenant.findUniqueOrThrow({ where: { id: session.tenant.id } }))
+      .toMatchObject({ subscriptionStatus: "canceled" });
+    expect((await prisma.aiUsageReservation.findUniqueOrThrow({ where: { id: root.id } })).state)
+      .toBe("STARTED");
+
+    const workspace = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: { fullName: "Blocked After Cancellation", phone: "555-010-2200" },
+    });
+    expect(workspace.statusCode).toBe(402);
+    expect(parseJson<{ code: string }>(workspace).code).toBe("BILLING_REQUIRED");
+    await withTenantRlsContext(prisma, session.tenant.id, (tx) => tx.aiUsageReservation.update({
+      where: { id: root.id },
+      data: { state: "AMBIGUOUS_CHARGED", actualCredits: 1, finalizedAtUtc: new Date() },
+    }));
+  });
+
   test("rejects reconciliation when Stripe customer or tenant metadata bindings mismatch", () => {
+    const periodStart = Math.floor(Date.now() / 1000) - 86_400;
     const periodEnd = Math.floor(Date.now() / 1000) + 86_400;
     const subscription = stripeSubscriptionFixture({
       id: "sub_reconciliation_binding",
       customerId: "cus_expected",
       tenantId: "tenant_expected",
       status: "active",
+      periodStart,
       periodEnd,
     });
     const baseInput = {
@@ -2436,6 +2814,10 @@ describe("QuoteFly API integration", () => {
     };
 
     expect(resolveReconciledSubscriptionPeriod(baseInput)?.getTime()).toBe(periodEnd * 1000);
+    expect(resolveReconciledSubscriptionBillingPeriod(baseInput)).toEqual({
+      currentPeriodStartUtc: new Date(periodStart * 1000),
+      currentPeriodEndUtc: new Date(periodEnd * 1000),
+    });
     expect(
       resolveReconciledSubscriptionPeriod({ ...baseInput, expectedCustomerId: "cus_different" }),
     ).toBeNull();
@@ -2553,6 +2935,17 @@ describe("QuoteFly API integration", () => {
     expect(activeParams.subscription_data?.trial_end).toBeGreaterThan(
       Math.floor(Date.now() / 1000) + 48 * 60 * 60,
     );
+    const activeAfterAbandon = await prisma.tenant.findUniqueOrThrow({
+      where: { id: activeTrial.tenant.id },
+      select: { stripeCustomerId: true, stripeSubscriptionId: true },
+    });
+    expect(activeAfterAbandon.stripeCustomerId).toMatch(/^cus_internal_active_/);
+    expect(activeAfterAbandon.stripeSubscriptionId).toBeNull();
+    expect((await app.inject({
+      method: "GET",
+      url: "/v1/customers",
+      headers: authHeaders(activeTrial.cookie),
+    })).statusCode).toBe(200);
 
     stripeProviderMocks.createCustomer.mockReset();
     stripeProviderMocks.createCheckoutSession.mockReset();

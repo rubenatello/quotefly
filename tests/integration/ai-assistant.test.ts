@@ -17,6 +17,23 @@ function cookieFrom(response: { headers: Record<string, number | string | string
   return String(value).split(";")[0] ?? String(value);
 }
 
+function tenantDateIso(value: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+}
+
+function addCalendarDays(dateValue: string, days: number) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const result = new Date(Date.UTC(year, month - 1, day + days));
+  return result.toISOString().slice(0, 10);
+}
+
 async function signUp(label: string): Promise<Session> {
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const response = await app.inject({
@@ -171,6 +188,100 @@ describe("AI assistant", () => {
     await prisma.$disconnect();
   });
 
+  test("supports one-release missing-key clients across public paid AI routes without weakening explicit validation", async () => {
+    const owner = await signUp("ai-idempotency-compatibility");
+    const compatibilityHeader = "x-quotefly-ai-idempotency-compatibility";
+
+    const assistant = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Draft a roofing quote for replacing twenty squares of asphalt shingles for $12,000.",
+        tool: "DRAFT_QUOTE",
+      },
+    });
+    expect(assistant.statusCode).toBe(200);
+    expect(assistant.headers[compatibilityHeader]).toBe("synthesized-request-key");
+
+    const insights = await app.inject({
+      method: "POST",
+      url: "/v1/ai/business-insights",
+      headers: { cookie: owner.cookie },
+      payload: {
+        prompt: "Summarize our current sales pipeline.",
+        tool: "SALES_PIPELINE",
+      },
+    });
+    expect(insights.statusCode).toBe(200);
+    expect(insights.headers[compatibilityHeader]).toBe("synthesized-request-key");
+
+    const quoteSuggestion = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: { cookie: owner.cookie },
+      payload: {
+        prompt: "Create a roofing quote to replace twenty squares of asphalt shingles for $12,000.",
+      },
+    });
+    expect(quoteSuggestion.statusCode).toBe(200);
+    expect(quoteSuggestion.headers[compatibilityHeader]).toBe("synthesized-request-key");
+    expect(quoteSuggestion.body).toContain('"type":"complete"');
+
+    const rootsAfterCompatibilityCalls = await prisma.aiUsageReservation.findMany({
+      where: {
+        tenantId: owner.tenant.id,
+        kind: "OPERATION",
+      },
+      select: { idempotencyKeyHash: true, state: true },
+    });
+    expect(rootsAfterCompatibilityCalls).toHaveLength(3);
+    expect(new Set(rootsAfterCompatibilityCalls.map((root) => root.idempotencyKeyHash)).size).toBe(3);
+    expect(rootsAfterCompatibilityCalls.every((root) => root.state === "SETTLED")).toBe(true);
+
+    const malformedRequests = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie, "idempotency-key": "short" },
+        payload: {
+          message: "Draft a roofing quote for replacing twenty squares of asphalt shingles for $12,000.",
+          tool: "DRAFT_QUOTE",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/ai/business-insights",
+        headers: { cookie: owner.cookie, "idempotency-key": "short" },
+        payload: { prompt: "Summarize our current sales pipeline.", tool: "SALES_PIPELINE" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/quotes/ai-suggest",
+        headers: { cookie: owner.cookie, "idempotency-key": "short" },
+        payload: { prompt: "Create a roofing quote to replace twenty squares of shingles for $12,000." },
+      }),
+    ]);
+    for (const response of malformedRequests) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REQUIRED" });
+      expect(response.headers[compatibilityHeader]).toBeUndefined();
+    }
+
+    const deterministic = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie, "idempotency-key": "short" },
+      payload: { message: "Take me to products", tool: "AUTO" },
+    });
+    expect(deterministic.statusCode).toBe(200);
+    expect(deterministic.headers[compatibilityHeader]).toBeUndefined();
+    expect((deterministic.json() as { usage: { consumedCredits: number } }).usage.consumedCredits).toBe(0);
+    expect(await prisma.aiUsageReservation.count({
+      where: { tenantId: owner.tenant.id, kind: "OPERATION" },
+    })).toBe(3);
+  });
+
   test("rejects off-topic prompts without model usage and records tenant-user-scoped feedback", async () => {
     const owner = await signUp("assistant-scope-owner");
     const otherTenant = await signUp("assistant-scope-other");
@@ -220,7 +331,7 @@ describe("AI assistant", () => {
       },
     });
     expect(body.assistant.answer).toContain("only help with work inside QuoteFly");
-    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(body.usage).toMatchObject({ consumedCredits: 0 });
 
     const usageEvent = await prisma.aiUsageEvent.findUniqueOrThrow({
       where: { id: body.assistant.auditEventId },
@@ -515,7 +626,7 @@ describe("AI assistant", () => {
       usage: { consumedCredits: number; consumedSpendUsd: number };
     };
     expect(agendaBody.assistant.tool).toBe("PRIORITIZE_MY_DAY");
-    expect(agendaBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(agendaBody.usage).toMatchObject({ consumedCredits: 0 });
     expect(agendaBody.assistant.results[0]).toMatchObject({
       title: "Urgent assigned task",
       customerName: "Assigned Field Customer",
@@ -550,7 +661,38 @@ describe("AI assistant", () => {
     };
     expect(listBody.assistant.tool).toBe("LIST_MY_ACTIVITIES");
     expect(listBody.assistant.results.map((row) => row.title)).not.toContain("Private linked task");
-    expect(listBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(listBody.usage).toMatchObject({ consumedCredits: 0 });
+
+    await prisma.user.update({
+      where: { id: member.user.id },
+      data: { preferredLocale: "es-US" },
+    });
+    const spanishAgendaResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Prioriza mi día", tool: "AUTO", context: { currentPage: "follow-up" } },
+    });
+    expect(spanishAgendaResponse.statusCode).toBe(200);
+    const spanishAgendaBody = spanishAgendaResponse.json() as { assistant: { tool: string; answer: string } };
+    expect(spanishAgendaBody.assistant.tool).toBe("PRIORITIZE_MY_DAY");
+    expect(spanishAgendaBody.assistant.answer).toContain("Empezaría");
+    expect(spanishAgendaBody.assistant.answer).toContain("Usé");
+    expect(spanishAgendaBody.assistant.answer).toContain("próximas");
+    expect(spanishAgendaBody.assistant.answer).not.toMatch(/Â|â|Ã/);
+
+    const spanishListResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "¿Qué tareas activas tengo asignadas?", tool: "AUTO", context: { currentPage: "follow-up" } },
+    });
+    expect(spanishListResponse.statusCode).toBe(200);
+    const spanishListBody = spanishListResponse.json() as { assistant: { tool: string; answer: string } };
+    expect(spanishListBody.assistant.tool).toBe("LIST_MY_ACTIVITIES");
+    expect(spanishListBody.assistant.answer).toContain("Encontré");
+    expect(spanishListBody.assistant.answer).toContain("más importantes");
+    expect(spanishListBody.assistant.answer).not.toMatch(/Â|â|Ã/);
 
     const beforePreview = await Promise.all([
       prisma.activityTask.count({ where: { tenantId: owner.tenant.id } }),
@@ -577,8 +719,8 @@ describe("AI assistant", () => {
       usage: { consumedCredits: number; consumedSpendUsd: number };
     };
     expect(previewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
-    expect(previewBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
-    expect(previewBody.assistant.answer).toContain("I used the due time from your request.");
+    expect(previewBody.usage).toMatchObject({ consumedCredits: 0 });
+    expect(previewBody.assistant.answer).toContain("Usé la hora de vencimiento de tu solicitud.");
     expect(previewBody.assistant.actions[0]).toMatchObject({
       type: "OPEN_ACTIVITY_DRAFT",
       requiresConfirmation: true,
@@ -604,18 +746,24 @@ describe("AI assistant", () => {
       url: "/v1/ai/assistant",
       headers: { cookie: member.cookie },
       payload: {
-        message: "Crea una tarea de seguimiento para Assigned Field Customer manana a las 3",
+        message: "Crea una tarea de seguimiento para Assigned Field Customer mañana a las 3",
         tool: "AUTO",
         context: { currentPage: "follow-up" },
       },
     });
     expect(spanishPreviewResponse.statusCode).toBe(200);
     const spanishPreviewBody = spanishPreviewResponse.json() as {
-      assistant: { tool: string; actions: Array<{ payload: Record<string, unknown> }> };
+      assistant: { tool: string; answer: string; citations: Array<{ label: string }>; actions: Array<{ payload: Record<string, unknown> }> };
       usage: { consumedCredits: number; consumedSpendUsd: number };
     };
     expect(spanishPreviewBody.assistant.tool).toBe("PREPARE_ACTIVITY");
-    expect(spanishPreviewBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(spanishPreviewBody.usage).toMatchObject({ consumedCredits: 0 });
+    expect(spanishPreviewBody.assistant.answer).toContain("Preparé");
+    expect(spanishPreviewBody.assistant.answer).toContain("Usé");
+    expect(spanishPreviewBody.assistant.answer).toContain("Revísala");
+    expect(spanishPreviewBody.assistant.answer).toContain("todavía");
+    expect(spanishPreviewBody.assistant.citations[0]?.label).toBe("Búsqueda de cliente activo para vista previa de tarea");
+    expect(spanishPreviewResponse.body).not.toMatch(/Â|â|Ã/);
     const spanishPreviewDueAt = new Date(String(spanishPreviewBody.assistant.actions[0]?.payload.dueAtUtc));
     const spanishPreviewDueParts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/Los_Angeles",
@@ -625,6 +773,31 @@ describe("AI assistant", () => {
     }).formatToParts(spanishPreviewDueAt);
     expect(Number(spanishPreviewDueParts.find((part) => part.type === "hour")?.value)).toBe(15);
     expect(Number(spanishPreviewDueParts.find((part) => part.type === "minute")?.value)).toBe(0);
+
+    const spanishFallbackTitleResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Crea una tarea para enviar cotización mañana a las 3",
+        tool: "AUTO",
+        context: { currentPage: "follow-up", search: "Assigned Field Customer" },
+      },
+    });
+    expect(spanishFallbackTitleResponse.statusCode).toBe(200);
+    expect(spanishFallbackTitleResponse.json()).toMatchObject({
+      assistant: {
+        tool: "PREPARE_ACTIVITY",
+        actions: [{ payload: { type: "SEND_QUOTE", title: "Enviar cotización" } }],
+      },
+      usage: { consumedCredits: 0 },
+    });
+    expect(spanishFallbackTitleResponse.body).not.toMatch(/Â|â|Ã/);
+
+    await prisma.user.update({
+      where: { id: member.user.id },
+      data: { preferredLocale: "en-US" },
+    });
 
     const standalonePreviewResponse = await app.inject({
       method: "POST",
@@ -1233,7 +1406,7 @@ describe("AI assistant", () => {
         email: "maria@example.com",
       }),
     })]);
-    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(body.usage).toMatchObject({ consumedCredits: 0 });
     await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(beforeCount);
   });
 
@@ -1358,7 +1531,7 @@ describe("AI assistant", () => {
         results: [],
         actions: [],
       },
-      usage: { consumedCredits: 0, consumedSpendUsd: 0 },
+      usage: { consumedCredits: 0 },
     });
 
     await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
@@ -1453,7 +1626,7 @@ describe("AI assistant", () => {
       payload: expect.objectContaining({ quoteId: assignedQuote.id, channel: "email" }),
     })]);
     expect(body.assistant.answer).toMatch(/will not mark it sent automatically/i);
-    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(body.usage).toMatchObject({ consumedCredits: 0 });
     expect(response.body).not.toContain(otherQuote.id);
     expect(response.body).not.toContain("Other tenant hidden quote");
     expect(response.body).not.toContain(unassignedQuote.id);
@@ -1727,7 +1900,7 @@ describe("AI assistant", () => {
       type: "OPEN_WORKSPACE_PAGE",
       payload: { page: "follow-up" },
     });
-    expect(followUpBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(followUpBody.usage).toMatchObject({ consumedCredits: 0 });
     expect(followUpResponse.body).not.toContain(betaCustomer.id);
     expect(followUpResponse.body).not.toContain("Beta Private Follow Up");
     expect(followUpResponse.body).not.toContain("999000");
@@ -1750,7 +1923,7 @@ describe("AI assistant", () => {
       activeQuoteCount: 0,
     }));
     expect(noQuoteResponse.body).not.toContain(betaCustomer.id);
-    expect(noQuoteBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(noQuoteBody.usage).toMatchObject({ consumedCredits: 0 });
 
     const scenarioResponse = await app.inject({
       method: "POST",
@@ -1775,7 +1948,7 @@ describe("AI assistant", () => {
       projectedRevenueWithScenario: 8_000,
     });
     expect(scenarioBody.assistant.answer).not.toContain("999,000");
-    expect(scenarioBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(scenarioBody.usage).toMatchObject({ consumedCredits: 0 });
 
     const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
       where: { id: followUpBody.assistant.auditEventId },
@@ -1813,7 +1986,7 @@ describe("AI assistant", () => {
       requiresConfirmation: false,
       payload: { page: "products" },
     })]);
-    expect(body.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(body.usage).toMatchObject({ consumedCredits: 0 });
     const audit = await prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: body.assistant.auditEventId } });
     expect(audit.creditsConsumed).toBe(0);
     expect(audit.requestCount).toBe(0);
@@ -1853,7 +2026,7 @@ describe("AI assistant", () => {
       requiresConfirmation: true,
       payload: expect.objectContaining({ name: "Labor Hours", unitType: "HOUR", unitCost: 30, unitPrice: 75 }),
     })]);
-    expect(productDraftBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(productDraftBody.usage).toMatchObject({ consumedCredits: 0 });
 
     const shiftedResponse = await app.inject({
       method: "POST",
@@ -1939,7 +2112,7 @@ describe("AI assistant", () => {
       label: "Use on a quote",
       payload: { page: "build" },
     })]);
-    expect(memberBody.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(memberBody.usage).toMatchObject({ consumedCredits: 0 });
     const memberAudit = await prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: memberBody.assistant.auditEventId } });
     expect(memberAudit.tenantId).toBe(owner.tenant.id);
     expect(memberAudit.creditsConsumed).toBe(0);
@@ -1984,7 +2157,7 @@ describe("AI assistant", () => {
       assistant: {
         tool: "SEARCH_PRODUCTS",
       },
-      usage: { consumedCredits: 0, consumedSpendUsd: 0 },
+      usage: { consumedCredits: 0 },
     });
     expect(genericCatalogBody.assistant.results).toContainEqual(expect.objectContaining({
       productId: ownedProduct.id,
@@ -1994,7 +2167,335 @@ describe("AI assistant", () => {
     }));
   });
 
-  test("Kody blocks every tool after the tenant reaches its monthly AI budget", async () => {
+  test("schedule intelligence is tenant-scoped, review-only, and uses no provider or AI credits", async () => {
+    const owner = await signUp("assistant-schedule-owner");
+    const member = await addWorkspaceUser(owner, "member");
+    const otherTenant = await signUp("assistant-schedule-other");
+    const ownerMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: owner.user.id, deletedAtUtc: null },
+    });
+    const memberMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+    });
+    const otherMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: otherTenant.tenant.id, userId: otherTenant.user.id, deletedAtUtc: null },
+    });
+    await prisma.tenant.update({ where: { id: owner.tenant.id }, data: { timezone: "America/Los_Angeles" } });
+    await prisma.tenant.update({ where: { id: otherTenant.tenant.id }, data: { timezone: "America/Los_Angeles" } });
+
+    const createScheduledJob = async (params: {
+      session: Session;
+      assignedTenantUserId: string;
+      createdByTenantUserId: string;
+      jobNumber: number;
+      customerName: string;
+      startsAtUtc: Date;
+    }) => {
+      const customer = await createCustomer({
+        session: params.session,
+        name: params.customerName,
+        phoneDigits: `555${String(params.jobNumber).padStart(7, "0").slice(-7)}`,
+        assignedTenantUserId: params.assignedTenantUserId,
+      });
+      const quote = await createQuote({
+        session: params.session,
+        customerId: customer.id,
+        title: `${params.customerName} accepted work`,
+        serviceType: "ROOFING",
+        status: "ACCEPTED",
+        price: 1_500,
+        cost: 700,
+        createdAt: new Date("2026-08-01T16:00:00.000Z"),
+        assignedTenantUserId: params.assignedTenantUserId,
+      });
+      const job = await prisma.job.create({
+        data: {
+          tenantId: params.session.tenant.id,
+          customerId: customer.id,
+          sourceQuoteId: quote.id,
+          assignedTenantUserId: params.assignedTenantUserId,
+          jobNumber: params.jobNumber,
+          status: "SCHEDULED",
+          title: `${params.customerName} roof repair`,
+          scopeSnapshot: "Private scope must not enter Kody schedule results.",
+          serviceType: "ROOFING",
+          serviceAddressSnapshot: "123 Private Street",
+          accessInstructions: "Private gate code 1234",
+          acceptedAtUtc: new Date("2026-08-01T16:00:00.000Z"),
+          scheduledAtUtc: params.startsAtUtc,
+        },
+      });
+      const appointment = await prisma.jobAppointment.create({
+        data: {
+          tenantId: params.session.tenant.id,
+          jobId: job.id,
+          assignedTenantUserId: params.assignedTenantUserId,
+          createdByTenantUserId: params.createdByTenantUserId,
+          status: "SCHEDULED",
+          startsAtUtc: params.startsAtUtc,
+          endsAtUtc: new Date(params.startsAtUtc.getTime() + 2 * 60 * 60 * 1_000),
+          timeZone: "America/Los_Angeles",
+          instructions: "Private appointment instructions",
+        },
+      });
+      return { customer, quote, job, appointment };
+    };
+
+    const memberJob = await createScheduledJob({
+      session: owner,
+      assignedTenantUserId: memberMembership.id,
+      createdByTenantUserId: ownerMembership.id,
+      jobNumber: 4101,
+      customerName: "Member Schedule Customer",
+      startsAtUtc: new Date(Date.now() + 2 * 60 * 60 * 1_000),
+    });
+    const ownerJob = await createScheduledJob({
+      session: owner,
+      assignedTenantUserId: ownerMembership.id,
+      createdByTenantUserId: ownerMembership.id,
+      jobNumber: 4102,
+      customerName: "Owner Schedule Customer",
+      startsAtUtc: new Date(Date.now() + 3 * 60 * 60 * 1_000),
+    });
+    await createScheduledJob({
+      session: owner,
+      assignedTenantUserId: memberMembership.id,
+      createdByTenantUserId: ownerMembership.id,
+      jobNumber: 4104,
+      customerName: "Member Schedule Customer Two",
+      startsAtUtc: new Date(Date.now() + 5 * 60 * 60 * 1_000),
+    });
+    const foreignJob = await createScheduledJob({
+      session: otherTenant,
+      assignedTenantUserId: otherMembership.id,
+      createdByTenantUserId: otherMembership.id,
+      jobNumber: 4103,
+      customerName: "Foreign Schedule Customer",
+      startsAtUtc: new Date(Date.now() + 4 * 60 * 60 * 1_000),
+    });
+
+    setAssistantCompositionProviderForTest(async () => {
+      throw new Error("Deterministic schedule tools must never call the composition provider.");
+    });
+    const businessWritesBefore = {
+      jobs: await prisma.job.count({ where: { tenantId: owner.tenant.id } }),
+      appointments: await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id } }),
+      events: await prisma.jobEvent.count({ where: { tenantId: owner.tenant.id } }),
+      notifications: await prisma.notificationOutbox.count({ where: { tenantId: owner.tenant.id } }),
+    };
+
+    const memberList = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Show my schedule for the next 7 days", tool: "AUTO", context: { currentPage: "jobs", limit: 1 } },
+    });
+    expect(memberList.statusCode).toBe(200);
+    const memberListBody = memberList.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string; payload: Record<string, unknown> }>;
+        fieldsExcluded: string[];
+        diagnostics: { filters: { fromUtc: string; toUtc: string; timeZone: string; hasMore: boolean } };
+      };
+      usage: { consumedCredits: number; consumedSpendUsd: number };
+    };
+    expect(memberListBody.assistant.tool).toBe("LIST_SCHEDULE");
+    expect(memberListBody.usage).toMatchObject({ consumedCredits: 0 });
+    expect(memberListBody.assistant.results).toHaveLength(1);
+    expect(memberListBody.assistant.results[0]).toMatchObject({
+      appointmentId: memberJob.appointment.id,
+      jobId: memberJob.job.id,
+      customerId: memberJob.customer.id,
+      assignedTenantUserId: memberMembership.id,
+    });
+    expect(JSON.stringify(memberListBody.assistant.results)).not.toContain(ownerJob.job.id);
+    expect(JSON.stringify(memberListBody.assistant.results)).not.toContain(foreignJob.job.id);
+    expect(JSON.stringify(memberListBody.assistant.results)).not.toContain("Private");
+    const scheduleAction = memberListBody.assistant.actions[0];
+    const scheduleFilters = memberListBody.assistant.diagnostics.filters;
+    const scheduleStartDate = tenantDateIso(scheduleFilters.fromUtc, scheduleFilters.timeZone);
+    expect(scheduleAction).toMatchObject({
+      type: "OPEN_SCHEDULE",
+      payload: { range: "next7", date: scheduleStartDate, mine: true },
+    });
+    // The action preserves the exact rolling seven tenant-local days Kody
+    // queried, including when the window starts on a weekend.
+    expect(tenantDateIso(scheduleFilters.toUtc, scheduleFilters.timeZone)).toBe(addCalendarDays(scheduleStartDate, 7));
+    expect(scheduleFilters.hasMore).toBe(true);
+
+    const ownerList = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "Show our schedule for the next 7 days", tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(ownerList.statusCode).toBe(200);
+    const ownerResults = (ownerList.json() as { assistant: { results: Array<{ jobId: string }> } }).assistant.results;
+    expect(ownerResults.map((item) => item.jobId)).toEqual(expect.arrayContaining([memberJob.job.id, ownerJob.job.id]));
+    expect(ownerResults.map((item) => item.jobId)).not.toContain(foreignJob.job.id);
+
+    const memberBooking = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: `Book job #${memberJob.job.jobNumber} tomorrow from 9 AM to 11 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(memberBooking.statusCode).toBe(200);
+    expect(memberBooking.json()).toMatchObject({
+      assistant: {
+        tool: "PREPARE_BOOKING",
+        results: [],
+        actions: [{ type: "REQUEST_ADMIN_ACCESS" }],
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const ambiguousClock = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow at 9 for 2 hours`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(ambiguousClock.statusCode).toBe(200);
+    expect(ambiguousClock.json()).toMatchObject({ assistant: { tool: "PREPARE_BOOKING", actions: [] } });
+
+    for (const message of [
+      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 11 PM to 1`,
+      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 11 to 1 AM`,
+      `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 11 p. m. a 1`,
+      `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 11 a 1 a. m.`,
+    ]) {
+      const ambiguousRange = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: { message, tool: "AUTO", context: { currentPage: "jobs" } },
+      });
+      expect(ambiguousRange.statusCode).toBe(200);
+      expect(ambiguousRange.json()).toMatchObject({
+        assistant: { tool: "PREPARE_BOOKING", actions: [] },
+        usage: { consumedCredits: 0 },
+      });
+    }
+    expect({
+      jobs: await prisma.job.count({ where: { tenantId: owner.tenant.id } }),
+      appointments: await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id } }),
+      events: await prisma.jobEvent.count({ where: { tenantId: owner.tenant.id } }),
+      notifications: await prisma.notificationOutbox.count({ where: { tenantId: owner.tenant.id } }),
+    }).toEqual(businessWritesBefore);
+
+    for (const message of [
+      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 11 PM to 1 AM`,
+      `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 11 p. m. a 1 a. m.`,
+      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 14:00 to 16:00`,
+    ]) {
+      const explicitRange = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: { message, tool: "AUTO", context: { currentPage: "jobs" } },
+      });
+      expect(explicitRange.statusCode).toBe(200);
+      expect(explicitRange.json()).toMatchObject({
+        assistant: {
+          tool: "PREPARE_BOOKING",
+          actions: [{ type: "OPEN_BOOKING_REVIEW", requiresConfirmation: false }],
+        },
+        usage: { consumedCredits: 0 },
+      });
+    }
+
+    const booking = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow at 9 AM for 2 hours`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(booking.statusCode).toBe(200);
+    const bookingBody = booking.json() as { assistant: { tool: string; answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }> }; usage: { consumedCredits: number } };
+    expect(bookingBody.assistant.tool).toBe("PREPARE_BOOKING");
+    expect(bookingBody.assistant.answer).toContain("nothing changed yet");
+    expect(bookingBody.assistant.actions).toHaveLength(1);
+    expect(bookingBody.assistant.actions[0]).toMatchObject({
+      type: "OPEN_BOOKING_REVIEW",
+      requiresConfirmation: false,
+      payload: { mode: "CREATE", jobId: ownerJob.job.id, assignedTenantUserId: ownerMembership.id },
+    });
+    expect(bookingBody.usage.consumedCredits).toBe(0);
+
+    const spanishBooking = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 9 a. m. a 11 a. m.`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(spanishBooking.statusCode).toBe(200);
+    expect(spanishBooking.json()).toMatchObject({
+      assistant: {
+        tool: "PREPARE_BOOKING",
+        actions: [{ type: "OPEN_BOOKING_REVIEW", requiresConfirmation: false }],
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const gap = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2027-03-14 from 2:30 AM to 3:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(gap.statusCode).toBe(200);
+    expect(gap.json()).toMatchObject({ assistant: { tool: "PREPARE_BOOKING", actions: [] } });
+
+    const fold = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2026-11-01 from 1:30 AM to 2:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(fold.statusCode).toBe(200);
+    const foldBody = fold.json() as { assistant: { answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: { startsAtUtc: string } }> } };
+    expect(foldBody.assistant.answer).toContain("occurs twice");
+    expect(foldBody.assistant.actions).toHaveLength(2);
+    expect(new Set(foldBody.assistant.actions.map((action) => action.payload.startsAtUtc)).size).toBe(2);
+    expect(foldBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);
+
+    const dispatch = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Dispatch my next job", tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(dispatch.statusCode).toBe(200);
+    expect(dispatch.json()).toMatchObject({
+      assistant: {
+        tool: "PREPARE_DISPATCH",
+        actions: [{
+          type: "OPEN_DISPATCH_REVIEW",
+          requiresConfirmation: false,
+          payload: {
+            jobId: memberJob.job.id,
+            appointmentId: memberJob.appointment.id,
+            appointmentVersion: memberJob.appointment.version,
+            expectedStatus: "SCHEDULED",
+          },
+        }],
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    expect({
+      jobs: await prisma.job.count({ where: { tenantId: owner.tenant.id } }),
+      appointments: await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id } }),
+      events: await prisma.jobEvent.count({ where: { tenantId: owner.tenant.id } }),
+      notifications: await prisma.notificationOutbox.count({ where: { tenantId: owner.tenant.id } }),
+    }).toEqual(businessWritesBefore);
+    setAssistantCompositionProviderForTest(null);
+  });
+
+  test("Kody blocks paid tools at the monthly AI budget but still allows zero-credit tools", async () => {
     const owner = await signUp("assistant-budget-cutoff-owner");
     await prisma.aiUsageEvent.create({
       data: {
@@ -2011,7 +2512,7 @@ describe("AI assistant", () => {
     for (const payload of [
       { message: "Take me to products", tool: "AUTO" },
       { message: "Add a product called Cleanup Labor for $85 per hour.", tool: "AUTO" },
-      { message: "Find customer Ruben", tool: "SEARCH_CUSTOMERS" },
+      { message: "Show my schedule today", tool: "AUTO", context: { currentPage: "jobs" } },
     ]) {
       const response = await app.inject({
         method: "POST",
@@ -2019,15 +2520,25 @@ describe("AI assistant", () => {
         headers: { cookie: owner.cookie },
         payload,
       });
-      expect(response.statusCode).toBe(402);
+      expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
-        code: "AI_USAGE_LIMIT_REACHED",
-        feature: "aiSpendUsdPerMonth",
         usage: {
+          consumedCredits: 0,
           warningThresholdPercent: 100,
           limitReached: true,
         },
       });
     }
+
+    const paidResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "Find customer Ruben", tool: "SEARCH_CUSTOMERS" },
+    });
+    expect(paidResponse.statusCode).toBe(402);
+    expect(paidResponse.json()).toMatchObject({
+      code: "AI_USAGE_LIMIT_REACHED",
+    });
   });
 });

@@ -205,6 +205,7 @@ describe("workspace team permissions", () => {
         stripeCustomerId: `cus_private_${Date.now()}`,
         stripeSubscriptionId: `sub_private_${Date.now()}`,
         stripeCheckoutSessionId: `cs_private_${Date.now()}`,
+        subscriptionPlanCode: "starter",
       },
     });
     const memberTenant = await app.inject({

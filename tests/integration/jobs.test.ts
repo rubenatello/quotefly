@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { readFileSync } from "node:fs";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
@@ -111,6 +112,52 @@ async function jobForQuote(tenantId: string, quoteId: string) {
     where: { tenantId, sourceQuoteId: quoteId, deletedAtUtc: null },
     include: { events: true },
   });
+}
+
+async function completeJobThroughAppointment(
+  session: Session,
+  jobId: string,
+  assignedTenantUserId: string,
+  startsAtUtc: string,
+  endsAtUtc: string,
+) {
+  const created = await app.inject({
+    method: "POST",
+    url: `/v1/jobs/${jobId}/appointments`,
+    headers: { cookie: session.cookie },
+    payload: {
+      assignedTenantUserId,
+      startsAtUtc,
+      endsAtUtc,
+      timeZone: "America/Los_Angeles",
+    },
+  });
+  expect(created.statusCode).toBe(201);
+  const appointment = (created.json() as { appointment: { id: string; version: number } }).appointment;
+  const dispatched = await app.inject({
+    method: "PATCH",
+    url: `/v1/jobs/${jobId}/appointments/${appointment.id}`,
+    headers: { cookie: session.cookie },
+    payload: { version: appointment.version, status: "DISPATCHED" },
+  });
+  expect(dispatched.statusCode).toBe(200);
+  const dispatchedVersion = (dispatched.json() as { appointment: { version: number } }).appointment.version;
+  const arrived = await app.inject({
+    method: "PATCH",
+    url: `/v1/jobs/${jobId}/appointments/${appointment.id}`,
+    headers: { cookie: session.cookie },
+    payload: { version: dispatchedVersion, status: "ARRIVED" },
+  });
+  expect(arrived.statusCode).toBe(200);
+  const arrivedVersion = (arrived.json() as { appointment: { version: number } }).appointment.version;
+  const completed = await app.inject({
+    method: "PATCH",
+    url: `/v1/jobs/${jobId}/appointments/${appointment.id}`,
+    headers: { cookie: session.cookie },
+    payload: { version: arrivedVersion, status: "COMPLETED" },
+  });
+  expect(completed.statusCode).toBe(200);
+  return prisma.job.findUniqueOrThrow({ where: { id: jobId } });
 }
 
 function deferred() {
@@ -250,6 +297,219 @@ describe("jobs from accepted quotes", () => {
     expect(sequence.nextValue).toBe(2);
   });
 
+  test("ignores legacy job-status spoofing while preserving old quote clients", async () => {
+    const owner = await signUp("jobs-legacy-compatibility");
+    const customer = await createCustomer(owner, "Legacy Compatibility Customer");
+    const quote = await createQuote(owner, customer.id, "Legacy compatible accepted work");
+    await prisma.quoteLineItem.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quoteId: quote.id,
+        description: "Legacy-compatible line",
+        sectionType: "INCLUDED",
+        quantity: 1,
+        unitCost: 50,
+        unitPrice: 150,
+      },
+    });
+
+    const currentClientSave = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}/sheet`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        quote: {
+          serviceType: "CONSTRUCTION",
+          status: "DRAFT",
+          afterSaleFollowUpStatus: "NOT_READY",
+          title: quote.title,
+          scopeText: quote.scopeText,
+          taxAmount: 0,
+        },
+        lineItems: [],
+        newLineItems: [],
+      },
+    });
+    expect(currentClientSave.statusCode).toBe(200);
+    expect(currentClientSave.json()).toMatchObject({ quote: { jobStatus: "NOT_STARTED" }, job: null });
+
+    const sheetAcceptance = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}/sheet`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        quote: {
+          serviceType: "CONSTRUCTION",
+          status: "ACCEPTED",
+          jobStatus: "COMPLETED",
+          afterSaleFollowUpStatus: "NOT_READY",
+          title: quote.title,
+          scopeText: quote.scopeText,
+          taxAmount: 0,
+        },
+        lineItems: [],
+        newLineItems: [],
+      },
+    });
+    expect(sheetAcceptance.statusCode).toBe(200);
+    expect(sheetAcceptance.json()).toMatchObject({
+      quote: { status: "ACCEPTED", jobStatus: "NOT_STARTED", jobCompletedAtUtc: null },
+      job: { jobNumber: 1 },
+    });
+    expect((await jobForQuote(owner.tenant.id, quote.id)).status).toBe("UNSCHEDULED");
+
+    const compatiblePatch = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { jobStatus: "IN_PROGRESS", afterSaleFollowUpStatus: "DUE" },
+    });
+    expect(compatiblePatch.statusCode).toBe(200);
+    expect(compatiblePatch.json()).toMatchObject({
+      quote: { jobStatus: "NOT_STARTED", jobCompletedAtUtc: null, afterSaleFollowUpStatus: "DUE" },
+    });
+
+    const moved = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { jobStatus: "COMPLETED" },
+    });
+    expect(moved.statusCode).toBe(409);
+    expect(moved.json()).toMatchObject({ code: "QUOTE_JOB_STATUS_MOVED" });
+    expect(await prisma.job.count({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } })).toBe(1);
+  });
+
+  test("restores accepted commercial history without restoring operational state or duplicating its job", async () => {
+    const owner = await signUp("jobs-accepted-restore");
+    const customer = await createCustomer(owner, "Accepted Restore Customer");
+    const quote = await createQuote(owner, customer.id, "Current commercial draft");
+    const historicalCompletion = "2026-01-01T18:00:00.000Z";
+    const revision = await prisma.quoteRevision.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quoteId: quote.id,
+        customerId: customer.id,
+        version: 1,
+        eventType: "UPDATED",
+        changedFields: ["status", "title"],
+        actorUserId: owner.user.id,
+        actorEmail: owner.user.email,
+        actorName: owner.user.fullName,
+        title: "Historical accepted work",
+        status: "ACCEPTED",
+        customerPriceSubtotal: 150,
+        totalAmount: 150,
+        snapshot: {
+          quote: {
+            id: quote.id,
+            title: "Historical accepted work",
+            serviceType: "CONSTRUCTION",
+            status: "ACCEPTED",
+            jobStatus: "COMPLETED",
+            afterSaleFollowUpStatus: "COMPLETED",
+            scopeText: "Historical accepted commercial scope.",
+            internalCostSubtotal: 50,
+            customerPriceSubtotal: 150,
+            taxAmount: 0,
+            totalAmount: 150,
+            documentLocale: "en-US",
+            sentAtUtc: null,
+            closedAtUtc: historicalCompletion,
+            jobCompletedAtUtc: historicalCompletion,
+            afterSaleFollowUpDueAtUtc: historicalCompletion,
+            afterSaleFollowUpCompletedAtUtc: historicalCompletion,
+          },
+          customer: {
+            id: customer.id,
+            fullName: customer.fullName,
+            email: customer.email,
+            phone: customer.phone,
+          },
+          lineItems: [],
+        },
+      },
+    });
+
+    const restored = await app.inject({
+      method: "POST",
+      url: `/v1/quotes/${quote.id}/history/${revision.id}/restore`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({
+      quote: {
+        status: "ACCEPTED",
+        title: "Historical accepted work",
+        jobStatus: "NOT_STARTED",
+        jobCompletedAtUtc: null,
+        afterSaleFollowUpStatus: "NOT_READY",
+        afterSaleFollowUpDueAtUtc: null,
+      },
+      job: { jobNumber: 1 },
+    });
+    expect(await prisma.job.count({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } })).toBe(1);
+    expect((await jobForQuote(owner.tenant.id, quote.id)).status).toBe("UNSCHEDULED");
+
+    const repeatedRestore = await app.inject({
+      method: "POST",
+      url: `/v1/quotes/${quote.id}/history/${revision.id}/restore`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(repeatedRestore.statusCode).toBe(409);
+    expect(repeatedRestore.json()).toMatchObject({ code: "QUOTE_JOB_LOCKED" });
+    expect(await prisma.job.count({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } })).toBe(1);
+  });
+
+  test("opens after-sale follow-up on authoritative completion without overwriting manual completion", async () => {
+    const owner = await signUp("jobs-after-sale-handoff");
+    const member = await addMember(owner, "After Sale Field Member");
+    const customer = await createCustomer(owner, "After Sale Customer", member.membershipId);
+    const dueQuote = await createQuote(owner, customer.id, "After sale due work", member.membershipId);
+    const completedQuote = await createQuote(owner, customer.id, "Manually completed follow-up work", member.membershipId);
+    await acceptQuote(owner, dueQuote.id);
+    await acceptQuote(owner, completedQuote.id);
+    const dueJob = await jobForQuote(owner.tenant.id, dueQuote.id);
+    const manuallyCompletedJob = await jobForQuote(owner.tenant.id, completedQuote.id);
+
+    const completedDueJob = await completeJobThroughAppointment(
+      owner,
+      dueJob.id,
+      member.membershipId,
+      "2026-06-01T16:00:00.000Z",
+      "2026-06-01T18:00:00.000Z",
+    );
+    expect(completedDueJob.status).toBe("COMPLETED");
+    const dueSourceQuote = await prisma.quote.findUniqueOrThrow({ where: { id: dueQuote.id } });
+    expect(dueSourceQuote.afterSaleFollowUpStatus).toBe("DUE");
+    expect(dueSourceQuote.afterSaleFollowUpCompletedAtUtc).toBeNull();
+    expect(dueSourceQuote.afterSaleFollowUpDueAtUtc?.getTime()).toBe(
+      completedDueJob.completedAtUtc!.getTime() + 7 * 24 * 60 * 60 * 1000,
+    );
+
+    const manualDueAt = new Date("2026-06-05T17:00:00.000Z");
+    const manualCompletedAt = new Date("2026-06-05T18:00:00.000Z");
+    await prisma.quote.update({
+      where: { id: completedQuote.id },
+      data: {
+        afterSaleFollowUpStatus: "COMPLETED",
+        afterSaleFollowUpDueAtUtc: manualDueAt,
+        afterSaleFollowUpCompletedAtUtc: manualCompletedAt,
+      },
+    });
+    await completeJobThroughAppointment(
+      owner,
+      manuallyCompletedJob.id,
+      member.membershipId,
+      "2026-06-02T16:00:00.000Z",
+      "2026-06-02T18:00:00.000Z",
+    );
+    const preserved = await prisma.quote.findUniqueOrThrow({ where: { id: completedQuote.id } });
+    expect(preserved.afterSaleFollowUpStatus).toBe("COMPLETED");
+    expect(preserved.afterSaleFollowUpDueAtUtc).toEqual(manualDueAt);
+    expect(preserved.afterSaleFollowUpCompletedAtUtc).toEqual(manualCompletedAt);
+  });
+
   test("serializes concurrent accepted quotes into unique tenant job numbers", async () => {
     const owner = await signUp("jobs-concurrent-numbering");
     const customer = await createCustomer(owner, "Concurrent Job Customer");
@@ -305,6 +565,82 @@ describe("jobs from accepted quotes", () => {
     });
     expect(forbiddenDetail.statusCode).toBe(404);
     expect(forbiddenDetail.json()).toMatchObject({ code: "JOB_NOT_FOUND" });
+  });
+
+  test("scopes workspace job summaries and active counts by tenant and member visibility", async () => {
+    const owner = await signUp("jobs-workspace-scope");
+    const alpha = await addMember(owner, "Workspace Job Alpha");
+    const beta = await addMember(owner, "Workspace Job Beta");
+    const otherOwner = await signUp("jobs-workspace-other");
+
+    const alphaCustomer = await createCustomer(owner, "Workspace Alpha Customer", alpha.membershipId);
+    const alphaQuote = await createQuote(owner, alphaCustomer.id, "Workspace Alpha Job", alpha.membershipId);
+    const alphaDispatchedCustomer = await createCustomer(owner, "Workspace Alpha Dispatched Customer", alpha.membershipId);
+    const alphaDispatchedQuote = await createQuote(
+      owner,
+      alphaDispatchedCustomer.id,
+      "Workspace Alpha Dispatched Job",
+      alpha.membershipId,
+    );
+    const betaCustomer = await createCustomer(owner, "Workspace Beta Customer", beta.membershipId);
+    const betaQuote = await createQuote(owner, betaCustomer.id, "Workspace Beta Job", beta.membershipId);
+    const otherCustomer = await createCustomer(otherOwner, "Cross Tenant Workspace Secret");
+    const otherQuote = await createQuote(otherOwner, otherCustomer.id, "Cross Tenant Workspace Job");
+    await acceptQuote(owner, alphaQuote.id);
+    await acceptQuote(owner, alphaDispatchedQuote.id);
+    await acceptQuote(owner, betaQuote.id);
+    await acceptQuote(otherOwner, otherQuote.id);
+    const alphaJob = await jobForQuote(owner.tenant.id, alphaQuote.id);
+    const alphaDispatchedJob = await jobForQuote(owner.tenant.id, alphaDispatchedQuote.id);
+    await prisma.job.update({ where: { id: alphaDispatchedJob.id }, data: { status: "DISPATCHED" } });
+    // Simulate an old Quote row carrying stale compatibility data. Both the
+    // flat and nested follow-up projections must remain authoritative Job data.
+    await prisma.quote.update({ where: { id: alphaQuote.id }, data: { jobStatus: "COMPLETED" } });
+
+    const alphaFollowUp = await app.inject({
+      method: "GET",
+      url: "/v1/workspace/follow-up?queue=closed",
+      headers: { cookie: alpha.cookie },
+    });
+    expect(alphaFollowUp.statusCode).toBe(200);
+    expect(alphaFollowUp.json()).toMatchObject({
+      pagination: { total: 2 },
+      items: [
+        {
+          customerId: alphaCustomer.id,
+          quoteId: alphaQuote.id,
+          jobStatus: "UNSCHEDULED",
+          job: { id: alphaJob.id, jobNumber: alphaJob.jobNumber, status: "UNSCHEDULED" },
+        },
+        {
+          customerId: alphaDispatchedCustomer.id,
+          quoteId: alphaDispatchedQuote.id,
+          jobStatus: "DISPATCHED",
+          job: { id: alphaDispatchedJob.id, jobNumber: alphaDispatchedJob.jobNumber, status: "DISPATCHED" },
+        },
+      ],
+    });
+    expect(alphaFollowUp.body).not.toContain("Workspace Beta Customer");
+    expect(alphaFollowUp.body).not.toContain("Cross Tenant Workspace Secret");
+
+    const alphaOverview = await app.inject({
+      method: "GET",
+      url: "/v1/workspace/overview",
+      headers: { cookie: alpha.cookie },
+    });
+    expect(alphaOverview.statusCode).toBe(200);
+    expect(alphaOverview.json()).toMatchObject({ metrics: { activeJobs: 2 } });
+    expect(alphaOverview.body).not.toContain("Workspace Beta Customer");
+    expect(alphaOverview.body).not.toContain("Cross Tenant Workspace Secret");
+
+    const ownerOverview = await app.inject({
+      method: "GET",
+      url: "/v1/workspace/overview",
+      headers: { cookie: owner.cookie },
+    });
+    expect(ownerOverview.statusCode).toBe(200);
+    expect(ownerOverview.json()).toMatchObject({ metrics: { activeJobs: 3 } });
+    expect(ownerOverview.body).not.toContain("Cross Tenant Workspace Secret");
   });
 
   test("requires linked customer and quote assignment before assigning a member to a job", async () => {
@@ -781,11 +1117,290 @@ describe("jobs from accepted quotes", () => {
       headers: { cookie: owner.cookie },
       payload: { version: second.version },
     });
-    expect(deleteSecond.statusCode).toBe(204);
+    expect(deleteSecond.statusCode).toBe(200);
+    expect(deleteSecond.json()).toMatchObject({
+      appointmentId: second.id,
+      notificationReceipt: { kind: "CANCELED", createdCount: expect.any(Number) },
+    });
     const completedJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(completedJob.status).toBe("COMPLETED");
     expect(completedJob.scheduledAtUtc).toBeNull();
     expect(completedJob.completedAtUtc).not.toBeNull();
+  });
+
+  test("requires explicit-offset appointment timestamps and returns a compact schedule projection", async () => {
+    const owner = await signUp("jobs-schedule-contract");
+    const member = await addMember(owner, "Schedule Contract Member");
+    const customer = await createCustomer(owner, "Schedule Contract Customer", member.membershipId);
+    const quote = await createQuote(owner, customer.id, "Schedule contract quote", member.membershipId);
+    await acceptQuote(owner, quote.id);
+    const job = await jobForQuote(owner.tenant.id, quote.id);
+
+    const offsetlessCreate = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${job.id}/appointments`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        assignedTenantUserId: member.membershipId,
+        startsAtUtc: "2026-06-01T09:00:00",
+        endsAtUtc: "2026-06-01T10:00:00",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(offsetlessCreate.statusCode).toBe(400);
+    expect(await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id, jobId: job.id } })).toBe(0);
+
+    const impossibleDateCreate = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${job.id}/appointments`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        assignedTenantUserId: member.membershipId,
+        startsAtUtc: "2026-02-30T09:00:00-08:00",
+        endsAtUtc: "2026-02-30T10:00:00-08:00",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(impossibleDateCreate.statusCode).toBe(400);
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${job.id}/appointments`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        assignedTenantUserId: member.membershipId,
+        startsAtUtc: "2026-06-01T09:00:00-07:00",
+        endsAtUtc: "2026-06-01T10:00:00-07:00",
+        timeZone: "America/Los_Angeles",
+        instructions: "Private dispatch instructions must not appear on the schedule board.",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const createdAppointment = (created.json() as {
+      appointment: { id: string; startsAtUtc: string; endsAtUtc: string };
+    }).appointment;
+    expect(createdAppointment).toMatchObject({
+      startsAtUtc: "2026-06-01T16:00:00.000Z",
+      endsAtUtc: "2026-06-01T17:00:00.000Z",
+    });
+
+    const offsetlessSchedule = await app.inject({
+      method: "GET",
+      url: "/v1/jobs/schedule?fromUtc=2026-06-01T00%3A00%3A00&toUtc=2026-06-02T00%3A00%3A00",
+      headers: { cookie: owner.cookie },
+    });
+    expect(offsetlessSchedule.statusCode).toBe(400);
+
+    const scheduleQuery = new URLSearchParams({
+      fromUtc: "2026-06-01T00:00:00-07:00",
+      toUtc: "2026-06-02T00:00:00-07:00",
+      limit: "25",
+      offset: "0",
+    });
+    const schedule = await app.inject({
+      method: "GET",
+      url: `/v1/jobs/schedule?${scheduleQuery.toString()}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(schedule.statusCode).toBe(200);
+    const scheduleItem = (schedule.json() as { items: Array<Record<string, unknown>> }).items[0];
+    expect(scheduleItem).toBeDefined();
+    expect(Object.keys(scheduleItem ?? {}).sort()).toEqual([
+      "assignedTenantUser",
+      "assignedTenantUserId",
+      "endsAtUtc",
+      "id",
+      "job",
+      "jobId",
+      "startsAtUtc",
+      "status",
+      "timeZone",
+      "version",
+    ].sort());
+    expect(scheduleItem).toMatchObject({
+      id: createdAppointment.id,
+      startsAtUtc: "2026-06-01T16:00:00.000Z",
+      endsAtUtc: "2026-06-01T17:00:00.000Z",
+    });
+    expect(scheduleItem).not.toHaveProperty("instructions");
+    expect(scheduleItem).not.toHaveProperty("createdByTenantUserId");
+    expect(scheduleItem).not.toHaveProperty("createdByTenantUser");
+    expect(scheduleItem).not.toHaveProperty("dispatchedAtUtc");
+    expect(scheduleItem).not.toHaveProperty("arrivedAtUtc");
+    expect(scheduleItem).not.toHaveProperty("completedAtUtc");
+    expect(scheduleItem).not.toHaveProperty("canceledAtUtc");
+    expect(scheduleItem).not.toHaveProperty("createdAt");
+    expect(scheduleItem).not.toHaveProperty("updatedAt");
+  });
+
+  test("keeps rescheduling atomic, scheduled-only, overlap-safe, and separate from status changes", async () => {
+    const owner = await signUp("jobs-reschedule-contract");
+    const member = await addMember(owner, "Reschedule Contract Member");
+    const customer = await createCustomer(owner, "Reschedule Contract Customer", member.membershipId);
+    const quote = await createQuote(owner, customer.id, "Reschedule contract quote", member.membershipId);
+    await acceptQuote(owner, quote.id);
+    const job = await jobForQuote(owner.tenant.id, quote.id);
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${job.id}/appointments`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        assignedTenantUserId: member.membershipId,
+        startsAtUtc: "2026-06-03T16:00:00.000Z",
+        endsAtUtc: "2026-06-03T17:00:00.000Z",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const appointment = (created.json() as { appointment: { id: string; version: number } }).appointment;
+
+    const blocker = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${job.id}/appointments`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        assignedTenantUserId: member.membershipId,
+        startsAtUtc: "2026-06-03T20:00:00.000Z",
+        endsAtUtc: "2026-06-03T21:00:00.000Z",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(blocker.statusCode).toBe(201);
+
+    const mixedStatusUpdate = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: appointment.version,
+        status: "DISPATCHED",
+        startsAtUtc: "2026-06-03T17:00:00.000Z",
+        endsAtUtc: "2026-06-03T18:00:00.000Z",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(mixedStatusUpdate.statusCode).toBe(400);
+
+    const incompleteReschedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: appointment.version,
+        startsAtUtc: "2026-06-03T17:00:00.000Z",
+        endsAtUtc: "2026-06-03T18:00:00.000Z",
+      },
+    });
+    expect(incompleteReschedule.statusCode).toBe(400);
+
+    const offsetlessReschedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: appointment.version,
+        startsAtUtc: "2026-06-03T10:00:00",
+        endsAtUtc: "2026-06-03T11:00:00",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(offsetlessReschedule.statusCode).toBe(400);
+
+    const overlappingReschedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: appointment.version,
+        startsAtUtc: "2026-06-03T20:30:00.000Z",
+        endsAtUtc: "2026-06-03T21:30:00.000Z",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(overlappingReschedule.statusCode).toBe(409);
+    expect(overlappingReschedule.json()).toMatchObject({ code: "JOB_APPOINTMENT_OVERLAP" });
+
+    const concurrentReschedules = await Promise.all([
+      app.inject({
+        method: "PATCH",
+        url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+        headers: { cookie: owner.cookie },
+        payload: {
+          version: appointment.version,
+          startsAtUtc: "2026-06-03T10:00:00-07:00",
+          endsAtUtc: "2026-06-03T11:00:00-07:00",
+          timeZone: "America/Los_Angeles",
+        },
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+        headers: { cookie: owner.cookie },
+        payload: {
+          version: appointment.version,
+          startsAtUtc: "2026-06-03T11:00:00-07:00",
+          endsAtUtc: "2026-06-03T12:00:00-07:00",
+          timeZone: "America/Los_Angeles",
+        },
+      }),
+    ]);
+    expect(concurrentReschedules.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const staleReschedule = concurrentReschedules.find((response) => response.statusCode === 409);
+    expect(staleReschedule?.json()).toMatchObject({ code: "JOB_APPOINTMENT_STALE_VERSION" });
+
+    const current = await prisma.jobAppointment.findUniqueOrThrow({ where: { id: appointment.id } });
+    expect(current.version).toBe(2);
+    expect([
+      "2026-06-03T17:00:00.000Z",
+      "2026-06-03T18:00:00.000Z",
+    ]).toContain(current.startsAtUtc.toISOString());
+
+    const dispatched = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { version: current.version, status: "DISPATCHED" },
+    });
+    expect(dispatched.statusCode).toBe(200);
+    const dispatchedAppointment = (dispatched.json() as { appointment: { version: number } }).appointment;
+
+    const forbiddenReschedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: dispatchedAppointment.version,
+        startsAtUtc: "2026-06-04T09:00:00-07:00",
+        endsAtUtc: "2026-06-04T10:00:00-07:00",
+        timeZone: "America/Los_Angeles",
+      },
+    });
+    expect(forbiddenReschedule.statusCode).toBe(409);
+    expect(forbiddenReschedule.json()).toMatchObject({
+      code: "JOB_APPOINTMENT_RESCHEDULE_NOT_ALLOWED",
+      currentStatus: "DISPATCHED",
+    });
+    const identicalForbiddenReschedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/jobs/${job.id}/appointments/${appointment.id}`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        version: dispatchedAppointment.version,
+        startsAtUtc: current.startsAtUtc.toISOString(),
+        endsAtUtc: current.endsAtUtc.toISOString(),
+        timeZone: current.timeZone,
+      },
+    });
+    expect(identicalForbiddenReschedule.statusCode).toBe(409);
+    expect(identicalForbiddenReschedule.json()).toMatchObject({
+      code: "JOB_APPOINTMENT_RESCHEDULE_NOT_ALLOWED",
+      currentStatus: "DISPATCHED",
+    });
+    const unchanged = await prisma.jobAppointment.findUniqueOrThrow({ where: { id: appointment.id } });
+    expect(unchanged.startsAtUtc.toISOString()).toBe(current.startsAtUtc.toISOString());
+    expect(unchanged.endsAtUtc.toISOString()).toBe(current.endsAtUtc.toISOString());
+    expect(unchanged.status).toBe("DISPATCHED");
   });
 
   test("assigned members can only advance their own booking status", async () => {
@@ -838,7 +1453,7 @@ describe("jobs from accepted quotes", () => {
         instructions: "Trying to edit instructions from the field.",
       },
     });
-    expect(combinedEdit.statusCode).toBe(403);
+    expect(combinedEdit.statusCode).toBe(400);
 
     const otherMemberAttempt = await app.inject({
       method: "PATCH",
@@ -1216,6 +1831,79 @@ describe("jobs from accepted quotes", () => {
     }
     expect(await prisma.jobNote.count({ where: { id: note.id, deletedAtUtc: null } })).toBe(0);
     expect(await prisma.jobEvent.count({ where: { tenantId: owner.tenant.id, jobId: job.id, type: "NOTE_DELETED" } })).toBe(1);
+  });
+
+  test("completed-job after-sale repair is idempotent and preserves manual or ineligible state", async () => {
+    const owner = await signUp("jobs-after-sale-repair");
+    const customer = await createCustomer(owner, "Repair Migration Customer");
+    const eligibleQuote = await createQuote(owner, customer.id, "Eligible repair quote");
+    const manualQuote = await createQuote(owner, customer.id, "Manual repair quote");
+    const openQuote = await createQuote(owner, customer.id, "Open job repair quote");
+    const rejectedQuote = await createQuote(owner, customer.id, "Rejected repair quote");
+    const completedAtUtc = new Date("2026-07-01T18:00:00.000Z");
+    const manualDueAtUtc = new Date("2026-07-02T18:00:00.000Z");
+    const manualCompletedAtUtc = new Date("2026-07-03T18:00:00.000Z");
+
+    await prisma.quote.update({ where: { id: eligibleQuote.id }, data: { status: "ACCEPTED" } });
+    await prisma.quote.update({
+      where: { id: manualQuote.id },
+      data: {
+        status: "ACCEPTED",
+        afterSaleFollowUpStatus: "COMPLETED",
+        afterSaleFollowUpDueAtUtc: manualDueAtUtc,
+        afterSaleFollowUpCompletedAtUtc: manualCompletedAtUtc,
+      },
+    });
+    await prisma.quote.update({ where: { id: openQuote.id }, data: { status: "ACCEPTED" } });
+    await prisma.quote.update({ where: { id: rejectedQuote.id }, data: { status: "REJECTED" } });
+
+    for (const [index, input] of [
+      { quote: eligibleQuote, status: "COMPLETED" as const, completedAtUtc },
+      { quote: manualQuote, status: "COMPLETED" as const, completedAtUtc },
+      { quote: openQuote, status: "IN_PROGRESS" as const, completedAtUtc: null },
+      { quote: rejectedQuote, status: "COMPLETED" as const, completedAtUtc },
+    ].entries()) {
+      await prisma.job.create({
+        data: {
+          tenantId: owner.tenant.id,
+          customerId: customer.id,
+          sourceQuoteId: input.quote.id,
+          jobNumber: index + 1,
+          status: input.status,
+          title: input.quote.title,
+          scopeSnapshot: input.quote.scopeText,
+          serviceType: input.quote.serviceType,
+          acceptedAtUtc: completedAtUtc,
+          completedAtUtc: input.completedAtUtc,
+        },
+      });
+    }
+
+    const repairSql = readFileSync(
+      new URL("../../prisma/migrations/20260822230000_repair_completed_job_after_sale/migration.sql", import.meta.url),
+      "utf8",
+    );
+    await prisma.$executeRawUnsafe(repairSql);
+    const firstEligible = await prisma.quote.findUniqueOrThrow({ where: { id: eligibleQuote.id } });
+    expect(firstEligible.afterSaleFollowUpStatus).toBe("DUE");
+    expect(firstEligible.afterSaleFollowUpDueAtUtc?.getTime()).toBe(
+      completedAtUtc.getTime() + 7 * 24 * 60 * 60 * 1000,
+    );
+    expect(firstEligible.afterSaleFollowUpCompletedAtUtc).toBeNull();
+
+    await prisma.$executeRawUnsafe(repairSql);
+    const [secondEligible, preservedManual, preservedOpen, preservedRejected] = await Promise.all([
+      prisma.quote.findUniqueOrThrow({ where: { id: eligibleQuote.id } }),
+      prisma.quote.findUniqueOrThrow({ where: { id: manualQuote.id } }),
+      prisma.quote.findUniqueOrThrow({ where: { id: openQuote.id } }),
+      prisma.quote.findUniqueOrThrow({ where: { id: rejectedQuote.id } }),
+    ]);
+    expect(secondEligible.afterSaleFollowUpDueAtUtc).toEqual(firstEligible.afterSaleFollowUpDueAtUtc);
+    expect(preservedManual.afterSaleFollowUpStatus).toBe("COMPLETED");
+    expect(preservedManual.afterSaleFollowUpDueAtUtc).toEqual(manualDueAtUtc);
+    expect(preservedManual.afterSaleFollowUpCompletedAtUtc).toEqual(manualCompletedAtUtc);
+    expect(preservedOpen.afterSaleFollowUpStatus).toBe("NOT_READY");
+    expect(preservedRejected.afterSaleFollowUpStatus).toBe("NOT_READY");
   });
 
   test("runtime role enforces direct job tenant RLS and immutable event privileges", async () => {

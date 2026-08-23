@@ -110,7 +110,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "How does AI usage work?",
-      a: "AI is metered by usage, not by quotes sent. The app shows a monthly progress bar and warns at 25%, 50%, 75%, 85%, 95%, and 100%. At 100%, Kody and AI tools pause until the monthly reset; manual edits remain available.",
+      a: "AI is metered by usage, not by quotes sent. The app shows a monthly progress bar and warns at 25%, 50%, 75%, 85%, 95%, and 100%. At the monthly limit, AI drafting and analysis pause until the monthly reset. Kody's schedule, task, product-catalog, navigation, and review actions remain available, along with manual editing.",
     },
     {
       q: "Do you offer annual billing?",

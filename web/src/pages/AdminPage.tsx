@@ -20,7 +20,7 @@ import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../compon
 import { ThemeSelector } from "../components/settings/ThemeSelector";
 import { LanguageSelector } from "../components/settings/LanguageSelector";
 import { notify } from "../lib/notifications";
-import { aiUsageProgressTone } from "../lib/ai-credits";
+import { aiUsageProgressTone, formatAiUsageBreakdown } from "../lib/ai-credits";
 import { localizedApiError } from "../lib/localized-api-error";
 
 interface AdminPageProps {
@@ -455,11 +455,10 @@ export function AdminPage({ session }: AdminPageProps) {
   useEffect(() => {
     if (memberPage > totalMemberPages) setMemberPage(totalMemberPages);
   }, [memberPage, totalMemberPages]);
-  const aiBudgetLimit = session?.entitlements?.limits.aiSpendUsdPerMonth ?? null;
-  const aiBudgetUsed = session?.usage?.monthlyAiSpendUsd ?? 0;
-  const aiUsagePercent = aiBudgetLimit && aiBudgetLimit > 0 ? Math.min((aiBudgetUsed / aiBudgetLimit) * 100, 100) : 0;
-  const aiUsagePercentLabel = t("admin.access.percentUsed", { percent: Math.round(aiUsagePercent) });
-  const aiRenewalText = session?.usage?.periodEndUtc ? dateText(session.usage.periodEndUtc, locale, t) : null;
+  const aiUsage = useMemo(() => formatAiUsageBreakdown(session?.usage ?? {}, locale), [locale, session?.usage]);
+  const aiRenewalText = !aiUsage.billingCycleReconciliationPending && session?.usage?.periodEndUtc
+    ? dateText(session.usage.periodEndUtc, locale, t)
+    : null;
   const adminLinks = [
     { id: "admin-overview", label: t("admin.nav.overview"), hint: t("admin.nav.overviewHint") },
     { id: "admin-appearance", label: t("admin.nav.appearance"), hint: t("admin.nav.appearanceHint") },
@@ -586,29 +585,44 @@ export function AdminPage({ session }: AdminPageProps) {
                 hint={teamMembersLimit === null ? t("admin.access.noSeatCap") : t("admin.access.seatsEnforced")}
               />
             </div>
-            {settingsMode === "org" && aiBudgetLimit !== null ? (
-              <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50 px-3 py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{t("admin.access.aiUsage")}</p>
-                  <span className="text-xs font-semibold text-slate-900">
-                    {aiUsagePercentLabel}
+            {settingsMode === "org" && session?.usage ? (
+              <div
+                role={aiUsage.billingCycleReconciliationPending ? "status" : undefined}
+                className={`mt-4 rounded-[22px] border px-3 py-3 ${
+                  aiUsage.billingCycleReconciliationPending
+                    ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)]"
+                    : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]"
+                }`}
+              >
+                <div className={`flex gap-2 ${
+                  aiUsage.billingCycleReconciliationPending
+                    ? "flex-col items-start"
+                    : "items-center justify-between"
+                }`}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{t("admin.access.aiUsage")}</p>
+                  <span className="text-xs font-semibold text-[var(--qf-text)]">
+                    {aiUsage.headline}
                   </span>
                 </div>
-                <ProgressBar
-                  value={aiUsagePercent}
-                  label={t("admin.access.monthlyAiUsage")}
-                  tone={aiUsageProgressTone(aiUsagePercent)}
-                  hint={
-                    aiUsagePercent >= 100
-                      ? aiRenewalText
-                        ? t("admin.access.usageLimitRenews", { date: aiRenewalText })
-                        : t("admin.access.usageLimitReached")
-                      : aiRenewalText
-                        ? t("admin.access.renews", { date: aiRenewalText })
-                        : undefined
-                  }
-                  className="mt-3"
-                />
+                {!aiUsage.billingCycleReconciliationPending ? (
+                  <ProgressBar
+                    value={aiUsage.effectivePercent}
+                    label={t("admin.access.monthlyAiUsage")}
+                    tone={aiUsageProgressTone(aiUsage.effectivePercent)}
+                    valueText={aiUsage.valueText}
+                    hint={
+                      aiUsage.limitReached
+                        ? aiRenewalText
+                          ? t("admin.access.usageLimitRenews", { date: aiRenewalText })
+                          : t("admin.access.usageLimitReached")
+                        : aiRenewalText
+                          ? t("admin.access.renews", { date: aiRenewalText })
+                          : undefined
+                    }
+                    className="mt-3"
+                  />
+                ) : null}
+                <p className="mt-2 text-xs leading-5 text-[var(--qf-text-muted)]">{aiUsage.detail}</p>
               </div>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-2">
@@ -712,9 +726,9 @@ export function AdminPage({ session }: AdminPageProps) {
             <AdminMetricCard
               icon={<ClockIcon size={16} />}
               label={t("admin.access.aiUsage")}
-              value={aiBudgetLimit === null ? t("admin.access.noCap") : aiUsagePercentLabel}
+              value={aiUsage.enforcementMode === "UNLIMITED" ? t("admin.access.noCap") : aiUsage.headline}
               hint={
-                aiBudgetLimit === null
+                aiUsage.enforcementMode === "UNLIMITED"
                   ? t("admin.access.noMonthlyCap")
                   : aiRenewalText
                     ? t("admin.access.renews", { date: aiRenewalText })

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
@@ -14,8 +14,10 @@ import {
   ApiError,
   type AuthPayload,
   type AuthSessionPayload,
+  type TenantUsageSnapshot,
 } from "./lib/api";
 import type { AppSession, SessionRecovery } from "./lib/app-session";
+import { AI_USAGE_UPDATED_EVENT, type AiUsageUpdateDetail } from "./lib/ai-credits";
 import { browserTimeZone } from "./lib/display-format";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
 import { useLocale } from "./i18n";
@@ -37,6 +39,7 @@ const AuthModal = lazy(() => import("./components/AuthModal").then((module) => (
 const CrmAppLayout = lazy(() => import("./components/CrmAppLayout").then((module) => ({ default: module.CrmAppLayout })));
 
 const SESSION_CHECK_TIMEOUT_MS = 15_000;
+type UsageWithAccountingPause = TenantUsageSnapshot & { accountingUnavailable?: boolean };
 
 async function loadAuthSession(): Promise<AuthSessionPayload> {
   let timeoutId: number | undefined;
@@ -184,6 +187,42 @@ function AppRoutes() {
   const [session, setSession] = useState<AppSession | null>(null);
   const [isSessionChecking, setIsSessionChecking] = useState(true);
   const [sessionRecovery, setSessionRecovery] = useState<SessionRecovery | null>(null);
+  // A canonical accounting outage must win over any already in-flight session
+  // refresh. A refresh started after this barrier is still authoritative and may
+  // clear the client-side pause when the server has recovered.
+  const accountingPauseGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const handleAiUsageUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<AiUsageUpdateDetail>).detail;
+      if (!detail || typeof detail !== "object") return;
+
+      if (detail.accountingUnavailable === true) {
+        accountingPauseGenerationRef.current += 1;
+      }
+
+      setSession((current) => {
+        if (!current?.usage) return current;
+        const limitReached = typeof detail.limitReached === "boolean" ? detail.limitReached : undefined;
+        return {
+          ...current,
+          usage: {
+            ...current.usage,
+            ...detail,
+            ...(limitReached === undefined
+              ? {}
+              : { limitReached, monthlyAiLimitReached: limitReached }),
+            ...(typeof detail.renewsAtUtc === "string" && detail.renewsAtUtc.trim()
+              ? { periodEndUtc: detail.renewsAtUtc }
+              : {}),
+          },
+        };
+      });
+    };
+
+    window.addEventListener(AI_USAGE_UPDATED_EVENT, handleAiUsageUpdate);
+    return () => window.removeEventListener(AI_USAGE_UPDATED_EVENT, handleAiUsageUpdate);
+  }, []);
 
   useEffect(() => {
     void reconcileLocale(session?.preferredLocale);
@@ -199,6 +238,7 @@ function AppRoutes() {
   };
 
   const hydrateSessionState = useCallback(async (): Promise<AppSession> => {
+    const refreshGeneration = accountingPauseGenerationRef.current;
     try {
       const payload = await loadAuthSession();
       prepareQuoteBuilderDraftStorage(payload.tenant.id, payload.user.id);
@@ -206,7 +246,21 @@ function AppRoutes() {
       localStorage.setItem("qf_full_name", payload.user.fullName);
       const nextSession = toSession(payload);
       await reconcileLocale(nextSession.preferredLocale);
-      setSession(nextSession);
+      setSession((current) => {
+        const currentUsage = current?.usage as UsageWithAccountingPause | undefined;
+        const staleAgainstAccountingPause =
+          accountingPauseGenerationRef.current > refreshGeneration &&
+          currentUsage?.accountingUnavailable === true;
+        if (!staleAgainstAccountingPause || !nextSession.usage) return nextSession;
+
+        return {
+          ...nextSession,
+          usage: {
+            ...nextSession.usage,
+            accountingUnavailable: true,
+          } as TenantUsageSnapshot,
+        };
+      });
       return nextSession;
     } catch (error) {
       if (isDefinitiveSignedOut(error)) {

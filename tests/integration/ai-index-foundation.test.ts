@@ -12,7 +12,17 @@ import { withTenantRlsContext } from "../../src/lib/tenant-rls";
 async function createTenant(label: string) {
   const unique = `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return prisma.tenant.create({
-    data: { name: unique, slug: unique.toLowerCase(), primaryTrade: "GARDENING" },
+    data: {
+      name: unique,
+      slug: unique.toLowerCase(),
+      primaryTrade: "GARDENING",
+      subscriptionStatus: "active",
+      subscriptionPlanCode: "enterprise",
+      stripeCustomerId: `cus_${unique}`,
+      stripeSubscriptionId: `sub_${unique}`,
+      subscriptionCurrentPeriodStartUtc: new Date("2026-08-01T00:00:00.000Z"),
+      subscriptionCurrentPeriodEndUtc: new Date("2027-01-01T00:00:00.000Z"),
+    },
   });
 }
 

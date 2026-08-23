@@ -14,9 +14,15 @@ import {
 } from "./ai-retrieval";
 import { AiRetrievalContentQuarantinedError } from "./ai-content-governance";
 import { sha256Text } from "./ai-data-governance";
-import { assertAiUsageAvailable, type AiUsageTelemetry } from "./ai-usage";
-import { buildTenantEntitlements } from "./subscription";
+import { mergeAiUsageTelemetry, type AiUsageTelemetry } from "./ai-usage";
 import { withTenantRlsContext, type TenantRlsClient } from "./tenant-rls";
+import {
+  AI_USAGE_ERROR_CODES,
+  AiUsageLedgerError,
+  currentAiUsageRootReservation,
+  hashAiUsageRequest,
+  runWithAiUsageOperation,
+} from "../services/ai-usage-ledger";
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_LEASE_MS = 5 * 60_000;
@@ -46,33 +52,18 @@ type AiIndexJobEnqueueInput = Readonly<{
   maxAttempts?: number;
 }>;
 
-async function assertIndexingBudgetAvailable(prisma: PrismaClient, tenantId: string) {
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: {
-      subscriptionStatus: true,
-      subscriptionPlanCode: true,
-      trialStartsAtUtc: true,
-      trialEndsAtUtc: true,
-      subscriptionCurrentPeriodEndUtc: true,
-    },
-  });
-  if (!tenant) throw new Error("AI_INDEX_TENANT_NOT_FOUND");
-  const entitlements = buildTenantEntitlements(tenant);
-  const budget = await assertAiUsageAvailable(prisma, tenantId, entitlements);
-  if (budget.blocked) {
-    throw new AiIndexBudgetExhaustedError(budget.snapshot.periodEndUtc);
-  }
-}
-
 async function recordIndexingUsage(
   prisma: PrismaClient,
   job: ClaimedAiIndexJob,
   telemetry: AiUsageTelemetry,
 ) {
+  const root = currentAiUsageRootReservation();
+  if (!root || root.tenantId !== job.tenantId) throw new Error("AI_INDEX_ACCOUNTING_CONTEXT_REQUIRED");
   await withTenantRlsContext(prisma, job.tenantId, (tx) => tx.aiUsageEvent.create({
     data: {
       tenantId: job.tenantId,
+      rootReservationId: root.rootReservationId,
+      ledgerAccountedAtUtc: new Date(),
       eventType: "INDEXING",
       classification: "C2_CUSTOMER_CONFIDENTIAL",
       creditsConsumed: 0,
@@ -707,21 +698,51 @@ export async function executeAiIndexJob(prisma: PrismaClient, job: ClaimedAiInde
     // contacting an embedding provider. A source fix should not consume retry
     // attempts or AI quota.
     assertAiRetrievalSourceGovernance(source);
-    await assertIndexingBudgetAvailable(prisma, job.tenantId);
   }
-  const result = await upsertAiRetrievalSource(prisma, sourceToPersist, {
-    persistenceFence: {
-      jobId: job.id,
-      generation: job.generation,
-      leaseToken: job.lockedBy ?? "",
-      startedAtMs: Date.now(),
+  const liveClaim = await withTenantRlsContext(prisma, job.tenantId, (tx) => tx.aiIndexJob.findFirst({
+    where: {
+      id: job.id,
+      tenantId: job.tenantId,
+      status: "PROCESSING",
+      lockedBy: job.lockedBy,
     },
-    onEmbeddingTelemetry: (telemetry) => recordIndexingUsage(prisma, job, telemetry),
+    select: { generation: true },
+  }));
+  if (!liveClaim || liveClaim.generation !== job.generation) {
+    throw new Error("AI_INDEX_JOB_STALE");
+  }
+  return runWithAiUsageOperation(prisma, {
+    tenantId: job.tenantId,
+    operation: "AI_INDEX",
+    idempotencyKey: `ai-index:${job.id}:${job.generation}`,
+    requestHash: hashAiUsageRequest({
+      sourceType: job.sourceType,
+      sourceId: job.sourceId,
+      operation: job.operation,
+      generation: job.generation,
+      expectedSourceUpdatedAtUtc: job.expectedSourceUpdatedAtUtc,
+    }),
+    credits: 0,
+    allowVoidedReplay: true,
+  }, async () => {
+    let telemetry: AiUsageTelemetry | null = null;
+    const result = await upsertAiRetrievalSource(prisma, sourceToPersist, {
+      persistenceFence: {
+        jobId: job.id,
+        generation: job.generation,
+        leaseToken: job.lockedBy ?? "",
+        startedAtMs: Date.now(),
+      },
+      onEmbeddingTelemetry: async (value) => {
+        telemetry = mergeAiUsageTelemetry(telemetry, value);
+      },
+    });
+    if (telemetry) await recordIndexingUsage(prisma, job, telemetry);
+    return {
+      chunkCount: result.chunkCount,
+      embeddingCacheHitCount: result.embeddingCacheHitCount,
+    };
   });
-  return {
-    chunkCount: result.chunkCount,
-    embeddingCacheHitCount: result.embeddingCacheHitCount,
-  };
 }
 
 export async function processClaimedAiIndexJob(
@@ -774,6 +795,27 @@ export async function processClaimedAiIndexJob(
         return { outcome: "stale" as const };
       }
       return { outcome: "budget_deferred" as const, availableAtUtc: error.renewsAtUtc };
+    }
+    if (error instanceof AiUsageLedgerError && error.code === AI_USAGE_ERROR_CODES.LIMIT_REACHED) {
+      const deferredError = new AiIndexBudgetExhaustedError(error.renewsAtUtc ?? new Date(Date.now() + 60_000));
+      const deferred = await withTenantRlsContext(prisma, job.tenantId, (tx) => tx.aiIndexJob.updateMany({
+        where: { id: job.id, tenantId: job.tenantId, generation: job.generation, status: "PROCESSING", lockedBy: job.lockedBy },
+        data: { status: "PENDING", attempts: { decrement: 1 }, availableAtUtc: deferredError.renewsAtUtc, completedAtUtc: null, lockedAtUtc: null, lockedBy: null, lastErrorCode: "AI_BUDGET_EXHAUSTED" },
+      }));
+      if (deferred.count !== 1) return { outcome: "stale" as const };
+      return { outcome: "budget_deferred" as const, availableAtUtc: deferredError.renewsAtUtc };
+    }
+    if (
+      error instanceof AiUsageLedgerError
+      && (error.code === AI_USAGE_ERROR_CODES.ALREADY_PROCESSED || error.code === AI_USAGE_ERROR_CODES.IN_PROGRESS)
+    ) {
+      const now = new Date();
+      const reconciled = await withTenantRlsContext(prisma, job.tenantId, (tx) => tx.aiIndexJob.updateMany({
+        where: { id: job.id, tenantId: job.tenantId, generation: job.generation, status: "PROCESSING", lockedBy: job.lockedBy },
+        data: { status: "DEAD", completedAtUtc: now, lockedAtUtc: null, lockedBy: null, lastErrorCode: "AI_ACCOUNTING_RECONCILIATION_REQUIRED" },
+      }));
+      if (reconciled.count !== 1) return { outcome: "stale" as const };
+      return { outcome: "dead" as const };
     }
     const now = new Date();
     const exhausted = job.attempts >= job.maxAttempts;

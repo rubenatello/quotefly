@@ -39,6 +39,11 @@ const intentCases = [
   ["prioritize assigned day", "Prioritize my day", "PRIORITIZE_MY_DAY"],
   ["list assigned tasks", "What active tasks are assigned to me?", "LIST_MY_ACTIVITIES"],
   ["prepare activity task", "Create a follow-up task for Robert tomorrow", "PREPARE_ACTIVITY"],
+  ["list assigned schedule", "Show my schedule today", "LIST_SCHEDULE"],
+  ["list team schedule", "What is on our schedule this week?", "LIST_SCHEDULE"],
+  ["prepare booking", "Book job #12 tomorrow from 9 AM to 11 AM", "PREPARE_BOOKING"],
+  ["task beats booking", "Schedule a task for Robert California", "PREPARE_ACTIVITY"],
+  ["prepare dispatch", "Dispatch next job", "PREPARE_DISPATCH"],
   ["unquoted customers", "Which customers do not have a quote?", "CUSTOMERS_WITHOUT_QUOTES"],
   ["pipeline summary", "Summarize open pipeline revenue for this month", "SUMMARIZE_PIPELINE"],
   ["pipeline forecast", "Forecast my open quote revenue this month", "SUMMARIZE_PIPELINE"],
@@ -62,6 +67,9 @@ const intentCases = [
   ["spanish pipeline scenario", "Si cerramos el 30 por ciento de las cotizaciones abiertas, ¿cuánto ingreso agregaríamos?", "PIPELINE_SCENARIO"],
   ["spanish profitability", "Ordena mis trabajos por rentabilidad", "RANK_PROFITABLE_JOBS"],
   ["spanish help", "¿Qué puedes hacer?", "ASSISTANT_HELP"],
+  ["spanish list schedule", "Muestra mi agenda de mañana", "LIST_SCHEDULE"],
+  ["spanish prepare booking", "Programa el trabajo #12 mañana de 9 a. m. a 11 a. m.", "PREPARE_BOOKING"],
+  ["spanish prepare dispatch", "Despacha mi próximo trabajo", "PREPARE_DISPATCH"],
 ] as const;
 
 const cases: EvalCase[] = intentCases.map(([name, prompt, expected]) => ({
@@ -129,6 +137,9 @@ for (const tool of [
   "DRAFT_PRODUCT",
   "SEARCH_PRODUCTS",
   "PREPARE_ACTIVITY",
+  "LIST_SCHEDULE",
+  "PREPARE_BOOKING",
+  "PREPARE_DISPATCH",
   "PREPARE_QUOTE_SEND",
   "ASSISTANT_HELP",
   "OUT_OF_SCOPE",

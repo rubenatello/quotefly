@@ -14,6 +14,8 @@ import {
 } from "./crm/workspace-navigation";
 import { DashboardProvider, type DashboardSession } from "./dashboard/DashboardContext";
 import type { AppSession } from "../lib/app-session";
+import { resolveAiUsagePresentation } from "../lib/ai-credits";
+import { notificationJobPath } from "../lib/notification-display";
 
 const KodyAssistant = lazy(() => import("./ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
 const AiUsageMilestoneNotifier = lazy(() => import("./ai/AiUsageMilestoneNotifier").then((module) => ({ default: module.AiUsageMilestoneNotifier })));
@@ -134,6 +136,7 @@ export function CrmAppLayout({
   }
 
   const currentPage = workspacePageFromPath(location.pathname);
+  const aiUsage = resolveAiUsagePresentation(session.usage);
 
   const handleNavigate = (page: WorkspaceNavigationId) => {
     navigate(workspacePathForNavigation(page));
@@ -162,6 +165,8 @@ export function CrmAppLayout({
       entitlements={session.entitlements}
       usage={session.usage}
       canManageCatalog={canManageCatalog}
+      displayTimeZone={session.timezone}
+      onNavigateToJob={(jobId) => navigate(notificationJobPath(jobId))}
     >
       <Suspense fallback={null}>
         <AiUsageMilestoneNotifier
@@ -235,11 +240,10 @@ export function CrmAppLayout({
           <KodyAssistant
             currentPage={currentPage}
             canViewInternalCosts={session.role.trim().toLowerCase() !== "member"}
-            aiUsageLimitReached={
-              session.usage?.monthlyAiLimitReached === true ||
-              (session.usage?.monthlyAiSpendUsagePercent ?? 0) >= 100
-            }
-            aiUsageRenewsAtUtc={session.usage?.periodEndUtc}
+            aiPaidActionsUnavailable={aiUsage.paidActionsUnavailable}
+            aiUsageReconciliationPending={aiUsage.billingCycleReconciliationPending}
+            aiUsageAccountingUnavailable={aiUsage.accountingUnavailable}
+            aiUsageRenewsAtUtc={aiUsage.renewsAtUtc}
             displayTimeZone={session.timezone}
           />
         </Suspense>

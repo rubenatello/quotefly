@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, BriefcaseBusiness, CalendarClock, CheckCircle2, ExternalLink, NotebookPen, Search, Send, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
-import { KodyButton } from "../components/ai/KodyButton";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  publishKodyOutcome,
+  type KodyBookingReviewDetail,
+  type KodyDispatchReviewDetail,
+} from "../components/ai/kody-events";
+import {
+  JobScheduleWorkspace,
+  RescheduleModal,
+  type AppointmentReloadResult,
+  type ScheduleAssignee,
+  type ScheduleRange,
+} from "../components/jobs/JobScheduleWorkspace";
 import { InvoicePanel } from "../components/invoices/InvoicePanel";
-import { api, ApiError, type Job, type JobAppointment, type JobAppointmentStatus, type JobNote, type JobScheduleAppointment, type JobStatus, type OrgUserRole } from "../lib/api";
+import { api, ApiError, type AppointmentNotificationReceipt, type Job, type JobAppointment, type JobAppointmentStatus, type JobNote, type JobScheduleAppointment, type JobStatus, type OrgUserRole } from "../lib/api";
 import { localizedApiError } from "../lib/localized-api-error";
-import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../lib/tenant-time";
+import { resolveTenantWallTime, toTenantDateTimeInput, validTimeZone, type TenantWallTimeResolution } from "../lib/tenant-time";
 import { cn } from "../lib/utils";
+import { publishNotificationsUpdated } from "../lib/notification-display";
 import { formatDateTime, money, useDashboard } from "../components/dashboard/DashboardContext";
 import {
   Alert,
@@ -32,6 +44,13 @@ const JOB_STATUS_FILTERS: Array<JobStatus | "active"> = [
   "COMPLETED",
   "CANCELED",
 ];
+
+function validCalendarDate(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() + 1 === month && parsed.getUTCDate() === day;
+}
 
 type JobAssigneeOption = {
   id: string;
@@ -66,6 +85,37 @@ const APPOINTMENT_ACTIONS: Readonly<Record<JobAppointmentStatus, readonly JobApp
   CANCELED: [],
 };
 
+const APPOINTMENT_RELOAD_PAGE_SIZE = 100;
+const APPOINTMENT_RELOAD_CAP = 500;
+
+function isRouteStateRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function kodyReviewState(value: unknown, jobId: string | undefined) {
+  if (!jobId || !isRouteStateRecord(value)) return { booking: null, dispatch: null, focusReturnId: null };
+  const booking = isRouteStateRecord(value.kodyBookingReview)
+    && value.kodyBookingReview.jobId === jobId
+    && (value.kodyBookingReview.mode === "CREATE" || value.kodyBookingReview.mode === "RESCHEDULE")
+    && typeof value.kodyBookingReview.startsAtUtc === "string"
+    && typeof value.kodyBookingReview.endsAtUtc === "string"
+      ? value.kodyBookingReview as KodyBookingReviewDetail
+      : null;
+  const dispatch = isRouteStateRecord(value.kodyDispatchReview)
+    && value.kodyDispatchReview.jobId === jobId
+    && value.kodyDispatchReview.expectedStatus === "SCHEDULED"
+    && typeof value.kodyDispatchReview.appointmentId === "string"
+    && typeof value.kodyDispatchReview.appointmentVersion === "number"
+      ? value.kodyDispatchReview as KodyDispatchReviewDetail
+      : null;
+  // This is deliberately an allowlisted static id rather than an arbitrary
+  // selector from navigation state. Kody's launcher persists in CrmAppLayout.
+  const focusReturnId: "kody-launcher" | null = booking?.mode === "RESCHEDULE" && value.kodyFocusReturnId === "kody-launcher"
+    ? "kody-launcher"
+    : null;
+  return { booking, dispatch, focusReturnId };
+}
+
 function defaultAppointmentInputs(timeZone: string) {
   const now = new Date();
   const start = new Date(now.getTime() + 60 * 60 * 1000);
@@ -77,19 +127,10 @@ function defaultAppointmentInputs(timeZone: string) {
   };
 }
 
-function addLocalDays(dateValue: string, days: number) {
-  const [year, month, day] = dateValue.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day + days));
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
-}
-
-function scheduleWindow(timeZone: string, range: "today" | "week") {
-  const today = toTenantDateTimeInput(new Date(), timeZone).slice(0, 10);
-  const endDate = addLocalDays(today, range === "today" ? 1 : 7);
-  const fromUtc = tenantWallTimeToIso(`${today}T00:00`, timeZone);
-  const toUtc = tenantWallTimeToIso(`${endDate}T00:00`, timeZone);
-  return fromUtc && toUtc ? { fromUtc, toUtc } : null;
+function resolvedWallTimeIso(resolution: TenantWallTimeResolution, selectedIndex: number | null) {
+  if (resolution.kind === "valid") return resolution.choices[0].iso;
+  if (resolution.kind === "ambiguous" && selectedIndex !== null) return resolution.choices[selectedIndex]?.iso ?? null;
+  return null;
 }
 
 function appointmentActionLabel(status: JobAppointmentStatus, t: ReturnType<typeof useTranslation>["t"]) {
@@ -98,6 +139,42 @@ function appointmentActionLabel(status: JobAppointmentStatus, t: ReturnType<type
   if (status === "COMPLETED") return t("jobs.markComplete");
   if (status === "CANCELED") return t("jobs.cancelBooking");
   return t(`domain.appointmentStatus.${status}`);
+}
+
+function appointmentSuccessNotice(
+  base: string,
+  receipt: AppointmentNotificationReceipt | null,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  if (!receipt) return base;
+  return `${base} ${t(receipt.createdCount > 0 ? "jobs.inAppNotificationAvailable" : "jobs.noInAppNotificationCreated")}`;
+}
+
+function scheduleAppointmentFromJob(
+  appointment: JobAppointment,
+  job: Job,
+  proposedWindow?: { startsAtUtc: string; endsAtUtc: string; timeZone: string },
+): JobScheduleAppointment {
+  return {
+    id: appointment.id,
+    jobId: appointment.jobId,
+    assignedTenantUserId: appointment.assignedTenantUserId,
+    status: appointment.status,
+    startsAtUtc: proposedWindow?.startsAtUtc ?? appointment.startsAtUtc,
+    endsAtUtc: proposedWindow?.endsAtUtc ?? appointment.endsAtUtc,
+    timeZone: proposedWindow?.timeZone ?? appointment.timeZone,
+    version: appointment.version,
+    assignedTenantUser: appointment.assignedTenantUser,
+    job: {
+      id: job.id,
+      jobNumber: job.jobNumber,
+      status: job.status,
+      title: job.title,
+      serviceAddressSnapshot: job.serviceAddressSnapshot,
+      customer: job.customer,
+      sourceQuote: { id: job.sourceQuote.id, title: job.sourceQuote.title },
+    },
+  };
 }
 
 function useJobDateFormatter() {
@@ -169,161 +246,22 @@ function JobCard({
   );
 }
 
-function JobScheduleOverview() {
-  const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
-  const { session } = useDashboard();
-  const timeZone = validTimeZone(session?.timezone ?? "UTC");
-  const [range, setRange] = useState<"today" | "week">("week");
-  const [items, setItems] = useState<JobScheduleAppointment[]>([]);
-  const [limit, setLimit] = useState<PageSize>(25);
-  const [offset, setOffset] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const window = useMemo(() => scheduleWindow(timeZone, range), [range, timeZone]);
-
-  const loadSchedule = useCallback(async () => {
-    if (!window) {
-      setError(t("jobs.invalidWallTime"));
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.jobs.schedule({
-        fromUtc: window.fromUtc,
-        toUtc: window.toUtc,
-        limit,
-        offset,
-      });
-      setItems(response.items);
-      setTotal(response.pagination.total);
-    } catch (err) {
-      setError(localizedApiError(err, t, { fallbackKey: "jobs.loadScheduleError" }));
-    } finally {
-      setLoading(false);
-    }
-  }, [limit, offset, t, window]);
-
-  useEffect(() => {
-    void loadSchedule();
-  }, [loadSchedule]);
-
-  return (
-    <section className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)] sm:p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("jobs.scheduleEyebrow")}</p>
-          <h2 className="mt-1 flex items-center gap-2 text-lg font-semibold text-[var(--qf-text)]">
-            <CalendarClock size={18} />
-            {t("jobs.scheduleBoardTitle")}
-          </h2>
-          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("jobs.scheduleBoardDescription")}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex">
-          {(["today", "week"] as const).map((option) => (
-            <Button
-              key={option}
-              type="button"
-              variant={range === option ? "primary" : "outline"}
-              className="min-h-11"
-              aria-pressed={range === option}
-              onClick={() => {
-                setRange(option);
-                setOffset(0);
-              }}
-            >
-              {t(`jobs.scheduleRange.${option}`)}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-4">
-        {loading ? (
-          <LoadingState title={t("jobs.loadingSchedule")} />
-        ) : error ? (
-          <Alert tone="error" onDismiss={() => setError(null)}>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span>{error}</span>
-              <Button type="button" variant="outline" className="min-h-11 shrink-0" onClick={() => void loadSchedule()}>
-                {t("jobs.retry")}
-              </Button>
-            </div>
-          </Alert>
-        ) : items.length === 0 ? (
-          <EmptyState
-            icon={<CalendarClock size={22} />}
-            title={t("jobs.noSchedule")}
-            description={t("jobs.noScheduleDescription")}
-          />
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {items.map((appointment) => (
-              <button
-                key={appointment.id}
-                type="button"
-                className="min-h-11 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4 text-left transition hover:border-[var(--qf-focus)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
-                onClick={() => navigate(`/app/jobs/${appointment.job.id}`)}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={appointmentStatusTone(appointment.status)}>
-                    {t(`domain.appointmentStatus.${appointment.status}`)}
-                  </Badge>
-                  <span className="text-xs font-semibold text-[var(--qf-text-muted)]">
-                    {t("jobs.jobNumber", { number: appointment.job.jobNumber })}
-                  </span>
-                </div>
-                <p className="mt-2 font-semibold text-[var(--qf-text)]">{appointment.job.customer.fullName}</p>
-                <p className="mt-1 line-clamp-1 text-sm text-[var(--qf-text-soft)]">{appointment.job.title}</p>
-                <p className="mt-2 text-xs text-[var(--qf-text-soft)]">
-                  {t("jobs.appointmentAssignedTo", { name: appointment.assignedTenantUser.user.fullName })}
-                </p>
-                <p className="mt-1 line-clamp-2 text-xs text-[var(--qf-text-muted)]">
-                  {t("jobs.scheduleAddress", { address: appointment.job.serviceAddressSnapshot || t("jobs.noAddress") })}
-                </p>
-                <p className="mt-2 text-xs text-[var(--qf-text-muted)]">
-                  {t("jobs.scheduledWindow", {
-                    start: formatDateTime(appointment.startsAtUtc, i18n.resolvedLanguage, timeZone),
-                    end: formatDateTime(appointment.endsAtUtc, i18n.resolvedLanguage, timeZone),
-                  })}
-                </p>
-              </button>
-            ))}
-          </div>
-        )}
-        {total > 0 && (
-          <div className="mt-4">
-            <PaginationControls
-              limit={limit}
-              offset={offset}
-              total={total}
-              loading={loading}
-              itemLabel={t("jobs.appointmentItemLabel")}
-              onLimitChange={(nextLimit) => {
-                setLimit(nextLimit);
-                setOffset(0);
-              }}
-              onOffsetChange={setOffset}
-            />
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function JobSchedulePanel({
   job,
   canManageJobs,
   onReloadLatest,
+  kodyBookingReview,
+  kodyDispatchReview,
+  kodyFocusReturnId,
+  onKodyReviewConsumed,
 }: {
   job: Job;
   canManageJobs: boolean;
   onReloadLatest: () => void | Promise<void>;
+  kodyBookingReview: KodyBookingReviewDetail | null;
+  kodyDispatchReview: KodyDispatchReviewDetail | null;
+  kodyFocusReturnId: "kody-launcher" | null;
+  onKodyReviewConsumed: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { session } = useDashboard();
@@ -340,41 +278,82 @@ function JobSchedulePanel({
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bookingFormOpen, setBookingFormOpen] = useState(false);
   const [appointmentToCancel, setAppointmentToCancel] = useState<JobAppointment | null>(null);
-  const [editingAppointment, setEditingAppointment] = useState<JobAppointment | null>(null);
+  const [appointmentToDispatch, setAppointmentToDispatch] = useState<JobAppointment | null>(null);
+  const [appointmentToReschedule, setAppointmentToReschedule] = useState<JobScheduleAppointment | null>(null);
+  const [rescheduleInitialInstructions, setRescheduleInitialInstructions] = useState<string | null>(null);
+  const [kodyBookingOutcome, setKodyBookingOutcome] = useState<KodyBookingReviewDetail | null>(null);
+  const [kodyRescheduleOutcome, setKodyRescheduleOutcome] = useState<KodyBookingReviewDetail | null>(null);
+  const [kodyDispatchOutcome, setKodyDispatchOutcome] = useState<KodyDispatchReviewDetail | null>(null);
+  const [dispatchReviewError, setDispatchReviewError] = useState<string | null>(null);
+  const [kodyReviewRetryAvailable, setKodyReviewRetryAvailable] = useState(false);
+  const [kodyReviewAttempt, setKodyReviewAttempt] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [appointmentStale, setAppointmentStale] = useState(false);
   const [startsAt, setStartsAt] = useState(initialTimes.startsAt);
   const [endsAt, setEndsAt] = useState(initialTimes.endsAt);
+  const [startChoice, setStartChoice] = useState<number | null>(null);
+  const [endChoice, setEndChoice] = useState<number | null>(null);
   const [instructions, setInstructions] = useState("");
   const bookingFormRef = useRef<HTMLFormElement | null>(null);
   const staleAlertRef = useRef<HTMLDivElement | null>(null);
+  const rescheduleTriggerRef = useRef<HTMLElement | null>(null);
+  const processedKodyReviewRef = useRef<string | null>(null);
+  const appointmentRequestGenerationRef = useRef(0);
   const bookingFormId = useMemo(() => `job-booking-form-${job.id}`, [job.id]);
 
   useEffect(() => {
+    if (kodyBookingReview || kodyBookingOutcome) return;
     setStartsAt(initialTimes.startsAt);
     setEndsAt(initialTimes.endsAt);
-  }, [initialTimes.endsAt, initialTimes.startsAt]);
+    setStartChoice(null);
+    setEndChoice(null);
+  }, [initialTimes.endsAt, initialTimes.startsAt, kodyBookingOutcome, kodyBookingReview]);
+
+  const startResolution = useMemo(() => resolveTenantWallTime(startsAt, timeZone), [startsAt, timeZone]);
+  const endResolution = useMemo(() => resolveTenantWallTime(endsAt, timeZone), [endsAt, timeZone]);
 
   const loadAppointments = useCallback(async () => {
+    const generation = appointmentRequestGenerationRef.current + 1;
+    appointmentRequestGenerationRef.current = generation;
     setLoading(true);
     setError(null);
     try {
       const response = await api.jobs.appointments.list(job.id, { limit: appointmentLimit, offset: appointmentOffset });
+      if (generation !== appointmentRequestGenerationRef.current) return;
       setAppointments(response.items);
       setAppointmentTotal(response.pagination.total);
     } catch (err) {
+      if (generation !== appointmentRequestGenerationRef.current) return;
       setError(localizedApiError(err, t, { fallbackKey: "jobs.loadAppointmentsError" }));
     } finally {
-      setLoading(false);
+      if (generation === appointmentRequestGenerationRef.current) setLoading(false);
     }
   }, [appointmentLimit, appointmentOffset, job.id, t]);
 
   useEffect(() => {
     void loadAppointments();
+    return () => {
+      appointmentRequestGenerationRef.current += 1;
+    };
   }, [loadAppointments]);
 
+  const loadAppointmentById = useCallback(async (appointmentId: string) => {
+    let offset = 0;
+    while (offset < APPOINTMENT_RELOAD_CAP) {
+      const response = await api.jobs.appointments.list(job.id, {
+        limit: APPOINTMENT_RELOAD_PAGE_SIZE,
+        offset,
+      });
+      const match = response.items.find((appointment) => appointment.id === appointmentId);
+      if (match) return { kind: "found" as const, appointment: match };
+      offset += response.items.length;
+      if (offset >= response.pagination.total || response.items.length === 0) return { kind: "missing" as const };
+    }
+    return { kind: "limit" as const };
+  }, [job.id]);
+
   const createDisabled = !canManageJobs || !job.assignedTenantUserId || job.status === "COMPLETED" || job.status === "CANCELED";
-  const formDisabled = saving || (!editingAppointment && createDisabled);
+  const formDisabled = saving || createDisabled;
 
   const refreshAfterMutation = useCallback(async () => {
     await loadAppointments();
@@ -410,47 +389,203 @@ function JobSchedulePanel({
   const reloadLatestBooking = useCallback(async () => {
     setAppointmentStale(false);
     setActionError(null);
-    setEditingAppointment(null);
     setAppointmentToCancel(null);
     setBookingFormOpen(false);
     await refreshAfterMutation();
   }, [refreshAfterMutation]);
 
   const openCreateForm = () => {
-    setEditingAppointment(null);
     setStartsAt(initialTimes.startsAt);
     setEndsAt(initialTimes.endsAt);
+    setStartChoice(null);
+    setEndChoice(null);
     setInstructions("");
     setActionError(null);
     setAppointmentStale(false);
     setBookingFormOpen((open) => {
       const nextOpen = !open;
       if (nextOpen) focusBookingForm();
+      else setKodyBookingOutcome(null);
       return nextOpen;
     });
   };
 
-  const openEditForm = (appointment: JobAppointment) => {
-    setEditingAppointment(appointment);
-    setStartsAt(toTenantDateTimeInput(appointment.startsAtUtc, timeZone));
-    setEndsAt(toTenantDateTimeInput(appointment.endsAtUtc, timeZone));
-    setInstructions(appointment.instructions ?? "");
-    setActionError(null);
-    setAppointmentStale(false);
-    setBookingFormOpen(true);
-    focusBookingForm();
+  const openEditForm = (
+    appointment: JobAppointment,
+    proposedWindow?: { startsAtUtc: string; endsAtUtc: string; timeZone: string },
+  ) => {
+    if (appointment.status !== "SCHEDULED") return;
+    rescheduleTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setRescheduleInitialInstructions(appointment.instructions);
+    setAppointmentToReschedule(scheduleAppointmentFromJob(appointment, job, proposedWindow));
   };
+
+  const closeReschedule = () => {
+    setAppointmentToReschedule(null);
+    setRescheduleInitialInstructions(null);
+    setKodyRescheduleOutcome(null);
+    window.setTimeout(() => rescheduleTriggerRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    const reviewKey = kodyBookingReview
+      ? `booking:${kodyBookingReview.mode}:${kodyBookingReview.appointmentId ?? kodyBookingReview.jobId}:${kodyBookingReview.startsAtUtc}`
+      : kodyDispatchReview
+        ? `dispatch:${kodyDispatchReview.appointmentId}:${kodyDispatchReview.appointmentVersion}`
+        : null;
+    if (!reviewKey || processedKodyReviewRef.current === reviewKey) return;
+    processedKodyReviewRef.current = reviewKey;
+    let cancelled = false;
+
+    const rejectReview = (message: string) => {
+      if (cancelled) return;
+      setActionError(message);
+      focusStaleRecovery();
+    };
+    const finishReview = () => {
+      if (cancelled) return;
+      setKodyReviewRetryAvailable(false);
+      onKodyReviewConsumed();
+    };
+
+    const prepareReview = async () => {
+      try {
+        if (kodyBookingReview) {
+          if (!canManageJobs) {
+            rejectReview(t("jobs.kodyBookingPermission"));
+            return;
+          }
+          if (kodyBookingReview.customerId !== job.customer.id
+            || kodyBookingReview.assignedTenantUserId !== job.assignedTenantUserId) {
+            rejectReview(t("jobs.kodyReviewChanged"));
+            return;
+          }
+          if (kodyBookingReview.mode === "CREATE") {
+            if (cancelled) return;
+            const proposedStart = toTenantDateTimeInput(kodyBookingReview.startsAtUtc, timeZone);
+            const proposedEnd = toTenantDateTimeInput(kodyBookingReview.endsAtUtc, timeZone);
+            const proposedStartResolution = resolveTenantWallTime(proposedStart, timeZone);
+            const proposedEndResolution = resolveTenantWallTime(proposedEnd, timeZone);
+            const proposedStartChoice = proposedStartResolution.kind === "ambiguous"
+              ? proposedStartResolution.choices.findIndex((choice) => choice.iso === kodyBookingReview.startsAtUtc)
+              : -1;
+            const proposedEndChoice = proposedEndResolution.kind === "ambiguous"
+              ? proposedEndResolution.choices.findIndex((choice) => choice.iso === kodyBookingReview.endsAtUtc)
+              : -1;
+            setStartsAt(proposedStart);
+            setEndsAt(proposedEnd);
+            setStartChoice(proposedStartChoice >= 0 ? proposedStartChoice : null);
+            setEndChoice(proposedEndChoice >= 0 ? proposedEndChoice : null);
+            setInstructions("");
+            setKodyBookingOutcome(kodyBookingReview);
+            setActionError(null);
+            setBookingFormOpen(true);
+            focusBookingForm();
+            finishReview();
+            return;
+          }
+          if (!kodyBookingReview.appointmentId || kodyBookingReview.appointmentVersion === undefined) {
+            rejectReview(t("jobs.kodyReviewInvalid"));
+            return;
+          }
+          const located = await loadAppointmentById(kodyBookingReview.appointmentId);
+          if (cancelled) return;
+          if (located.kind !== "found") {
+            rejectReview(located.kind === "limit" ? t("jobs.bookingReloadLimit") : t("jobs.bookingNotFoundAfterReload"));
+            return;
+          }
+          const current = located.appointment;
+          if (current.status !== "SCHEDULED" || current.version !== kodyBookingReview.appointmentVersion
+            || current.assignedTenantUserId !== kodyBookingReview.assignedTenantUserId) {
+            rejectReview(t("jobs.kodyReviewChanged"));
+            return;
+          }
+          setRescheduleInitialInstructions(current.instructions);
+          setKodyRescheduleOutcome(kodyBookingReview);
+          const focusReturnTarget = kodyFocusReturnId
+            ? document.getElementById(kodyFocusReturnId)
+            : null;
+          rescheduleTriggerRef.current = focusReturnTarget instanceof HTMLElement
+            && focusReturnTarget.isConnected
+            && !focusReturnTarget.hasAttribute("disabled")
+            ? focusReturnTarget
+            : null;
+          setAppointmentToReschedule(scheduleAppointmentFromJob(current, job, {
+            startsAtUtc: kodyBookingReview.startsAtUtc,
+            endsAtUtc: kodyBookingReview.endsAtUtc,
+            timeZone,
+          }));
+          finishReview();
+          return;
+        }
+
+        if (kodyDispatchReview) {
+          const located = await loadAppointmentById(kodyDispatchReview.appointmentId);
+          if (cancelled) return;
+          if (located.kind !== "found") {
+            rejectReview(located.kind === "limit" ? t("jobs.bookingReloadLimit") : t("jobs.bookingNotFoundAfterReload"));
+            return;
+          }
+          const current = located.appointment;
+          const memberOwnsBooking = current.assignedTenantUser.user.id === session?.userId;
+          if ((!canManageJobs && !memberOwnsBooking)
+            || current.status !== "SCHEDULED"
+            || current.version !== kodyDispatchReview.appointmentVersion
+            || current.assignedTenantUserId !== kodyDispatchReview.assignedTenantUserId) {
+            rejectReview(t("jobs.kodyDispatchChanged"));
+            return;
+          }
+          setKodyDispatchOutcome(kodyDispatchReview);
+          setDispatchReviewError(null);
+          setAppointmentToDispatch(current);
+          finishReview();
+          return;
+        }
+      } catch (err) {
+        processedKodyReviewRef.current = null;
+        setKodyReviewRetryAvailable(true);
+        rejectReview(localizedApiError(err, t, { fallbackKey: "jobs.loadAppointmentsError" }));
+        return;
+      }
+    };
+
+    void prepareReview();
+    return () => {
+      cancelled = true;
+      if (processedKodyReviewRef.current === reviewKey) {
+        processedKodyReviewRef.current = null;
+      }
+    };
+  }, [
+    canManageJobs,
+    focusBookingForm,
+    focusStaleRecovery,
+    job,
+    kodyBookingReview,
+    kodyDispatchReview,
+    kodyFocusReturnId,
+    kodyReviewAttempt,
+    loadAppointmentById,
+    onKodyReviewConsumed,
+    session?.userId,
+    t,
+    timeZone,
+  ]);
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (formDisabled || (!editingAppointment && !job.assignedTenantUserId)) return;
+    if (formDisabled || !job.assignedTenantUserId) return;
     setNotice(null);
     setActionError(null);
     setAppointmentStale(false);
-    const startsAtUtc = tenantWallTimeToIso(startsAt, timeZone);
-    const endsAtUtc = tenantWallTimeToIso(endsAt, timeZone);
+    if (startResolution.kind === "invalid" || startResolution.kind === "nonexistent" || endResolution.kind === "invalid" || endResolution.kind === "nonexistent") {
+      setActionError(t("jobs.invalidOrMissingWallTime"));
+      return;
+    }
+    const startsAtUtc = resolvedWallTimeIso(startResolution, startChoice);
+    const endsAtUtc = resolvedWallTimeIso(endResolution, endChoice);
     if (!startsAtUtc || !endsAtUtc) {
-      setActionError(t("jobs.invalidWallTime"));
+      setActionError(t("jobs.chooseAmbiguousTime"));
       return;
     }
     if (new Date(startsAtUtc) >= new Date(endsAtUtc)) {
@@ -459,32 +594,37 @@ function JobSchedulePanel({
     }
     setSaving(true);
     try {
-      if (editingAppointment) {
-        await api.jobs.appointments.update(job.id, editingAppointment.id, {
-          version: editingAppointment.version,
-          startsAtUtc,
-          endsAtUtc,
-          timeZone,
-          instructions: instructions.trim() || null,
-        });
-      } else {
-        const assignedTenantUserId = job.assignedTenantUserId;
-        if (!assignedTenantUserId) {
-          setSaving(false);
-          return;
-        }
-        await api.jobs.appointments.create(job.id, {
-          assignedTenantUserId,
-          startsAtUtc,
-          endsAtUtc,
-          timeZone,
-          instructions: instructions.trim() || null,
-        });
+      const assignedTenantUserId = job.assignedTenantUserId;
+      if (!assignedTenantUserId) {
+        setSaving(false);
+        return;
       }
+      const response = await api.jobs.appointments.create(job.id, {
+        assignedTenantUserId,
+        startsAtUtc,
+        endsAtUtc,
+        timeZone,
+        instructions: instructions.trim() || null,
+      });
+      const notificationReceipt = response.notificationReceipt ?? null;
+      publishNotificationsUpdated(notificationReceipt?.createdCount ?? 0);
       setInstructions("");
       setBookingFormOpen(false);
-      setEditingAppointment(null);
-      setNotice(editingAppointment ? t("jobs.bookingUpdated") : t("jobs.bookingSaved"));
+      setNotice(appointmentSuccessNotice(
+        kodyBookingOutcome ? t("jobs.kodyBookingSaved") : t("jobs.bookingSaved"),
+        notificationReceipt,
+        t,
+      ));
+      if (kodyBookingOutcome) {
+        publishKodyOutcome({
+          type: "BOOKING_CREATED",
+          jobNumber: job.jobNumber,
+          customerName: job.customer.fullName,
+          startsAtUtc,
+          inAppNotificationCreated: (notificationReceipt?.createdCount ?? 0) > 0,
+        });
+        setKodyBookingOutcome(null);
+      }
       await refreshAfterMutation();
     } catch (err) {
       handleAppointmentActionError(err, "jobs.bookingSaveError");
@@ -493,21 +633,79 @@ function JobSchedulePanel({
     }
   };
 
-  const updateAppointmentStatus = async (appointment: JobAppointment, status: JobAppointmentStatus) => {
+  const updateAppointmentStatus = async (
+    appointment: JobAppointment,
+    status: JobAppointmentStatus,
+    fromKodyDispatchReview = false,
+  ) => {
     if (updatingId) return;
     setNotice(null);
     setActionError(null);
+    if (fromKodyDispatchReview) setDispatchReviewError(null);
     setAppointmentStale(false);
     setUpdatingId(appointment.id);
     try {
-      await api.jobs.appointments.update(job.id, appointment.id, {
+      const response = await api.jobs.appointments.update(job.id, appointment.id, {
         version: appointment.version,
         status,
       });
-      setNotice(t("jobs.bookingSaved"));
+      const notificationReceipt = response.notificationReceipt ?? null;
+      publishNotificationsUpdated(notificationReceipt?.createdCount ?? 0);
+      setNotice(appointmentSuccessNotice(
+        fromKodyDispatchReview ? t("jobs.kodyDispatchSaved") : t("jobs.bookingSaved"),
+        notificationReceipt,
+        t,
+      ));
+      if (fromKodyDispatchReview && status === "DISPATCHED" && kodyDispatchOutcome) {
+        publishKodyOutcome({
+          type: "BOOKING_DISPATCHED",
+          jobNumber: job.jobNumber,
+          customerName: job.customer.fullName,
+          inAppNotificationCreated: (notificationReceipt?.createdCount ?? 0) > 0,
+        });
+        setKodyDispatchOutcome(null);
+      }
+      setAppointmentToDispatch(null);
       await refreshAfterMutation();
     } catch (err) {
-      handleAppointmentActionError(err, "jobs.statusUpdateError");
+      if (fromKodyDispatchReview) {
+        setDispatchReviewError(localizedApiError(err, t, { fallbackKey: "jobs.statusUpdateError" }));
+      } else {
+        handleAppointmentActionError(err, "jobs.statusUpdateError");
+      }
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const reloadKodyDispatchReview = async () => {
+    if (!appointmentToDispatch || updatingId) return;
+    setUpdatingId(appointmentToDispatch.id);
+    setDispatchReviewError(null);
+    try {
+      const located = await loadAppointmentById(appointmentToDispatch.id);
+      if (located.kind !== "found") {
+        setDispatchReviewError(located.kind === "limit" ? t("jobs.bookingReloadLimit") : t("jobs.bookingNotFoundAfterReload"));
+        return;
+      }
+      const current = located.appointment;
+      const memberOwnsBooking = current.assignedTenantUser.user.id === session?.userId;
+      if ((!canManageJobs && !memberOwnsBooking) || current.status !== "SCHEDULED") {
+        setDispatchReviewError(t("jobs.kodyDispatchChanged"));
+        return;
+      }
+      setAppointmentToDispatch(current);
+      setKodyDispatchOutcome((review) => review ? {
+        ...review,
+        appointmentVersion: current.version,
+        startsAtUtc: current.startsAtUtc,
+        endsAtUtc: current.endsAtUtc,
+        timeZone: current.timeZone,
+        assignedTenantUserId: current.assignedTenantUserId,
+        assigneeName: current.assignedTenantUser.user.fullName,
+      } : review);
+    } catch (err) {
+      setDispatchReviewError(localizedApiError(err, t, { fallbackKey: "jobs.loadAppointmentsError" }));
     } finally {
       setUpdatingId(null);
     }
@@ -520,8 +718,10 @@ function JobSchedulePanel({
     setAppointmentStale(false);
     setUpdatingId(appointmentToCancel.id);
     try {
-      await api.jobs.appointments.remove(job.id, appointmentToCancel.id, appointmentToCancel.version);
-      setNotice(t("jobs.bookingCanceled"));
+      const response = await api.jobs.appointments.remove(job.id, appointmentToCancel.id, appointmentToCancel.version);
+      const notificationReceipt = response?.notificationReceipt ?? null;
+      publishNotificationsUpdated(notificationReceipt?.createdCount ?? 0);
+      setNotice(appointmentSuccessNotice(t("jobs.bookingCanceled"), notificationReceipt, t));
       setAppointmentToCancel(null);
       await refreshAfterMutation();
     } catch (err) {
@@ -530,6 +730,44 @@ function JobSchedulePanel({
       setUpdatingId(null);
     }
   };
+
+  const reloadAppointmentForReschedule = useCallback(async (
+    current: JobScheduleAppointment,
+  ): Promise<AppointmentReloadResult> => {
+    try {
+      let reloadOffset = 0;
+      while (reloadOffset < APPOINTMENT_RELOAD_CAP) {
+        const response = await api.jobs.appointments.list(job.id, {
+          limit: APPOINTMENT_RELOAD_PAGE_SIZE,
+          offset: reloadOffset,
+        });
+        const latest = response.items.find((appointment) => appointment.id === current.id);
+        if (latest) {
+          if (latest.status !== "SCHEDULED") return { kind: "notScheduled" };
+          return {
+            kind: "current",
+            appointment: {
+              id: latest.id,
+              jobId: latest.jobId,
+              assignedTenantUserId: latest.assignedTenantUserId,
+              status: latest.status,
+              startsAtUtc: latest.startsAtUtc,
+              endsAtUtc: latest.endsAtUtc,
+              timeZone: latest.timeZone,
+              version: latest.version,
+              assignedTenantUser: latest.assignedTenantUser,
+              job: current.job,
+            },
+          };
+        }
+        reloadOffset += APPOINTMENT_RELOAD_PAGE_SIZE;
+        if (reloadOffset >= response.pagination.total) return { kind: "missing" };
+      }
+      return { kind: "limit" };
+    } catch {
+      return { kind: "network" };
+    }
+  }, [job.id]);
 
   return (
     <section className="rounded-2xl border border-[var(--qf-border)] p-4">
@@ -549,18 +787,31 @@ function JobSchedulePanel({
 
       {notice && <div className="mt-4"><Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert></div>}
       {actionError && (
-        <div ref={staleAlertRef} tabIndex={appointmentStale ? -1 : undefined} className="mt-4">
+        <div ref={staleAlertRef} tabIndex={appointmentStale || kodyReviewRetryAvailable ? -1 : undefined} className="mt-4">
           <Alert tone="error" onDismiss={() => {
             setActionError(null);
             setAppointmentStale(false);
+            if (kodyReviewRetryAvailable) {
+              setKodyReviewRetryAvailable(false);
+              onKodyReviewConsumed();
+            }
           }}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <span>{actionError}</span>
-              {appointmentStale && (
+              {kodyReviewRetryAvailable ? (
+                <Button type="button" variant="outline" className="min-h-11 shrink-0" onClick={() => {
+                  setActionError(null);
+                  setKodyReviewRetryAvailable(false);
+                  processedKodyReviewRef.current = null;
+                  setKodyReviewAttempt((attempt) => attempt + 1);
+                }}>
+                  {t("jobs.retryKodyReview")}
+                </Button>
+              ) : appointmentStale ? (
                 <Button type="button" variant="outline" className="min-h-11 shrink-0" onClick={() => void reloadLatestBooking()}>
                   {t("jobs.reloadLatestBooking")}
                 </Button>
-              )}
+              ) : null}
             </div>
           </Alert>
         </div>
@@ -593,7 +844,7 @@ function JobSchedulePanel({
                 ? actions.filter((status) => status !== "CANCELED")
                 : [];
             return (
-              <article key={appointment.id} className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4">
+              <article key={appointment.id} data-appointment-id={appointment.id} className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -622,7 +873,7 @@ function JobSchedulePanel({
                   </div>
                   {visibleActions.length > 0 && (
                     <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
-                      {canManageJobs && !["COMPLETED", "CANCELED"].includes(appointment.status) && (
+                      {canManageJobs && appointment.status === "SCHEDULED" && (
                         <Button
                           type="button"
                           variant="outline"
@@ -697,24 +948,65 @@ function JobSchedulePanel({
       )}
 
       {canManageJobs && bookingFormOpen && (
-        <form id={bookingFormId} ref={bookingFormRef} className="mt-4 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4" onSubmit={handleCreate}>
+        <form id={bookingFormId} ref={bookingFormRef} data-testid="job-booking-form" className="mt-4 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4" onSubmit={handleCreate}>
+          {kodyBookingOutcome && <Alert tone="info">{t("jobs.kodyBookingReviewNotice")}</Alert>}
           {!job.assignedTenantUserId && <Alert tone="warning">{t("jobs.assignBeforeBooking")}</Alert>}
           {(job.status === "COMPLETED" || job.status === "CANCELED") && <Alert tone="warning">{t("jobs.bookingLocked")}</Alert>}
           <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <Input
-              type="datetime-local"
-              label={t("jobs.startTime")}
-              value={startsAt}
-              onChange={(event) => setStartsAt(event.target.value)}
-              disabled={formDisabled}
-            />
-            <Input
-              type="datetime-local"
-              label={t("jobs.endTime")}
-              value={endsAt}
-              onChange={(event) => setEndsAt(event.target.value)}
-              disabled={formDisabled}
-            />
+            <div className="space-y-2">
+              <Input
+                type="datetime-local"
+                label={t("jobs.startTime")}
+                value={startsAt}
+                onChange={(event) => {
+                  setStartsAt(event.target.value);
+                  setStartChoice(null);
+                }}
+                disabled={formDisabled}
+              />
+              {startResolution.kind === "ambiguous" ? (
+                <Select
+                  label={t("jobs.startTimeOffset")}
+                  value={startChoice === null ? "" : String(startChoice)}
+                  onChange={(event) => setStartChoice(event.target.value === "" ? null : Number(event.target.value))}
+                  disabled={formDisabled}
+                  options={[
+                    { value: "", label: t("jobs.chooseTimeOffset") },
+                    ...startResolution.choices.map((choice, index) => ({ value: String(index), label: `${choice.zoneName} (${choice.offsetLabel})` })),
+                  ]}
+                />
+              ) : null}
+              {(startResolution.kind === "nonexistent" || startResolution.kind === "invalid") && startsAt ? (
+                <p className="text-sm text-[var(--qf-danger)]" role="alert">{t("jobs.nonexistentWallTime")}</p>
+              ) : null}
+            </div>
+            <div className="space-y-2">
+              <Input
+                type="datetime-local"
+                label={t("jobs.endTime")}
+                value={endsAt}
+                onChange={(event) => {
+                  setEndsAt(event.target.value);
+                  setEndChoice(null);
+                }}
+                disabled={formDisabled}
+              />
+              {endResolution.kind === "ambiguous" ? (
+                <Select
+                  label={t("jobs.endTimeOffset")}
+                  value={endChoice === null ? "" : String(endChoice)}
+                  onChange={(event) => setEndChoice(event.target.value === "" ? null : Number(event.target.value))}
+                  disabled={formDisabled}
+                  options={[
+                    { value: "", label: t("jobs.chooseTimeOffset") },
+                    ...endResolution.choices.map((choice, index) => ({ value: String(index), label: `${choice.zoneName} (${choice.offsetLabel})` })),
+                  ]}
+                />
+              ) : null}
+              {(endResolution.kind === "nonexistent" || endResolution.kind === "invalid") && endsAt ? (
+                <p className="text-sm text-[var(--qf-danger)]" role="alert">{t("jobs.nonexistentWallTime")}</p>
+              ) : null}
+            </div>
             <div className="md:col-span-2">
               <Textarea
                 label={t("jobs.bookingInstructions")}
@@ -727,26 +1019,8 @@ function JobSchedulePanel({
             </div>
           </div>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
-            {editingAppointment && (
-              <Button
-                type="button"
-                variant="outline"
-                className="min-h-11"
-                disabled={saving}
-                onClick={() => {
-                  setEditingAppointment(null);
-                  setAppointmentStale(false);
-                  setActionError(null);
-                  setBookingFormOpen(false);
-                }}
-              >
-                {t("jobs.cancelEditBooking")}
-              </Button>
-            )}
             <Button type="submit" loading={saving} disabled={formDisabled}>
-              {saving
-                ? editingAppointment ? t("jobs.updatingBooking") : t("jobs.creatingBooking")
-                : editingAppointment ? t("jobs.updateBooking") : t("jobs.createBooking")}
+              {saving ? t("jobs.creatingBooking") : t("jobs.createBooking")}
             </Button>
           </div>
         </form>
@@ -761,6 +1035,86 @@ function JobSchedulePanel({
         confirmLabel={t("jobs.cancelBookingConfirm")}
         confirmVariant="warning"
         loading={Boolean(appointmentToCancel && updatingId === appointmentToCancel.id)}
+      />
+      <ConfirmModal
+        open={Boolean(appointmentToDispatch)}
+        onClose={() => {
+          setAppointmentToDispatch(null);
+          setKodyDispatchOutcome(null);
+          setDispatchReviewError(null);
+        }}
+        onConfirm={() => {
+          if (appointmentToDispatch) void updateAppointmentStatus(appointmentToDispatch, "DISPATCHED", true);
+        }}
+        title={t("jobs.kodyDispatchTitle", { customer: job.customer.fullName })}
+        description={t("jobs.kodyDispatchDescription")}
+        confirmLabel={t("jobs.kodyDispatchConfirm")}
+        confirmVariant="primary"
+        loading={Boolean(appointmentToDispatch && updatingId === appointmentToDispatch.id)}
+      >
+        {appointmentToDispatch && (
+          <div className="space-y-3">
+          {dispatchReviewError && (
+            <Alert tone="error">
+              <div className="flex flex-col gap-3">
+                <span>{dispatchReviewError}</span>
+                <Button type="button" variant="outline" className="min-h-11 self-start" onClick={() => void reloadKodyDispatchReview()} disabled={Boolean(updatingId)}>
+                  {t("jobs.reloadLatestBooking")}
+                </Button>
+              </div>
+            </Alert>
+          )}
+          <dl data-testid="kody-dispatch-review" className="space-y-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3 text-sm">
+            <div>
+              <dt className="font-medium text-[var(--qf-text)]">{t("jobs.scheduledWindowLabel")}</dt>
+              <dd className="mt-1 text-[var(--qf-text-soft)]">{t("jobs.scheduledWindow", {
+                start: formatDateTime(appointmentToDispatch.startsAtUtc, i18n.resolvedLanguage, timeZone),
+                end: formatDateTime(appointmentToDispatch.endsAtUtc, i18n.resolvedLanguage, timeZone),
+              })}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[var(--qf-text)]">{t("jobs.assignee")}</dt>
+              <dd className="mt-1 text-[var(--qf-text-soft)]">{appointmentToDispatch.assignedTenantUser.user.fullName}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[var(--qf-text)]">{t("jobs.serviceAddress")}</dt>
+              <dd className="mt-1 text-[var(--qf-text-soft)]">{job.serviceAddressSnapshot || t("jobs.noAddress")}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[var(--qf-text)]">{t("jobs.bookingInstructions")}</dt>
+              <dd className="mt-1 whitespace-pre-wrap text-[var(--qf-text-soft)]">{appointmentToDispatch.instructions || t("jobs.noBookingInstructions")}</dd>
+            </div>
+          </dl>
+          </div>
+        )}
+      </ConfirmModal>
+      <RescheduleModal
+        appointment={appointmentToReschedule}
+        timeZone={timeZone}
+        editInstructions
+        initialInstructions={rescheduleInitialInstructions}
+        onClose={closeReschedule}
+        onSaved={async ({ startsAtUtc, changed, notificationReceipt }) => {
+          setNotice(appointmentSuccessNotice(
+            changed
+              ? (kodyRescheduleOutcome ? t("jobs.kodyBookingUpdated") : t("jobs.bookingUpdated"))
+              : t("jobs.rescheduleNoChanges"),
+            notificationReceipt,
+            t,
+          ));
+          if (kodyRescheduleOutcome && changed) {
+            publishKodyOutcome({
+              type: "BOOKING_RESCHEDULED",
+              jobNumber: job.jobNumber,
+              customerName: job.customer.fullName,
+              startsAtUtc,
+              inAppNotificationCreated: (notificationReceipt?.createdCount ?? 0) > 0,
+            });
+          }
+          if (kodyRescheduleOutcome) setKodyRescheduleOutcome(null);
+          if (changed) await refreshAfterMutation();
+        }}
+        onReloadVersion={reloadAppointmentForReschedule}
       />
     </section>
   );
@@ -962,6 +1316,10 @@ function JobDetail({
   editStale,
   onSave,
   onReloadLatest,
+  kodyBookingReview,
+  kodyDispatchReview,
+  kodyFocusReturnId,
+  onKodyReviewConsumed,
 }: {
   job: Job;
   canManageJobs: boolean;
@@ -972,6 +1330,10 @@ function JobDetail({
   editStale: boolean;
   onSave: (payload: { assignedTenantUserId: string | null; accessInstructions: string | null }) => Promise<void>;
   onReloadLatest: () => void | Promise<void>;
+  kodyBookingReview: KodyBookingReviewDetail | null;
+  kodyDispatchReview: KodyDispatchReviewDetail | null;
+  kodyFocusReturnId: "kody-launcher" | null;
+  onKodyReviewConsumed: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -1031,14 +1393,6 @@ function JobDetail({
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{job.title}</p>
         </div>
         <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
-          <KodyButton
-            showLabel
-            tool="PRIORITIZE_MY_DAY"
-            prompt={t("kody.quick.prioritizeDay.prompt")}
-            context={{ currentPage: "dashboard" }}
-            label={t("kody.quick.prioritizeDay.label")}
-            className="min-h-11"
-          />
           <Button className="min-h-11" onClick={() => navigate(`/app/quotes/${job.sourceQuoteId}`)}>
             <ExternalLink size={16} />
             {t("jobs.openQuote")}
@@ -1047,7 +1401,15 @@ function JobDetail({
       </div>
 
       <div className="mt-6">
-        <JobSchedulePanel job={job} canManageJobs={canManageJobs} onReloadLatest={onReloadLatest} />
+        <JobSchedulePanel
+          job={job}
+          canManageJobs={canManageJobs}
+          onReloadLatest={onReloadLatest}
+          kodyBookingReview={kodyBookingReview}
+          kodyDispatchReview={kodyDispatchReview}
+          kodyFocusReturnId={kodyFocusReturnId}
+          onKodyReviewConsumed={onKodyReviewConsumed}
+        />
       </div>
 
       <div className="mt-6 grid gap-3 md:grid-cols-3">
@@ -1172,9 +1534,29 @@ function JobDetail({
 export function JobsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const { jobId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { session } = useDashboard();
   const canManageJobs = session?.role === "owner" || session?.role === "admin";
+  const workspaceTimeZone = validTimeZone(session?.timezone ?? "UTC");
+  const tenantToday = toTenantDateTimeInput(new Date(), workspaceTimeZone).slice(0, 10);
+  const workspaceView = searchParams.get("view") === "schedule" ? "schedule" : "jobs";
+  const requestedScheduleRange = searchParams.get("range");
+  const scheduleRange: ScheduleRange = requestedScheduleRange === "day"
+    ? "day"
+    : requestedScheduleRange === "next7"
+      ? "next7"
+      : "week";
+  const selectedScheduleDate = validCalendarDate(searchParams.get("date")) ? searchParams.get("date")! : tenantToday;
+  const requestedAssignee = searchParams.get("assignee");
+  const scheduleAssignee: ScheduleAssignee = canManageJobs
+    ? requestedAssignee && requestedAssignee !== "" ? requestedAssignee : "all"
+    : "me";
+  const kodyReview = useMemo(() => kodyReviewState(location.state, jobId), [jobId, location.state]);
+  const consumeKodyReview = useCallback(() => {
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, navigate]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [status, setStatus] = useState<JobStatus | "active">("active");
@@ -1191,6 +1573,24 @@ export function JobsPage() {
   const [editStale, setEditStale] = useState(false);
   const [assignees, setAssignees] = useState<JobAssigneeOption[]>([]);
   const [assigneesLoading, setAssigneesLoading] = useState(false);
+  const listRequestGenerationRef = useRef(0);
+  const detailRequestGenerationRef = useRef(0);
+
+  useEffect(() => {
+    if (jobId) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("view", workspaceView);
+    next.set("range", scheduleRange);
+    next.set("date", selectedScheduleDate);
+    next.set("assignee", scheduleAssignee);
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
+  }, [jobId, scheduleAssignee, scheduleRange, searchParams, selectedScheduleDate, setSearchParams, workspaceView]);
+
+  const updateWorkspaceSearch = useCallback((updates: Record<string, string>) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => next.set(key, value));
+    setSearchParams(next);
+  }, [searchParams, setSearchParams]);
 
   const query = useMemo(() => ({
     status: status === "active" ? undefined : status,
@@ -1200,42 +1600,51 @@ export function JobsPage() {
   }), [limit, offset, search, status]);
 
   const loadJobs = useCallback(async () => {
+    const generation = listRequestGenerationRef.current + 1;
+    listRequestGenerationRef.current = generation;
     setListLoading(true);
     setListError(null);
     try {
       const response = await api.jobs.list(query);
+      if (generation !== listRequestGenerationRef.current) return;
       setJobs(response.items);
       setTotal(response.pagination.total);
     } catch (err) {
+      if (generation !== listRequestGenerationRef.current) return;
       setListError(localizedApiError(err, t, { fallbackKey: "jobs.loadError" }));
     } finally {
-      setListLoading(false);
+      if (generation === listRequestGenerationRef.current) setListLoading(false);
     }
   }, [query, t]);
 
   useEffect(() => {
-    if (jobId) return;
+    if (jobId || workspaceView !== "jobs") return;
     void loadJobs();
-  }, [jobId, loadJobs]);
+  }, [jobId, loadJobs, workspaceView]);
 
   const loadJob = useCallback(async (id: string) => {
+    const generation = detailRequestGenerationRef.current + 1;
+    detailRequestGenerationRef.current = generation;
     setDetailLoading(true);
     setDetailError(null);
     setEditError(null);
     setEditStale(false);
     try {
       const response = await api.jobs.get(id);
+      if (generation !== detailRequestGenerationRef.current) return;
       setSelectedJob(response.job);
     } catch (err) {
+      if (generation !== detailRequestGenerationRef.current) return;
       setSelectedJob(null);
       setDetailError(localizedApiError(err, t, { fallbackKey: "jobs.loadDetailError" }));
     } finally {
-      setDetailLoading(false);
+      if (generation === detailRequestGenerationRef.current) setDetailLoading(false);
     }
   }, [t]);
 
   useEffect(() => {
     if (!jobId) {
+      detailRequestGenerationRef.current += 1;
       setSelectedJob(null);
       return;
     }
@@ -1326,13 +1735,47 @@ export function JobsPage() {
         editStale={editStale}
         onSave={handleSaveJob}
         onReloadLatest={() => loadJob(selectedJob.id)}
+        kodyBookingReview={kodyReview.booking}
+        kodyDispatchReview={kodyReview.dispatch}
+        kodyFocusReturnId={kodyReview.focusReturnId}
+        onKodyReviewConsumed={consumeKodyReview}
       />
     );
   }
 
   return (
-    <div className="space-y-5">
-      <JobScheduleOverview />
+    <div className="min-w-0 max-w-full space-y-5 overflow-x-hidden">
+      <section className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 shadow-[var(--qf-shadow-sm)] sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("jobs.workspace")}</p>
+            <h1 className="mt-1 font-display text-2xl font-semibold tracking-[-0.03em] text-[var(--qf-text)]">{t("jobs.title")}</h1>
+          </div>
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label={t("jobs.workspaceViewLabel")}>
+            <Button type="button" variant={workspaceView === "schedule" ? "primary" : "outline"} className="min-h-11" aria-pressed={workspaceView === "schedule"} onClick={() => updateWorkspaceSearch({ view: "schedule" })}>
+              <CalendarClock size={17} aria-hidden="true" />
+              {t("jobs.scheduleView")}
+            </Button>
+            <Button type="button" variant={workspaceView === "jobs" ? "primary" : "outline"} className="min-h-11" aria-pressed={workspaceView === "jobs"} onClick={() => updateWorkspaceSearch({ view: "jobs" })}>
+              <BriefcaseBusiness size={17} aria-hidden="true" />
+              {t("jobs.jobsView")}
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {workspaceView === "schedule" ? (
+        <JobScheduleWorkspace
+          range={scheduleRange}
+          selectedDate={selectedScheduleDate}
+          assignee={scheduleAssignee}
+          canManageJobs={canManageJobs}
+          onRangeChange={(range) => updateWorkspaceSearch({ range })}
+          onDateChange={(date) => updateWorkspaceSearch({ date })}
+          onAssigneeChange={(assignee) => updateWorkspaceSearch({ assignee })}
+        />
+      ) : (
+        <>
 
       <section className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-sm)]">
         <div className="border-b border-[var(--qf-border)] p-4 sm:p-5">
@@ -1411,6 +1854,8 @@ export function JobsPage() {
         }}
         onOffsetChange={setOffset}
       />
+        </>
+      )}
     </div>
   );
 }

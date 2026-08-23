@@ -5,7 +5,7 @@ import type { TenantEntitlements, TenantUsageSnapshot } from "../../lib/api";
 import { SUPPORT_MAILTO } from "../../lib/contact";
 import { CloseIcon } from "../Icons";
 import { cn } from "../../lib/utils";
-import { aiUsageProgressTone, formatAiRenewalDate } from "../../lib/ai-credits";
+import { aiUsageProgressTone, formatAiUsageBreakdown } from "../../lib/ai-credits";
 import { AppTooltip, AppTooltipProvider } from "../ui/tooltip";
 import { ProgressBar } from "../ui";
 import {
@@ -63,7 +63,6 @@ export function CrmSidebar({
   onRequestFeature,
   planName,
   isTrial,
-  entitlements,
   usage,
 }: CrmSidebarProps) {
   const { t } = useTranslation();
@@ -75,18 +74,7 @@ export function CrmSidebar({
   const showTrialBadge = Boolean(isTrial);
 
   const sidebarWidthClass = collapsed ? "lg:w-[74px]" : "lg:w-[228px]";
-  const aiSpendLimitUsd = entitlements?.limits.aiSpendUsdPerMonth ?? null;
-  const aiSpendUsedUsd = usage?.monthlyAiSpendUsd ?? 0;
-  const aiUsagePercent =
-    usage?.monthlyAiSpendUsagePercent ??
-    (aiSpendLimitUsd && aiSpendLimitUsd > 0
-      ? Math.min((aiSpendUsedUsd / aiSpendLimitUsd) * 100, 100)
-      : 0);
-  const usagePercentLabel = useMemo(
-    () => t("navigation.percentUsed", { percent: Math.round(aiUsagePercent) }),
-    [aiUsagePercent, t],
-  );
-  const aiRenewalLabel = formatAiRenewalDate(usage?.periodEndUtc ?? null);
+  const aiUsage = useMemo(() => formatAiUsageBreakdown(usage ?? {}, undefined), [usage]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 1024px)");
@@ -302,31 +290,40 @@ export function CrmSidebar({
         </div>
 
         <div className={cn("mt-6 space-y-3 transition-[padding] duration-300", collapsed ? "px-2.5" : "px-3")}>
-          {aiSpendLimitUsd !== null && usage ? (
-            <div aria-hidden={collapsed} className="qf-sidebar-detail rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-3">
-              <div className="flex items-center justify-between gap-2">
+          {usage ? (
+            <div
+              aria-hidden={collapsed}
+              role={aiUsage.billingCycleReconciliationPending ? "status" : undefined}
+              className={cn(
+                "qf-sidebar-detail rounded-lg border px-3 py-3",
+                aiUsage.billingCycleReconciliationPending
+                  ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)]"
+                  : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]",
+              )}
+            >
+              <div className={cn(
+                "flex gap-2",
+                aiUsage.billingCycleReconciliationPending
+                  ? "flex-col items-start"
+                  : "items-center justify-between",
+              )}>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">
                   {showTrialBadge ? t("navigation.fullTrialAccess") : displayPlanName}
                 </p>
                 <span className="text-xs font-semibold text-[var(--qf-text)]">
-                  {usagePercentLabel}
+                  {aiUsage.headline}
                 </span>
               </div>
-              <ProgressBar
-                value={aiUsagePercent}
-                label={t("navigation.monthlyAiUsage")}
-                tone={aiUsageProgressTone(aiUsagePercent)}
-                hint={
-                  aiUsagePercent >= 100
-                    ? aiRenewalLabel
-                      ? `${t("navigation.usageLimitReached")} · ${t("navigation.renews", { date: aiRenewalLabel })}`
-                      : t("navigation.limitReached")
-                    : aiRenewalLabel
-                      ? t("navigation.renews", { date: aiRenewalLabel })
-                      : undefined
-                }
-                className="mt-3"
-              />
+              {!aiUsage.billingCycleReconciliationPending ? (
+                <ProgressBar
+                  value={aiUsage.effectivePercent}
+                  label={t("navigation.monthlyAiUsage")}
+                  tone={aiUsageProgressTone(aiUsage.effectivePercent)}
+                  valueText={aiUsage.valueText}
+                  className="mt-3"
+                />
+              ) : null}
+              <p className="mt-2 text-xs leading-5 text-[var(--qf-text-muted)]">{aiUsage.detail}</p>
             </div>
           ) : null}
 

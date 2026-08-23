@@ -17,10 +17,26 @@ export const BASIC_ESTIMATED_AI_REQUESTS_PER_MONTH = 770;
 export interface TenantBillingSnapshot {
   subscriptionStatus: string;
   subscriptionPlanCode: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
   trialStartsAtUtc: Date | null;
   trialEndsAtUtc: Date | null;
+  subscriptionCurrentPeriodStartUtc?: Date | null;
   subscriptionCurrentPeriodEndUtc: Date | null;
 }
+
+export type TenantUsagePeriodSource =
+  | "PAID_SUBSCRIPTION"
+  | "ACTIVE_TRIAL"
+  | "UTC_CALENDAR_SUPERUSER"
+  | "UTC_CALENDAR_LEGACY"
+  | "UTC_CALENDAR";
+
+export type TenantUsagePeriod = {
+  periodStartUtc: Date;
+  periodEndUtc: Date;
+  source: TenantUsagePeriodSource;
+};
 
 interface EntitlementContext {
   userEmail?: string | null;
@@ -116,23 +132,34 @@ const PAID_ACCESS_STATUSES = new Set(["active"]);
 export function resolveSubscriptionItemBilling(
   subscription: Stripe.Subscription,
   pricePlans: ReadonlyMap<string, PlanCode>,
-): { planCode: PlanCode | null; currentPeriodEndUtc: Date | null } {
+): {
+  planCode: PlanCode | null;
+  currentPeriodStartUtc: Date | null;
+  currentPeriodEndUtc: Date | null;
+} {
   const matchingItems = subscription.items.data.filter((item) => pricePlans.has(item.price.id));
   if (matchingItems.length !== 1) {
-    return { planCode: null, currentPeriodEndUtc: null };
+    return { planCode: null, currentPeriodStartUtc: null, currentPeriodEndUtc: null };
   }
 
   const item = matchingItems[0];
   const planCode = pricePlans.get(item.price.id) ?? null;
+  const periodStart = item.current_period_start;
   const periodEnd = item.current_period_end;
+  const hasValidBounds =
+    planCode
+    && Number.isFinite(periodStart)
+    && periodStart > 0
+    && Number.isFinite(periodEnd)
+    && periodEnd > periodStart;
   return {
     planCode,
-    currentPeriodEndUtc:
-      planCode && Number.isFinite(periodEnd) && periodEnd > 0 ? new Date(periodEnd * 1000) : null,
+    currentPeriodStartUtc: hasValidBounds ? new Date(periodStart * 1000) : null,
+    currentPeriodEndUtc: hasValidBounds ? new Date(periodEnd * 1000) : null,
   };
 }
 
-export function resolveReconciledSubscriptionPeriod(input: {
+export function resolveReconciledSubscriptionBillingPeriod(input: {
   subscription: Stripe.Subscription;
   expectedTenantId: string;
   expectedCustomerId: string | null;
@@ -140,7 +167,7 @@ export function resolveReconciledSubscriptionPeriod(input: {
   expectedPlanCode: string;
   pricePlans: ReadonlyMap<string, PlanCode>;
   now?: Date;
-}): Date | null {
+}): { currentPeriodStartUtc: Date; currentPeriodEndUtc: Date } | null {
   const {
     subscription,
     expectedTenantId,
@@ -156,19 +183,72 @@ export function resolveReconciledSubscriptionPeriod(input: {
   const billing = resolveSubscriptionItemBilling(subscription, pricePlans);
 
   if (
-    subscription.id !== expectedSubscriptionId ||
-    !expectedCustomerId ||
-    subscriptionCustomerId !== expectedCustomerId ||
-    (metadataTenantId !== undefined && metadataTenantId !== expectedTenantId) ||
-    (subscription.status !== "active" && subscription.status !== "trialing") ||
-    billing.planCode !== expectedPlanCode ||
-    !billing.currentPeriodEndUtc ||
-    billing.currentPeriodEndUtc.getTime() <= now.getTime()
+    subscription.id !== expectedSubscriptionId
+    || !expectedCustomerId
+    || subscriptionCustomerId !== expectedCustomerId
+    || (metadataTenantId !== undefined && metadataTenantId !== expectedTenantId)
+    || (subscription.status !== "active" && subscription.status !== "trialing")
+    || billing.planCode !== expectedPlanCode
+    || !billing.currentPeriodStartUtc
+    || !billing.currentPeriodEndUtc
+    || billing.currentPeriodStartUtc.getTime() > now.getTime()
+    || billing.currentPeriodEndUtc.getTime() <= now.getTime()
   ) {
     return null;
   }
 
-  return billing.currentPeriodEndUtc;
+  return {
+    currentPeriodStartUtc: billing.currentPeriodStartUtc,
+    currentPeriodEndUtc: billing.currentPeriodEndUtc,
+  };
+}
+
+export function resolveReconciledSubscriptionPeriod(input: {
+  subscription: Stripe.Subscription;
+  expectedTenantId: string;
+  expectedCustomerId: string | null;
+  expectedSubscriptionId: string;
+  expectedPlanCode: string;
+  pricePlans: ReadonlyMap<string, PlanCode>;
+  now?: Date;
+}): Date | null {
+  return resolveReconciledSubscriptionBillingPeriod(input)?.currentPeriodEndUtc ?? null;
+}
+
+export function resolveReconciledSubscriptionUsagePeriod(input: {
+  subscription: Stripe.Subscription;
+  expectedTenantId: string;
+  expectedCustomerId: string | null;
+  expectedSubscriptionId: string;
+  expectedPlanCode: string;
+  pricePlans: ReadonlyMap<string, PlanCode>;
+  now?: Date;
+}): { currentPeriodStartUtc: Date; currentPeriodEndUtc: Date } | null {
+  const now = input.now ?? new Date();
+  const billingPeriod = resolveReconciledSubscriptionBillingPeriod({ ...input, now });
+  if (!billingPeriod) return null;
+  if (input.subscription.status !== "trialing") return billingPeriod;
+
+  const trialStart = input.subscription.trial_start;
+  const trialEnd = input.subscription.trial_end;
+  if (
+    !Number.isFinite(trialStart)
+    || !trialStart
+    || !Number.isFinite(trialEnd)
+    || !trialEnd
+    || trialEnd <= trialStart
+  ) {
+    return null;
+  }
+  const currentPeriodStartUtc = new Date(trialStart * 1000);
+  const currentPeriodEndUtc = new Date(trialEnd * 1000);
+  if (
+    currentPeriodStartUtc.getTime() > now.getTime()
+    || currentPeriodEndUtc.getTime() <= now.getTime()
+  ) {
+    return null;
+  }
+  return { currentPeriodStartUtc, currentPeriodEndUtc };
 }
 
 function parsePlanCode(value: string | null | undefined): PlanCode | null {
@@ -180,7 +260,16 @@ function parsePlanCode(value: string | null | undefined): PlanCode | null {
 function isActiveTrial(snapshot: TenantBillingSnapshot, now: Date): boolean {
   if (snapshot.subscriptionStatus !== "trialing") return false;
   if (!snapshot.trialEndsAtUtc) return false;
-  return snapshot.trialEndsAtUtc.getTime() > now.getTime();
+  if (snapshot.trialEndsAtUtc.getTime() <= now.getTime()) return false;
+  // Checkout may create a Stripe Customer before a subscription exists. That
+  // customer-only state remains QuoteFly's local trial; subscription binding is
+  // the boundary where provider plan integrity becomes mandatory.
+  if (!snapshot.stripeSubscriptionId) return true;
+  return Boolean(
+    snapshot.stripeCustomerId
+    && snapshot.stripeSubscriptionId
+    && parsePlanCode(snapshot.subscriptionPlanCode),
+  );
 }
 
 function isSuperuser(context?: EntitlementContext): boolean {
@@ -195,6 +284,7 @@ function hasActivePaidSubscription(snapshot: TenantBillingSnapshot, now: Date): 
   const explicitPlan = parsePlanCode(snapshot.subscriptionPlanCode);
   if (!explicitPlan) return false;
   if (!PAID_ACCESS_STATUSES.has(normalizeSubscriptionStatus(snapshot.subscriptionStatus))) return false;
+  if (!snapshot.stripeCustomerId || !snapshot.stripeSubscriptionId) return false;
   // Stripe's Dahlia API reports the billing period on the subscription item.
   // A missing synchronized period is incomplete billing evidence, so access must
   // fail closed until a later webhook repairs the snapshot.
@@ -268,6 +358,7 @@ export interface TenantEntitlements {
   hasWorkspaceAccess: boolean;
   billingRequired: boolean;
   accessReason: TenantAccessReason;
+  usagePeriod: TenantUsagePeriod;
   limits: PlanDefinition["limits"];
   features: PlanDefinition["features"];
 }
@@ -296,6 +387,37 @@ export function buildTenantEntitlements(
     : access.accessReason === "superuser"
       ? { ...definition.limits, teamMembers: seatDefinition.limits.teamMembers }
       : definition.limits;
+  const calendarPeriod = {
+    periodStartUtc: startOfCurrentUtcMonth(now),
+    periodEndUtc: startOfNextUtcMonth(now),
+  };
+  const paidStart = snapshot.subscriptionCurrentPeriodStartUtc ?? null;
+  const paidEnd = snapshot.subscriptionCurrentPeriodEndUtc;
+  const usagePeriod: TenantUsagePeriod = access.accessReason === "superuser"
+    ? { ...calendarPeriod, source: "UTC_CALENDAR_SUPERUSER" }
+    : access.accessReason === "trial"
+      && snapshot.trialStartsAtUtc
+      && snapshot.trialEndsAtUtc
+      && snapshot.trialStartsAtUtc.getTime() <= now.getTime()
+      && snapshot.trialEndsAtUtc.getTime() > now.getTime()
+      ? {
+          periodStartUtc: snapshot.trialStartsAtUtc,
+          periodEndUtc: snapshot.trialEndsAtUtc,
+          source: "ACTIVE_TRIAL",
+        }
+      : access.accessReason === "paid"
+        && paidStart
+        && paidEnd
+        && paidStart.getTime() <= now.getTime()
+        && paidEnd.getTime() > now.getTime()
+        ? {
+            periodStartUtc: paidStart,
+            periodEndUtc: paidEnd,
+            source: "PAID_SUBSCRIPTION",
+          }
+        : access.accessReason === "paid" || access.accessReason === "trial"
+          ? { ...calendarPeriod, source: "UTC_CALENDAR_LEGACY" }
+          : { ...calendarPeriod, source: "UTC_CALENDAR" };
 
   return {
     planCode: access.planCode,
@@ -306,6 +428,7 @@ export function buildTenantEntitlements(
     hasWorkspaceAccess: access.hasWorkspaceAccess,
     billingRequired: access.billingRequired,
     accessReason: access.accessReason,
+    usagePeriod,
     limits,
     features: definition.features,
   };
@@ -320,8 +443,11 @@ export async function loadTenantBillingSnapshot(
     select: {
       subscriptionStatus: true,
       subscriptionPlanCode: true,
+      stripeCustomerId: true,
+      stripeSubscriptionId: true,
       trialStartsAtUtc: true,
       trialEndsAtUtc: true,
+      subscriptionCurrentPeriodStartUtc: true,
       subscriptionCurrentPeriodEndUtc: true,
     },
   });

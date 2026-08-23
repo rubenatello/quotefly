@@ -1,5 +1,6 @@
-import OpenAI from "openai";
 import { env } from "../config/env";
+import { createOpenAiChatCompletion } from "./ai-provider-gateway";
+import { AiUsageLedgerError } from "./ai-usage-ledger";
 import type { ParsedChatToQuoteDraft } from "./chat-to-quote";
 import { deriveSquareFeetEstimateRange, parseChatToQuotePrompt } from "./chat-to-quote";
 
@@ -19,14 +20,6 @@ const AREA_SECONDARY_CUE_PATTERN =
   /\b(allowance|uneven|level|leveling|patch|repair|optional|alternate|option|upgrade|contingency|if needed)\b/i;
 const AREA_OPTION_PATTERN = /\b(option|alternate|alternative|either|vs\.?|versus)\b/i;
 const AREA_CLAUSE_BOUNDARY_PATTERN = /[.;:\n]/;
-
-let openaiClient: OpenAI | undefined;
-function getOpenAI(): OpenAI {
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  }
-  return openaiClient;
-}
 
 export function getAiQuoteRuntimeInfo() {
   return {
@@ -202,13 +195,12 @@ export async function aiParseChatToQuotePrompt(
   }
 
   try {
-    const client = getOpenAI();
     const deterministicFallback = parseChatToQuotePrompt(rawPrompt);
     const compactContext = compactAiContext(options?.context);
     const userMessage = compactContext
       ? `Context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
-    const completion = await client.chat.completions.create({
+    const completion = await createOpenAiChatCompletion({
       model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 800,
@@ -272,6 +264,7 @@ export async function aiParseChatToQuotePrompt(
       lineItems: resolvedLineItems,
     };
   } catch (err) {
+    if (err instanceof AiUsageLedgerError) throw err;
     if (options?.strictAi) {
       throw err;
     }
@@ -292,12 +285,11 @@ export async function aiBuildQuoteRevisionPlan(
   }
 
   try {
-    const client = getOpenAI();
     const compactContext = compactAiContext(options?.context);
     const userMessage = compactContext
       ? `Revision context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
-    const completion = await client.chat.completions.create({
+    const completion = await createOpenAiChatCompletion({
       model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 1200,
@@ -330,6 +322,7 @@ export async function aiBuildQuoteRevisionPlan(
       lineOperations: normalizeRevisionLineOperations(parsed.lineOperations),
     };
   } catch (err) {
+    if (err instanceof AiUsageLedgerError) throw err;
     console.error("[ai-quote] AI revision planning failed:", err);
     return emptyRevisionPlan();
   }

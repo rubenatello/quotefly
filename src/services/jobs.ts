@@ -3,6 +3,7 @@ import { JobAppointmentStatus, JobStatus, Prisma, type ServiceCategory } from "@
 import type { AccessContext } from "../lib/access-policy";
 import { hasCapability } from "../lib/access-policy";
 import { setTenantRlsContext } from "../lib/tenant-rls";
+import { enqueueAppointmentNotifications } from "./notification-outbox";
 
 export type JobTransaction = Prisma.TransactionClient;
 
@@ -117,7 +118,26 @@ export const JobAppointmentPublicSelect = {
 export type JobAppointmentPublic = Prisma.JobAppointmentGetPayload<{ select: typeof JobAppointmentPublicSelect }>;
 
 export const JobScheduleAppointmentPublicSelect = {
-  ...JobAppointmentPublicSelect,
+  id: true,
+  jobId: true,
+  assignedTenantUserId: true,
+  status: true,
+  startsAtUtc: true,
+  endsAtUtc: true,
+  timeZone: true,
+  version: true,
+  assignedTenantUser: {
+    select: {
+      id: true,
+      role: true,
+      user: {
+        select: {
+          id: true,
+          fullName: true,
+        },
+      },
+    },
+  },
   job: {
     select: {
       id: true,
@@ -171,13 +191,6 @@ const ACTIVE_APPOINTMENT_STATUSES: JobAppointmentStatus[] = ["SCHEDULED", "DISPA
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function mapQuoteJobStatus(status: string): JobStatus {
-  if (status === "SCHEDULED") return "SCHEDULED";
-  if (status === "IN_PROGRESS") return "IN_PROGRESS";
-  if (status === "COMPLETED") return "COMPLETED";
-  return "UNSCHEDULED";
 }
 
 function memberJobScope(access: AccessContext): Prisma.JobWhereInput {
@@ -380,11 +393,9 @@ export async function ensureJobForAcceptedQuote(
     assignedTenantUserId: string | null;
     serviceType: ServiceCategory;
     status: string;
-    jobStatus: string;
     title: string;
     scopeText: string;
     closedAtUtc: Date | null;
-    jobCompletedAtUtc: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }>>(Prisma.sql`
@@ -395,11 +406,9 @@ export async function ensureJobForAcceptedQuote(
       quote."assignedTenantUserId",
       quote."serviceType",
       quote."status",
-      quote."jobStatus",
       quote."title",
       quote."scopeText",
       quote."closedAtUtc",
-      quote."jobCompletedAtUtc",
       quote."createdAt",
       quote."updatedAt"
     FROM "Quote" quote
@@ -441,7 +450,6 @@ export async function ensureJobForAcceptedQuote(
   });
 
   const jobNumber = await nextJobNumber(transaction, access.tenantId);
-  const status = mapQuoteJobStatus(quote.jobStatus);
   const acceptedAtUtc = quote.closedAtUtc ?? quote.updatedAt ?? quote.createdAt;
   const job = await transaction.job.create({
     data: {
@@ -450,12 +458,11 @@ export async function ensureJobForAcceptedQuote(
       sourceQuoteId: quote.id,
       assignedTenantUserId: quote.assignedTenantUserId,
       jobNumber,
-      status,
+      status: "UNSCHEDULED",
       title: quote.title,
       scopeSnapshot: quote.scopeText,
       serviceType: quote.serviceType,
       acceptedAtUtc,
-      completedAtUtc: status === "COMPLETED" ? quote.jobCompletedAtUtc ?? acceptedAtUtc : null,
     },
     select: JobPublicSelect,
   });
@@ -473,7 +480,7 @@ export async function ensureJobForAcceptedQuote(
         sourceQuoteId: quote.id,
         customerId: quote.customerId,
         jobNumber,
-        status,
+        status: "UNSCHEDULED",
       })),
     },
   });
@@ -807,6 +814,7 @@ async function syncJobScheduleState(
     where: { id: params.jobId, tenantId: params.tenantId, deletedAtUtc: null, archivedAtUtc: null },
     select: {
       id: true,
+      sourceQuoteId: true,
       status: true,
       scheduledAtUtc: true,
       dispatchedAtUtc: true,
@@ -875,6 +883,24 @@ async function syncJobScheduleState(
       version: { increment: 1 },
     },
   });
+
+  if (nextStatus === "COMPLETED" && nextCompletedAtUtc) {
+    await transaction.quote.updateMany({
+      where: {
+        id: job.sourceQuoteId,
+        tenantId: params.tenantId,
+        status: "ACCEPTED",
+        afterSaleFollowUpStatus: "NOT_READY",
+        archivedAtUtc: null,
+        deletedAtUtc: null,
+      },
+      data: {
+        afterSaleFollowUpStatus: "DUE",
+        afterSaleFollowUpDueAtUtc: new Date(nextCompletedAtUtc.getTime() + 7 * 24 * 60 * 60 * 1000),
+        afterSaleFollowUpCompletedAtUtc: null,
+      },
+    });
+  }
 
   await transaction.jobEvent.create({
     data: {
@@ -1016,7 +1042,7 @@ export async function createJobAppointment(
     select: JobAppointmentPublicSelect,
   });
 
-  await transaction.jobEvent.create({
+  const sourceEvent = await transaction.jobEvent.create({
     data: {
       tenantId: access.tenantId,
       jobId: job.id,
@@ -1033,6 +1059,14 @@ export async function createJobAppointment(
         endsAtUtc: params.endsAtUtc.toISOString(),
       })),
     },
+    select: { id: true },
+  });
+  const notificationCount = await enqueueAppointmentNotifications(transaction, {
+    tenantId: access.tenantId,
+    actorTenantUserId: access.tenantUserId,
+    sourceJobEventId: sourceEvent.id,
+    kind: "BOOKED",
+    appointment,
   });
   await syncJobScheduleState(transaction, {
     tenantId: access.tenantId,
@@ -1041,7 +1075,10 @@ export async function createJobAppointment(
     requestId: `${params.requestId}:schedule-state`,
   });
 
-  return appointment;
+  return {
+    appointment,
+    notificationReceipt: { kind: "BOOKED" as const, createdCount: notificationCount },
+  };
 }
 
 export async function updateJobAppointment(
@@ -1061,6 +1098,27 @@ export async function updateJobAppointment(
   },
 ) {
   const manager = hasCapability(access, "manageAssignments");
+  const hasAssignmentUpdate = params.assignedTenantUserId !== undefined;
+  const hasStartsAtUtcUpdate = params.startsAtUtc !== undefined;
+  const hasEndsAtUtcUpdate = params.endsAtUtc !== undefined;
+  const hasTimeZoneUpdate = params.timeZone !== undefined;
+  const hasInstructionsUpdate = params.instructions !== undefined;
+  const hasStatusUpdate = params.status !== undefined;
+  const scheduleFieldCount = Number(hasStartsAtUtcUpdate) + Number(hasEndsAtUtcUpdate) + Number(hasTimeZoneUpdate);
+  if (hasStatusUpdate && (hasAssignmentUpdate || scheduleFieldCount > 0 || hasInstructionsUpdate)) {
+    throw new JobServiceError(
+      400,
+      "JOB_APPOINTMENT_STATUS_MUST_BE_STATUS_ONLY",
+      "Appointment status changes must be submitted without other updates.",
+    );
+  }
+  if (scheduleFieldCount > 0 && scheduleFieldCount < 3) {
+    throw new JobServiceError(
+      400,
+      "JOB_APPOINTMENT_RESCHEDULE_INCOMPLETE",
+      "Rescheduling requires startsAtUtc, endsAtUtc, and timeZone together.",
+    );
+  }
   await lockJobSchedule(transaction, { tenantId: access.tenantId, jobId: params.jobId });
   const job = await loadVisibleJobForSchedule(transaction, access, params.jobId, { requireBookable: true });
   const current = await transaction.jobAppointment.findFirst({
@@ -1077,6 +1135,14 @@ export async function updateJobAppointment(
   }
   if (current.version !== params.version) {
     throw new JobServiceError(409, "JOB_APPOINTMENT_STALE_VERSION", "This appointment changed. Refresh and try again.");
+  }
+  if (scheduleFieldCount === 3 && current.status !== "SCHEDULED") {
+    throw new JobServiceError(
+      409,
+      "JOB_APPOINTMENT_RESCHEDULE_NOT_ALLOWED",
+      "Only a scheduled appointment can be rescheduled.",
+      { currentStatus: current.status },
+    );
   }
   if (!manager) {
     const statusOnly =
@@ -1105,6 +1171,19 @@ export async function updateJobAppointment(
   const nextStatus = params.status ?? current.status;
   assertAppointmentTransitionAllowed(current.status, nextStatus);
   assertAppointmentAssigneeMatchesJob(job, nextAssignedTenantUserId);
+  const hasMaterialChange =
+    (hasAssignmentUpdate && nextAssignedTenantUserId !== current.assignedTenantUserId)
+    || (hasStartsAtUtcUpdate && nextStartsAtUtc.getTime() !== current.startsAtUtc.getTime())
+    || (hasEndsAtUtcUpdate && nextEndsAtUtc.getTime() !== current.endsAtUtc.getTime())
+    || (hasTimeZoneUpdate && params.timeZone !== current.timeZone)
+    || (hasInstructionsUpdate && params.instructions !== current.instructions)
+    || (hasStatusUpdate && nextStatus !== current.status);
+  if (manager && !hasMaterialChange) {
+    return {
+      appointment: current,
+      notificationReceipt: null,
+    };
+  }
   await lockJobAppointmentAssignee(transaction, {
     tenantId: access.tenantId,
     assignedTenantUserId: nextAssignedTenantUserId,
@@ -1161,7 +1240,7 @@ export async function updateJobAppointment(
     where: { id: current.id, tenantId: access.tenantId },
     select: JobAppointmentPublicSelect,
   });
-  await transaction.jobEvent.create({
+  const sourceEvent = await transaction.jobEvent.create({
     data: {
       tenantId: access.tenantId,
       jobId: job.id,
@@ -1180,14 +1259,40 @@ export async function updateJobAppointment(
         status: nextStatus,
       })),
     },
+    select: { id: true },
   });
+  const notificationKind = params.status === "DISPATCHED"
+    ? "DISPATCHED"
+    : params.status === "ARRIVED"
+      ? "ARRIVED"
+      : params.status === "COMPLETED"
+        ? "COMPLETED"
+        : params.status === "CANCELED"
+          ? "CANCELED"
+          : hasAssignmentUpdate || scheduleFieldCount === 3
+            ? "RESCHEDULED"
+            : null;
+  const notificationCount = notificationKind
+    ? await enqueueAppointmentNotifications(transaction, {
+      tenantId: access.tenantId,
+      actorTenantUserId: access.tenantUserId,
+      sourceJobEventId: sourceEvent.id,
+      kind: notificationKind,
+      appointment: updated,
+    })
+    : 0;
   await syncJobScheduleState(transaction, {
     tenantId: access.tenantId,
     jobId: job.id,
     actorTenantUserId: access.tenantUserId,
     requestId: `${params.requestId}:schedule-state`,
   });
-  return updated;
+  return {
+    appointment: updated,
+    notificationReceipt: notificationKind
+      ? { kind: notificationKind, createdCount: notificationCount }
+      : null,
+  };
 }
 
 export async function deleteJobAppointment(
@@ -1207,7 +1312,17 @@ export async function deleteJobAppointment(
   const job = await loadVisibleJobForSchedule(transaction, access, params.jobId, { requireBookable: true });
   const current = await transaction.jobAppointment.findFirst({
     where: { id: params.appointmentId, tenantId: access.tenantId, jobId: job.id, deletedAtUtc: null },
-    select: { id: true, version: true, status: true, assignedTenantUserId: true },
+    select: {
+      id: true,
+      jobId: true,
+      version: true,
+      status: true,
+      assignedTenantUserId: true,
+      createdByTenantUserId: true,
+      startsAtUtc: true,
+      endsAtUtc: true,
+      timeZone: true,
+    },
   });
   if (!current) {
     throw new JobServiceError(404, "JOB_APPOINTMENT_NOT_FOUND", "Appointment not found for tenant.");
@@ -1228,7 +1343,7 @@ export async function deleteJobAppointment(
   if (updated.count !== 1) {
     throw new JobServiceError(409, "JOB_APPOINTMENT_STALE_VERSION", "This appointment changed. Refresh and try again.");
   }
-  await transaction.jobEvent.create({
+  const sourceEvent = await transaction.jobEvent.create({
     data: {
       tenantId: access.tenantId,
       jobId: job.id,
@@ -1240,6 +1355,14 @@ export async function deleteJobAppointment(
       commandKeyHash: sha256(`job-appointment-delete:${access.tenantId}:${current.id}:${params.requestId}`),
       commandPayloadHash: sha256(JSON.stringify({ appointmentId: current.id, version: params.version })),
     },
+    select: { id: true },
+  });
+  const notificationCount = await enqueueAppointmentNotifications(transaction, {
+    tenantId: access.tenantId,
+    actorTenantUserId: access.tenantUserId,
+    sourceJobEventId: sourceEvent.id,
+    kind: "CANCELED",
+    appointment: { ...current, version: current.version + 1 },
   });
   await syncJobScheduleState(transaction, {
     tenantId: access.tenantId,
@@ -1247,6 +1370,10 @@ export async function deleteJobAppointment(
     actorTenantUserId: access.tenantUserId,
     requestId: `${params.requestId}:schedule-state`,
   });
+  return {
+    appointmentId: current.id,
+    notificationReceipt: { kind: "CANCELED" as const, createdCount: notificationCount },
+  };
 }
 
 export async function listJobNotes(

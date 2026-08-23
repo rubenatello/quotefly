@@ -1,11 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
-import { Prisma, type QuoteStatus } from "@prisma/client";
+import { Prisma, type JobStatus, type QuoteStatus } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext } from "../lib/access-policy";
 import { PaginationQuerySchema, tenantActiveCustomerScope, tenantActiveQuoteScope } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { withTenantRlsContext } from "../lib/tenant-rls";
 import { assignedRecordScope } from "../lib/workspace-assignment";
+import { ACTIVE_JOB_STATUSES, visibleJobWhere } from "../services/jobs";
 
 const QUOTE_STATUSES: QuoteStatus[] = [
   "DRAFT",
@@ -45,7 +47,9 @@ type FollowUpRow = {
   quoteTitle: string | null;
   totalAmount: Prisma.Decimal | null;
   status: string | null;
-  jobStatus: string | null;
+  jobId: string | null;
+  jobNumber: number | null;
+  jobStatus: JobStatus | null;
   afterSaleFollowUpStatus: string | null;
   afterSaleFollowUpDueAtUtc: Date | null;
   followUpStatus: string;
@@ -92,7 +96,9 @@ function followUpCte(input: {
         latest_quote."title" AS "quoteTitle",
         latest_quote."totalAmount",
         latest_quote."status"::text AS "status",
-        latest_quote."jobStatus"::text AS "jobStatus",
+        latest_job."id" AS "jobId",
+        latest_job."jobNumber",
+        latest_job."status"::text AS "jobStatus",
         latest_quote."afterSaleFollowUpStatus"::text AS "afterSaleFollowUpStatus",
         latest_quote."afterSaleFollowUpDueAtUtc",
         latest_quote."updatedAt" AS "quoteUpdatedAt"
@@ -108,6 +114,16 @@ function followUpCte(input: {
         ORDER BY quote."updatedAt" DESC, quote."id" DESC
         LIMIT 1
       ) latest_quote ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT job."id", job."jobNumber", job."status"
+        FROM "Job" job
+        WHERE job."tenantId" = ${input.tenantId}
+          AND job."sourceQuoteId" = latest_quote."id"
+          AND job."archivedAtUtc" IS NULL
+          AND job."deletedAtUtc" IS NULL
+          AND (${input.assignedTenantUserId}::text IS NULL OR job."assignedTenantUserId" = ${input.assignedTenantUserId})
+        LIMIT 1
+      ) latest_job ON TRUE
       WHERE customer."tenantId" = ${input.tenantId}
         AND customer."archivedAtUtc" IS NULL
         AND customer."deletedAtUtc" IS NULL
@@ -151,11 +167,13 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       : query.queue === "closed"
         ? Prisma.sql`
             CASE "jobStatus"
-              WHEN 'NOT_STARTED' THEN 0
+              WHEN 'UNSCHEDULED' THEN 0
               WHEN 'SCHEDULED' THEN 1
-              WHEN 'IN_PROGRESS' THEN 2
-              WHEN 'COMPLETED' THEN 3
-              ELSE 4
+              WHEN 'DISPATCHED' THEN 2
+              WHEN 'IN_PROGRESS' THEN 3
+              WHEN 'COMPLETED' THEN 4
+              WHEN 'CANCELED' THEN 5
+              ELSE 6
             END,
             COALESCE("quoteUpdatedAt", "customerCreatedAt") ASC,
             "customerId" ASC`
@@ -179,8 +197,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
 
-    const [rows, countRows, acceptedRevenue, monthlyQuotes] = await measureRequestPerformance(request, "db", () => app.prisma.$transaction([
-      app.prisma.$queryRaw<FollowUpRow[]>(Prisma.sql`
+    const [rows, countRows, acceptedRevenue, monthlyQuotes] = await measureRequestPerformance(request, "db", () =>
+      withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => Promise.all([
+      tx.$queryRaw<FollowUpRow[]>(Prisma.sql`
         ${cte}
         SELECT
           "customerId",
@@ -191,6 +210,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           "quoteTitle",
           "totalAmount",
           "status",
+          "jobId",
+          "jobNumber",
           "jobStatus",
           "afterSaleFollowUpStatus",
           "afterSaleFollowUpDueAtUtc",
@@ -202,7 +223,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         LIMIT ${query.limit}
         OFFSET ${query.offset}
       `),
-      app.prisma.$queryRaw<FollowUpCountsRow[]>(Prisma.sql`
+      tx.$queryRaw<FollowUpCountsRow[]>(Prisma.sql`
         ${cte}
         SELECT
           COUNT(*) FILTER (WHERE "queueKey" = 'new')::bigint AS "newCount",
@@ -212,17 +233,17 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           COUNT(*)::bigint AS "recentCount"
         FROM classified
       `),
-      app.prisma.quote.aggregate({
+      tx.quote.aggregate({
         where: { ...quoteScope, status: "ACCEPTED" },
         _sum: { totalAmount: true },
       }),
-      app.prisma.quote.count({
+      tx.quote.count({
         where: {
           ...quoteScope,
           createdAt: { gte: monthStart },
         },
       }),
-    ]));
+    ])));
 
     const counts = countRows[0] ?? {
       newCount: 0n,
@@ -257,7 +278,13 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         ...(row.quoteTitle ? { quoteTitle: row.quoteTitle } : {}),
         ...(row.totalAmount !== null ? { totalAmount: Number(row.totalAmount) } : {}),
         ...(row.status ? { status: row.status } : {}),
-        ...(row.jobStatus ? { jobStatus: row.jobStatus } : {}),
+        // One-release mixed-client compatibility. This flat read projection
+        // comes only from authoritative Job; Quote.jobStatus remains legacy
+        // display data and is never accepted as Job write authority.
+        jobStatus: row.jobStatus,
+        ...(row.jobId && row.jobNumber !== null && row.jobStatus
+          ? { job: { id: row.jobId, jobNumber: row.jobNumber, status: row.jobStatus } }
+          : {}),
         ...(row.afterSaleFollowUpStatus ? { afterSaleFollowUpStatus: row.afterSaleFollowUpStatus } : {}),
         afterSaleFollowUpDueAtUtc: row.afterSaleFollowUpDueAtUtc?.toISOString() ?? null,
         followUpStatus: row.followUpStatus,
@@ -291,11 +318,12 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       ...recordScope,
     };
 
-    const overview = await measureRequestPerformance(request, "db", () => app.prisma.$transaction(async (tx) => {
+    const overview = await measureRequestPerformance(request, "db", () => withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
       const [
         customerGroups,
         unquotedLeadCount,
         quoteGroups,
+        activeJobCount,
         recentCustomers,
         attentionQuotes,
         unquotedCustomers,
@@ -314,10 +342,16 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           },
         }),
         tx.quote.groupBy({
-          by: ["status", "jobStatus", "afterSaleFollowUpStatus"],
+          by: ["status", "afterSaleFollowUpStatus"],
           where: quoteScope,
           _count: { _all: true },
           _sum: { totalAmount: true },
+        }),
+        tx.job.count({
+          where: {
+            ...visibleJobWhere(access),
+            status: { in: ACTIVE_JOB_STATUSES },
+          },
         }),
         tx.customer.findMany({
           where: customerScope,
@@ -388,7 +422,6 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
             id: true,
             title: true,
             status: true,
-            jobStatus: true,
             totalAmount: true,
             updatedAt: true,
             customer: { select: { id: true, fullName: true } },
@@ -402,7 +435,6 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       let activeQuotes = 0;
       let openPipelineRevenue = 0;
       let acceptedRevenue = 0;
-      let activeJobs = 0;
       let afterSaleDue = 0;
 
       for (const group of quoteGroups) {
@@ -417,7 +449,6 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         }
         if (group.status === "ACCEPTED") {
           acceptedRevenue += totalAmount;
-          if (group.jobStatus !== "COMPLETED") activeJobs += count;
           if (group.afterSaleFollowUpStatus === "DUE") afterSaleDue += count;
         }
       }
@@ -497,7 +528,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           activeQuotes,
           openPipelineRevenue,
           acceptedRevenue,
-          activeJobs,
+          activeJobs: activeJobCount,
           afterSaleDue,
         },
         quoteStatusCounts,

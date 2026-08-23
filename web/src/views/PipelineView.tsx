@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ChevronDown, Search } from "lucide-react";
@@ -9,7 +9,7 @@ import { ActivityTaskPanel, type ActivityTaskDraft } from "../components/activit
 import { Alert, Badge, Button, Card, EmptyState, Input, LoadingState, PageHeader, PaginationControls, Select, type PageSize } from "../components/ui";
 import { FollowUpPill, QuoteStatusPill } from "../components/dashboard/DashboardUi";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import { api, type AfterSaleFollowUpStatus, type LeadFollowUpStatus, type QuoteJobStatus, type WorkspaceFollowUpItem } from "../lib/api";
+import { api, type AfterSaleFollowUpStatus, type JobStatus, type LeadFollowUpStatus, type WorkspaceFollowUpItem } from "../lib/api";
 import { usePageView } from "../lib/analytics";
 import { resolveActivityTiming } from "../lib/display-format";
 import { validTimeZone } from "../lib/tenant-time";
@@ -19,7 +19,6 @@ type QueueTab = "new" | "quoted" | "closed" | "afterSale" | "recent";
 type ActivitySurface = "mine" | "team" | "leads";
 
 const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON", "LOST"];
-const JOB_STATUSES: QuoteJobStatus[] = ["NOT_STARTED", "SCHEDULED", "IN_PROGRESS", "COMPLETED"];
 const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = ["NOT_READY", "DUE", "COMPLETED"];
 
 const ACTIVITY_TYPE_VALUES = new Set(["FOLLOW_UP", "PREPARE_QUOTE", "SEND_QUOTE", "CHECK_IN", "CUSTOM"]);
@@ -62,11 +61,15 @@ function followUpLabel(status: LeadFollowUpStatus, t: TFunction): string {
   return t("activity.status.lost");
 }
 
-function jobStatusLabel(status: QuoteJobStatus, t: TFunction): string {
-  if (status === "NOT_STARTED") return t("activity.status.notStarted");
-  if (status === "SCHEDULED") return t("activity.status.scheduled");
-  if (status === "IN_PROGRESS") return t("activity.status.inProgress");
-  return t("activity.status.completed");
+function jobStatusLabel(status: JobStatus, t: TFunction): string {
+  return t(`domain.jobStatus.${status}`);
+}
+
+function jobStatusTone(status: JobStatus): "slate" | "blue" | "emerald" | "amber" {
+  if (status === "COMPLETED") return "emerald";
+  if (status === "SCHEDULED" || status === "IN_PROGRESS") return "blue";
+  if (status === "DISPATCHED") return "amber";
+  return "slate";
 }
 
 function afterSaleLabel(status: AfterSaleFollowUpStatus, t: TFunction): string {
@@ -116,7 +119,9 @@ function compactDateTime(value: string, t: TFunction, locale: string, timeZone: 
 }
 
 function nextActionLabel(lead: PipelineLead, actionKind: QueueActionKind, t: TFunction) {
-  if (actionKind === "job_status") return t("activity.action.moveWork");
+  if (actionKind === "job") return lead.job
+    ? t("activity.action.openJobNumber", { number: lead.job.jobNumber })
+    : t("activity.action.jobUnavailable");
   if (actionKind === "after_sale") return t("activity.action.askReview");
   if (!lead.quoteId) return t("activity.action.draftFirst");
   return t("activity.action.followUp");
@@ -126,7 +131,7 @@ function sectionToneBadge(tone: "blue" | "orange" | "emerald" | "slate") {
   return tone === "orange" ? "orange" : tone === "emerald" ? "emerald" : tone === "slate" ? "slate" : "blue";
 }
 
-type QueueActionKind = "follow_up" | "job_status" | "after_sale" | "none";
+type QueueActionKind = "follow_up" | "job" | "after_sale" | "none";
 
 type QueueConfig = {
   key: QueueTab;
@@ -236,6 +241,7 @@ function QueueActions({
   mobile = false,
   onNavigateToQuote,
   onNavigateToBuilder,
+  onNavigateToJob,
   onUpdateFollowUp,
   onUpdateQuoteLifecycle,
   includePrimary = true,
@@ -246,29 +252,38 @@ function QueueActions({
   mobile?: boolean;
   onNavigateToQuote: (quoteId: string) => void;
   onNavigateToBuilder: (customerId: string) => void;
+  onNavigateToJob: (jobId: string) => void;
   onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
   onUpdateQuoteLifecycle?: (
     quoteId: string,
-    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+    patch: { afterSaleFollowUpStatus: AfterSaleFollowUpStatus },
   ) => void;
   includePrimary?: boolean;
 }) {
   const { t } = useTranslation();
   const selectClassName = mobile ? "min-w-0 w-full" : "w-full min-w-[150px] sm:w-auto";
   const followUpOptions = FOLLOW_UP_STATUSES.map((status) => ({ value: status, label: followUpLabel(status, t) }));
-  const jobStatusOptions = JOB_STATUSES.map((status) => ({ value: status, label: jobStatusLabel(status, t) }));
   const afterSaleOptions = AFTER_SALE_STATUSES.map((status) => ({ value: status, label: afterSaleLabel(status, t) }));
+  const job = actionKind === "job" ? lead.job : undefined;
 
   return (
     <div className={mobile ? "grid grid-cols-1 gap-2 min-[420px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
       {includePrimary ? (
         <Button
           size="sm"
-          variant={lead.quoteId ? "outline" : "primary"}
-          className="w-full sm:w-auto"
-          onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
+          variant={job ? "primary" : lead.quoteId ? "outline" : "primary"}
+          className="min-h-11 w-full sm:w-auto"
+          disabled={actionKind === "job" && !lead.job}
+          aria-label={job
+            ? t("activity.openJobLabel", { number: job.jobNumber })
+            : undefined}
+          onClick={() => job
+            ? onNavigateToJob(job.id)
+            : lead.quoteId
+              ? onNavigateToQuote(lead.quoteId)
+              : onNavigateToBuilder(lead.customerId)}
         >
-          {lead.quoteId ? t("activity.openQuote") : t("activity.draftQuote")}
+          {job ? t("activity.openJob") : actionKind === "job" ? t("activity.jobUnavailable") : lead.quoteId ? t("activity.openQuote") : t("activity.draftQuote")}
         </Button>
       ) : null}
 
@@ -279,17 +294,6 @@ function QueueActions({
           disabled={saving}
           onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
           options={followUpOptions}
-          className={selectClassName}
-        />
-      ) : actionKind === "job_status" ? (
-        <Select
-          aria-label={t("activity.updateJob", { name: lead.customerName })}
-          value={lead.jobStatus ?? "NOT_STARTED"}
-          disabled={saving || !lead.quoteId}
-          onChange={(event) =>
-            lead.quoteId && onUpdateQuoteLifecycle?.(lead.quoteId, { jobStatus: event.target.value as QuoteJobStatus })
-          }
-          options={jobStatusOptions}
           className={selectClassName}
         />
       ) : actionKind === "after_sale" ? (
@@ -316,6 +320,7 @@ function QueueRow({
   activeQuoteId,
   onNavigateToQuote,
   onNavigateToBuilder,
+  onNavigateToJob,
   onUpdateFollowUp,
   onUpdateQuoteLifecycle,
 }: {
@@ -326,10 +331,11 @@ function QueueRow({
   activeQuoteId?: string | null;
   onNavigateToQuote: (quoteId: string) => void;
   onNavigateToBuilder: (customerId: string) => void;
+  onNavigateToJob: (jobId: string) => void;
   onUpdateFollowUp?: (customerId: string, followUpStatus: LeadFollowUpStatus) => void;
   onUpdateQuoteLifecycle?: (
     quoteId: string,
-    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+    patch: { afterSaleFollowUpStatus: AfterSaleFollowUpStatus },
   ) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -344,8 +350,8 @@ function QueueRow({
     <>
       <FollowUpPill status={lead.followUpStatus} compact />
       {lead.status ? <QuoteStatusPill status={lead.status} compact /> : <LifecyclePill label={t("activity.noQuotePill")} tone="slate" />}
-      {actionKind === "job_status" && lead.jobStatus ? (
-        <LifecyclePill label={jobStatusLabel(lead.jobStatus, t)} tone={lead.jobStatus === "COMPLETED" ? "emerald" : lead.jobStatus === "IN_PROGRESS" ? "blue" : "slate"} />
+      {actionKind === "job" && lead.job ? (
+        <LifecyclePill label={jobStatusLabel(lead.job.status, t)} tone={jobStatusTone(lead.job.status)} />
       ) : null}
       {actionKind === "after_sale" && lead.afterSaleFollowUpStatus ? (
         <LifecyclePill label={afterSaleLabel(lead.afterSaleFollowUpStatus, t)} tone={lead.afterSaleFollowUpStatus === "COMPLETED" ? "emerald" : "amber"} />
@@ -369,6 +375,14 @@ function QueueRow({
               {lead.quoteTitle ?? nextActionLabel(lead, actionKind, t)}
             </p>
             <p className="mt-1 text-[11px] font-medium text-[var(--qf-text-soft)] sm:hidden">{timingLabel}</p>
+            {actionKind === "job" && lead.job ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold text-[var(--qf-text-soft)]">
+                  {t("activity.jobNumber", { number: lead.job.jobNumber })}
+                </span>
+                <LifecyclePill label={jobStatusLabel(lead.job.status, t)} tone={jobStatusTone(lead.job.status)} />
+              </div>
+            ) : null}
           </div>
           <span className="hidden shrink-0 text-right text-xs font-medium text-[var(--qf-text-soft)] sm:block">{timingLabel}</span>
         </div>
@@ -394,12 +408,27 @@ function QueueRow({
           ) : null}
           <Button
             size="sm"
-            variant={lead.quoteId ? "outline" : "primary"}
-            className="min-w-0 flex-1"
-            aria-label={lead.quoteId ? t("activity.openQuote") : t("activity.action.draftFirst")}
-            onClick={() => lead.quoteId ? onNavigateToQuote(lead.quoteId) : onNavigateToBuilder(lead.customerId)}
+            variant={actionKind === "job" && lead.job ? "primary" : lead.quoteId ? "outline" : "primary"}
+            className="min-h-11 min-w-0 flex-1"
+            disabled={actionKind === "job" && !lead.job}
+            aria-label={actionKind === "job" && lead.job
+              ? t("activity.openJobLabel", { number: lead.job.jobNumber })
+              : actionKind === "job"
+                ? t("activity.jobUnavailable")
+              : lead.quoteId
+                ? t("activity.openQuote")
+                : t("activity.action.draftFirst")}
+            onClick={() => actionKind === "job" && lead.job
+              ? onNavigateToJob(lead.job.id)
+              : lead.quoteId
+                ? onNavigateToQuote(lead.quoteId)
+                : onNavigateToBuilder(lead.customerId)}
           >
-            {lead.quoteId ? `${t("activity.openQuote")}${lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}` : t("activity.action.draftFirst")}
+            {actionKind === "job"
+              ? lead.job ? t("activity.openJob") : t("activity.jobUnavailable")
+              : lead.quoteId
+                ? `${t("activity.openQuote")}${lead.totalAmount !== undefined ? ` · ${money(lead.totalAmount)}` : ""}`
+                : t("activity.action.draftFirst")}
           </Button>
         </div>
 
@@ -418,6 +447,7 @@ function QueueRow({
               includePrimary={false}
               onNavigateToQuote={onNavigateToQuote}
               onNavigateToBuilder={onNavigateToBuilder}
+              onNavigateToJob={onNavigateToJob}
               onUpdateFollowUp={onUpdateFollowUp}
               onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
             />
@@ -467,6 +497,7 @@ function QueueRow({
           saving={saving}
           onNavigateToQuote={onNavigateToQuote}
           onNavigateToBuilder={onNavigateToBuilder}
+          onNavigateToJob={onNavigateToJob}
           onUpdateFollowUp={onUpdateFollowUp}
           onUpdateQuoteLifecycle={onUpdateQuoteLifecycle}
         />
@@ -479,6 +510,7 @@ export function PipelineView() {
   usePageView("pipeline");
   const { t } = useTranslation();
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     session,
     saving,
@@ -591,7 +623,7 @@ export function PipelineView() {
       title: t("activity.tabs.closedTitle", { count: queueTotals.closedLeads }),
       subtitle: t("activity.tabs.closedSubtitle"),
       count: queueTotals.closedLeads,
-      actionKind: "job_status",
+      actionKind: "job",
       tone: "emerald",
       emptyTitle: t("activity.empty.closedTitle"),
       emptyDescription: t("activity.empty.closedDescription"),
@@ -634,7 +666,7 @@ export function PipelineView() {
 
   async function updateLifecycle(
     quoteId: string,
-    patch: { jobStatus?: QuoteJobStatus; afterSaleFollowUpStatus?: AfterSaleFollowUpStatus },
+    patch: { afterSaleFollowUpStatus: AfterSaleFollowUpStatus },
   ) {
     await updateQuoteLifecycle(quoteId, patch);
     await loadQueuePage();
@@ -764,6 +796,7 @@ export function PipelineView() {
                         activeQuoteId={selectedQuoteId}
                         onNavigateToQuote={navigateToQuote}
                         onNavigateToBuilder={navigateToBuilder}
+                        onNavigateToJob={(jobId) => navigate(`/app/jobs/${jobId}`)}
                         onUpdateFollowUp={(customerId, followUpStatus) => void updateFollowUp(customerId, followUpStatus)}
                         onUpdateQuoteLifecycle={(quoteId, patch) => void updateLifecycle(quoteId, patch)}
                       />

@@ -55,6 +55,16 @@ export type JobEventType =
   | "ARCHIVED"
   | "DELETED";
 
+export type NotificationKind =
+  | "BOOKED"
+  | "RESCHEDULED"
+  | "DISPATCHED"
+  | "ARRIVED"
+  | "COMPLETED"
+  | "CANCELED";
+
+export type NotificationDeliveryStatus = "AVAILABLE" | "DELIVERED";
+
 export type AfterSaleFollowUpStatus =
   | "NOT_READY"
   | "DUE"
@@ -89,7 +99,9 @@ export type QuoteOutboundChannel =
 export type AiUsageEventType =
   | "DRAFT"
   | "REVISE"
-  | "BUSINESS_INSIGHT";
+  | "BUSINESS_INSIGHT"
+  | "INDEXING"
+  | "ACCOUNTING";
 
 export type PresetCategory =
   | "LABOR"
@@ -157,6 +169,7 @@ export interface TenantRow {
   subscriptionPlanCode: string | null;
   trialStartsAtUtc: UtcDate | null;
   trialEndsAtUtc: UtcDate | null;
+  subscriptionCurrentPeriodStartUtc: UtcDate | null;
   subscriptionCurrentPeriodEndUtc: UtcDate | null;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
@@ -324,6 +337,33 @@ export interface JobEventRow {
   commandKeyHash: string;
   commandPayloadHash: string;
   createdAt: UtcDate;
+}
+
+export interface NotificationOutboxRow {
+  id: string;
+  tenantId: string;
+  recipientTenantUserId: string;
+  actorTenantUserId: string;
+  jobId: string;
+  appointmentId: string;
+  sourceJobEventId: string;
+  kind: NotificationKind;
+  channel: "IN_APP";
+  templateKey: string;
+  templateVersion: number;
+  sourceVersion: number;
+  startsAtUtc: UtcDate;
+  endsAtUtc: UtcDate;
+  timeZone: string;
+  dedupeKeyHash: string;
+  payloadHash: string;
+  deliveryStatus: NotificationDeliveryStatus;
+  deliveredAtUtc: UtcDate | null;
+  readAtUtc: UtcDate | null;
+  version: number;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  archivedAtUtc: UtcDate | null;
 }
 
 export interface QuoteLineItemRow {
@@ -533,6 +573,7 @@ export const TABLE_RELATION_MAP = {
       "TenantSequence",
       "Job",
       "JobEvent",
+      "NotificationOutbox",
     ],
     hasOne: ["TenantBranding", "TenantPhoneNumber"],
   },
@@ -541,7 +582,7 @@ export const TABLE_RELATION_MAP = {
   },
   TenantUser: {
     belongsTo: ["Tenant", "User"],
-    hasMany: ["Job", "JobEvent"],
+    hasMany: ["Job", "JobEvent", "NotificationOutbox"],
   },
   TenantPhoneNumber: {
     belongsTo: ["Tenant"],
@@ -565,10 +606,13 @@ export const TABLE_RELATION_MAP = {
   },
   Job: {
     belongsTo: ["Tenant", "Customer", "Quote", "TenantUser"],
-    hasMany: ["JobEvent"],
+    hasMany: ["JobEvent", "NotificationOutbox"],
   },
   JobEvent: {
     belongsTo: ["Tenant", "Job", "TenantUser"],
+  },
+  NotificationOutbox: {
+    belongsTo: ["Tenant", "Job", "JobAppointment", "JobEvent", "TenantUser"],
   },
   QuoteLineItem: {
     belongsTo: ["Tenant", "Quote"],

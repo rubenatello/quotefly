@@ -16,6 +16,7 @@ import { CrmSidebar, type CrmNavLink } from "./crm/CrmSidebar";
 import { CrmLayoutFooter } from "./crm/CrmLayoutFooter";
 import { Modal, ModalBody, ModalHeader } from "./ui";
 import { AppTooltip, AppTooltipProvider } from "./ui/tooltip";
+import { NotificationBellButton, NotificationCenter } from "./notifications/NotificationCenter";
 import {
   WORKSPACE_OPERATIONS_LINKS,
   WORKSPACE_PAGE_META,
@@ -41,6 +42,8 @@ interface CrmShellProps {
   entitlements?: TenantEntitlements;
   usage?: TenantUsageSnapshot;
   canManageCatalog?: boolean;
+  displayTimeZone: string;
+  onNavigateToJob: (jobId: string) => void;
 }
 
 function navigationIcon(icon: (typeof WORKSPACE_OPERATIONS_LINKS)[number]["icon"]) {
@@ -70,6 +73,8 @@ export function CrmShell({
   entitlements,
   usage,
   canManageCatalog = false,
+  displayTimeZone,
+  onNavigateToJob,
 }: CrmShellProps) {
   const { t } = useTranslation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -79,7 +84,12 @@ export function CrmShell({
   });
   const [commandOpen, setCommandOpen] = useState(false);
   const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileNotificationTriggerRef = useRef<HTMLButtonElement>(null);
+  const desktopNotificationTriggerRef = useRef<HTMLButtonElement>(null);
+  const notificationReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const mobileDrawerWasOpenRef = useRef(false);
 
   useEffect(() => {
@@ -148,6 +158,13 @@ export function CrmShell({
     setFeatureRequestOpen(true);
   };
 
+  const handleOpenNotifications = (source: "mobile" | "desktop") => {
+    notificationReturnFocusRef.current = source === "mobile"
+      ? mobileNotificationTriggerRef.current
+      : desktopNotificationTriggerRef.current;
+    setNotificationCenterOpen(true);
+  };
+
   const pageMeta = WORKSPACE_PAGE_META[currentPage];
   const pageLabel = t(`${pageMeta.translationKey}.label`);
   const pageHint = t(`${pageMeta.translationKey}.hint`);
@@ -189,6 +206,9 @@ export function CrmShell({
         onLogout={onLogout}
         currentLabel={pageLabel}
         canManageWorkspace={canManageCatalog}
+        notificationButtonRef={mobileNotificationTriggerRef}
+        notificationUnreadCount={notificationUnreadCount}
+        onOpenNotifications={() => handleOpenNotifications("mobile")}
       />
       {commandOpen ? (
         <Suspense fallback={null}>
@@ -252,6 +272,12 @@ export function CrmShell({
               </div>
 
               <div className="flex items-center gap-2">
+                <NotificationBellButton
+                  buttonRef={desktopNotificationTriggerRef}
+                  unreadCount={notificationUnreadCount}
+                  onClick={() => handleOpenNotifications("desktop")}
+                  className="bg-qf-surface"
+                />
                 <AppTooltipProvider>
                   <div className="flex items-center gap-1.5" role="group" aria-label={t("navigation.quickCommands")}>
                     <AppTooltip content={t("navigation.newCustomer")} side="bottom">
@@ -363,6 +389,15 @@ export function CrmShell({
           </div>
         </div>
       </div>
+
+      <NotificationCenter
+        open={notificationCenterOpen}
+        onOpenChange={setNotificationCenterOpen}
+        displayTimeZone={displayTimeZone}
+        onUnreadCountChange={setNotificationUnreadCount}
+        onOpenJob={onNavigateToJob}
+        returnFocusRef={notificationReturnFocusRef}
+      />
 
       <Modal
         open={featureRequestOpen}
