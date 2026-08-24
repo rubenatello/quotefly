@@ -25,6 +25,7 @@ import {
   tenantActiveScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
+import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   WorkspaceAssigneeSelect,
@@ -1253,81 +1254,40 @@ function normalizeNullablePhone(value?: string): string | undefined {
   return normalized || undefined;
 }
 
-async function findActiveCustomerByPhone(
+async function findActivePromptCustomer(
   prisma: PrismaClient,
-  tenantId: string,
-  normalizedPhone: string,
-) {
-  const normalizedPhoneDigits = normalizePhoneSearchDigits(normalizedPhone);
-  return prisma.customer.findFirst({
-    where: {
-      ...tenantActiveCustomerScope(tenantId),
-      OR: [
-        { phone: normalizedPhone },
-        ...(normalizedPhoneDigits ? [{ phoneDigits: normalizedPhoneDigits }] : []),
-      ],
-    },
-    orderBy: { createdAt: "desc" },
-  });
-}
-
-async function findOrCreatePromptCustomer(
-  prisma: PrismaClient,
-  tenantId: string,
+  access: AccessContext,
   params: {
     fullName?: string | null;
-    phone: string;
+    phone?: string | null;
     email?: string | null;
   },
 ) {
-  const phoneDigits = normalizePhoneSearchDigits(params.phone);
+  const normalizedPhoneDigits = params.phone ? normalizePhoneSearchDigits(params.phone) : null;
   const normalizedEmail = params.email?.trim().toLowerCase() || null;
-  const existing = await prisma.customer.findFirst({
+  const normalizedName = params.fullName?.trim() || null;
+  if (!normalizedPhoneDigits && !normalizedEmail && !normalizedName) return null;
+
+  const candidates = await prisma.customer.findMany({
     where: {
-      tenantId,
+      ...tenantActiveCustomerScope(access.tenantId),
+      ...assignedRecordScope(access),
       OR: [
-        { phone: params.phone },
-        ...(phoneDigits ? [{ phoneDigits }] : []),
-        ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+        ...(normalizedPhoneDigits ? [{ phoneDigits: normalizedPhoneDigits }] : []),
+        ...(normalizedEmail ? [{ email: { equals: normalizedEmail, mode: "insensitive" as const } }] : []),
+        ...(normalizedName ? [{ fullName: { equals: normalizedName, mode: "insensitive" as const } }] : []),
       ],
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: 2,
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+    },
   });
-
-  if (existing?.deletedAtUtc) {
-    return null;
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const customer = existing
-      ? await tx.customer.update({
-          where: { id: existing.id },
-          data: {
-            fullName: params.fullName?.trim() || existing.fullName,
-            phone: params.phone,
-            phoneDigits,
-            email: normalizedEmail ?? existing.email,
-            archivedAtUtc: null,
-          },
-        })
-      : await tx.customer.create({
-          data: {
-            tenantId,
-            fullName: params.fullName?.trim() || "New Customer",
-            phone: params.phone,
-            phoneDigits,
-            email: normalizedEmail,
-          },
-        });
-    await enqueueAiIndexJob(tx, {
-      tenantId,
-      sourceType: "Customer",
-      sourceId: customer.id,
-      operation: "UPSERT",
-      expectedSourceUpdatedAtUtc: customer.updatedAt,
-    });
-    return customer;
-  });
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 async function lockActiveQuoteForRetention(
@@ -2369,15 +2329,7 @@ type SimilarQuoteContext = {
 function buildAiQuoteContext(params: {
   customer?: {
     fullName: string;
-    phone: string;
-    email?: string | null;
-    notes?: string | null;
   } | null;
-  customerActivity?: Array<{
-    title: string;
-    detail?: string | null;
-    occurredAt: Date;
-  }>;
   currentQuote?: {
     serviceType: z.infer<typeof ServiceTypeSchema>;
     title?: string;
@@ -2415,24 +2367,9 @@ function buildAiQuoteContext(params: {
       [
         "Customer context:",
         `- Name: ${params.customer.fullName}`,
-        `- Phone: ${params.customer.phone}`,
-        params.customer.email ? `- Email: ${params.customer.email}` : null,
-        params.customer.notes?.trim() ? `- Notes: ${params.customer.notes.trim()}` : null,
       ]
         .filter(Boolean)
         .join("\n"),
-    );
-  }
-
-  if (params.customerActivity?.length) {
-    sections.push(
-      [
-        "Recent customer activity:",
-        ...params.customerActivity.map(
-          (event, index) =>
-            `- ${index + 1}. ${event.occurredAt.toISOString().slice(0, 10)} | ${event.title}${event.detail ? ` | ${event.detail.slice(0, 180)}` : ""}`,
-        ),
-      ].join("\n"),
     );
   }
 
@@ -3105,6 +3042,7 @@ async function buildAiSuggestedQuoteDraft(
     where: {
       tenantId,
       serviceType,
+      deletedAtUtc: null,
     },
     orderBy: {
       isDefault: "desc",
@@ -3453,6 +3391,10 @@ async function resolveMemberLineUnitCost(
 }
 
 export const quoteRoutes: FastifyPluginAsync = async (app) => {
+  const QuoteAiRateLimit = {
+    config: authenticatedAiRateLimit("quote-ai-suggest", app.env.NODE_ENV === "test" ? 10_000 : 12),
+  } as const;
+
   app.addHook("preSerialization", async (request, _reply, payload) => {
     stripRestrictedAiPromptFields(payload);
     const membership = request.liveAuthMembership;
@@ -3462,7 +3404,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     return payload;
   });
 
-  app.post("/quotes/ai-suggest", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/quotes/ai-suggest", { ...QuoteAiRateLimit, preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = SuggestQuoteWithAiSchema.parse(request.body);
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
@@ -3539,7 +3481,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                   fullName: true,
                   email: true,
                   phone: true,
-                  notes: true,
                 },
               },
               lineItems: {
@@ -3581,6 +3522,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               ...tenantActiveCustomerScope(claims.tenantId),
               ...assignedRecordScope(access),
             },
+            select: {
+              id: true,
+              fullName: true,
+              phone: true,
+              email: true,
+            },
           })
         : existingQuote?.customer ?? null;
 
@@ -3612,35 +3559,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       where: {
         tenantId: claims.tenantId,
         serviceType: preliminaryServiceType,
+        deletedAtUtc: null,
       },
       orderBy: {
         isDefault: "desc",
       },
     });
 
-    let customerActivityContext = selectedCustomer
-      ? await app.prisma.customerActivityEvent.findMany({
-          where: {
-            tenantId: claims.tenantId,
-            customerId: selectedCustomer.id,
-            deletedAtUtc: null,
-          },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: {
-            title: true,
-            detail: true,
-            createdAt: true,
-          },
-        })
-          .then((events) =>
-            events.map((event) => ({
-              title: event.title,
-              detail: event.detail,
-              occurredAt: event.createdAt,
-            })),
-          )
-      : [];
+    const customerActivityContext: [] = [];
 
     const similarQuotes = await loadSimilarQuoteContext(app.prisma, access, {
       serviceType: preliminaryServiceType,
@@ -3678,9 +3604,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       {
         sourceHints: buildAiContextSourceHints({
           customer: selectedCustomer
-            ? {
-                notes: selectedCustomer.notes,
-              }
+            ? {}
             : null,
           customerActivityCount: customerActivityContext.length,
           presetCount: contextPresets.length,
@@ -3754,12 +3678,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       customer: selectedCustomer
           ? {
               fullName: selectedCustomer.fullName,
-              phone: selectedCustomer.phone,
-              email: selectedCustomer.email,
-              notes: selectedCustomer.notes,
             }
           : null,
-      customerActivity: customerActivityContext,
       currentQuote: currentQuoteContext
         ? {
             serviceType: currentQuoteContext.serviceType,
@@ -3800,9 +3720,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       {
         sourceHints: buildAiContextSourceHints({
           customer: selectedCustomer
-            ? {
-                notes: selectedCustomer.notes,
-              }
+            ? {}
             : null,
           customerActivityCount: customerActivityContext.length,
           presetCount: contextPresets.length,
@@ -3820,21 +3738,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const customerPhone = normalizeNullablePhone(parsedDraft.customerPhone);
     const customerEmail = normalizeNullableEmail(parsedDraft.customerEmail);
 
-    if (!selectedCustomer && customerPhone) {
-      selectedCustomer = await findActiveCustomerByPhone(app.prisma, claims.tenantId, customerPhone);
-    }
-
-    if (!selectedCustomer && customerEmail) {
-      selectedCustomer = await app.prisma.customer.findFirst({
-        where: {
-          email: customerEmail,
-          ...tenantActiveCustomerScope(claims.tenantId),
-        },
-      });
-    }
-
-    if (!selectedCustomer && customerPhone) {
-      selectedCustomer = await findOrCreatePromptCustomer(app.prisma, claims.tenantId, {
+    if (!selectedCustomer) {
+      selectedCustomer = await findActivePromptCustomer(app.prisma, access, {
         fullName: parsedDraft.customerName,
         phone: customerPhone,
         email: customerEmail,
@@ -3849,27 +3754,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (selectedCustomer && !hadExplicitCustomerContext) {
-      customerActivityContext = await app.prisma.customerActivityEvent.findMany({
-        where: {
-          tenantId: claims.tenantId,
-          customerId: selectedCustomer.id,
-          deletedAtUtc: null,
-        },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        select: {
-          title: true,
-          detail: true,
-          createdAt: true,
-        },
-      }).then((events) =>
-        events.map((event) => ({
-          title: event.title,
-          detail: event.detail,
-          occurredAt: event.createdAt,
-        })),
-      );
-
       try {
         governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
           access,
@@ -3889,11 +3773,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
         customer: {
           fullName: selectedCustomer.fullName,
-          phone: selectedCustomer.phone,
-          email: selectedCustomer.email,
-          notes: selectedCustomer.notes,
         },
-        customerActivity: customerActivityContext,
         currentQuote: currentQuoteContext
           ? {
               serviceType: currentQuoteContext.serviceType,
@@ -3935,12 +3815,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       stream.progress(
         "drafting_quote_patch",
-        `Matched customer context from the prompt: ${selectedCustomer.fullName}. Refining the suggestion with saved notes and recent activity.`,
+        `Matched authorized customer context from the prompt: ${selectedCustomer.fullName}. Refining the review draft without contact details or customer notes.`,
         {
           sourceHints: buildAiContextSourceHints({
-            customer: {
-              notes: selectedCustomer.notes,
-            },
+            customer: {},
             customerActivityCount: customerActivityContext.length,
             presetCount: contextPresets.length,
             standardPresetCount: standardCatalogMatches.length,
@@ -4121,7 +3999,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       customer: selectedCustomer
         ? {
             fullName: selectedCustomer.fullName,
-            notes: selectedCustomer.notes,
           }
         : null,
       customerActivityCount: customerActivityContext.length,
@@ -4182,7 +4059,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         result: {
-          customer: selectedCustomer,
+          customer: selectedCustomer
+            ? {
+                id: selectedCustomer.id,
+                fullName: selectedCustomer.fullName,
+                phone: selectedCustomer.phone,
+                email: selectedCustomer.email,
+              }
+            : null,
           parsed: {
             customerName: parsedDraft.customerName,
             customerPhone: parsedDraft.customerPhone,
@@ -4217,11 +4101,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         );
       }
       const finalSnapshot = (await assertAiUsageAvailable(app.prisma, claims.tenantId, finalEntitlements)).snapshot;
+      const projectedResult = structuredClone(operationResult.result);
+      stripRestrictedAiPromptFields(projectedResult);
+      if (!includeFinancialContext) stripInternalFinancialFields(projectedResult);
       const output = stream.flushTo(reply);
       output.write({
         type: "complete",
         result: {
-          ...operationResult.result,
+          ...projectedResult,
           usage: buildAiUsageResponse(finalSnapshot, {
             consumedCredits: 1,
             consumedSpendUsd: operationResult.telemetry.estimatedCostUsd,

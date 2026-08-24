@@ -97,7 +97,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       <LandingKodyShowcase onOpenAuth={onOpenAuth} />
       <LandingTradeRail />
 
-      <section className="border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="basic-plan-heading">
+      <section id="landing-basic-plan" className="scroll-mt-24 border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="basic-plan-heading">
         <div className="mx-auto grid max-w-6xl gap-8 overflow-hidden rounded-[32px] border border-slate-200 bg-stone-50 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.07)] sm:p-10 lg:grid-cols-[1fr_0.9fr] lg:items-center">
           <div data-marketing-reveal>
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">A simple place to start</p>
@@ -115,7 +115,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                 "Internal invoice records without payment collection",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2 text-sm font-medium text-slate-700">
-                  <Check size={17} className="mt-0.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                  <Check size={17} className="mt-0.5 shrink-0 text-[var(--qf-brand-orange-text)]" aria-hidden="true" />
                   {item}
                 </li>
               ))}
@@ -124,7 +124,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <div data-marketing-reveal="scale" className="rounded-3xl bg-slate-950 p-7 text-white shadow-[0_24px_54px_rgba(15,23,42,0.18)] sm:p-9">
             <div className="flex items-center justify-between gap-3">
               <p className="text-lg font-bold">Basic</p>
-              <span className="rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-900">Available now</span>
+              <span className="rounded-full border border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] px-3 py-1 text-xs font-bold text-[var(--qf-brand-orange-contrast)]">Available now</span>
             </div>
             <p className="mt-7 flex items-end gap-2"><span className="text-5xl font-bold tracking-tight">${BASIC_PLAN.monthlyPriceUsd}</span><span className="pb-1 text-slate-400">/month</span></p>
             <p className="mt-3 text-sm leading-6 text-slate-300">Your first paid month is {basicFirstPaidMonthPriceLabel()} after the free trial. Then the standard monthly price applies.</p>

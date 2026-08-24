@@ -46,6 +46,11 @@ test.describe("public site and session auth", () => {
     await page.goto("/solutions");
     await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/solutions"].heading })).toBeVisible();
 
+    await page.goto("/about");
+    await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/about"].heading })).toBeVisible();
+    await expect(page.locator("#workflow").getByRole("listitem")).toHaveCount(5);
+    await expect(page.getByRole("img", { name: /QuoteFly mobile Job detail/i })).toBeVisible();
+
     await page.goto("/support");
     await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/support"].heading })).toBeVisible();
     await expect(page.getByRole("link", { name: "Email support" })).toHaveAttribute(

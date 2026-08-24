@@ -167,8 +167,26 @@ function ScrollToRoute() {
 
   useEffect(() => {
     if (location.hash) {
-      window.requestAnimationFrame(() => document.querySelector(location.hash)?.scrollIntoView());
-      return;
+      let observer: MutationObserver | undefined;
+      const targetId = location.hash.slice(1);
+      const scrollToTarget = () => {
+        const target = document.getElementById(targetId);
+        if (!target) return false;
+        target.scrollIntoView();
+        observer?.disconnect();
+        return true;
+      };
+      const frameId = window.requestAnimationFrame(() => {
+        if (scrollToTarget()) return;
+        observer = new MutationObserver(scrollToTarget);
+        observer.observe(document.getElementById("main-content") ?? document.body, { childList: true, subtree: true });
+      });
+      const timeoutId = window.setTimeout(() => observer?.disconnect(), 5_000);
+      return () => {
+        window.cancelAnimationFrame(frameId);
+        window.clearTimeout(timeoutId);
+        observer?.disconnect();
+      };
     }
     window.scrollTo({ top: 0, left: 0 });
   }, [location.hash, location.pathname]);

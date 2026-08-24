@@ -1,8 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { BASIC_PLAN_PRICING_PATH } from "../../web/src/lib/plans";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
-const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/pricing"] as const;
+const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/pricing", "/about"] as const;
 const RESPONSIVE_WIDTHS = [360, 390, 768, 1280, 1440] as const;
 
 async function expectNoSeriousAccessibilityViolations(page: Page, label: string) {
@@ -38,6 +39,8 @@ async function expectNoPageOverflow(page: Page, label: string) {
 test("public pages tell the verified quote-to-internal-invoice story", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/"].heading })).toBeVisible();
+  await expect(page.locator("#landing-basic-plan")).toBeAttached();
+  await expect(page.getByRole("link", { name: "Pricing" }).first()).toHaveAttribute("href", BASIC_PLAN_PRICING_PATH);
   await expect(page.getByRole("link", { name: "See the quote-to-job workflow" })).toHaveAttribute("href", "#product-story");
 
   const homeWorkflow = page.getByRole("list", { name: "Quote to internal invoice workflow" });
@@ -70,9 +73,13 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
   const solutionsWorkflow = page.locator("#workflow").getByRole("list");
   await expect(solutionsWorkflow.getByRole("listitem")).toHaveCount(6);
   await expect(page.getByText(/external invoice sending, payment collection, and QuickBooks invoice creation are not part/i)).toBeVisible();
-  await expect(page.getByRole("link", { name: "See Basic pricing" })).toHaveAttribute("href", "/pricing");
+  const basicPricingLink = page.getByRole("link", { name: "See Basic pricing" });
+  await expect(basicPricingLink).toHaveAttribute("href", BASIC_PLAN_PRICING_PATH);
+  await basicPricingLink.click();
+  await expect(page).toHaveURL(new RegExp(`${BASIC_PLAN_PRICING_PATH}$`));
+  await expect(page.locator("#basic-plan")).toBeInViewport();
+  await expect.poll(() => page.locator("#basic-plan").evaluate((element) => element.getBoundingClientRect().top)).toBeLessThanOrEqual(110);
 
-  await page.goto("/pricing");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/pricing"].heading })).toBeVisible();
   await expect(page.getByText("Accepted-quote Jobs with day/week scheduling and dispatch controls")).toBeVisible();
   await expect(page.getByText("Internal invoice records from accepted quotes or completed Jobs")).toBeVisible();
@@ -85,7 +92,14 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
 
   await page.goto("/solutions/hvac");
   await expect(page.getByRole("link", { name: "See the quote-to-job workflow" })).toHaveAttribute("href", "/solutions#workflow");
-  await expect(page.getByRole("link", { name: "See Basic pricing" })).toHaveAttribute("href", "/pricing");
+  await expect(page.getByRole("link", { name: "See Basic pricing" })).toHaveAttribute("href", BASIC_PLAN_PRICING_PATH);
+
+  await page.goto("/about");
+  await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/about"].heading })).toBeVisible();
+  const aboutWorkflow = page.locator("#workflow").getByRole("list");
+  await expect(aboutWorkflow.getByRole("listitem")).toHaveCount(5);
+  await expect(page.getByText(/does not claim autonomous booking or sending/i)).toBeVisible();
+  await expect(page.getByRole("link", { name: "See Basic pricing" })).toHaveAttribute("href", BASIC_PLAN_PRICING_PATH);
 });
 
 test("operational marketing pages stay responsive at release widths", async ({ page }) => {
@@ -105,6 +119,10 @@ test("operational marketing pages stay responsive at release widths", async ({ p
   expect(kodyControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   const trialControlBox = await page.getByRole("button", { name: /Start your 20-day free trial/i }).first().boundingBox();
   expect(trialControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+
+  await page.goto("/about");
+  const aboutTrialBox = await page.getByRole("button", { name: "Start free trial" }).first().boundingBox();
+  expect(aboutTrialBox?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
 
 test("operational marketing pages pass Axe at phone and desktop widths", async ({ page }) => {

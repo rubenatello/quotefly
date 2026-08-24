@@ -122,6 +122,51 @@ test("accepts a review-only product draft action", () => {
   assert.equal(response.actions[0].requiresConfirmation, true);
 });
 
+test("preserves bounded catalog pricing and provenance in a quote draft handoff", () => {
+  const response = normalizeKodyAssistantResponse({
+    tool: "DRAFT_QUOTE",
+    answer: "Prepared a priced review draft.",
+    actions: [{
+      type: "OPEN_QUOTE_DRAFT",
+      label: "Draft for Maria Lopez (match 1)",
+      requiresConfirmation: true,
+      payload: {
+        serviceType: "PLUMBING",
+        estimatedDurationHoursLow: 3,
+        estimatedDurationHoursHigh: 4,
+        lineItems: [{
+          description: "Plumbing labor hours",
+          quantity: 4,
+          sectionType: "INCLUDED",
+          sourcePresetId: "preset-labor",
+          unitType: "HOUR",
+          unitPrice: 95,
+          unitCost: 42,
+          catalogMatched: true,
+          tenantId: "must-not-travel",
+        }],
+      },
+    }],
+  });
+
+  assert.deepEqual(response.actions[0]?.payload, {
+    serviceType: "PLUMBING",
+    estimatedDurationHoursLow: 3,
+    estimatedDurationHoursHigh: 4,
+    lineItems: [{
+      description: "Plumbing labor hours",
+      quantity: 4,
+      sectionType: "INCLUDED",
+      sourcePresetId: "preset-labor",
+      unitType: "HOUR",
+      unitPrice: 95,
+      unitCost: 42,
+      catalogMatched: true,
+    }],
+    retrievedSourceLabels: [],
+  });
+});
+
 test("accepts only typed review handoffs for customer creation and quote sending", () => {
   const customer = normalizeKodyAssistantResponse({
     tool: "DRAFT_CUSTOMER",

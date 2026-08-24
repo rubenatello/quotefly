@@ -159,10 +159,14 @@ type KodyQuoteDraftHandoff = {
     description: string;
     quantity: number | null;
     sectionType: "INCLUDED" | "ALTERNATE" | null;
+    sourcePresetId: string | null;
+    unitPrice: number | null;
+    unitCost: number | null;
   }>;
   editableLines: EditableQuoteLine[];
   hasStructuredDraft: boolean;
   hasQuickCustomerDraft: boolean;
+  needsDraftChoice: boolean;
   pricingNeedsReview: boolean;
   useWorkspaceContext: boolean;
   retrievedSourceCount: number;
@@ -225,6 +229,9 @@ function readKodyDraftLineItems(value: unknown): KodyQuoteDraftHandoff["lineItem
       description,
       quantity: readKodyDraftNumber(candidate.quantity),
       sectionType,
+      sourcePresetId: cleanKodyDraftText(candidate.sourcePresetId, 200),
+      unitPrice: readKodyDraftNumber(candidate.unitPrice),
+      unitCost: readKodyDraftNumber(candidate.unitCost),
     }];
   });
 }
@@ -247,7 +254,10 @@ function buildEditableKodyDraftLines(
 
   return lineItems.map((lineItem, index) => {
     const quantity = lineItem.quantity && lineItem.quantity > 0 ? lineItem.quantity : 1;
-    const shouldSeedEstimate = singlePricedLineIndex === index && estimatedSubtotal !== null && estimatedSubtotal > 0;
+    const shouldSeedEstimate = lineItem.unitPrice === null
+      && singlePricedLineIndex === index
+      && estimatedSubtotal !== null
+      && estimatedSubtotal > 0;
     const { title, details } = splitQuoteLineDescription(lineItem.description);
 
     return makeEditableQuoteLine({
@@ -256,8 +266,13 @@ function buildEditableKodyDraftLines(
       sectionType: lineItem.sectionType ?? "INCLUDED",
       sectionLabel: lineItem.sectionType === "ALTERNATE" ? t("quoteComponents.line.alternate") : "",
       quantity: String(quantity),
-      unitCost: "0.00",
-      unitPrice: shouldSeedEstimate ? (estimatedSubtotal / quantity).toFixed(2) : "0.00",
+      unitCost: (lineItem.unitCost ?? 0).toFixed(2),
+      unitPrice: lineItem.unitPrice !== null
+        ? lineItem.unitPrice.toFixed(2)
+        : shouldSeedEstimate
+          ? (estimatedSubtotal / quantity).toFixed(2)
+          : "0.00",
+      sourcePresetId: lineItem.sourcePresetId,
       presetPromptHandled: true,
     });
   });
@@ -303,7 +318,7 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
     : null;
   const customerId = isDraftString(draft.customerId, 200) && draft.customerId.trim() ? draft.customerId.trim() : null;
   const editableLines = buildEditableKodyDraftLines(t, lineItems, estimatedTotalAmount, estimatedTaxAmount);
-  const hasQuickCustomerDraft = Boolean(!customerId && (customerName || customerPhone || customerEmail));
+  const hasQuickCustomerDraft = Boolean(!customerId && customerName && customerPhone);
   const hasStructuredDraft = Boolean(
     customerId ||
       customerName ||
@@ -332,7 +347,8 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
     editableLines,
     hasStructuredDraft,
     hasQuickCustomerDraft,
-    pricingNeedsReview: editableLines.some((line) => Number(line.unitPrice) <= 0 || Number(line.unitCost) <= 0),
+    needsDraftChoice: false,
+    pricingNeedsReview: editableLines.some((line) => Number(line.unitPrice) <= 0),
     useWorkspaceContext,
     retrievedSourceCount,
     retrievedSourceLabels,
@@ -495,6 +511,8 @@ export function QuoteBuilderView() {
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
   const [lastAppliedAiRunId, setLastAppliedAiRunId] = useState<string | null>(null);
   const [kodyDraftHandoff, setKodyDraftHandoff] = useState<KodyQuoteDraftHandoff | null>(null);
+  const [replaceKodyDraftConfirmOpen, setReplaceKodyDraftConfirmOpen] = useState(false);
+  const [focusedKodyLineId, setFocusedKodyLineId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const {
@@ -648,6 +666,7 @@ export function QuoteBuilderView() {
   }, [draftStorageKey, setQuoteForm, t]);
 
   useEffect(() => {
+    if (draftStorageKey && hydratedDraftStorageKey !== draftStorageKey) return;
     const draft = readKodyQuoteDraftState(t, location.state);
     if (!draft) return;
     if (handledKodyDraftStateRef.current === location.state) return;
@@ -681,8 +700,8 @@ export function QuoteBuilderView() {
     if (draft.prompt) {
       setChatPrompt(draft.prompt);
     }
-    setKodyDraftHandoff(draft);
-    setAiModalOpen(draft.useWorkspaceContext || !canApplyKodyContext || !draft.hasStructuredDraft);
+    setKodyDraftHandoff({ ...draft, needsDraftChoice: !canApplyKodyContext && draft.hasStructuredDraft });
+    setAiModalOpen(!draft.hasStructuredDraft);
     setMobilePane("editor");
     setNotice(
       canApplyKodyContext
@@ -695,7 +714,9 @@ export function QuoteBuilderView() {
     location.search,
     location.state,
     navigate,
+    draftStorageKey,
     hasMeaningfulDraft,
+    hydratedDraftStorageKey,
     selectQuoteCustomer,
     setChatPrompt,
     setNotice,
@@ -1381,6 +1402,79 @@ export function QuoteBuilderView() {
     }
   }
 
+  function applyKodyDraftChoice(strategy: "merge" | "replace") {
+    const handoff = kodyDraftHandoff;
+    if (!handoff) return;
+
+    setQuoteForm((current) => ({
+      ...current,
+      customerId: strategy === "replace"
+        ? handoff.customerId ?? ""
+        : current.customerId || handoff.customerId || "",
+      serviceType: strategy === "replace"
+        ? handoff.serviceType ?? current.serviceType
+        : current.serviceType,
+      title: strategy === "replace"
+        ? handoff.title ?? ""
+        : current.title || handoff.title || "",
+      scopeText: strategy === "replace"
+        ? handoff.scopeText ?? ""
+        : current.scopeText || handoff.scopeText || "",
+      taxAmount: strategy === "replace"
+        ? String(handoff.estimatedTaxAmount ?? 0)
+        : current.taxAmount,
+    }));
+    setDraftLines((current) => {
+      const incoming = handoff.editableLines;
+      if (strategy === "replace") return incoming.length ? incoming : [makeEditableQuoteLine()];
+      const meaningfulCurrent = current.filter((line) => Boolean(
+        line.title.trim()
+        || line.details.trim()
+        || line.sectionType === "ALTERNATE"
+        || line.sectionLabel.trim()
+        || Number(line.quantity) !== 1
+        || Number(line.unitCost) !== 0
+        || Number(line.unitPrice) !== 0,
+      ));
+      const merged = [...meaningfulCurrent, ...incoming].slice(0, QUOTE_LINE_CHANGE_LIMIT);
+      return merged.length ? merged : [makeEditableQuoteLine()];
+    });
+
+    const shouldAdoptHandoffCustomer = strategy === "replace" || !quoteForm.customerId;
+    if (shouldAdoptHandoffCustomer && !handoff.customerId && handoff.hasQuickCustomerDraft) {
+      setQuickCustomerForm({
+        fullName: handoff.customerName ?? "",
+        phone: handoff.customerPhone ?? "",
+        email: handoff.customerEmail ?? "",
+        notes: "",
+      });
+      setQuickCustomerOpen(true);
+    } else if (strategy === "replace" && handoff.customerId) {
+      setQuickCustomerOpen(false);
+      setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
+    }
+
+    setKodyDraftHandoff({ ...handoff, needsDraftChoice: false });
+    setReplaceKodyDraftConfirmOpen(false);
+    setAiModalOpen(false);
+    setMobilePane("editor");
+    setNotice(t("quoteBuilder.notices.kodyReviewDraft"));
+  }
+
+  function focusKodyDraftLines() {
+    const firstLineId = draftLines[0]?.id ?? null;
+    setFocusedKodyLineId(firstLineId);
+    setMobilePane("editor");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const lineControls = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="quote-line-row-1"] input, [data-testid="quote-line-row-1"] textarea'));
+        const firstVisibleControl = lineControls.find((control) => control.getClientRects().length > 0);
+        firstVisibleControl?.scrollIntoView({ block: "center", behavior: "smooth" });
+        firstVisibleControl?.focus({ preventScroll: true });
+      });
+    });
+  }
+
   const mobileBuilderStep = mobilePane === "preview" ? 3 : activeCustomer ? 2 : 1;
 
   return (
@@ -1405,10 +1499,19 @@ export function QuoteBuilderView() {
       {kodyDraftHandoff ? (
           <KodyDraftHandoffBanner
           handoff={kodyDraftHandoff}
-          canViewInternalCosts={canViewInternalCosts}
-          activeCustomerName={activeCustomer?.fullName ?? null}
-          onOpenAiDraft={() => openBuilderAiAssist({ kind: "quote" })}
-          onDismiss={() => setKodyDraftHandoff(null)}
+          activeCustomer={activeCustomer ? {
+            id: activeCustomer.id,
+            fullName: activeCustomer.fullName,
+            phone: activeCustomer.phone,
+            email: activeCustomer.email,
+          } : null}
+          onMerge={() => applyKodyDraftChoice("merge")}
+          onReplace={() => setReplaceKodyDraftConfirmOpen(true)}
+          onReview={focusKodyDraftLines}
+          onDismiss={() => {
+            setReplaceKodyDraftConfirmOpen(false);
+            setKodyDraftHandoff(null);
+          }}
         />
       ) : null}
       {conflictingStoredDraft ? (
@@ -1815,6 +1918,7 @@ export function QuoteBuilderView() {
                     line={line}
                     index={index}
                     startExpanded={!line.title.trim() && !line.details.trim()}
+                    forceExpanded={line.id === focusedKodyLineId}
                     canViewInternalCosts={canViewInternalCosts}
                     onChange={updateDraftLine}
                     onInsertBelow={addBlankLine}
@@ -2036,6 +2140,16 @@ export function QuoteBuilderView() {
       </Modal>
 
       <ConfirmModal
+        open={replaceKodyDraftConfirmOpen}
+        onClose={() => setReplaceKodyDraftConfirmOpen(false)}
+        onConfirm={() => applyKodyDraftChoice("replace")}
+        title={t("quoteBuilder.handoff.replaceConfirmTitle")}
+        description={t("quoteBuilder.handoff.replaceConfirmDescription")}
+        confirmLabel={t("quoteBuilder.handoff.replaceConfirm")}
+        confirmVariant="warning"
+      />
+
+      <ConfirmModal
         open={navigationPromptOpen}
         onClose={cancelNavigation}
         onConfirm={continueNavigation}
@@ -2075,20 +2189,37 @@ function SummaryRow({
 
 function KodyDraftHandoffBanner({
   handoff,
-  activeCustomerName,
-  onOpenAiDraft,
+  activeCustomer,
+  onMerge,
+  onReplace,
+  onReview,
   onDismiss,
-  canViewInternalCosts,
 }: {
   handoff: KodyQuoteDraftHandoff;
-  activeCustomerName: string | null;
-  onOpenAiDraft: () => void;
+  activeCustomer: { id: string; fullName: string; phone: string; email?: string | null } | null;
+  onMerge: () => void;
+  onReplace: () => void;
+  onReview: () => void;
   onDismiss: () => void;
-  canViewInternalCosts: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? "en-US";
-  const customerLabel = activeCustomerName ?? handoff.customerName ?? t("quoteBuilder.handoff.customerNotSelected");
+  const customerLabel = handoff.customerName ?? activeCustomer?.fullName ?? t("quoteBuilder.handoff.customerNotSelected");
+  const currentCustomerIdentity = activeCustomer
+    ? [activeCustomer.fullName, activeCustomer.email || activeCustomer.phone].filter(Boolean).join(" · ")
+    : null;
+  const kodyCustomerIdentity = handoff.customerName
+    ? [handoff.customerName, handoff.customerEmail || handoff.customerPhone].filter(Boolean).join(" · ")
+    : null;
+  const customerConflict = Boolean(
+    handoff.needsDraftChoice
+    && activeCustomer
+    && (
+      (handoff.customerId && handoff.customerId !== activeCustomer.id)
+      || (!handoff.customerId && kodyCustomerIdentity && currentCustomerIdentity
+        && kodyCustomerIdentity.toLowerCase() !== currentCustomerIdentity.toLowerCase())
+    ),
+  );
   const visibleLines = handoff.lineItems.slice(0, 3);
   const extraLineCount = Math.max(0, handoff.lineItems.length - visibleLines.length);
 
@@ -2117,19 +2248,30 @@ function KodyDraftHandoffBanner({
               ? t("quoteBuilder.handoff.groundedDescription")
               : t("quoteBuilder.handoff.promptDescription")}
           </p>
-          {handoff.pricingNeedsReview && canViewInternalCosts ? (
+          {handoff.pricingNeedsReview ? (
             <p className="mt-2 text-sm font-semibold text-[var(--qf-warning-text)]">
               {t("quoteBuilder.handoff.pricingReview")}
             </p>
           ) : null}
+          {customerConflict ? (
+            <p className="mt-2 text-sm font-semibold text-[var(--qf-warning-text)]">
+              {t("quoteBuilder.handoff.customerConflict", { current: currentCustomerIdentity, kody: kodyCustomerIdentity })}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
-          <Button size="sm" onClick={onOpenAiDraft} icon={<Sparkles size={14} />}>
-            {handoff.useWorkspaceContext ? t("quoteBuilder.handoff.generateGrounded") : t("quoteBuilder.handoff.openAi")}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onDismiss}>
-            {t("quoteBuilder.dismiss")}
-          </Button>
+          {handoff.needsDraftChoice ? (
+            <>
+              <Button size="sm" onClick={onMerge}>{t("quoteBuilder.handoff.mergeDraft")}</Button>
+              <Button size="sm" variant="outline" onClick={onReplace}>{t("quoteBuilder.handoff.replaceDraft")}</Button>
+              <Button size="sm" variant="ghost" onClick={onDismiss}>{t("quoteBuilder.handoff.keepCurrent")}</Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" onClick={onReview}>{t("quoteBuilder.handoff.reviewLines")}</Button>
+              <Button size="sm" variant="ghost" onClick={onDismiss}>{t("quoteBuilder.dismiss")}</Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -2223,6 +2365,7 @@ function DraftLineEditorRow({
   line,
   index,
   startExpanded,
+  forceExpanded,
   onChange,
   onInsertBelow,
   onRemove,
@@ -2233,6 +2376,7 @@ function DraftLineEditorRow({
   line: EditableQuoteLine;
   index: number;
   startExpanded?: boolean;
+  forceExpanded?: boolean;
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onInsertBelow: (lineId?: string) => void;
   onRemove: (lineId: string) => void;
@@ -2257,8 +2401,8 @@ function DraftLineEditorRow({
       : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)] text-[var(--qf-text-soft)]";
 
   useEffect(() => {
-    if (startExpanded) setExpanded(true);
-  }, [line.id, startExpanded]);
+    if (startExpanded || forceExpanded) setExpanded(true);
+  }, [forceExpanded, line.id, startExpanded]);
 
   function updateSectionType(nextSectionType: "INCLUDED" | "ALTERNATE") {
     onChange(line.id, "sectionType", nextSectionType);

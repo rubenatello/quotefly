@@ -77,6 +77,10 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   );
   assert.equal(resolveAssistantTool("Draft a quote for customer Robert"), "DRAFT_QUOTE");
   assert.equal(resolveAssistantTool("Draft a roofing quote for Ruben"), "DRAFT_QUOTE");
+  assert.equal(
+    resolveAssistantTool("Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review."),
+    "DRAFT_QUOTE",
+  );
   assert.equal(resolveAssistantTool("Send quote to customer"), "PREPARE_QUOTE_SEND");
   assert.equal(resolveAssistantTool("Email the latest quote to Maria Lopez"), "PREPARE_QUOTE_SEND");
   assert.equal(
@@ -190,6 +194,15 @@ test("bounded conversation hints route genuine follow-ups but never override exp
       [{ message: "Add a new customer named Maria Lopez", resolvedTool: "DRAFT_CUSTOMER" }],
     ),
     "DRAFT_CUSTOMER",
+  );
+  assert.equal(
+    resolveAssistantTool(
+      "Maria Lopez",
+      "AUTO",
+      { currentPage: "dashboard" },
+      [{ message: "Draft a plumbing quote for faucet replacement", resolvedTool: "DRAFT_QUOTE" }],
+    ),
+    "DRAFT_QUOTE",
   );
   assert.deepEqual(resolveAssistantConversationState(conversation, "SUMMARIZE_PIPELINE"), {
     mode: "CONTINUING",

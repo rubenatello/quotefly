@@ -438,6 +438,31 @@ textarea {
   }
 }
 
+@keyframes qf-about-proof-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(1deg);
+  }
+  50% {
+    transform: translate3d(0, -7px, 0) rotate(0deg);
+  }
+}
+
+@keyframes qf-about-flow-signal {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  15%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(400%);
+  }
+}
+
 .qf-marketing-grid {
   background-image:
     linear-gradient(rgba(47, 111, 214, 0.08) 1px, transparent 1px),
@@ -455,6 +480,16 @@ textarea {
 .qf-marketing-orbit--orange {
   animation-delay: -3.5s;
   animation-duration: 10s;
+}
+
+.qf-about-proof-float {
+  animation: qf-about-proof-float 7s ease-in-out infinite;
+  will-change: transform;
+}
+
+.qf-about-flow-signal {
+  animation: qf-about-flow-signal 5.5s ease-in-out infinite;
+  will-change: transform;
 }
 
 .qf-hero-product {
@@ -505,11 +540,17 @@ textarea {
   .qf-demo-pane-enter,
   .qf-marketing-grid,
   .qf-marketing-orbit,
+  .qf-about-proof-float,
+  .qf-about-flow-signal,
   .qf-reveal-pending,
   .qf-reveal-pending.qf-reveal-visible {
-    opacity: 1 !important;
     transform: none !important;
     animation: none !important;
     transition: none !important;
+  }
+
+  .qf-reveal-pending,
+  .qf-reveal-pending.qf-reveal-visible {
+    opacity: 1 !important;
   }
 }

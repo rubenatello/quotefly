@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goldface: Frontend Quality"
+  short_description: "Harden mobile and desktop product UX"
+  default_prompt: "Use $quotefly-frontend-quality to improve QuoteFly frontend usability across mobile and desktop."

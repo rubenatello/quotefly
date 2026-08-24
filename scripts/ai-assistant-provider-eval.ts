@@ -1,9 +1,39 @@
+import { randomUUID } from "node:crypto";
 import type { DataClassification } from "@prisma/client";
 
 process.env.NODE_ENV = "test";
-process.env.DATABASE_URL ??= "postgresql://user:pass@127.0.0.1:1/quotefly_provider_eval_test";
 process.env.JWT_SECRET ??= "provider-eval-secret-that-is-long-enough-for-validation";
 process.env.OPENAI_ASSISTANT_COMPOSITION_ENABLED = "true";
+
+const PROVIDER_EVAL_DATABASE_NAME = "quotefly_provider_eval_test";
+
+function requireProviderEvalDatabaseUrl() {
+  const databaseUrl = process.env.TEST_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("TEST_DATABASE_URL or DATABASE_URL is required for the provider evaluation.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("Provider evaluation database URL must be a valid PostgreSQL connection URL.");
+  }
+  if (!parsed.protocol.startsWith("postgres")) {
+    throw new Error("Provider evaluation database URL must use PostgreSQL.");
+  }
+  if (decodeURIComponent(parsed.pathname).replace(/^\/+/, "") !== PROVIDER_EVAL_DATABASE_NAME) {
+    throw new Error(`Provider evaluation must use the isolated ${PROVIDER_EVAL_DATABASE_NAME} database.`);
+  }
+
+  if (process.env.DATABASE_URL?.trim() && process.env.DATABASE_URL.trim() !== databaseUrl) {
+    throw new Error("DATABASE_URL and TEST_DATABASE_URL must refer to the same isolated provider evaluation database.");
+  }
+  process.env.DATABASE_URL = databaseUrl;
+  process.env.TEST_DATABASE_URL = databaseUrl;
+}
+
+requireProviderEvalDatabaseUrl();
 
 if (!process.env.OPENAI_API_KEY?.trim()) {
   console.error("OPENAI_API_KEY is required for the synthetic provider-backed Kody evaluation.");
@@ -166,52 +196,143 @@ const cases: EvalCase[] = [
 ];
 
 async function main() {
+  const { prisma } = await import("../src/lib/prisma");
   const { composeAssistantAnswer } = await import("../src/lib/ai-assistant-composer");
-  const results = [];
-  for (const evalCase of cases) {
-    const startedAt = performance.now();
-    const output = await composeAssistantAnswer(evalCase.input);
-    const durationMs = Number((performance.now() - startedAt).toFixed(1));
-    const failures: string[] = [];
-    if (output.answerMode !== "LLM_COMPOSED") failures.push("provider composition fell back to deterministic output");
-    for (const pattern of evalCase.required) {
-      if (!pattern.test(output.answer)) failures.push(`missing required pattern ${pattern}`);
-    }
-    for (const pattern of evalCase.forbidden) {
-      if (pattern.test(output.answer)) failures.push(`matched forbidden pattern ${pattern}`);
-    }
-    if (durationMs > 15_000) failures.push(`latency ${durationMs}ms exceeded 15000ms`);
-    results.push({
-      name: evalCase.name,
-      passed: failures.length === 0,
-      failures,
-      answerMode: output.answerMode,
-      model: output.model,
-      durationMs,
-      promptTokens: output.telemetry?.promptTokens ?? 0,
-      completionTokens: output.telemetry?.completionTokens ?? 0,
-      estimatedCostUsd: output.telemetry?.estimatedCostUsd ?? 0,
+  const { withTenantRlsContext } = await import("../src/lib/tenant-rls");
+  const {
+    hashAiUsageRequest,
+    hashAiIdempotencyKey,
+    runWithAiUsageOperation,
+  } = await import("../src/services/ai-usage-ledger");
+  const runId = randomUUID();
+  const now = new Date();
+  let tenantId: string | null = null;
+  let userId: string | null = null;
+  try {
+    const tenant = await prisma.tenant.create({
+      data: {
+        name: `Synthetic Provider Evaluation ${runId}`,
+        slug: `synthetic-provider-eval-${runId}`,
+        primaryTrade: "ROOFING",
+        subscriptionStatus: "active",
+        subscriptionPlanCode: "enterprise",
+        stripeCustomerId: `cus_provider_eval_${runId}`,
+        stripeSubscriptionId: `sub_provider_eval_${runId}`,
+        subscriptionCurrentPeriodStartUtc: new Date(now.getTime() - 60_000),
+        subscriptionCurrentPeriodEndUtc: new Date(now.getTime() + 60 * 60 * 1000),
+      },
     });
+    tenantId = tenant.id;
+    const user = await prisma.user.create({
+      data: {
+        email: `provider-eval-${runId}@synthetic.quotefly.test`,
+        fullName: "Synthetic Provider Evaluator",
+        passwordHash: "provider-eval-not-a-login-password",
+      },
+    });
+    userId = user.id;
+    const membership = await prisma.tenantUser.create({
+      data: { tenantId: tenant.id, userId: user.id, role: "owner" },
+    });
+    const results = [];
+    for (const [index, evalCase] of cases.entries()) {
+      const startedAt = performance.now();
+      const idempotencyKey = `provider-eval:${runId}:${index}`;
+      const output = await runWithAiUsageOperation(prisma, {
+        tenantId: tenant.id,
+        userEmail: user.email,
+        actorTenantUserId: membership.id,
+        operation: "AI_ASSISTANT_PROVIDER_EVAL",
+        idempotencyKey,
+        requestHash: hashAiUsageRequest({ suite: "ai-assistant-provider-synthetic", index, input: evalCase.input }),
+        credits: 1,
+      }, () => composeAssistantAnswer(evalCase.input));
+      const durationMs = Number((performance.now() - startedAt).toFixed(1));
+      const failures: string[] = [];
+      if (output.answerMode !== "LLM_COMPOSED") failures.push("provider composition fell back to deterministic output");
+      for (const pattern of evalCase.required) {
+        if (!pattern.test(output.answer)) failures.push(`missing required pattern ${pattern}`);
+      }
+      for (const pattern of evalCase.forbidden) {
+        if (pattern.test(output.answer)) failures.push(`matched forbidden pattern ${pattern}`);
+      }
+      if (durationMs > 15_000) failures.push(`latency ${durationMs}ms exceeded 15000ms`);
+
+      const ledger = await withTenantRlsContext(prisma, tenant.id, async (tx) => {
+        const root = await tx.aiUsageReservation.findFirst({
+          where: {
+            tenantId: tenant.id,
+            kind: "OPERATION",
+            idempotencyKeyHash: hashAiIdempotencyKey(idempotencyKey),
+          },
+          select: { id: true, state: true, actualCredits: true },
+        });
+        const [children, audit] = root
+          ? await Promise.all([
+              tx.aiUsageReservation.findMany({
+                where: { tenantId: tenant.id, parentReservationId: root.id, kind: "PROVIDER_CALL" },
+                select: { state: true, providerStartedAtUtc: true, actualCostMicros: true },
+              }),
+              tx.aiUsageEvent.findFirst({
+                where: { tenantId: tenant.id, rootReservationId: root.id },
+                select: { promptText: true, promptRedacted: true, insightSummary: true },
+              }),
+            ])
+          : [[], null] as const;
+        return { root, children, audit };
+      });
+      if (ledger.root?.state !== "SETTLED" || ledger.root.actualCredits !== 1) {
+        failures.push("usage root reservation did not settle with one credit");
+      }
+      if (ledger.children.length !== 1 || ledger.children[0]?.state !== "SETTLED" || !ledger.children[0].providerStartedAtUtc) {
+        failures.push("provider call did not create one started, settled child reservation");
+      }
+      if (!ledger.audit || ledger.audit.promptText !== null || ledger.audit.promptRedacted !== null || ledger.audit.insightSummary !== null) {
+        failures.push("ledger accounting audit retained provider or prompt content");
+      }
+      results.push({
+        name: evalCase.name,
+        passed: failures.length === 0,
+        failures,
+        answerMode: output.answerMode,
+        model: output.model,
+        durationMs,
+        promptTokens: output.telemetry?.promptTokens ?? 0,
+        completionTokens: output.telemetry?.completionTokens ?? 0,
+        estimatedCostUsd: output.telemetry?.estimatedCostUsd ?? 0,
+      });
+    }
+
+    const durations = results.map((entry) => entry.durationMs).sort((left, right) => left - right);
+    const p95Index = Math.max(0, Math.ceil(durations.length * 0.95) - 1);
+    const totalEstimatedCostUsd = Number(results.reduce((total, entry) => total + entry.estimatedCostUsd, 0).toFixed(6));
+    const passed = results.filter((entry) => entry.passed).length;
+    const report = {
+      suite: "ai-assistant-provider-synthetic",
+      dataPolicy: "Synthetic fixtures only; no tenant or production data.",
+      endpointStorage: "store=false",
+      ledgerPolicy: "Each provider call uses a settled governed usage reservation; accounting rows retain no prompt or provider content.",
+      passed,
+      total: results.length,
+      score: passed / results.length,
+      p95DurationMs: durations[p95Index] ?? 0,
+      totalEstimatedCostUsd,
+      results,
+    };
+
+    console.log(JSON.stringify(report, null, 2));
+    if (passed !== results.length || totalEstimatedCostUsd > 0.05) process.exitCode = 1;
+  } finally {
+    try {
+      if (tenantId) await prisma.tenant.delete({ where: { id: tenantId } });
+    } finally {
+      try {
+        if (userId) await prisma.user.delete({ where: { id: userId } });
+      } finally {
+        await prisma.$disconnect();
+      }
+    }
   }
-
-  const durations = results.map((entry) => entry.durationMs).sort((left, right) => left - right);
-  const p95Index = Math.max(0, Math.ceil(durations.length * 0.95) - 1);
-  const totalEstimatedCostUsd = Number(results.reduce((total, entry) => total + entry.estimatedCostUsd, 0).toFixed(6));
-  const passed = results.filter((entry) => entry.passed).length;
-  const report = {
-    suite: "ai-assistant-provider-synthetic",
-    dataPolicy: "Synthetic fixtures only; no tenant or production data.",
-    endpointStorage: "store=false",
-    passed,
-    total: results.length,
-    score: passed / results.length,
-    p95DurationMs: durations[p95Index] ?? 0,
-    totalEstimatedCostUsd,
-    results,
-  };
-
-  console.log(JSON.stringify(report, null, 2));
-  if (passed !== results.length || totalEstimatedCostUsd > 0.05) process.exitCode = 1;
 }
 
 void main().catch((error: unknown) => {

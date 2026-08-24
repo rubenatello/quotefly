@@ -132,7 +132,7 @@ function sanitizeQuoteLines(value: unknown) {
     if (!isRecord(candidate)) return [];
     const description = getString(candidate.description);
     if (!description || description.length > 500) return [];
-    const line: Record<string, string | number> = { description };
+    const line: Record<string, string | number | boolean> = { description };
     const quantity = getFiniteNumber(candidate.quantity);
     if (quantity !== null && quantity >= 0) line.quantity = quantity;
     if (candidate.sectionType === "INCLUDED" || candidate.sectionType === "ALTERNATE") {
@@ -140,6 +140,16 @@ function sanitizeQuoteLines(value: unknown) {
     }
     const sectionLabel = getString(candidate.sectionLabel);
     if (sectionLabel && sectionLabel.length <= 120) line.sectionLabel = sectionLabel;
+    const sourcePresetId = getString(candidate.sourcePresetId);
+    if (sourcePresetId && sourcePresetId.length <= 200) line.sourcePresetId = sourcePresetId;
+    if (candidate.unitType === "FLAT" || candidate.unitType === "SQ_FT" || candidate.unitType === "HOUR" || candidate.unitType === "EACH") {
+      line.unitType = candidate.unitType;
+    }
+    const unitPrice = getFiniteNumber(candidate.unitPrice);
+    if (unitPrice !== null && unitPrice >= 0) line.unitPrice = unitPrice;
+    const unitCost = getFiniteNumber(candidate.unitCost);
+    if (unitCost !== null && unitCost >= 0) line.unitCost = unitCost;
+    if (candidate.catalogMatched === true) line.catalogMatched = true;
     return [line];
   });
 }
@@ -172,7 +182,7 @@ function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown)
       ["prompt", 2_000], ["customerId", 200], ["customerName", 500], ["customerEmail", 500],
       ["customerPhone", 100], ["quoteId", 200], ["serviceType", 32], ["title", 500], ["scopeText", 4_000],
     ] as const) copyString(payload, value, key, maxLength);
-    for (const key of ["squareFeetEstimate", "squareFeetEstimateLow", "squareFeetEstimateHigh", "estimatedTotalAmount", "estimatedTaxAmount", "estimatedInternalCostAmount", "retrievedSourceCount"] as const) {
+    for (const key of ["squareFeetEstimate", "squareFeetEstimateLow", "squareFeetEstimateHigh", "estimatedDurationHoursLow", "estimatedDurationHoursHigh", "estimatedTotalAmount", "estimatedTaxAmount", "estimatedInternalCostAmount", "retrievedSourceCount"] as const) {
       copyNumber(payload, value, key);
     }
     copyBoolean(payload, value, "useWorkspaceContext");

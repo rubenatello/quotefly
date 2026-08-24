@@ -123,6 +123,44 @@ function routeSchema(path: PublicRoutePath) {
     };
   }
 
+  if (path === "/about") {
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "AboutPage",
+          "@id": `${canonical}#page`,
+          name: route.heading,
+          description: route.description,
+          url: canonical,
+          isPartOf: { "@id": `${PUBLIC_SITE_URL}/#website` },
+          publisher: { "@id": `${PUBLIC_SITE_URL}/#organization` },
+          about: { "@id": `${PUBLIC_SITE_URL}/#software` },
+        },
+        {
+          "@type": "Organization",
+          "@id": `${PUBLIC_SITE_URL}/#organization`,
+          name: "QuoteFly",
+          url: `${PUBLIC_SITE_URL}/`,
+          logo: `${PUBLIC_SITE_URL}/logo.png`,
+        },
+        {
+          "@type": "WebSite",
+          "@id": `${PUBLIC_SITE_URL}/#website`,
+          name: "QuoteFly",
+          url: `${PUBLIC_SITE_URL}/`,
+          publisher: { "@id": `${PUBLIC_SITE_URL}/#organization` },
+        },
+        {
+          ...softwareApplication,
+          "@id": `${PUBLIC_SITE_URL}/#software`,
+          description: PUBLIC_ROUTE_SEO["/"].description,
+          url: `${PUBLIC_SITE_URL}/`,
+        },
+      ],
+    };
+  }
+
   if (route.schemaType === "SoftwareApplication") {
     return { "@context": "https://schema.org", ...softwareApplication };
   }

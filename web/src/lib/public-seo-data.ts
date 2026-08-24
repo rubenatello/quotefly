@@ -150,13 +150,13 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/about": {
     path: "/about",
-    lastModified: "2026-08-01",
-    title: "About QuoteFly | Contractor Quoting Software",
+    lastModified: "2026-08-24",
+    title: "About QuoteFly | Quoting, CRM & Dispatch Software",
     description:
-      "Learn why QuoteFly is being built as a focused quoting and lightweight CRM tool for contractors who work from the field.",
-    heading: "Built for contractors who move fast",
+      "QuoteFly brings quoting, customer management, job scheduling, and dispatch into one practical workflow for solo operators and small service teams.",
+    heading: "We are building the easiest way to quote, manage customers, and dispatch work.",
     summary:
-      "QuoteFly is focused on reducing the time between a new customer request, a clear estimate, and practical follow-up.",
+      "QuoteFly is contractor operations software that keeps customers, quotes, accepted Jobs, scheduled visits, dispatch status, and internal invoice records connected.",
     schemaType: "AboutPage",
   },
   "/support": {

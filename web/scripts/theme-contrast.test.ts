@@ -76,6 +76,7 @@ for (const [name, block] of [["light", light], ["dark", dark]] as const) {
     expectContrast(block, "kody-trigger-text", "kody-trigger", 4.5, `${name} Kody trigger`);
     expectContrast(block, "kody-trigger-text", "kody-trigger-hover", 4.5, `${name} Kody trigger hover`);
     expectContrast(block, "kody-trigger-text", "kody-trigger-active", 4.5, `${name} Kody trigger active`);
+    expectContrast(block, "brand-orange-contrast", "brand-orange", 4.5, `${name} brand-orange label`);
   });
 }
 

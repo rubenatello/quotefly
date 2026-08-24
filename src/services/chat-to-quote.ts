@@ -1,11 +1,17 @@
 import { ServiceCategory, inferServiceType } from "./quote-generator";
-import { findBestStandardWorkPresetMatch, findStandardWorkPresetMatches } from "./work-preset-catalog";
+import {
+  findBestStandardWorkPresetMatch,
+  findStandardWorkPresetMatches,
+  type StandardWorkPresetDefinition,
+} from "./work-preset-catalog";
 
 export interface ChatQuoteLineItemSuggestion {
   description: string;
   quantity: number;
   sectionType?: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
+  catalogKey?: string;
+  unitType?: "FLAT" | "SQ_FT" | "HOUR" | "EACH";
 }
 
 export interface ParsedChatToQuoteDraft {
@@ -22,6 +28,8 @@ export interface ParsedChatToQuoteDraft {
   estimatedTotalAmount: number | null;
   estimatedTaxAmount: number | null;
   estimatedInternalCostAmount: number | null;
+  estimatedDurationHoursLow: number | null;
+  estimatedDurationHoursHigh: number | null;
   lineItems: ChatQuoteLineItemSuggestion[];
 }
 
@@ -47,6 +55,10 @@ const STRUCTURED_PROMPT_LINE_PATTERN = /^(?:line|item)\s*(\d+)\s*[:\-]\s*(.+)$/i
 const STRUCTURED_PROMPT_QTY_PATTERN = /\b(?:qty|quantity)\s*[:=]?\s*([\d,]+(?:\.\d+)?(?:\s*[kK])?)/i;
 const STRUCTURED_PROMPT_ROOFING_SQUARE_QTY_PATTERN =
   /\b(?:qty|quantity)\s*[:=]?\s*([\d,]+(?:\.\d+)?(?:\s*[kK])?)\s*(?:roofing\s*)?squares?\b/i;
+const DURATION_HOURS_RANGE_PATTERN =
+  /\b(?:about|around|approximately|roughly|estimated?|take|takes|taking)?\s*(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?)\s*(?:labor\s*)?(?:hours?|hrs?)\b/i;
+const DURATION_HOURS_PATTERN =
+  /\b(?:about|around|approximately|roughly|estimated?|take|takes|taking)?\s*(\d+(?:\.\d+)?)\s*(?:labor\s*)?(?:hours?|hrs?)\b/i;
 
 function normalizePrompt(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim();
@@ -341,15 +353,70 @@ function extractNamedAmount(prompt: string, patterns: RegExp[]): number | null {
 }
 
 function extractCustomerName(prompt: string): string | undefined {
-  const primaryMatch = prompt.match(
-    /\b(?:new\s+quote|quote|estimate)\s+for\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=\s*(?:[,.\d]|$))/i,
+  const explicitCustomerMatch = prompt.match(
+    /\b(?:customer|client)\s+(?:named?\s+)?([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3})(?=\s*(?:[,.;:]|\b(?:phone|email|number|should|please|who|that|with)\b|$))/i,
   );
-  const fallbackMatch = prompt.match(
-    /\bfor\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3})(?=\s*(?:[,.\d]|$))/i,
+  const directQuoteMatch = prompt.match(
+    /\b(?:new\s+quote|quote|estimate)\s+for\s+(?!review\b)([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3}?)(?=\s*(?:[,.;:]|\d|$)|\s+(?:for|to|with|about|covering|including)\b)/i,
   );
-  const candidate = primaryMatch?.[1] ?? fallbackMatch?.[1];
+  const directMatchEnd = directQuoteMatch?.index === undefined
+    ? -1
+    : directQuoteMatch.index + directQuoteMatch[0].length;
+  const trailingForMatches = Array.from(prompt.matchAll(
+    /\bfor\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3}?)(?=\s*(?:[,.;:]|\d|$)|\s+\b(?:phone|email|number)\b)/gi,
+  ));
+  const trailingCustomerMatch = [...trailingForMatches]
+    .reverse()
+    .filter((match) => match.index === undefined || match.index >= directMatchEnd)
+    .map((match) => match[1]?.trim())
+    .find((value): value is string => Boolean(
+      value
+      && !/(?:^|\s)(?:review|approval)$/i.test(value)
+      && !/^(?:inspection|the\s+(?:job|work|project)|this\s+(?:job|work|project))$/i.test(value),
+    ));
+  const directMatchRemainder = directQuoteMatch?.index === undefined
+    ? ""
+    : prompt.slice(directQuoteMatch.index + directQuoteMatch[0].length);
+  const directQuoteCandidate = /^\s+for\b/i.test(directMatchRemainder)
+    ? undefined
+    : directQuoteMatch?.[1];
+  const candidate = explicitCustomerMatch?.[1] ?? trailingCustomerMatch ?? directQuoteCandidate;
+  const candidateCameFromAmbiguousQuoteFor = !explicitCustomerMatch?.[1]
+    && !trailingCustomerMatch
+    && Boolean(directQuoteCandidate);
   if (!candidate) return undefined;
-  return candidate.trim().replace(/[,.]$/, "");
+  const normalized = candidate.trim().replace(/[,.]$/, "");
+  if (
+    /(?:^|\s)(?:review|approval)$/i.test(normalized)
+    || /^(?:inspection|the\s+(?:job|work|project)|this\s+(?:job|work|project))$/i.test(normalized)
+    || (candidateCameFromAmbiguousQuoteFor
+      && /\b(?:replacement|repair|installation|install|service|labor|inspection|maintenance|remodel|roofing|plumbing|flooring|landscaping|construction)\b/i.test(normalized))
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function extractDurationHours(prompt: string): { low: number | null; high: number | null } {
+  const rangeMatch = prompt.match(DURATION_HOURS_RANGE_PATTERN);
+  if (rangeMatch?.[1] && rangeMatch[2]) {
+    const first = Number(rangeMatch[1]);
+    const second = Number(rangeMatch[2]);
+    if (Number.isFinite(first) && Number.isFinite(second) && first > 0 && second > 0) {
+      return {
+        low: Number(Math.min(first, second).toFixed(2)),
+        high: Number(Math.max(first, second).toFixed(2)),
+      };
+    }
+  }
+
+  const singleMatch = prompt.match(DURATION_HOURS_PATTERN);
+  const single = singleMatch?.[1] ? Number(singleMatch[1]) : NaN;
+  if (Number.isFinite(single) && single > 0) {
+    const normalized = Number(single.toFixed(2));
+    return { low: normalized, high: normalized };
+  }
+  return { low: null, high: null };
 }
 
 function serviceTitle(serviceType: ServiceCategory): string {
@@ -494,8 +561,12 @@ function laborDescription(serviceType: ServiceCategory, squareFeetEstimate: numb
   return `${serviceTitle(serviceType)} labor and installation${sqftText}`;
 }
 
-function inferTitle(serviceType: ServiceCategory, prompt: string): string {
-  const matchedStandardPreset = findBestStandardWorkPresetMatch(serviceType, prompt, { primaryOnly: true });
+function inferTitle(
+  serviceType: ServiceCategory,
+  prompt: string,
+  matchedStandardPreset?: StandardWorkPresetDefinition | null,
+): string {
+  matchedStandardPreset ??= findBestStandardWorkPresetMatch(serviceType, prompt, { primaryOnly: true });
   if (matchedStandardPreset) {
     return matchedStandardPreset.name;
   }
@@ -618,24 +689,23 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
   const customerName = extractCustomerName(prompt);
   const customerPhone = prompt.match(PHONE_PATTERN)?.[0];
   const customerEmail = prompt.match(EMAIL_PATTERN)?.[0]?.toLowerCase();
-  const primaryStandardPresetMatch =
-    findStandardWorkPresetMatches(serviceType, prompt, {
-      primaryOnly: true,
-      minimumScore: 2,
-    })[0] ?? null;
+  const estimatedDuration = extractDurationHours(prompt);
+  const allStandardPresetMatches = findStandardWorkPresetMatches(serviceType, prompt, {
+    minimumScore: 2,
+  });
+  const strongestExplicitMatch = allStandardPresetMatches.find((match) => match.score >= 4) ?? null;
+  const primaryStandardPresetMatch = strongestExplicitMatch ??
+    allStandardPresetMatches.find((match) => match.preset.isPrimaryJob) ??
+    null;
   const supplementalStandardPresetMatches = primaryStandardPresetMatch
-    ? findStandardWorkPresetMatches(serviceType, prompt, {
-        excludeCatalogKeys: [primaryStandardPresetMatch.preset.catalogKey],
-        minimumScore: 3,
-      })
+    ? allStandardPresetMatches
+        .filter((match) => match.preset.catalogKey !== primaryStandardPresetMatch.preset.catalogKey && match.score >= 3)
         .filter((match) => !match.preset.isPrimaryJob)
         .slice(0, 2)
     : [];
   const additionalPrimaryPresetMatches = primaryStandardPresetMatch
-    ? findStandardWorkPresetMatches(serviceType, prompt, {
-        excludeCatalogKeys: [primaryStandardPresetMatch.preset.catalogKey],
-        minimumScore: 4,
-      })
+    ? allStandardPresetMatches
+        .filter((match) => match.preset.catalogKey !== primaryStandardPresetMatch.preset.catalogKey && match.score >= 4)
         .filter((match) => match.preset.isPrimaryJob)
         .slice(0, 1)
     : [];
@@ -658,15 +728,44 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
           ),
           sectionType: "INCLUDED" as const,
           sectionLabel: null,
+          catalogKey: match.preset.catalogKey,
+          unitType: match.preset.unitType,
         }))
       : [];
+  const includesHourlyLine = matchedLineItems.some((lineItem) => lineItem.unitType === "HOUR");
+  const durationLineItems: ChatQuoteLineItemSuggestion[] =
+    estimatedDuration.high && !includesHourlyLine
+      ? [{
+          description: `${serviceTitle(serviceType)} labor hours`,
+          quantity: estimatedDuration.high,
+          sectionType: "INCLUDED",
+          sectionLabel: null,
+          unitType: "HOUR",
+        }]
+      : [];
+  const parsedLineItems: ChatQuoteLineItemSuggestion[] =
+    structuredLineItems.length > 0
+      ? structuredLineItems
+      : matchedLineItems.length > 0
+        ? [...matchedLineItems, ...durationLineItems]
+        : [
+            {
+              description: laborDescription(serviceType, squareFeetEstimate),
+              quantity: estimatedDuration.high ?? inferLaborQuantity(serviceType, squareFeetEstimate),
+              unitType: estimatedDuration.high ? "HOUR" : undefined,
+            },
+            {
+              description: inferMaterialDescription(serviceType, prompt),
+              quantity: 1,
+            },
+          ];
 
   return {
     customerName,
     customerPhone,
     customerEmail,
     serviceType,
-    title: inferTitle(serviceType, prompt),
+    title: inferTitle(serviceType, prompt, primaryStandardPresetMatch?.preset),
     scopeText: prompt,
     squareFeetEstimate,
     squareFeetVariancePercent: squareFeetRange.squareFeetVariancePercent,
@@ -675,20 +774,8 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
     estimatedTotalAmount,
     estimatedTaxAmount,
     estimatedInternalCostAmount,
-    lineItems:
-      structuredLineItems.length > 0
-        ? structuredLineItems
-        : matchedLineItems.length > 0
-        ? matchedLineItems
-        : [
-            {
-              description: laborDescription(serviceType, squareFeetEstimate),
-              quantity: inferLaborQuantity(serviceType, squareFeetEstimate),
-            },
-            {
-              description: inferMaterialDescription(serviceType, prompt),
-              quantity: 1,
-            },
-          ],
+    estimatedDurationHoursLow: estimatedDuration.low,
+    estimatedDurationHoursHigh: estimatedDuration.high,
+    lineItems: parsedLineItems,
   };
 }

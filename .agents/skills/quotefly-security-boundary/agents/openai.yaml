@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sentinel: Security Boundary"
+  short_description: "Review tenant, auth, privacy, and providers"
+  default_prompt: "Use $quotefly-security-boundary to review QuoteFly security, tenant isolation, privacy, and provider boundaries."

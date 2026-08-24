@@ -129,6 +129,46 @@ test("pricing describes the paid-AI cap without hiding deterministic Kody tools"
   assert.doesNotMatch(text, /Kody and AI tools pause/i);
 });
 
+test("about page gives search and answer engines a factual product definition", async () => {
+  const html = await readFile(join(distDir, "about", "index.html"), "utf8");
+  const text = decodeHtmlText(html);
+
+  for (const expected of [
+    "QuoteFly is contractor operations software that keeps customers, quotes, accepted Jobs, scheduled visits, dispatch status, and internal invoice records connected.",
+    "solo operators and small service teams",
+    "One customer-to-invoice record. Five clear stages.",
+    "Kody helps draft and review work inside QuoteFly.",
+    "QuoteFly does not claim autonomous booking or sending, route optimization, customer payment collection, or automatic QuickBooks reconciliation.",
+  ]) {
+    assert.ok(text.includes(expected), `about raw HTML must include: ${expected}`);
+  }
+
+  for (const href of ["/services", "/solutions#workflow", "/pricing#basic-plan", "/data-privacy", "/support"]) {
+    assert.ok(html.includes(`href="${href}"`), `about raw HTML must link to ${href}`);
+  }
+
+  assert.ok(html.includes("/images/product/job-detail-mobile-v1.webp"));
+  assert.ok(html.includes("/images/product/activity-my-day-desktop-v1.webp"));
+  assert.ok(html.includes("/images/product/activity-my-day-mobile-v1.webp"));
+  assert.ok(html.includes("Actual QuoteFly interface shown with sanitized fictional customer and Job data."));
+
+  const jsonLdText = extract(
+    html,
+    /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/i,
+    "/about JSON-LD",
+  );
+  const jsonLd = JSON.parse(jsonLdText) as {
+    "@graph"?: Array<{ "@type"?: string; "@id"?: string; url?: string; about?: { "@id"?: string } }>;
+  };
+  const graph = jsonLd["@graph"] ?? [];
+  const aboutPage = graph.find((node) => node["@type"] === "AboutPage");
+  assert.equal(aboutPage?.url, publicCanonicalUrl("/about"));
+  assert.equal(aboutPage?.about?.["@id"], `${PUBLIC_SITE_URL}/#software`);
+  assert.ok(graph.some((node) => node["@id"] === `${PUBLIC_SITE_URL}/#organization`));
+  assert.ok(graph.some((node) => node["@id"] === `${PUBLIC_SITE_URL}/#website`));
+  assert.ok(graph.some((node) => node["@id"] === `${PUBLIC_SITE_URL}/#software`));
+});
+
 test("every public route has unique raw crawlable HTML", async () => {
   const titles = new Set<string>();
   const descriptions = new Set<string>();

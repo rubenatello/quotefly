@@ -13,7 +13,24 @@ jobs:
     name: Synthetic provider-backed Kody quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: quotefly_provider_eval_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d quotefly_provider_eval_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/quotefly_provider_eval_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/quotefly_provider_eval_test
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_ASSISTANT_MODEL: gpt-4o-mini
       OPENAI_ASSISTANT_TIMEOUT_MS: "12000"
@@ -34,6 +51,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Prepare isolated provider evaluation database
+        run: |
+          npm run prisma:generate
+          npm run prisma:migrate:deploy
 
       - name: Run synthetic Kody provider evaluation
         run: |

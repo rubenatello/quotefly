@@ -1,8 +1,8 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phases 0 through 4A, the Phase 2 Job-authority cleanup, Phase 3B calendar, Phase 3C in-app notifications and retention, deterministic Kody schedule tools, and the atomic paid-AI ledger are committed and pushed to `main` at `543fc69`; production deployment is not asserted. The current local sellability candidate adds the public product story and default-off QuickBooks containment and is independently approved for the next explicitly authorized BCP. External email, SMS, payment, and durable accounting-provider workflows remain gated.
+Status: Phases 0 through 4A, the Phase 2 Job-authority cleanup, Phase 3B calendar, Phase 3C in-app notifications and retention, deterministic Kody schedule tools, the atomic paid-AI ledger, public product story, and default-off QuickBooks containment are committed on `main` at `8ceecb1`; production deployment is not asserted. The current uncommitted workspace adds the Kody prompt-to-priced-quote review contract and is pending exact-candidate release gates and independent final review. External email, SMS, payment, and durable accounting-provider workflows remain gated.
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 Owners: Product, Engineering, Security, Operations
 
@@ -214,6 +214,8 @@ Implemented tools are structured database queries and reviewed previews, not fre
 - [x] `LIST_SCHEDULE`
 - [x] `PREPARE_BOOKING`
 - [x] `PREPARE_DISPATCH`
+- [x] `DRAFT_QUOTE` resolves an active assignment-visible customer by authorized context, exact contact, exact name, then partial name; asks for missing new-customer details; retains bounded conversation context; preserves duration ranges; matches the active tenant catalog; and prepares separate priced source-linked Quote Builder lines without creating a Customer or Quote.
+- [x] The Quote Builder applies fresh Kody drafts directly and gives occupied drafts explicit merge, replace, or keep choices without automatically starting a second AI request.
 
 Schedule-tool release-candidate evidence:
 
@@ -233,6 +235,9 @@ Rules:
 - Narrative task/job fields start excluded from vector indexing.
 - Prepare tools return a typed preview and confirmation action; normal API endpoints perform the write after reauthorization.
 - The model cannot claim an action happened until the confirmed API result is recorded.
+- Quote suggestions never create, update, restore, archive, or assign customers. New-customer details enter the existing confirmed customer flow, and final quote creation reauthorizes the customer and rehydrates permission-gated preset cost.
+- Kody customer matching uses active tenant and assignment scope for name, email, phone, selected context, activity, retrieval, and returned references.
+- A quote handoff carries only bounded typed fields, saved preset references, and customer pricing; the builder applies it once after draft recovery and does not automatically start another paid AI pass.
 
 ## Classification defaults
 

@@ -85,14 +85,14 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         actions={
           <>
             <span className="text-sm font-medium text-slate-700">Billed monthly</span>
-            <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-xs font-bold text-emerald-900">
+            <span className="inline-flex items-center rounded-full border border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] px-4 py-2 text-xs font-bold text-[var(--qf-brand-orange-contrast)]">
               Basic · Available now
             </span>
           </>
         }
       />
 
-      <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8" aria-labelledby="current-plan-heading">
+      <section id="basic-plan" className="scroll-mt-24 px-4 py-14 sm:px-6 sm:py-16 lg:px-8" aria-labelledby="current-plan-heading">
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto mb-10 max-w-3xl text-center">
             <p className="text-sm font-bold uppercase tracking-[0.16em] text-blue-800">Current plan</p>
@@ -109,14 +109,14 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
                   <h3 className="text-2xl font-bold text-slate-950">Basic</h3>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-700">For solo operators and lean crews that need to quote the work and keep the resulting Job moving.</p>
                 </div>
-                <span className="rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-900">Available now</span>
+                <span className="rounded-full border border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] px-3 py-1.5 text-xs font-bold text-[var(--qf-brand-orange-contrast)]">Available now</span>
               </div>
 
               <p className="mt-7 flex items-baseline gap-1">
                 <span className="text-5xl font-bold tracking-tight text-slate-950">${PUBLIC_BASIC_PLAN.monthlyPriceUsd}</span>
                 <span className="text-slate-700">/month</span>
               </p>
-              <p className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">
+              <p className="mt-3 rounded-xl border border-[var(--qf-brand-orange)] bg-[var(--qf-brand-orange)] px-3 py-2 text-sm font-semibold text-[var(--qf-brand-orange-contrast)]">
                 {PUBLIC_BASIC_PLAN.trialDays}-day free trial · first paid month ${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}
               </p>
 

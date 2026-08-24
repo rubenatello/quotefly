@@ -908,6 +908,7 @@ export function DashboardProvider({
           quantity: lineItem.quantity,
           unitCost: lineItem.unitCost,
           unitPrice: lineItem.unitPrice,
+          sourcePresetId: lineItem.sourcePresetId,
         })),
       });
       setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId, documentLocale: prev.documentLocale }));

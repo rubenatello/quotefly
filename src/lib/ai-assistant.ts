@@ -56,7 +56,9 @@ import {
   prepareAssistantBooking,
   prepareAssistantDispatch,
 } from "../services/ai-schedule-tools";
+import { prepareCatalogQuoteLines } from "../services/ai-quote-catalog";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
+import { AiUsageLedgerError } from "../services/ai-usage-ledger";
 import type { SupportedLocale } from "./supported-locale";
 
 export { AI_ASSISTANT_TOOLS } from "./ai-assistant-contract";
@@ -225,6 +227,8 @@ const CUSTOMER_DRAFT_DETAIL_PATTERN =
   /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
 const QUOTE_SEND_FOLLOW_UP_PATTERN =
   /^(?:send|email|text|share|use\s+(?:email|text)|the\s+(?:first|second|third|latest)|for\s+|to\s+|enviar|envia|correo|texto|compartir|comparte|usa\s+(?:correo|texto)|la\s+(?:primera|segunda|tercera|ultima)|el\s+(?:primero|segundo|tercero|ultimo)|para\s+|a\s+)/i;
+const QUOTE_WORK_DETAIL_PATTERN =
+  /\b(?:hvac|plumb(?:ing)?|roof(?:ing)?|floor(?:ing)?|garden(?:ing)?|landscap(?:ing)?|construction|repair|replace(?:ment)?|install(?:ation)?|inspect(?:ion)?|diagnos(?:e|is|tic)|service|maintenance|clean(?:ing|up)?|labor|material|fixture|faucet|toilet|sink|heater|pipe|drain|sewer|hours?|hrs?|sq\s*ft|sqft|square\s+feet|techo|plomeria|piso|jardineria|paisajismo|construccion|reparacion|reemplazo|instalacion|inspeccion|servicio|mano\s+de\s+obra|horas?)\b/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me|ir|ve|abrir|abre|navegar|navega|llevame|moverme|muestrame)\b/i;
 const CONVERSATION_FOLLOW_UP_PATTERN =
   /^(?:and\b|also\b|what\s+about\b|how\s+about\b|now\b|same\b|show\s+me\s+more\b|which\s+(?:one|ones)\b|break\s+(?:that|it)\s+down\b|compare\s+(?:that|them|those)\b|y\b|ademas\b|ahora\b|que\s+tal\b|y\s+si\b|muestrame\s+mas\b|cual(?:es)?\b|compara\b)/i;
@@ -955,6 +959,9 @@ export function resolveAssistantTool(
   if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
 
   const previousTool = previousOperationalTool(conversation);
+  if (previousTool === "DRAFT_QUOTE" && CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)) {
+    return "DRAFT_QUOTE";
+  }
   if (previousTool === "DRAFT_CUSTOMER" && CUSTOMER_DRAFT_DETAIL_PATTERN.test(routingMessage)) {
     return "DRAFT_CUSTOMER";
   }
@@ -3691,6 +3698,44 @@ function quotePromptForParser(message: string) {
     .replace(/\b(?:costo\s+interno|nuestro\s+costo)\s+(?:es|de|sera|seria)?\s*/gi, "internal cost ");
 }
 
+function quotePromptForConversation(params: AiAssistantInput) {
+  const currentPrompt = quotePromptForParser(params.message);
+  const quoteNounPattern = /\b(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b/i;
+  const quoteTurns = (params.conversation ?? [])
+    .filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
+    .map((turn) => quotePromptForParser(turn.message.slice(0, 500)));
+  if (!quoteTurns.length || quoteNounPattern.test(currentPrompt)) {
+    return currentPrompt;
+  }
+
+  let latestQuoteAnchorIndex = -1;
+  for (let index = quoteTurns.length - 1; index >= 0; index -= 1) {
+    if (!quoteNounPattern.test(quoteTurns[index] ?? "")) continue;
+    latestQuoteAnchorIndex = index;
+    break;
+  }
+  const retainedTurns = quoteTurns.slice(Math.max(0, latestQuoteAnchorIndex));
+  let mergedPrompt = retainedTurns.shift() ?? "";
+
+  for (const reply of [...retainedTurns, currentPrompt]) {
+    const normalizedReply = normalizeAssistantRoutingText(reply);
+    if (!normalizedReply) continue;
+    const accumulatedDraft = parseChatToQuotePrompt(mergedPrompt);
+    const needsCustomerName = !accumulatedDraft.customerName;
+    const isShortEntityReply = CONTEXTUAL_ENTITY_QUERY_PATTERN.test(normalizedReply);
+    const isDirectContactReply = CUSTOMER_DRAFT_DETAIL_PATTERN.test(normalizedReply);
+    const retainedReply = needsCustomerName && isShortEntityReply && !isDirectContactReply
+      ? `customer ${normalizedReply}`
+      : normalizedReply;
+    const priorPrompt = mergedPrompt.trimEnd();
+    mergedPrompt = priorPrompt
+      ? `${priorPrompt}${/[.!?;:,]$/.test(priorPrompt) ? "" : "."}\n${retainedReply}`
+      : retainedReply;
+  }
+
+  return mergedPrompt;
+}
+
 function spanishQuoteTitle(serviceType: ServiceCategory) {
   if (serviceType === "ROOFING") return "Cotización de techado";
   if (serviceType === "HVAC") return "Cotización de HVAC";
@@ -3770,7 +3815,7 @@ async function runDraftQuotePreview(
         },
       })
     : null;
-  const parserPrompt = quotePromptForParser(params.message);
+  const parserPrompt = quotePromptForConversation(params);
   const draft = parseChatToQuotePrompt(parserPrompt);
   const selectedCustomerId = params.context?.customerId ?? selectedQuote?.customerId ?? null;
   const scopedCustomer = selectedQuote?.customer ?? (selectedCustomerId
@@ -3783,17 +3828,17 @@ async function runDraftQuotePreview(
         select: { id: true, fullName: true, email: true, phone: true },
       })
     : null);
-  const parsedCustomerMatches = !selectedCustomerId && !scopedCustomer && (
-    draft.customerName || draft.customerEmail || draft.customerPhone
-  )
+  const parsedPhoneDigits = draft.customerPhone
+    ? normalizeUsPhoneDigits(draft.customerPhone) ?? normalizePhoneSearchDigits(draft.customerPhone)
+    : null;
+  const exactContactMatches = !scopedCustomer && (draft.customerEmail || parsedPhoneDigits)
     ? await prisma.customer.findMany({
         where: {
           ...tenantActiveCustomerScope(params.access.tenantId),
           ...assignedCustomerScope(params.access),
           OR: [
-            ...(draft.customerName ? [{ fullName: { equals: draft.customerName, mode: "insensitive" as const } }] : []),
             ...(draft.customerEmail ? [{ email: { equals: draft.customerEmail, mode: "insensitive" as const } }] : []),
-            ...(draft.customerPhone ? [{ phone: formatUsPhone(draft.customerPhone) ?? draft.customerPhone }] : []),
+            ...(parsedPhoneDigits ? [{ phoneDigits: parsedPhoneDigits }] : []),
           ],
         },
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -3801,15 +3846,140 @@ async function runDraftQuotePreview(
         select: { id: true, fullName: true, email: true, phone: true },
       })
     : [];
-  const selectedCustomer = scopedCustomer ?? (parsedCustomerMatches.length === 1 ? parsedCustomerMatches[0] : null);
+  const exactNameMatches = !scopedCustomer && exactContactMatches.length === 0 && draft.customerName
+    ? await prisma.customer.findMany({
+        where: {
+          ...tenantActiveCustomerScope(params.access.tenantId),
+          ...assignedCustomerScope(params.access),
+          fullName: { equals: draft.customerName, mode: "insensitive" },
+        },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: 4,
+        select: { id: true, fullName: true, email: true, phone: true },
+      })
+    : [];
+  const partialNameMatches = !scopedCustomer
+    && exactContactMatches.length === 0
+    && exactNameMatches.length === 0
+    && draft.customerName
+    ? await prisma.customer.findMany({
+        where: {
+          ...tenantActiveCustomerScope(params.access.tenantId),
+          ...assignedCustomerScope(params.access),
+          fullName: { contains: draft.customerName, mode: "insensitive" },
+        },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: 4,
+        select: { id: true, fullName: true, email: true, phone: true },
+      })
+    : [];
+  const customerCandidates = exactContactMatches.length
+    ? exactContactMatches
+    : exactNameMatches.length
+      ? exactNameMatches
+      : partialNameMatches;
+  const selectedCustomer = scopedCustomer ?? (customerCandidates.length === 1 ? customerCandidates[0] : null);
   const serviceType = params.context?.serviceType ?? selectedQuote?.serviceType ?? draft.serviceType;
   const title = selectedQuote?.title || (isSpanishAssistant(params) ? spanishQuoteTitle(serviceType) : draft.title);
-  const scopeText = selectedQuote?.scopeText || params.message;
+  const scopeText = selectedQuote?.scopeText || parserPrompt;
+
+  const missingCustomer = !scopedCustomer && !draft.customerName && !draft.customerEmail && !draft.customerPhone;
+  const unmatchedCustomerNeedsName = !scopedCustomer && customerCandidates.length === 0
+    && Boolean(draft.customerEmail || draft.customerPhone) && !draft.customerName;
+  const unmatchedCustomerNeedsPhone = !scopedCustomer && customerCandidates.length === 0
+    && Boolean(draft.customerName || draft.customerEmail) && !draft.customerPhone;
+  const missingWork = !selectedQuote && !QUOTE_WORK_DETAIL_PATTERN.test(parserPrompt);
+  if (missingCustomer || unmatchedCustomerNeedsName || unmatchedCustomerNeedsPhone || missingWork) {
+    const answer = missingCustomer
+      ? localeText(
+          params,
+          "Who is this quote for? Reply with the customer name, email, or phone number. I'll keep the job details from this request.",
+          "¿Para quién es esta cotización? Responde con el nombre, correo o teléfono del cliente. Conservaré los detalles del trabajo de esta solicitud.",
+        )
+      : unmatchedCustomerNeedsName
+        ? localeText(
+            params,
+            "I could not find an active assigned customer with those contact details. Reply with the customer's name to prepare a new linked customer and keep this quote draft.",
+            "No encontré un cliente activo asignado con esos datos de contacto. Responde con el nombre del cliente para preparar un cliente nuevo vinculado y conservar este borrador.",
+          )
+        : unmatchedCustomerNeedsPhone
+          ? localeText(
+              params,
+              `I could not find an active assigned customer${draft.customerName ? ` named ${draft.customerName}` : ""}. Reply with the phone number to prepare a new linked customer, or provide a different email or phone to search again. I'll keep the quote details.`,
+              `No encontré un cliente activo asignado${draft.customerName ? ` llamado ${draft.customerName}` : ""}. Responde con el teléfono para preparar un cliente nuevo vinculado, o proporciona otro correo o teléfono para buscar de nuevo. Conservaré los detalles de la cotización.`,
+            )
+          : localeText(
+              params,
+              "What work should this quote cover? Reply with the trade and job, product, or service. I'll keep the customer from this request.",
+              "¿Qué trabajo debe incluir esta cotización? Responde con el oficio y el trabajo, producto o servicio. Conservaré el cliente de esta solicitud.",
+            );
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: "C2_CUSTOMER_CONFIDENTIAL",
+      sourceTypes: ["Quote"],
+      sourceLabels: ["Quote drafting clarification"],
+      customerId: scopedCustomer?.id ?? null,
+      quoteId: selectedQuote?.id ?? null,
+      serviceType,
+      creditsConsumed: 0,
+      riskNote: "Requested a missing quote input before provider retrieval or draft creation.",
+    });
+    const clarificationDiagnostics = diagnostics({
+      input: params,
+      resolvedTool: "DRAFT_QUOTE",
+      resultCount: 0,
+      citationCount: 0,
+      emptyReason: missingCustomer
+        ? "Customer identity is required to prepare the review draft."
+        : unmatchedCustomerNeedsName || unmatchedCustomerNeedsPhone
+          ? "No active assigned customer matched and required new-customer details are incomplete."
+          : "Work details are required to prepare the review draft.",
+      archivePolicy: "No customer, quote, or catalog rows are retrieved until the missing prompt detail is supplied.",
+      filters: {
+        currentPage: params.context?.currentPage,
+        scopedCustomer: Boolean(selectedCustomerId),
+        scopedQuote: Boolean(params.context?.quoteId),
+        includeArchivedRequested: Boolean(params.context?.includeArchived),
+        includeArchivedEffective: false,
+      },
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+        answer,
+        results: [],
+        citations: [],
+        actions: [],
+        auditEventId: event.id,
+        fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: clarificationDiagnostics,
+      },
+    };
+  }
+
+  const mayViewInternalCost = hasCapability(params.access, "viewInternalCosts");
+  const preparedCatalog = await prepareCatalogQuoteLines(prisma, {
+    tenantId: params.access.tenantId,
+    serviceType,
+    prompt: parserPrompt,
+    parsedLines: draft.lineItems,
+    estimatedDurationHoursHigh: draft.estimatedDurationHoursHigh,
+    includeInternalCost: mayViewInternalCost,
+  });
   let governedRetrieval: AiRetrievalResult | null = null;
+  let retrievalDegraded = false;
   try {
     governedRetrieval = await buildGovernedQuoteAiContext(prisma, {
       access: params.access,
-      query: params.message,
+      query: parserPrompt,
       purpose: selectedQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
       serviceType,
       requestId: params.access.requestId,
@@ -3818,12 +3988,18 @@ async function runDraftQuotePreview(
       priorUserQueries: params.conversation
         ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
         .map((turn) => turn.message),
+      refreshIndex: Boolean(selectedQuote),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AiUsageLedgerError) throw error;
+    retrievalDegraded = true;
     // Retrieval is additive. Kody still returns a review-only deterministic
     // preview when indexing or the embedding provider is temporarily unavailable.
   }
-  const includeInternalCost = hasCapability(params.access, "viewInternalCosts") && draft.estimatedInternalCostAmount !== null;
+  const includeInternalCost = mayViewInternalCost && (
+    draft.estimatedInternalCostAmount !== null
+    || preparedCatalog.lines.some((lineItem) => lineItem.unitCost !== null)
+  );
   const promptClassification: DataClassification = includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL";
   const retrievalClassification = governedRetrieval?.chunks.reduce<DataClassification>(
     (current, chunk) => highestClassification(current, chunk.classification),
@@ -3831,11 +4007,14 @@ async function runDraftQuotePreview(
   ) ?? "C0_PUBLIC";
   const maxClassification = highestClassification(promptClassification, retrievalClassification);
   const retrievedSourceCount = governedRetrieval?.citations.length ?? 0;
-  const answer = parsedCustomerMatches.length > 1
-    ? localeText(params, `I found ${parsedCustomerMatches.length} active assigned customers matching ${draft.customerName ?? "those contact details"}. Choose the correct customer before opening the review draft.`, `Encontré ${parsedCustomerMatches.length} clientes activos asignados que coinciden con ${draft.customerName ?? "esos datos de contacto"}. Elige al cliente correcto antes de abrir el borrador para revisión.`)
+  const catalogMatchedCount = preparedCatalog.lines.filter((lineItem) => lineItem.catalogMatched).length;
+  const answer = customerCandidates.length > 1
+    ? localeText(params, `I found ${customerCandidates.length} active assigned customers matching ${draft.customerName ?? "those contact details"}. Choose the correct customer before opening the review draft.`, `Encontré ${customerCandidates.length} clientes activos asignados que coinciden con ${draft.customerName ?? "esos datos de contacto"}. Elige al cliente correcto antes de abrir el borrador para revisión.`)
     : retrievedSourceCount
-    ? localeText(params, `Prepared a ${serviceType.toLowerCase()} quote preview for ${title} and found ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Open the draft to generate the grounded version, then review scope and pricing before saving or sending.`, `Preparé una vista previa de la cotización ${title} y encontré ${retrievedSourceCount} fuente${retrievedSourceCount === 1 ? " relevante" : "s relevantes"} del espacio de trabajo. Abre el borrador para generar la versión respaldada y revisa el alcance y los precios antes de guardar o enviar.`)
-    : localeText(params, `Prepared a preview for a ${serviceType.toLowerCase()} quote: ${title}. I did not find useful saved workspace context, so review it carefully before creating or sending anything.`, `Preparé una vista previa de la cotización ${title}. No encontré contexto guardado útil en el espacio de trabajo, así que revísala con cuidado antes de crear o enviar algo.`);
+    ? localeText(params, `Prepared a priced ${serviceType.toLowerCase()} review draft for ${title} using ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"} and ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios para revisar de ${title} usando ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo y ${retrievedSourceCount} fuente${retrievedSourceCount === 1 ? " relevante" : "s relevantes"} del espacio de trabajo. Revisa el alcance y los precios antes de guardar o enviar.`)
+    : !selectedCustomer
+      ? localeText(params, `Prepared a ${serviceType.toLowerCase()} review draft with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. I could not match an active assigned customer, so add or select the customer before saving.`, `Preparé un borrador de ${serviceType.toLowerCase()} para revisar con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. No pude encontrar un cliente activo asignado, así que agrega o selecciona el cliente antes de guardar.`)
+      : localeText(params, `Prepared a priced ${serviceType.toLowerCase()} review draft for ${title} with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios de ${serviceType.toLowerCase()} para revisar de ${title} con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. Revisa el alcance y los precios antes de guardar o enviar.`);
   const results = [{
     title,
     serviceType,
@@ -3844,10 +4023,21 @@ async function runDraftQuotePreview(
     estimatedTotalAmount: draft.estimatedTotalAmount,
     estimatedTaxAmount: draft.estimatedTaxAmount,
     estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
-    lineItemCount: draft.lineItems.length,
+    estimatedDurationHoursLow: draft.estimatedDurationHoursLow,
+    estimatedDurationHoursHigh: draft.estimatedDurationHoursHigh,
+    lineItemCount: preparedCatalog.lines.length,
+    catalogMatchedCount,
   }];
   const citations: AiAssistantCitation[] = [
     { key: "A1", label: localeText(params, "Parsed quote drafting prompt", "Solicitud analizada para preparar la cotización"), sourceType: "Quote", classification: promptClassification },
+    ...preparedCatalog.matchedPresetLabels.map((label, index) => ({
+      key: `P${index + 1}`,
+      label,
+      sourceType: "WorkPreset",
+      classification: includeInternalCost
+        ? "C3_FINANCIAL_CONFIDENTIAL" as const
+        : "C1_BUSINESS_INTERNAL" as const,
+    })),
     ...(governedRetrieval?.citations.map((citation) => ({
       key: citation.key,
       label: citation.label,
@@ -3856,7 +4046,7 @@ async function runDraftQuotePreview(
     })) ?? []),
   ];
   const baseActionPayload = {
-      prompt: params.message,
+      prompt: parserPrompt,
       customerId: selectedCustomer?.id ?? null,
       customerName: selectedCustomer?.fullName ?? draft.customerName ?? null,
       customerEmail: selectedCustomer?.email ?? draft.customerEmail ?? null,
@@ -3871,31 +4061,43 @@ async function runDraftQuotePreview(
       estimatedTotalAmount: draft.estimatedTotalAmount,
       estimatedTaxAmount: draft.estimatedTaxAmount,
       estimatedInternalCostAmount: includeInternalCost ? draft.estimatedInternalCostAmount : null,
-      lineItems: draft.lineItems.map((lineItem) => ({
+      estimatedDurationHoursLow: draft.estimatedDurationHoursLow,
+      estimatedDurationHoursHigh: draft.estimatedDurationHoursHigh,
+      lineItems: preparedCatalog.lines.map((lineItem) => ({
         description: lineItem.description,
         quantity: lineItem.quantity,
-        sectionType: lineItem.sectionType ?? "INCLUDED",
-        sectionLabel: lineItem.sectionLabel ?? null,
+        sectionType: lineItem.sectionType,
+        sectionLabel: lineItem.sectionLabel,
+        sourcePresetId: lineItem.sourcePresetId,
+        unitType: lineItem.unitType,
+        unitPrice: lineItem.unitPrice,
+        ...(includeInternalCost ? { unitCost: lineItem.unitCost } : {}),
       })),
-      useWorkspaceContext: retrievedSourceCount > 0,
-      retrievedSourceCount,
+      useWorkspaceContext: retrievedSourceCount > 0 || catalogMatchedCount > 0,
+      retrievedSourceCount: retrievedSourceCount + catalogMatchedCount,
       retrievedSourceLabels: Array.from(
-        new Set(governedRetrieval?.citations.map((citation) => citation.label) ?? []),
+        new Set([
+          ...preparedCatalog.matchedPresetLabels,
+          ...(governedRetrieval?.citations.map((citation) => citation.label) ?? []),
+        ]),
       ).slice(0, 6),
-    };
-  const actions: AiAssistantAction[] = parsedCustomerMatches.length > 1
-    ? parsedCustomerMatches.slice(0, 3).map((customer) => ({
-        type: "OPEN_QUOTE_DRAFT",
-        label: localeText(params, `Draft for ${customer.fullName} · ${formatUsPhone(customer.phone) ?? customer.phone}`, `Borrador para ${customer.fullName} · ${formatUsPhone(customer.phone) ?? customer.phone}`),
-        requiresConfirmation: true,
-        payload: {
-          ...baseActionPayload,
-          customerId: customer.id,
-          customerName: customer.fullName,
-          customerEmail: customer.email,
-          customerPhone: customer.phone,
-        },
-      }))
+  };
+  const actions: AiAssistantAction[] = customerCandidates.length > 1
+    ? customerCandidates.slice(0, 3).map((customer, index) => {
+        const contactLabel = customer.email || customer.phone || `match ${index + 1}`;
+        return {
+          type: "OPEN_QUOTE_DRAFT",
+          label: localeText(params, `Draft for ${customer.fullName} · ${contactLabel}`, `Borrador para ${customer.fullName} · ${contactLabel}`),
+          requiresConfirmation: true,
+          payload: {
+            ...baseActionPayload,
+            customerId: customer.id,
+            customerName: customer.fullName,
+            customerEmail: customer.email,
+            customerPhone: customer.phone,
+          },
+        };
+      })
     : [{
         type: "OPEN_QUOTE_DRAFT",
         label: localeText(params, "Review quote draft", "Revisar borrador de la cotización"),
@@ -3911,7 +4113,7 @@ async function runDraftQuotePreview(
     resolvedTool: "DRAFT_QUOTE",
     resultCount: 1,
     citationCount: citations.length,
-    emptyReason: selectedCustomer || selectedQuote ? null : "No selected active customer or quote context was found; preview was derived from the prompt only.",
+    emptyReason: selectedCustomer || selectedQuote ? null : "No active assigned customer matched; the draft contains an unconfirmed customer form.",
     archivePolicy: "Quote drafting context uses active tenant customers and quotes only.",
     filters: {
       currentPage: params.context?.currentPage,
@@ -3922,21 +4124,31 @@ async function runDraftQuotePreview(
       includeArchivedRequested: Boolean(params.context?.includeArchived),
       includeArchivedEffective: false,
       retrievedSourceCount,
+      catalogMatchedCount,
+      retrievalDegraded,
     },
   });
   const composition = await composeAssistantAnswer({
-    userMessage: params.message,
+    userMessage: parserPrompt,
     tool: "DRAFT_QUOTE",
     deterministicAnswer: answer,
     maxClassification,
     results,
     citations,
-    actions,
+    actions: actions.map((action, index) => ({
+      ...action,
+      label: customerCandidates.length > 1
+        ? localeText(params, `Review customer match ${index + 1}`, `Revisar coincidencia de cliente ${index + 1}`)
+        : action.label,
+    })),
     fieldsExcluded,
     diagnostics: baseDiagnostics,
     sensitiveValues: [
       params.actor.actorEmail,
       params.actor.actorName,
+      draft.customerName,
+      draft.customerEmail,
+      draft.customerPhone,
       selectedCustomer?.fullName,
       selectedCustomer?.email,
       selectedCustomer?.phone,
@@ -3956,6 +4168,7 @@ async function runDraftQuotePreview(
   const sourceTypes = Array.from(new Set([
     "Quote",
     ...(selectedCustomer ? ["Customer"] : []),
+    ...(catalogMatchedCount ? ["WorkPreset"] : []),
     ...(governedRetrieval?.citations.map((citation) => citation.sourceType) ?? []),
   ]));
   const sourceLabels = Array.from(new Set([
@@ -3964,6 +4177,7 @@ async function runDraftQuotePreview(
       : selectedCustomer
         ? "Selected active customer"
         : "Preview quote draft",
+    ...preparedCatalog.matchedPresetLabels,
     ...((governedRetrieval?.citations ?? []).map((citation) => citation.label)),
   ])).slice(0, 16);
   const event = await createAssistantUsageEvent(prisma, {

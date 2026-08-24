@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rook: Scoped Remediation"
+  short_description: "Implement bounded review fixes safely"
+  default_prompt: "Use $quotefly-scoped-remediation to implement a precise QuoteFly review finding and verify the fix."

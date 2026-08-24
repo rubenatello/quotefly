@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sweep: QuoteFly SEO + AEO"
+  short_description: "Improve search and AI answer-engine visibility"
+  default_prompt: "Use $quotefly-seo-sweep to audit and improve QuoteFly SEO, AEO, AI-search citation readiness, and public discoverability."

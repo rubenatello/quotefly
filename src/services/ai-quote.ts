@@ -261,6 +261,8 @@ export async function aiParseChatToQuotePrompt(
       estimatedInternalCostAmount:
         normalizeOptionalNumber(parsed.estimatedInternalCostAmount, { min: 0 }) ??
         deterministicFallback.estimatedInternalCostAmount,
+      estimatedDurationHoursLow: deterministicFallback.estimatedDurationHoursLow,
+      estimatedDurationHoursHigh: deterministicFallback.estimatedDurationHoursHigh,
       lineItems: resolvedLineItems,
     };
   } catch (err) {

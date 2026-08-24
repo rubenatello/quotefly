@@ -26,8 +26,8 @@ import {
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { MarketingAction } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
+import { BASIC_PLAN, BASIC_PLAN_PRICING_PATH, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 import { setPublicSEOMetadata } from "../lib/seo";
-import { BASIC_PLAN, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 
 interface SolutionsPageProps {
   onOpenAuth: () => void;
@@ -434,7 +434,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
               <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
                 Try the workflow free
               </MarketingAction>
-              <MarketingAction href="/pricing" variant="secondary">
+              <MarketingAction href={BASIC_PLAN_PRICING_PATH} variant="secondary">
                 See Basic pricing
               </MarketingAction>
             </div>

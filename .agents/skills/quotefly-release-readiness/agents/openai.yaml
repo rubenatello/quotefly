@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harbor: Release Readiness"
+  short_description: "Verify deploy, observability, and rollback"
+  default_prompt: "Use $quotefly-release-readiness to assess QuoteFly launch readiness, deployment safety, and operations."

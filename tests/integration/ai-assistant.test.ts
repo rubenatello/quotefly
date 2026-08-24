@@ -534,6 +534,58 @@ describe("AI assistant", () => {
     expect(results.map((row) => row.fullName)).not.toContain("Owner Office Customer");
   });
 
+  test("legacy AI quote suggestions never attach or mutate an unassigned inferred customer", async () => {
+    const owner = await signUp("assistant-legacy-suggest-owner");
+    const member = await addWorkspaceUser(owner, "member");
+    const privateCustomer = await createCustomer({
+      session: owner,
+      name: "Private Suggest Customer",
+      phoneDigits: "5553030199",
+      notes: "FORBIDDEN_PRIVATE_SUGGEST_NOTE",
+    });
+    await prisma.workPreset.create({
+      data: {
+        tenantId: owner.tenant.id,
+        serviceType: "PLUMBING",
+        catalogKey: "fixture_install_package",
+        category: "SERVICE",
+        unitType: "EACH",
+        name: "Private fixture pricing",
+        description: "Member-visible customer price with owner-only internal cost.",
+        defaultQuantity: 1,
+        unitCost: 54321.12,
+        unitPrice: 225,
+      },
+    });
+    const before = {
+      customers: await prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+      activities: await prisma.customerActivityEvent.count({ where: { tenantId: owner.tenant.id } }),
+      indexJobs: await prisma.aiIndexJob.count({ where: { tenantId: owner.tenant.id } }),
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: { cookie: member.cookie },
+      payload: {
+        prompt: "Prepare a plumbing quote for 555-303-0199 to replace a faucet in four hours.",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["x-ratelimit-limit"]).toBe("10000");
+    expect(response.body).toContain('"type":"complete"');
+    expect(response.body).not.toContain(privateCustomer.id);
+    expect(response.body).not.toContain("FORBIDDEN_PRIVATE_SUGGEST_NOTE");
+    expect(response.body).not.toContain("54321.12");
+    expect(response.body).not.toContain('"unitCost"');
+    expect(response.body).not.toContain('"internalCostSubtotal"');
+    expect(response.body).not.toContain('"grossProfit"');
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
+    await expect(prisma.customerActivityEvent.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.activities);
+    await expect(prisma.aiIndexJob.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.indexJobs);
+  });
+
   test("activity assistant tools use narrow assigned projections and activity previews write nothing", async () => {
     const owner = await signUp("assistant-activity-owner");
     await prisma.tenant.update({
@@ -1372,6 +1424,458 @@ describe("AI assistant", () => {
     expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
     expect(audit.retrievalAuditEvent?.purpose).toBe("QUOTE_DRAFT");
     expect(audit.retrievalAuditEvent?.resultCount).toBeGreaterThan(0);
+  });
+
+  test("natural Kody quote prompts resolve customers, duration, and priced catalog lines in one review handoff", async () => {
+    const owner = await signUp("assistant-natural-quote-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5554047070",
+    });
+    const fixture = await prisma.workPreset.create({
+      data: {
+        tenantId: owner.tenant.id,
+        serviceType: "PLUMBING",
+        catalogKey: "fixture_install_package",
+        category: "MATERIAL",
+        unitType: "EACH",
+        name: "Fixture replacement",
+        description: "Replace the selected faucet fixture.",
+        defaultQuantity: 1,
+        unitCost: 80,
+        unitPrice: 225,
+      },
+    });
+    const labor = await prisma.workPreset.create({
+      data: {
+        tenantId: owner.tenant.id,
+        serviceType: "PLUMBING",
+        category: "LABOR",
+        unitType: "HOUR",
+        name: "Plumbing labor",
+        description: "Hourly field labor.",
+        defaultQuantity: 1,
+        unitCost: 42,
+        unitPrice: 95,
+      },
+    });
+    const before = {
+      customers: await prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+      quotes: await prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review.",
+        tool: "AUTO",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+    };
+    expect(body.assistant.tool).toBe("DRAFT_QUOTE");
+    expect(body.assistant.results[0]).toMatchObject({
+      customerName: "Maria Lopez",
+      serviceType: "PLUMBING",
+      estimatedDurationHoursLow: 3,
+      estimatedDurationHoursHigh: 4,
+      lineItemCount: 2,
+      catalogMatchedCount: 2,
+    });
+    expect(body.assistant.actions).toHaveLength(1);
+    expect(body.assistant.actions[0]).toMatchObject({
+      type: "OPEN_QUOTE_DRAFT",
+      requiresConfirmation: true,
+      payload: expect.objectContaining({
+        customerId: customer.id,
+        useWorkspaceContext: true,
+        lineItems: [
+          expect.objectContaining({ sourcePresetId: fixture.id, quantity: 1, unitPrice: 225, unitCost: 80 }),
+          expect.objectContaining({ sourcePresetId: labor.id, quantity: 4, unitPrice: 95, unitCost: 42 }),
+        ],
+      }),
+    });
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.quotes);
+  });
+
+  test("Kody asks for a missing customer and keeps the work details for the reply", async () => {
+    const owner = await signUp("assistant-quote-clarification-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5555058080",
+    });
+
+    const clarification = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement that should take 3-4 hours.",
+        tool: "AUTO",
+      },
+    });
+    expect(clarification.statusCode).toBe(200);
+    expect(clarification.json()).toMatchObject({
+      assistant: { tool: "DRAFT_QUOTE", actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+    expect(clarification.json().assistant.answer).toMatch(/who is this quote for/i);
+
+    const finalReviewClarification = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement. Please prepare it for final review.",
+        tool: "AUTO",
+      },
+    });
+    expect(finalReviewClarification.statusCode).toBe(200);
+    expect(finalReviewClarification.json()).toMatchObject({
+      assistant: { tool: "DRAFT_QUOTE", actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+    expect(finalReviewClarification.json().assistant.answer).toMatch(/who is this quote for/i);
+
+    const completed = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Maria Lopez",
+        tool: "AUTO",
+        conversation: [{
+          message: "Draft a plumbing quote for faucet replacement that should take 3-4 hours.",
+          resolvedTool: "DRAFT_QUOTE",
+        }],
+      },
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        results: [expect.objectContaining({
+          customerName: "Maria Lopez",
+          estimatedDurationHoursLow: 3,
+          estimatedDurationHoursHigh: 4,
+        })],
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({ customerId: customer.id }),
+        })],
+      },
+    });
+  });
+
+  test("Kody retains quote work across name and phone clarification turns for a new customer", async () => {
+    const owner = await signUp("assistant-quote-multi-turn-customer-owner");
+    const before = {
+      customers: await prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+      quotes: await prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    };
+    const originalRequest = "Draft a plumbing quote for faucet replacement that should take 3-4 hours.";
+
+    const missingCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: originalRequest, tool: "AUTO" },
+    });
+    expect(missingCustomer.statusCode).toBe(200);
+    expect(missingCustomer.json()).toMatchObject({
+      assistant: { tool: "DRAFT_QUOTE", actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+
+    const missingPhone = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Brand New Customer",
+        tool: "AUTO",
+        conversation: [{ message: originalRequest, resolvedTool: "DRAFT_QUOTE" }],
+      },
+    });
+    expect(missingPhone.statusCode).toBe(200);
+    expect(missingPhone.json()).toMatchObject({
+      assistant: { tool: "DRAFT_QUOTE", actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+    expect(missingPhone.json().assistant.answer).toMatch(/reply with the phone number/i);
+
+    const completed = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "555-919-2020",
+        tool: "AUTO",
+        conversation: [
+          { message: originalRequest, resolvedTool: "DRAFT_QUOTE" },
+          { message: "Brand New Customer", resolvedTool: "DRAFT_QUOTE" },
+        ],
+      },
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        results: [expect.objectContaining({
+          customerName: "Brand New Customer",
+          serviceType: "PLUMBING",
+          estimatedDurationHoursLow: 3,
+          estimatedDurationHoursHigh: 4,
+        })],
+        actions: [expect.objectContaining({
+          type: "OPEN_QUOTE_DRAFT",
+          requiresConfirmation: true,
+          payload: expect.objectContaining({
+            customerId: null,
+            customerName: "Brand New Customer",
+            customerPhone: "555-919-2020",
+            serviceType: "PLUMBING",
+            estimatedDurationHoursLow: 3,
+            estimatedDurationHoursHigh: 4,
+            lineItems: expect.arrayContaining([
+              expect.objectContaining({
+                description: expect.stringMatching(/fixture|faucet/i),
+                quantity: 1,
+              }),
+              expect.objectContaining({
+                description: expect.stringMatching(/labor/i),
+                quantity: 4,
+                unitType: "HOUR",
+              }),
+            ]),
+          }),
+        })],
+      },
+    });
+    expect(completed.json().assistant.actions[0].payload.prompt).toContain("faucet replacement");
+    const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
+      where: { id: completed.json().assistant.auditEventId },
+      select: { tenantId: true, promptText: true },
+    });
+    expect(audit).toEqual({ tenantId: owner.tenant.id, promptText: null });
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.quotes);
+  });
+
+  test("quote customer matching identifies duplicate names and lets exact contact data win", async () => {
+    const owner = await signUp("assistant-quote-customer-precedence-owner");
+    const first = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5551012020",
+    });
+    const second = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5553034040",
+    });
+    const businessCustomer = await createCustomer({
+      session: owner,
+      name: "Smith Plumbing",
+      phoneDigits: "5559091010",
+    });
+    await prisma.customer.update({ where: { id: first.id }, data: { email: "maria.one@example.com" } });
+    await prisma.customer.update({ where: { id: second.id }, data: { email: "maria.two@example.com" } });
+
+    const ambiguous = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Kody I need a plumbing quote for faucet replacement for Maria Lopez. Please prepare it for review.",
+        tool: "AUTO",
+      },
+    });
+    expect(ambiguous.statusCode).toBe(200);
+    const ambiguousActions = ambiguous.json().assistant.actions as Array<{
+      label: string;
+      payload: Record<string, unknown>;
+    }>;
+    expect(ambiguousActions).toHaveLength(2);
+    expect(ambiguousActions.map((action) => action.payload.customerId)).toEqual(expect.arrayContaining([first.id, second.id]));
+    expect(ambiguousActions.map((action) => action.label).join(" ")).toContain("maria.one@example.com");
+    expect(ambiguousActions.map((action) => action.label).join(" ")).toContain("maria.two@example.com");
+
+    const exactEmail = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Kody I need a plumbing quote for faucet replacement for Maria Lopez, email maria.two@example.com. Please prepare it for review.",
+        tool: "AUTO",
+      },
+    });
+    expect(exactEmail.statusCode).toBe(200);
+    expect(exactEmail.json()).toMatchObject({
+      assistant: {
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({ customerId: second.id }),
+        })],
+      },
+    });
+
+    for (const contactOnlyPrompt of [
+      "Kody I need a plumbing quote for faucet replacement for maria.two@example.com. Please prepare it for review.",
+      "Kody I need a plumbing quote for faucet replacement for 555-303-4040. Please prepare it for review.",
+    ]) {
+      const exactContact = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: { message: contactOnlyPrompt, tool: "AUTO" },
+      });
+      expect(exactContact.statusCode).toBe(200);
+      expect(exactContact.json()).toMatchObject({
+        assistant: {
+          actions: [expect.objectContaining({
+            payload: expect.objectContaining({ customerId: second.id }),
+          })],
+        },
+      });
+    }
+
+    const businessName = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Kody I need a plumbing quote for faucet replacement for Smith Plumbing. Please prepare it for review.",
+        tool: "AUTO",
+      },
+    });
+    expect(businessName.statusCode).toBe(200);
+    expect(businessName.json()).toMatchObject({
+      assistant: {
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({ customerId: businessCustomer.id }),
+        })],
+      },
+    });
+  });
+
+  test("quote customer matching resolves an older exact name before newer partial matches", async () => {
+    const owner = await signUp("assistant-quote-exact-name-owner");
+    const member = await addWorkspaceUser(owner, "member");
+    const otherOwner = await signUp("assistant-quote-exact-name-other-owner");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const exact = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5551112200",
+      assignedTenantUserId: membership.id,
+    });
+    await prisma.customer.update({
+      where: { id: exact.id },
+      data: { updatedAt: new Date("2025-01-01T00:00:00.000Z") },
+    });
+    for (let index = 0; index < 5; index += 1) {
+      await createCustomer({
+        session: owner,
+        name: `Maria Lopez Household ${index + 1}`,
+        phoneDigits: `55522233${String(index).padStart(2, "0")}`,
+        assignedTenantUserId: membership.id,
+      });
+    }
+    const unassignedExact = await createCustomer({
+      session: owner,
+      name: "Maria Lopez",
+      phoneDigits: "5557778800",
+    });
+    const crossTenantExact = await createCustomer({
+      session: otherOwner,
+      name: "Maria Lopez",
+      phoneDigits: "5559990000",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement for Maria Lopez.",
+        tool: "AUTO",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assistant: {
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({ customerId: exact.id }),
+        })],
+      },
+    });
+    expect(response.body).not.toContain(unassignedExact.id);
+    expect(response.body).not.toContain(crossTenantExact.id);
+  });
+
+  test("unknown and stale customer contexts clarify or fall back to authorized prompt matching", async () => {
+    const owner = await signUp("assistant-quote-stale-context-owner");
+    const otherOwner = await signUp("assistant-quote-stale-context-other");
+    const authorizedCustomer = await createCustomer({
+      session: owner,
+      name: "Authorized Customer",
+      phoneDigits: "5556067070",
+    });
+    const crossTenantCustomer = await createCustomer({
+      session: otherOwner,
+      name: "Other Tenant Customer",
+      phoneDigits: "5558089090",
+    });
+
+    const unknownName = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement for Brand New Customer.",
+        tool: "AUTO",
+      },
+    });
+    expect(unknownName.statusCode).toBe(200);
+    expect(unknownName.json()).toMatchObject({
+      assistant: { tool: "DRAFT_QUOTE", actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+    expect(unknownName.json().assistant.answer).toMatch(/reply with the phone number/i);
+
+    const staleContext = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement for Authorized Customer.",
+        tool: "AUTO",
+        context: { customerId: crossTenantCustomer.id },
+      },
+    });
+    expect(staleContext.statusCode).toBe(200);
+    expect(staleContext.json()).toMatchObject({
+      assistant: {
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({ customerId: authorizedCustomer.id }),
+        })],
+      },
+    });
+    expect(staleContext.body).not.toContain(crossTenantCustomer.id);
   });
 
   test("customer draft assistant prepares the existing duplicate-safe form without creating a customer", async () => {

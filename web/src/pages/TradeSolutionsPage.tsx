@@ -21,8 +21,9 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { MarketingAction, MarketingCta } from "../components/marketing/PublicPageLayout";
-import { setPublicSEOMetadata } from "../lib/seo";
+import { BASIC_PLAN_PRICING_PATH } from "../lib/plans";
 import type { PublicRoutePath } from "../lib/public-seo-data";
+import { setPublicSEOMetadata } from "../lib/seo";
 
 export type TradeSolutionId = "hvac" | "plumbing" | "flooring" | "roofing" | "construction";
 
@@ -446,7 +447,7 @@ export function TradeSolutionsPage({ trade, onOpenAuth }: { trade: TradeSolution
               See the quote-to-job workflow <ArrowRight size={16} aria-hidden="true" />
             </Link>
             <Link
-              to="/pricing"
+              to={BASIC_PLAN_PRICING_PATH}
               className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold text-slate-200 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 sm:justify-start"
             >
               See Basic pricing

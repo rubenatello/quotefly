@@ -1,0 +1,4 @@
+interface:
+  display_name: "Opera: QuoteFly Gate"
+  short_description: "Run independent senior release review"
+  default_prompt: "Use $quotefly-opera-gate to independently review this QuoteFly change and issue an approval verdict."

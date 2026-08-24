@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { BASIC_PLAN_PRICING_PATH } from "../lib/plans";
 import { CloseIcon, MenuIcon } from "./Icons";
 
 interface NavbarProps {
@@ -17,10 +18,15 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
   const navLinks = [
     { label: "Services", path: "/services" },
     { label: "Solutions", path: "/solutions" },
-    { label: "Pricing", path: "/pricing" },
+    { label: "Pricing", path: BASIC_PLAN_PRICING_PATH },
     { label: "About", path: "/about" },
     { label: "Support", path: "/support" },
   ];
+
+  const isCurrentLink = (path: string) => {
+    const pathname = path.split("#", 1)[0];
+    return `/${currentPage}` === pathname || (pathname === "/solutions" && `/${currentPage}`.startsWith("/solutions/"));
+  };
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -47,9 +53,9 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
             <Link
               key={link.path}
               to={link.path}
-              aria-current={`/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/")) ? "page" : undefined}
+              aria-current={isCurrentLink(link.path) ? "page" : undefined}
               className={`text-sm font-medium transition-colors ${
-                `/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/"))
+                isCurrentLink(link.path)
                   ? "text-quotefly-primary"
                   : "text-slate-600 hover:text-slate-900"
               }`}
@@ -115,10 +121,10 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
               <Link
                 key={link.path}
                 to={link.path}
-                aria-current={`/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/")) ? "page" : undefined}
+                aria-current={isCurrentLink(link.path) ? "page" : undefined}
                 onClick={() => setMobileMenuOpen(false)}
                 className={`flex min-h-11 items-center rounded-lg px-3 text-left text-sm font-medium transition-colors ${
-                  `/${currentPage}` === link.path || (link.path === "/solutions" && `/${currentPage}`.startsWith("/solutions/"))
+                  isCurrentLink(link.path)
                     ? "text-quotefly-primary"
                     : "text-slate-600 hover:text-slate-900"
                 }`}

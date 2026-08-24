@@ -7,6 +7,11 @@ type EvalCase = {
   prompt: string;
   expectedServiceType: ServiceCategory;
   expectedPhone?: string;
+  expectedCustomerName?: string;
+  expectCustomerNameAbsent?: boolean;
+  expectedTitle?: string;
+  expectedDurationHoursLow?: number;
+  expectedDurationHoursHigh?: number;
   requiredKeywords: string[];
   minLineCount: number;
 };
@@ -19,6 +24,44 @@ type EvalResult = {
 };
 
 const EVAL_CASES: EvalCase[] = [
+  {
+    id: "kody-natural-faucet-duration",
+    prompt: "Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review.",
+    expectedServiceType: "PLUMBING",
+    expectedCustomerName: "Maria Lopez",
+    expectedTitle: "Fixture Install Package",
+    expectedDurationHoursLow: 3,
+    expectedDurationHoursHigh: 4,
+    requiredKeywords: ["fixture", "labor"],
+    minLineCount: 2,
+  },
+  {
+    id: "kody-final-review-is-not-customer",
+    prompt: "Draft a plumbing quote for faucet replacement. Please prepare it for final review.",
+    expectedServiceType: "PLUMBING",
+    expectCustomerNameAbsent: true,
+    expectedTitle: "Fixture Install Package",
+    requiredKeywords: ["fixture"],
+    minLineCount: 1,
+  },
+  {
+    id: "kody-trade-word-business-customer",
+    prompt: "Kody I need a plumbing quote for faucet replacement for Smith Plumbing. Please prepare it for review.",
+    expectedServiceType: "PLUMBING",
+    expectedCustomerName: "Smith Plumbing",
+    expectedTitle: "Fixture Install Package",
+    requiredKeywords: ["fixture"],
+    minLineCount: 1,
+  },
+  {
+    id: "kody-explicit-trade-word-business-customer",
+    prompt: "Kody I need a plumbing quote for faucet replacement for customer Smith Plumbing. Please prepare it for review.",
+    expectedServiceType: "PLUMBING",
+    expectedCustomerName: "Smith Plumbing",
+    expectedTitle: "Fixture Install Package",
+    requiredKeywords: ["fixture"],
+    minLineCount: 1,
+  },
   {
     id: "roof-replace-typo",
     prompt: "New quote for Jane Doe 415-555-0101. Replce 1800 sq ft asphlt shingle roof, include permit and disposal.",
@@ -171,6 +214,33 @@ function scoreCase(testCase: EvalCase, parsed: ReturnType<typeof parseChatToQuot
     score += 15;
   } else {
     misses.push(`line count ${parsed.lineItems.length} below min ${testCase.minLineCount}`);
+  }
+
+  if (testCase.expectedCustomerName && parsed.customerName !== testCase.expectedCustomerName) {
+    score = Math.max(0, score - 25);
+    misses.push(`customer name expected ${testCase.expectedCustomerName}, got ${parsed.customerName ?? "none"}`);
+  }
+  if (testCase.expectCustomerNameAbsent && parsed.customerName) {
+    score = Math.max(0, score - 25);
+    misses.push(`expected no customer name, got ${parsed.customerName}`);
+  }
+  if (testCase.expectedTitle && parsed.title !== testCase.expectedTitle) {
+    score = Math.max(0, score - 25);
+    misses.push(`title expected ${testCase.expectedTitle}, got ${parsed.title}`);
+  }
+  if (
+    testCase.expectedDurationHoursLow !== undefined
+    && parsed.estimatedDurationHoursLow !== testCase.expectedDurationHoursLow
+  ) {
+    score = Math.max(0, score - 25);
+    misses.push(`duration low expected ${testCase.expectedDurationHoursLow}, got ${parsed.estimatedDurationHoursLow ?? "none"}`);
+  }
+  if (
+    testCase.expectedDurationHoursHigh !== undefined
+    && parsed.estimatedDurationHoursHigh !== testCase.expectedDurationHoursHigh
+  ) {
+    score = Math.max(0, score - 25);
+    misses.push(`duration high expected ${testCase.expectedDurationHoursHigh}, got ${parsed.estimatedDurationHoursHigh ?? "none"}`);
   }
 
   return {

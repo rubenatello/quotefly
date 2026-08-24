@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Mail, Phone, Search, UserRoundPlus } from "lucide-react";
 import { api, type Customer } from "../../lib/api";
@@ -22,6 +22,8 @@ export function InlineCustomerLookup({
   const [results, setResults] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const resultsId = useId();
 
   useEffect(() => {
     const trimmedQuery = query.trim();
@@ -29,6 +31,7 @@ export function InlineCustomerLookup({
       setResults([]);
       setLoading(false);
       setError(null);
+      setActiveIndex(-1);
       return;
     }
 
@@ -36,6 +39,7 @@ export function InlineCustomerLookup({
       setResults([]);
       setLoading(false);
       setError(null);
+      setActiveIndex(-1);
       return;
     }
 
@@ -47,9 +51,11 @@ export function InlineCustomerLookup({
         const response = await api.customers.list({ search: trimmedQuery, limit: 5 });
         if (cancelled) return;
         setResults(response.customers);
+        setActiveIndex(-1);
       } catch (lookupError) {
         if (cancelled) return;
         setResults([]);
+        setActiveIndex(-1);
         setError(localizedApiError(lookupError, t, { fallbackKey: "quoteComponents.lookup.error" }));
       } finally {
         if (!cancelled) setLoading(false);
@@ -62,6 +68,16 @@ export function InlineCustomerLookup({
     };
   }, [query, selectedCustomer, t]);
 
+  const showResults = query.trim().length >= 2
+    && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase();
+
+  function selectResult(customer: Customer) {
+    onSelectCustomer(customer);
+    setQuery(customer.fullName);
+    setResults([]);
+    setActiveIndex(-1);
+  }
+
   return (
     <div className="w-full max-w-[560px]">
       <div className="relative">
@@ -70,8 +86,38 @@ export function InlineCustomerLookup({
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--qf-text-muted)]" />
             <input
               aria-label={t("quoteComponents.lookup.label")}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={showResults}
+              aria-controls={resultsId}
+              aria-activedescendant={activeIndex >= 0 ? `${resultsId}-option-${activeIndex}` : undefined}
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActiveIndex(-1);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && showResults) {
+                  event.preventDefault();
+                  setQuery("");
+                  setResults([]);
+                  setActiveIndex(-1);
+                  return;
+                }
+                if (!results.length || (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter")) return;
+                if (event.key === "Enter") {
+                  if (activeIndex < 0) return;
+                  event.preventDefault();
+                  const customer = results[activeIndex];
+                  if (customer) selectResult(customer);
+                  return;
+                }
+                event.preventDefault();
+                setActiveIndex((current) => {
+                  if (event.key === "ArrowDown") return current >= results.length - 1 ? 0 : current + 1;
+                  return current <= 0 ? results.length - 1 : current - 1;
+                });
+              }}
               placeholder={
                 selectedCustomer
                   ? t("quoteComponents.lookup.anotherPlaceholder")
@@ -93,24 +139,24 @@ export function InlineCustomerLookup({
           </Button>
         </div>
 
-        {query.trim().length >= 2 && query.trim().toLowerCase() !== selectedCustomer?.fullName.trim().toLowerCase() ? (
-          <div id="inline-customer-results" className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
+        {showResults ? (
+          <div id={resultsId} role="listbox" aria-label={t("quoteComponents.lookup.results")} className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] shadow-[var(--qf-shadow-md)]">
             {loading ? (
               <p role="status" className="px-3 py-3 text-sm text-[var(--qf-text-muted)]">{t("quoteComponents.lookup.searching")}</p>
             ) : error ? (
               <p role="alert" className="px-3 py-3 text-sm text-[var(--qf-danger-text)]">{error}</p>
             ) : results.length ? (
               <div className="max-h-[280px] divide-y divide-[var(--qf-border)] overflow-y-auto">
-                {results.map((customer) => (
+                {results.map((customer, index) => (
                   <button
                     key={customer.id}
+                    id={`${resultsId}-option-${index}`}
                     type="button"
-                    onClick={() => {
-                      onSelectCustomer(customer);
-                      setQuery(customer.fullName);
-                      setResults([]);
-                    }}
-                    className="flex min-h-[44px] w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px]"
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => selectResult(customer)}
+                    className={`flex min-h-[44px] w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--qf-focus)] sm:min-h-[40px] ${index === activeIndex ? "bg-[var(--qf-interactive-hover)]" : ""}`}
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-[var(--qf-text)]">{customer.fullName}</p>

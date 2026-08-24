@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { INFO_EMAIL, INFO_MAILTO, SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/contact";
+import { BASIC_PLAN_PRICING_PATH } from "../lib/plans";
 
 const PRODUCT_LINKS = [
   { label: "Services", to: "/services" },
-  { label: "Pricing", to: "/pricing" },
+  { label: "Pricing", to: BASIC_PLAN_PRICING_PATH },
   { label: "Solutions", to: "/solutions" },
   { label: "About", to: "/about" },
   { label: "Support", to: "/support" },
@@ -40,13 +41,13 @@ export function Footer() {
             <div className="mt-4 space-y-1 text-sm text-slate-600">
               <p>
                 Support:{" "}
-                <a href={SUPPORT_MAILTO} className="font-medium text-quotefly-blue hover:text-blue-700">
+                <a href={SUPPORT_MAILTO} className="inline-flex min-h-11 items-center font-medium text-quotefly-blue hover:text-blue-700 sm:min-h-0">
                   {SUPPORT_EMAIL}
                 </a>
               </p>
               <p>
                 Sales &amp; inquiries:{" "}
-                <a href={INFO_MAILTO} className="font-medium text-quotefly-blue hover:text-blue-700">
+                <a href={INFO_MAILTO} className="inline-flex min-h-11 items-center font-medium text-quotefly-blue hover:text-blue-700 sm:min-h-0">
                   {INFO_EMAIL}
                 </a>
               </p>
@@ -59,7 +60,7 @@ export function Footer() {
             <ul className="mt-4 space-y-2 text-sm text-slate-600">
               {PRODUCT_LINKS.map((link) => (
                 <li key={link.to}>
-                  <Link to={link.to} className="transition-colors hover:text-slate-900">
+                  <Link to={link.to} className="inline-flex min-h-11 items-center transition-colors hover:text-slate-900 sm:min-h-0">
                     {link.label}
                   </Link>
                 </li>
@@ -72,7 +73,7 @@ export function Footer() {
             <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-slate-600 lg:grid-cols-1">
               {INDUSTRY_LINKS.map((link) => (
                 <li key={link.to}>
-                  <Link to={link.to} className="transition-colors hover:text-slate-900">
+                  <Link to={link.to} className="inline-flex min-h-11 items-center transition-colors hover:text-slate-900 sm:min-h-0">
                     {link.label}
                   </Link>
                 </li>
@@ -85,7 +86,7 @@ export function Footer() {
             <ul className="mt-4 space-y-2 text-sm text-slate-600">
               {LEGAL_LINKS.map((link) => (
                 <li key={link.to}>
-                  <Link to={link.to} className="transition-colors hover:text-slate-900">
+                  <Link to={link.to} className="inline-flex min-h-11 items-center transition-colors hover:text-slate-900 sm:min-h-0">
                     {link.label}
                   </Link>
                 </li>

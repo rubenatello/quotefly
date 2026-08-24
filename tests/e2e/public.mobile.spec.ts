@@ -72,6 +72,17 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   const solutionsOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(solutionsOverflow).toBeLessThanOrEqual(1);
 
+  await page.goto("/about");
+  await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/about"].heading })).toBeVisible();
+  const aboutWorkflow = page.locator("#workflow");
+  await expect(aboutWorkflow.getByRole("listitem")).toHaveCount(5);
+  const aboutProductImage = page.getByRole("img", { name: /My Day workspace showing follow-up activity/i });
+  await aboutProductImage.scrollIntoViewIfNeeded();
+  await expect(aboutProductImage).toBeVisible();
+  await expect.poll(() => aboutProductImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  const aboutOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(aboutOverflow).toBeLessThanOrEqual(1);
+
   const tradeRoutes = [
     ["/solutions/hvac", /HVAC technician servicing/i],
     ["/solutions/plumbing", /Residential plumber repairing/i],

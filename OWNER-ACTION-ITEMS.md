@@ -61,12 +61,14 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 6. Authoritative provider status: `docs/integrations/quickbooks-api-progress.md`
 7. Online/Desktop architecture is long-term context only: `docs/integrations/quickbooks-online-desktop-architecture.md`
 
-### AI Model Options (set via `OPENAI_MODEL`)
-| Model | Cost (input/output per 1M tokens) | Speed | Best For |
-|-------|-----------------------------------|-------|----------|
-| `gpt-4o-mini` (default) | $0.15 / $0.60 | Fast | Best value — recommended for most plans |
-| `gpt-4o` | $2.50 / $10.00 | Medium | Enterprise tier, complex prompts |
-| `gpt-4.1-mini` | $0.40 / $1.60 | Fast | Good alternative if available |
+### AI Models Approved for Production
+
+| Setting | Approved model | Cost (input/output per 1M tokens) | Purpose |
+|---------|----------------|-----------------------------------|---------|
+| `OPENAI_MODEL` | `gpt-4o-mini` (default) | $0.15 / $0.60 | Chat-to-Quote and assistant composition |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` (default) | $0.02 / $0.00 | Grounded retrieval embeddings |
+
+Do not set a different production model until it has been added to the governed pricing catalog and environment validation.
 
 ## 2. Database Migration
 
@@ -142,15 +144,21 @@ npx tsc --noEmit
 npm run dev
 ```
 
-### Railway Production Command
+### Railway Production Commands
 
-Use this as the Railway start command for the API service:
+Run checked-in schema migrations first from an isolated release job, using the privileged `DIRECT_DATABASE_URL`:
+
+```bash
+npm run prisma:migrate:deploy
+```
+
+Only after that job succeeds, use this as the Railway start command for the API service. The runtime service should have only the least-privileged `DATABASE_URL`:
 
 ```bash
 npm run start:prod
 ```
 
-That command runs `prisma migrate deploy` before starting the API so production schema changes are applied explicitly instead of relying on manual steps.
+`start:prod` starts the API; it does not run Prisma migrations. Keeping migrations in the isolated release job makes their ownership and outcome explicit.
 
 ## 9. Cost Estimation (AI Usage)
 

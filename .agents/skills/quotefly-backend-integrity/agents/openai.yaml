@@ -1,0 +1,4 @@
+interface:
+  display_name: "Renford: Backend Integrity"
+  short_description: "Protect API, schema, and latency quality"
+  default_prompt: "Use $quotefly-backend-integrity to assess or improve QuoteFly backend, database, and API reliability."

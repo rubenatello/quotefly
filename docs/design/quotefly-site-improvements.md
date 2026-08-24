@@ -1,10 +1,10 @@
 # QuoteFly Site Improvements
 
-Status: Implemented and independently approved by security, UX, SEO, release operations, and final engineering review in the current local sellability candidate; BCP pending explicit authorization
+Status: The quote-to-job public-site improvements are committed on `main`; the current uncommitted workspace adds the Kody prompt-to-priced-review-draft improvement, passes the full local gate and independent source review, and remains blocked on exact-candidate database, browser, live-provider, staging, and owner-operated release evidence
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 
-Product baseline: `543fc69` (`feat: add job operations and harden AI usage`)
+Product baseline: `8ceecb1` (`feat: complete sellable quote-to-job product story`)
 
 ## Implementation record
 
@@ -15,6 +15,7 @@ Product baseline: `543fc69` (`feat: add job operations and harden AI usage`)
 - Trade pages link to the shared quote-to-job workflow and Basic pricing instead of duplicating thin operational content.
 - Legacy QuickBooks provider workflows are default-off in the current candidate; public copy does not market automatic provider invoicing, reconciliation, or payment collection.
 - Exact integrated evidence currently includes the database-backed CI gate with `213/213` integration tests, web build, lint, i18n `12/12`, 16-route prerender, SEO `9/9`, capture generation `1/1`, focused public responsive/Axe/keyboard/reduced-motion coverage `4/4`, QuickBooks API/security integration coverage `60/60`, `88/88` executed browser scenarios plus one intentional opt-in capture skip, and the focused member/manager QuickBooks Settings regression `2/2`. Independent security, UX (`97/100`), SEO, release-operations, and final engineering reviews approve the candidate for the next explicitly authorized BCP.
+- The current workspace improves Kody quote drafting so a single natural request can resolve an active visible customer, preserve an estimated labor-hour range, match the tenant's saved products/services, and hand the Quote Builder separate priced, source-linked lines for review. Missing customer or work details produce a bounded clarification instead of a guessed or silently created record.
 
 ## Purpose
 
@@ -56,6 +57,8 @@ The story should remain practical and contractor-oriented. Prefer concrete workf
 - "Assign, book, reschedule, dispatch, arrive, complete, or cancel eligible visits."
 - "Keep assigned field users focused on their own visible work."
 - "Ask Kody to show a schedule or prepare a booking or dispatch review."
+- "Ask Kody to prepare a quote review from a customer, trade, job, product, service, and expected labor time."
+- "Kody can match active visible customers and saved products or services, then place separate priced lines in the Quote Builder for review."
 - "Review every Kody-prepared action before the normal QuoteFly workflow makes a change."
 - "Create an internal invoice record from an accepted quote or completed job."
 - "Give eligible teammates an in-app update after confirmed appointment changes."
@@ -113,6 +116,24 @@ The response copy must clearly distinguish a result or prepared review from a co
 ### 5. Clarify the invoice boundary
 
 Show the internal invoice panel as the final step in the current workflow. Pair it with concise copy explaining that external sending, payment collection, and QuickBooks invoice creation remain separate provider actions.
+
+### 6. Make the Kody quote example concrete
+
+Use a real review-only example such as:
+
+> Kody, I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3–4 hours depending on damage or inspection. Please prepare the quote for review.
+
+The product behavior behind this example must remain explicit:
+
+- Resolve an active customer visible to the current user by exact or bounded name, email, or phone search.
+- Prefer an exact email or phone over an exact name, and an exact name over a partial name. If more than one customer matches, show contact-differentiated review choices.
+- If no customer matches, ask for any name or phone required by the confirmed Add Customer flow. Once the required details are present, prefill that normal flow and link the created customer only after confirmation.
+- Ask for the customer or work details when either is missing, and retain the prior quote request for the user's reply.
+- Match active tenant products/services across the bounded catalog, not only a short alphabetical prefix.
+- Put the requested job, product, service, and labor allowance into separate editable line items when they are distinct.
+- Carry the saved product/service reference and customer price into the builder. Internal cost remains permission-gated and is revalidated on the server.
+- Open one minimal Quote Builder review state. Do not automatically launch a second AI drafting pass. If an unsaved builder draft already exists, offer explicit merge, replace, or keep choices.
+- Never create, update, restore, archive, save, or send a Customer or Quote from the AI suggestion step.
 
 ## Solutions and trade-page changes
 
@@ -191,6 +212,16 @@ Capture requirements:
 - [x] Obtain independent security, UX, SEO, and claim-accuracy review on the exact frozen candidate.
 - [x] Obtain final engineering review on the exact frozen candidate before BCP.
 
+### Slice E — Kody prompt-to-quote review
+
+- [x] Parse the natural customer/trade/work/duration sentence, including a bounded hour range.
+- [x] Resolve only active tenant- and assignment-visible customer candidates; make suggestion endpoints review-only.
+- [x] Match the bounded active tenant catalog and carry separate priced, source-linked lines into Quote Builder.
+- [x] Preserve clarification context and remove the automatic second AI pass from the Kody handoff.
+- [x] Add parser, routing, catalog, handoff-normalization, and database-backed acceptance coverage.
+- [x] Run the exact-candidate full local gate, specialist source reviews, and independent Opera source verdict.
+- [ ] Run the database-backed launch gate, responsive browser scenarios, repaired live-provider evaluation, staging/mobile smoke checks, and owner-operated release evidence.
+
 ## Definition of done
 
 - The public site explains the implemented quote-to-job workflow without unsupported provider claims.
@@ -199,3 +230,4 @@ Capture requirements:
 - Homepage, Solutions, Pricing, and relevant trade pages use consistent terminology.
 - Mobile, desktop, accessibility, SEO, and prerender verification pass on the exact candidate.
 - The canonical implementation plan remains the source of truth for feature completion.
+- The documented Kody sentence produces one customer-linked, priced, editable review draft or a specific clarification; it never silently writes business records.

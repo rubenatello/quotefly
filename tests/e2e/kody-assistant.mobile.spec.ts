@@ -568,8 +568,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
             requiresConfirmation: true,
             payload: {
               prompt: message,
-              customerId: customer.id,
+              customerId: `${customer.id}-alternate`,
               customerName: customer.fullName,
+              customerPhone: "555-222-9999",
+              customerEmail: "alternate.maria@example.com",
               serviceType: "ROOFING",
               title: "Kody Mobile Roof Replacement",
               scopeText: "Replace asphalt shingle roof, include tear-off, underlayment, flashing, cleanup, and disposal.",
@@ -710,14 +712,14 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(draftDialog.getByText("Prepared a preview for a roofing quote.")).toBeVisible();
   await expect(draftDialog.getByTestId("kody-data-guardrails")).toContainText("Sources & safety");
   await draftDialog.getByRole("button", { name: "Review quote draft" }).click();
-  const confirmKodyDraft = page.getByRole("dialog", { name: "Review Kody's quote draft?" });
+  const confirmKodyDraft = page.getByRole("dialog", { name: `Review quote draft for ${customer.fullName}?` });
   await expect(confirmKodyDraft).toContainText("Nothing will be saved or sent");
   await confirmKodyDraft.getByRole("button", { name: "Open review draft" }).click();
 
   await expect(page).toHaveURL(/\/app\/build$/);
   await expect(draftDialog).toBeHidden();
   await expect(page.getByLabel("Quote title")).toHaveValue("Existing mobile draft should stay");
-  await expect(page.getByText("Kody prepared a quote prompt without changing your existing draft.")).toBeVisible();
+  await expect(page.getByText("Kody prepared a review draft without changing your existing work.")).toBeVisible();
   const kodyHandoff = page.getByTestId("kody-draft-handoff");
   await expect(kodyHandoff).toBeVisible();
   await expect(kodyHandoff).toContainText("Kody prepared a draft");
@@ -726,10 +728,19 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyHandoff).toContainText(customer.fullName);
   await expect(kodyHandoff).toContainText("Kody Mobile Roof Replacement");
   await expect(kodyHandoff).toContainText("Tear-off, disposal, and roof prep");
-  await expect(kodyHandoff).toContainText("Nothing is saved to the quote list or sent to the customer");
+  await expect(kodyHandoff).toContainText("Nothing is saved or sent automatically");
+  await expect(kodyHandoff).toContainText(customer.email);
+  await expect(kodyHandoff).toContainText("alternate.maria@example.com");
+  await expect(kodyHandoff).toContainText("Merge keeps the current customer; Replace uses Kody's customer.");
   const quoteAiDialog = page.getByRole("dialog", { name: "Draft quote with AI" });
-  await expect(quoteAiDialog).toBeVisible();
-  await expect(page.getByTestId("quote-ai-prompt")).toHaveValue(/20 squares asphalt shingle roof replacement/);
+  await expect(quoteAiDialog).toHaveCount(0);
+  await expect(kodyHandoff.getByRole("button", { name: "Merge Kody work" })).toBeVisible();
+  await expect(kodyHandoff.getByRole("button", { name: "Replace current draft" })).toBeVisible();
+  await expect(kodyHandoff.getByRole("button", { name: "Keep current draft" })).toBeVisible();
+  await kodyHandoff.getByRole("button", { name: "Merge Kody work" }).click();
+  await expect(page.getByLabel("Quote title")).toHaveValue("Existing mobile draft should stay");
+  await expect(page.getByTestId("quote-line-row-1")).toContainText("Tear-off, disposal, and roof prep");
+  await expect(page.getByTestId("quote-line-row-2")).toContainText("Install asphalt shingles and flashing");
   expect(quoteCreateRequests).toHaveLength(0);
 
   expect(aiRequests).toEqual(expect.arrayContaining([
@@ -803,9 +814,12 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
               title: "Kody Prefill Roof Replacement",
               scopeText: "Replace asphalt shingle roof, include tear-off, underlayment, flashing, cleanup, and disposal.",
               estimatedTotalAmount: 12000,
+              useWorkspaceContext: true,
+              retrievedSourceCount: 2,
+              retrievedSourceLabels: ["Roof preparation", "Asphalt shingle installation"],
               lineItems: [
-                { description: "Tear-off, disposal, and roof prep", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
-                { description: "Install asphalt shingles and flashing", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
+                { description: "Tear-off, disposal, and roof prep", quantity: 1, sectionType: "INCLUDED", sectionLabel: null, sourcePresetId: "preset-roof-prep", unitType: "FLAT", unitCost: 2300, unitPrice: 4200, catalogMatched: true },
+                { description: "Install asphalt shingles and flashing", quantity: 1, sectionType: "INCLUDED", sectionLabel: null, sourcePresetId: "preset-shingle-install", unitType: "FLAT", unitCost: 4100, unitPrice: 7800, catalogMatched: true },
               ],
             },
           }],
@@ -864,7 +878,7 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await kodyDialog.getByRole("button", { name: "Send", exact: true }).click();
   await expect(kodyDialog.getByText("Prepared a preview for a roofing quote.")).toBeVisible();
   await kodyDialog.getByRole("button", { name: "Review quote draft" }).click();
-  const confirmKodyDraft = page.getByRole("dialog", { name: "Review Kody's quote draft?" });
+  const confirmKodyDraft = page.getByRole("dialog", { name: `Review quote draft for ${customer.fullName}?` });
   await expect(confirmKodyDraft).toContainText("Nothing will be saved or sent");
   await confirmKodyDraft.getByRole("button", { name: "Open review draft" }).click();
   await expect(kodyDialog).toBeHidden();
@@ -873,12 +887,17 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await expect(page.getByText("Kody prepared a review draft in the builder.")).toBeVisible();
   await expect(page.getByTestId("kody-draft-handoff")).toContainText("Not saved");
   await expect(page.getByTestId("kody-draft-handoff")).toContainText("Not sent");
-  await expect(page.getByTestId("kody-draft-handoff")).toContainText("Pricing still needs review");
+  await expect(page.getByTestId("kody-draft-handoff")).not.toContainText("Pricing still needs review");
   await expect(page.getByRole("dialog", { name: "Draft quote with AI" })).toHaveCount(0);
   await expect(page.getByLabel("Quote title")).toHaveValue("Kody Prefill Roof Replacement");
   await expect(page.getByLabel("Quote overview")).toHaveValue(/Replace asphalt shingle roof/);
   await expect(page.getByTestId("quote-line-row-1")).toContainText("Tear-off, disposal, and roof prep");
   await expect(page.getByTestId("quote-line-row-2")).toContainText("Install asphalt shingles and flashing");
+  await expect(page.getByLabel("Existing line 1 price")).toHaveValue("4200.00");
+  await expect(page.getByLabel("Existing line 2 price")).toHaveValue("7800.00");
+  await page.getByTestId("kody-draft-handoff").getByRole("button", { name: "Review line items" }).click();
+  await expect(page.getByLabel("Existing line 1 title")).toBeVisible();
+  await expect(page.getByLabel("Existing line 1 title")).toBeFocused();
   expect(aiRequests).toEqual([
     expect.objectContaining({
       tool: "DRAFT_QUOTE",

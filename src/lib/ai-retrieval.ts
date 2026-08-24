@@ -48,7 +48,6 @@ const MAX_CANDIDATE_CHUNKS = 200;
 const DEFAULT_RETRIEVAL_LIMIT = 8;
 const FALLBACK_EMBEDDING_MODEL = "local-hash-embedding-v1";
 const FALLBACK_EMBEDDING_DIMENSIONS = 64;
-const OPENAI_EMBEDDING_TIMEOUT_MS = 90_000;
 const OPENAI_EMBEDDING_DIMENSIONS: Readonly<Record<string, number>> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
@@ -207,7 +206,7 @@ export async function createAiRetrievalEmbeddings(texts: readonly string[]): Pro
   const response = await createOpenAiEmbeddings({
     model: env.OPENAI_EMBEDDING_MODEL,
     input: [...texts],
-  }, { timeoutMs: OPENAI_EMBEDDING_TIMEOUT_MS });
+  }, { timeoutMs: env.OPENAI_ASSISTANT_TIMEOUT_MS });
   if (response.data.length !== texts.length || response.data.some((row) => !row.embedding.length)) {
     throw new Error("OpenAI returned an empty embedding.");
   }
@@ -1772,9 +1771,10 @@ export async function buildGovernedQuoteAiContext(
     embedText?: AiEmbeddingProvider;
     filters?: AiRetrievalFilters;
     priorUserQueries?: readonly string[];
+    refreshIndex?: boolean;
   },
 ) {
-  const refresh = env.AI_INDEX_INLINE_REFRESH
+  const refresh = env.AI_INDEX_INLINE_REFRESH && params.refreshIndex !== false
     ? await refreshQuoteAiRetrievalIndex(prisma, {
         access: params.access,
         serviceType: params.serviceType,

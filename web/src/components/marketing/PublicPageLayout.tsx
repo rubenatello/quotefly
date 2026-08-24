@@ -19,14 +19,14 @@ interface MarketingActionProps {
 
 const MARKETING_ACTION_VARIANTS: Record<MarketingActionVariant, string> = {
   primary:
-    "bg-quotefly-blue text-white shadow-[0_12px_28px_rgba(47,111,214,0.24)] hover:bg-blue-600 hover:shadow-[0_16px_34px_rgba(47,111,214,0.3)] focus-visible:ring-quotefly-blue/25",
+    "bg-quotefly-blue text-white shadow-[0_12px_28px_rgba(47,111,214,0.24)] hover:bg-blue-600 hover:shadow-[0_16px_34px_rgba(47,111,214,0.3)] focus-visible:ring-blue-800 focus-visible:ring-offset-white",
   orange:
-    "bg-quotefly-orange text-slate-950 shadow-[0_12px_30px_rgba(255,137,18,0.24)] hover:bg-orange-400 hover:shadow-[0_16px_38px_rgba(255,137,18,0.32)] focus-visible:ring-orange-300/35",
+    "bg-quotefly-orange text-slate-950 shadow-[0_12px_30px_rgba(255,137,18,0.24)] hover:bg-orange-400 hover:shadow-[0_16px_38px_rgba(255,137,18,0.32)] focus-visible:ring-white focus-visible:ring-offset-slate-950",
   secondary:
-    "border border-slate-300 bg-white/80 text-slate-800 hover:border-slate-400 hover:bg-white focus-visible:ring-slate-300/60",
+    "border border-slate-300 bg-white/80 text-slate-800 hover:border-slate-400 hover:bg-white focus-visible:ring-slate-800 focus-visible:ring-offset-white",
   "dark-secondary":
-    "border border-white/20 bg-white/[0.06] text-white hover:bg-white/[0.1] focus-visible:ring-white/25",
-  light: "bg-white text-slate-950 hover:bg-slate-100 focus-visible:ring-white/30",
+    "border border-white/20 bg-white/[0.06] text-white hover:bg-white/[0.1] focus-visible:ring-orange-300 focus-visible:ring-offset-slate-950",
+  light: "bg-white text-slate-950 hover:bg-slate-100 focus-visible:ring-orange-300 focus-visible:ring-offset-slate-950",
 };
 
 export function MarketingAction({
@@ -41,7 +41,7 @@ export function MarketingAction({
   disabled = false,
 }: MarketingActionProps) {
   const classes = cn(
-    "group inline-flex min-h-12 items-center justify-center gap-2 rounded-xl px-7 py-3 font-semibold transition duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-4 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0",
+    "group inline-flex min-h-12 items-center justify-center gap-2 rounded-xl px-7 py-3 font-semibold transition duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0",
     MARKETING_ACTION_VARIANTS[variant],
     fullWidth && "w-full",
     className,

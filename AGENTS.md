@@ -66,7 +66,7 @@ Backend integration tests cover the launch-critical auth, tenant isolation, cust
 
 Project-scoped custom agents live in `.codex/agents`; their reusable workflows live in `.agents/skills`.
 
-- `sweep`: public SEO, crawlability, structured data, and search performance.
+- `sweep`: public SEO and AEO, crawlability, structured data, answer-engine citation readiness, agent accessibility, and search performance.
 - `renford`: API latency, Prisma/PostgreSQL, backend architecture, and infrastructure integrity.
 - `goldface`: responsive mobile/desktop UX, accessibility, and frontend reliability.
 - `sentinel`: independent security and compliance-readiness reviewer for tenant isolation, auth, privacy, payments, providers, webhooks, dependencies, CI/CD, and production posture. Use `$quotefly-security-review` for its repeatable audit workflow.

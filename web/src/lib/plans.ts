@@ -10,6 +10,8 @@ export const BASIC_PLAN = {
   quoteHistoryDays: 30,
 } as const;
 
+export const BASIC_PLAN_PRICING_PATH = "/pricing#basic-plan";
+
 export function basicMonthlyPriceLabel(): string {
   return `$${BASIC_PLAN.monthlyPriceUsd}/mo`;
 }

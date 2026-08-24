@@ -347,6 +347,9 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
 }
 
 function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
+  if (action.type === "OPEN_QUOTE_DRAFT" && action.label.trim()) {
+    return action.label;
+  }
   const labels: Record<AiAssistantAction["type"], string> = {
     OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
     OPEN_PRODUCT_DRAFT: t("kody.actions.reviewProduct"), OPEN_QUOTE_DRAFT: t("kody.actions.reviewQuote"),
@@ -594,9 +597,13 @@ function actionConfirmationCopy(
     };
   }
   if (action.type === "OPEN_QUOTE_DRAFT") {
+    const customerName = getString(action.payload.customerName);
+    const phone = getString(action.payload.customerPhone);
+    const email = getString(action.payload.customerEmail);
+    const contactSummary = [phone, email].filter(Boolean).join(" · ");
     return {
-      title: t("kody.confirm.quoteTitle"),
-      description: t("kody.confirm.quoteDescription"),
+      title: customerName ? t("kody.confirm.quoteCustomerTitle", { name: customerName }) : t("kody.confirm.quoteTitle"),
+      description: t("kody.confirm.quoteDescription", { contact: contactSummary ? `${contactSummary}. ` : "" }),
       confirmLabel: t("kody.confirm.quoteButton"),
     };
   }
