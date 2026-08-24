@@ -10,77 +10,30 @@ interface PricingPageProps {
   onOpenAuth: () => void;
 }
 
+const PLANNED_PLANS = [
+  {
+    name: "Professional",
+    description: "Planned for teams that need broader reporting, history, and accounting workflows.",
+  },
+  {
+    name: "Enterprise",
+    description: "Planned for larger operations that need additional integration controls and rollout support.",
+  },
+] as const;
+
 export function PricingPage({ onOpenAuth }: PricingPageProps) {
   useEffect(() => {
     setPublicSEOMetadata("/pricing");
   }, []);
 
-  const plans = [
-    {
-      name: "Basic",
-      price: `$${PUBLIC_BASIC_PLAN.monthlyPriceUsd}`,
-      period: "/month",
-      seats: `${PUBLIC_BASIC_PLAN.teamMembers} users included`,
-      description: "Live now for solo operators and lean crews that need customer tracking and quoting fast.",
-      offer: `${PUBLIC_BASIC_PLAN.trialDays}-day free trial · first paid month $${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}`,
-      features: [
-        `Up to ${PUBLIC_BASIC_PLAN.quotesPerMonth} quotes/month`,
-        "Monthly AI usage included",
-        "Quick customer intake and lead pipeline",
-        "PDF quote generation",
-        "Customer and quote status tracking",
-        `${PUBLIC_BASIC_PLAN.teamMembers} team members`,
-        `${PUBLIC_BASIC_PLAN.quoteHistoryDays}-day quote history`,
-      ],
-      cta: "Start Free Trial",
-      highlighted: true,
-      availableNow: true,
-      note: "Available now",
-      badge: "Most popular",
-    },
-    {
-      name: "Professional",
-      price: "$59",
-      period: "/month",
-      seats: "15 users included",
-      description: "For growing teams that need deeper reporting, quote history, and accounting workflows.",
-      offer: null,
-      features: [
-        "Everything in Basic, plus:",
-        "Higher monthly AI allowance",
-        "Advanced analytics and reporting",
-        "Customer communication log",
-        "Quote versioning and history",
-        "15 team members",
-        "Accounting workflow upgrades",
-      ],
-      cta: "Coming Soon",
-      highlighted: false,
-      availableNow: false,
-      note: "Planned for V2",
-      badge: "Coming soon",
-    },
-    {
-      name: "Enterprise",
-      price: "$249",
-      period: "/month",
-      seats: "Unlimited users",
-      description: "For larger operations that need deeper automation, integration controls, and rollout support.",
-      offer: null,
-      features: [
-        "Everything in Professional, plus:",
-        "Expanded AI usage and automation",
-        "Unlimited team members",
-        "Advanced AI automation layer",
-        "API access and audit logs",
-        "Priority support and rollout planning",
-      ],
-      cta: "Coming Soon",
-      highlighted: false,
-      availableNow: false,
-      note: "Planned for a later release",
-      badge: "Coming soon",
-    },
+  const basicFeatures = [
+    `Up to ${PUBLIC_BASIC_PLAN.quotesPerMonth} quotes each month`,
+    `${PUBLIC_BASIC_PLAN.teamMembers} users included`,
+    `${PUBLIC_BASIC_PLAN.quoteHistoryDays}-day quote history`,
+    "Customer intake, reusable pricing, and branded PDF quotes",
+    "Accepted-quote Jobs with day/week scheduling and dispatch controls",
+    "Internal invoice records from accepted quotes or completed Jobs",
+    "Kody AI usage budget plus deterministic schedule and review tools",
   ];
 
   const faqs = [
@@ -94,7 +47,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Is there a free trial?",
-      a: `Yes. Every workspace starts with a ${PUBLIC_BASIC_PLAN.trialDays}-day free trial with no credit card required, so you can test the CRM, quoting flow, and PDF output.`,
+      a: `Yes. Every workspace starts with a ${PUBLIC_BASIC_PLAN.trialDays}-day free trial with no credit card required, so you can test customer intake, quoting, Jobs, scheduling, and internal invoice records.`,
     },
     {
       q: "How does the first-month discount work?",
@@ -102,15 +55,15 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
     },
     {
       q: "Can I change plans later?",
-      a: "Yes. Upgrade or downgrade from the admin billing area. Stripe handles the billing change and QuoteFly updates tenant access.",
+      a: "Basic is the only plan available today. We will publish the eligibility, pricing, and billing behavior for any additional plan before customers can change to it.",
     },
     {
       q: "Do you support QuickBooks?",
-      a: "QuickBooks integration is planned for a future plan. Basic currently focuses on customer management, quoting, branded PDFs, and follow-up.",
+      a: "Basic can create an internal QuoteFly invoice record. It does not send that invoice, collect payment, or create and reconcile a QuickBooks invoice. Provider-backed invoicing and payments will stay unavailable until those workflows are release-verified.",
     },
     {
       q: "How does AI usage work?",
-      a: "AI is metered by usage, not by quotes sent. The app shows a monthly progress bar and warns at 25%, 50%, 75%, 85%, 95%, and 100%. At the monthly limit, AI drafting and analysis pause until the monthly reset. Kody's schedule, task, product-catalog, navigation, and review actions remain available, along with manual editing.",
+      a: "AI is metered by usage, not by quotes sent. The app shows progress for the current billing cycle and warns at 25%, 50%, 75%, 85%, 95%, and 100%. At the billing-cycle limit, AI drafting and analysis pause until the next billing cycle. Kody's schedule, task, product-catalog, navigation, and review actions remain available, along with manual editing.",
     },
     {
       q: "Do you offer annual billing?",
@@ -126,117 +79,94 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         title="Contractor quoting software pricing"
         description={
           <>
-            Start with QuoteFly Basic today. Additional plans will open as advanced reporting, team, and accounting features become available.
+            Basic is the plan available today, with quoting, Jobs, scheduling, dispatch controls, and internal invoice records in one workspace.
           </>
         }
         actions={
           <>
-            <span className="text-sm font-medium text-slate-600">Billed monthly</span>
-            <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-300 px-4 py-2 text-xs font-bold text-slate-950">
-              Basic · Most popular
+            <span className="text-sm font-medium text-slate-700">Billed monthly</span>
+            <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-xs font-bold text-emerald-900">
+              Basic · Available now
             </span>
           </>
         }
       />
 
-      <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
+      <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8" aria-labelledby="current-plan-heading">
         <div className="mx-auto max-w-7xl">
-          <div className="mx-auto mb-10 max-w-2xl text-center">
-            <p className="text-sm font-bold uppercase tracking-[0.16em] text-quotefly-blue">Compare plans</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">Start with the plan built for quoting today</h2>
-            <p className="mt-4 text-base leading-7 text-slate-600">
-              Basic is available now. Preview what is planned for growing teams while we finish Professional and Enterprise.
+          <div className="mx-auto mb-10 max-w-3xl text-center">
+            <p className="text-sm font-bold uppercase tracking-[0.16em] text-blue-800">Current plan</p>
+            <h2 id="current-plan-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">One available plan, with the operational workflow included</h2>
+            <p className="mt-4 text-base leading-7 text-slate-700">
+              Start with Basic now. Planned tiers are shown separately without publishing unverified prices or feature commitments.
             </p>
           </div>
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-            {plans.map((plan) => (
-              <article
-                key={plan.name}
-                aria-disabled={!plan.availableNow || undefined}
-                className={`relative rounded-3xl border transition duration-200 ${
-                  plan.highlighted
-                    ? "border-quotefly-blue bg-gradient-to-b from-blue-50 to-white shadow-[0_18px_46px_rgba(47,111,214,0.16)] lg:-translate-y-2"
-                    : "border-slate-200 bg-slate-100/80 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
-                }`}
-              >
-                <span
-                  className={`absolute -right-2 -top-3 z-10 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm ${
-                    plan.availableNow
-                      ? "border-orange-400 bg-orange-300 text-slate-950"
-                      : "border-slate-300 bg-slate-200 text-slate-600"
-                  }`}
-                >
-                  {plan.badge}
-                </span>
 
-                <div className={`p-6 ${plan.availableNow ? "" : "opacity-65"}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <h3 className="text-xl font-bold text-slate-900">{plan.name}</h3>
-                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${plan.availableNow ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-500"}`}>
-                      {plan.note}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-600">{plan.description}</p>
-
-                  <div className="mt-6 flex items-baseline gap-1">
-                    <span className="text-4xl font-bold text-slate-900">{plan.price}</span>
-                    <span className="text-slate-600">{plan.period}</span>
-                  </div>
-                  {plan.offer ? (
-                    <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
-                      {plan.offer}
-                    </p>
-                  ) : null}
-                  <div className="mt-3 inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-800">
-                    {plan.seats}
-                  </div>
-
-                  <button
-                    onClick={plan.availableNow ? onOpenAuth : undefined}
-                    disabled={!plan.availableNow}
-                    className={`mt-6 min-h-12 w-full rounded-xl px-6 py-3 font-semibold transition duration-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-blue/20 ${
-                      plan.highlighted
-                        ? "bg-quotefly-blue text-white shadow-[0_10px_24px_rgba(47,111,214,0.22)] hover:-translate-y-0.5 hover:bg-blue-600"
-                        : "border border-slate-300 text-slate-900"
-                    } ${
-                      !plan.availableNow ? "cursor-not-allowed bg-slate-100 text-slate-400" : ""
-                    }`}
-                  >
-                    {plan.cta}
-                  </button>
-
-                  <div className="mt-8 space-y-3">
-                    {plan.features.map((feature) => (
-                      <div key={feature} className="flex items-start gap-3">
-                        <CheckIcon size={16} className={`mt-0.5 ${plan.availableNow ? "text-quotefly-blue" : "text-slate-400"}`} />
-                        <span
-                          className={`text-sm ${
-                            feature.includes("Everything") || feature.includes("plus:")
-                              ? "font-semibold text-slate-900"
-                              : "text-slate-600"
-                          }`}
-                        >
-                          {feature}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+          <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+            <article className="rounded-3xl border border-blue-300 bg-gradient-to-b from-blue-50 to-white p-6 shadow-[0_18px_46px_rgba(47,111,214,0.13)] sm:p-8">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-950">Basic</h3>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-700">For solo operators and lean crews that need to quote the work and keep the resulting Job moving.</p>
                 </div>
-              </article>
-            ))}
+                <span className="rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-900">Available now</span>
+              </div>
+
+              <p className="mt-7 flex items-baseline gap-1">
+                <span className="text-5xl font-bold tracking-tight text-slate-950">${PUBLIC_BASIC_PLAN.monthlyPriceUsd}</span>
+                <span className="text-slate-700">/month</span>
+              </p>
+              <p className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">
+                {PUBLIC_BASIC_PLAN.trialDays}-day free trial · first paid month ${PUBLIC_BASIC_PLAN.firstPaidMonthPriceUsd.toFixed(2)}
+              </p>
+
+              <button
+                type="button"
+                onClick={onOpenAuth}
+                className="mt-6 min-h-12 w-full rounded-xl bg-blue-800 px-6 py-3 font-semibold text-white shadow-[0_10px_24px_rgba(30,64,175,0.2)] transition hover:-translate-y-0.5 hover:bg-blue-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-300"
+              >
+                Start Free Trial
+              </button>
+
+              <ul className="mt-8 grid gap-3 sm:grid-cols-2">
+                {basicFeatures.map((feature) => (
+                  <li key={feature} className="flex items-start gap-3 text-sm leading-6 text-slate-700">
+                    <CheckIcon size={16} className="mt-1 shrink-0 text-blue-800" />
+                    <span>{feature}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+
+            <aside aria-labelledby="planned-plans-heading" className="rounded-3xl border border-slate-300 bg-slate-100 p-5 sm:p-6">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-700">Roadmap preview</p>
+              <h3 id="planned-plans-heading" className="mt-2 text-xl font-bold text-slate-950">Planned plans</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-700">Names and direction only. Final pricing, limits, and features will be published before launch.</p>
+              <div className="mt-5 space-y-3">
+                {PLANNED_PLANS.map((plan) => (
+                  <article key={plan.name} className="rounded-2xl border border-slate-300 bg-white p-4">
+                    <h4 className="font-bold text-slate-950">{plan.name}</h4>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{plan.description}</p>
+                    <button type="button" disabled className="mt-4 min-h-11 w-full cursor-not-allowed rounded-xl border border-slate-300 bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
+                      Coming Soon
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </aside>
           </div>
         </div>
       </section>
 
-      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8">
+      <section className="border-t border-slate-200 px-4 py-16 sm:px-6 lg:px-8" aria-labelledby="pricing-faq-heading">
         <div className="mx-auto max-w-4xl">
-          <h2 className="mb-12 text-center text-3xl font-bold text-slate-900">Frequently asked questions</h2>
+          <h2 id="pricing-faq-heading" className="mb-12 text-center text-3xl font-bold text-slate-950">Frequently asked questions</h2>
 
           <div className="space-y-6">
             {faqs.map((faq) => (
               <div key={faq.q} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.045)]">
-                <h3 className="mb-2 font-semibold text-slate-900">{faq.q}</h3>
-                <p className="text-slate-600">{faq.a}</p>
+                <h3 className="mb-2 font-semibold text-slate-950">{faq.q}</h3>
+                <p className="text-slate-700">{faq.a}</p>
               </div>
             ))}
           </div>
@@ -250,7 +180,7 @@ export function PricingPage({ onOpenAuth }: PricingPageProps) {
         onAction={onOpenAuth}
         supportingText={
           <>
-            AI usage applies only when you draft or revise with AI. Have a sales or plan question?{" "}
+            Paid AI usage applies only when QuoteFly calls the AI provider. Deterministic schedule and review tools remain available without AI credits. Have a sales or plan question?{" "}
             <a href={INFO_MAILTO} className="font-semibold text-blue-300 hover:text-blue-200">
               Email our team
             </a>

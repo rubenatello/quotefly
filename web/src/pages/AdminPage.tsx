@@ -255,6 +255,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const sessionRole = normalizeRole(session?.role ?? "member");
   const superuserView = Boolean(session?.isSuperuser);
   const ownerView = sessionRole === "owner";
+  const canManageQuickBooks = sessionRole === "owner" || sessionRole === "admin";
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
   const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Basic";
@@ -300,6 +301,12 @@ export function AdminPage({ session }: AdminPageProps) {
   }, [debouncedMemberSearch, memberPage, memberPageSize, t]);
 
   const loadQuickBooksStatus = useCallback(async () => {
+    if (!canManageQuickBooks) {
+      setQuickBooksStatus(null);
+      setQuickBooksLoading(false);
+      return;
+    }
+
     setQuickBooksLoading(true);
     try {
       const result = await api.integrations.quickbooks.status();
@@ -309,7 +316,7 @@ export function AdminPage({ session }: AdminPageProps) {
     } finally {
       setQuickBooksLoading(false);
     }
-  }, [t]);
+  }, [canManageQuickBooks, t]);
 
   useEffect(() => {
     setSEOMetadata({
@@ -880,11 +887,19 @@ export function AdminPage({ session }: AdminPageProps) {
                 <li>- {t("admin.accounting.invoice")}</li>
                 <li>- {t("admin.accounting.automation")}</li>
               </ul>
-              {quickBooksLoading ? (
+              {!canManageQuickBooks ? (
+                <p className="text-xs text-slate-500">{t("admin.accounting.managerFoundation")}</p>
+              ) : quickBooksLoading ? (
                 <p className="text-xs text-slate-400">{t("admin.accounting.checking")}</p>
               ) : (
                 <p className="text-xs text-slate-500">
-                  {t("admin.accounting.foundation", { status: quickBooksStatus?.enabled ? t("admin.accounting.configured") : t("admin.accounting.notConfigured") })}
+                  {t("admin.accounting.foundation", {
+                    status: !quickBooksStatus?.configured
+                      ? t("admin.accounting.notConfigured")
+                      : !quickBooksStatus.providerWorkflowsEnabled
+                        ? t("admin.accounting.workflowsPaused")
+                        : t("admin.accounting.configured"),
+                  })}
                 </p>
               )}
             </div>

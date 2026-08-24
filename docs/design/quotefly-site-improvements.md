@@ -1,10 +1,20 @@
 # QuoteFly Site Improvements
 
-Status: Approved product-marketing brief for the next public-site iteration
+Status: Implemented and independently approved by security, UX, SEO, release operations, and final engineering review in the current local sellability candidate; BCP pending explicit authorization
 
 Last reviewed: 2026-08-23
 
 Product baseline: `543fc69` (`feat: add job operations and harden AI usage`)
+
+## Implementation record
+
+- The homepage and Solutions page now tell the six-stage customer-to-internal-invoice story while preserving quoting as the primary entry point.
+- Pricing now describes the available Basic workflow, removes unsupported popularity and future-plan price claims, uses billing-cycle AI language, and states the internal-invoice/QuickBooks/payment boundary directly.
+- Kody examples now cover schedule lookup plus prepared booking and dispatch reviews, with explicit no-mutation wording.
+- Six real QuoteFly surfaces are captured at desktop and mobile sizes from a deterministic fictional tenant, producing twelve metadata-stripped WebP assets. Provenance and regeneration instructions are recorded in [`docs/image-credits.md`](../image-credits.md).
+- Trade pages link to the shared quote-to-job workflow and Basic pricing instead of duplicating thin operational content.
+- Legacy QuickBooks provider workflows are default-off in the current candidate; public copy does not market automatic provider invoicing, reconciliation, or payment collection.
+- Exact integrated evidence currently includes the database-backed CI gate with `213/213` integration tests, web build, lint, i18n `12/12`, 16-route prerender, SEO `9/9`, capture generation `1/1`, focused public responsive/Axe/keyboard/reduced-motion coverage `4/4`, QuickBooks API/security integration coverage `60/60`, `88/88` executed browser scenarios plus one intentional opt-in capture skip, and the focused member/manager QuickBooks Settings regression `2/2`. Independent security, UX (`97/100`), SEO, release-operations, and final engineering reviews approve the candidate for the next explicitly authorized BCP.
 
 ## Purpose
 
@@ -12,9 +22,9 @@ Expand QuoteFly's public product story beyond quote creation and follow-up so th
 
 This brief complements the canonical [Activity Center, Jobs, and Dispatch Plan](../plan/activity-job-dispatch-plan.md) and the stable [Jobs, Booking, Dispatch, and Invoicing Spec](../../quotefly_jobs_booking_dispatch_invoicing_spec.md). The canonical plan remains the authority for implementation status.
 
-## Current gap
+## Baseline gap addressed by this iteration
 
-The public homepage currently emphasizes customer capture, quote drafting, PDF review, and follow-up. That remains accurate, but it understates the implemented product:
+Before this iteration, the public homepage emphasized customer capture, quote drafting, PDF review, and follow-up. That was accurate, but it understated the implemented product:
 
 - Accepted quotes create tenant-numbered Jobs.
 - Owners and admins can assign work and create overlap-safe bookings.
@@ -24,7 +34,7 @@ The public homepage currently emphasizes customer capture, quote drafting, PDF r
 - Accepted Quotes and completed Jobs can create and display an internal QuoteFly invoice record.
 - Confirmed appointment changes can create tenant-scoped in-app team notifications.
 
-The site should tell that larger story without implying that unfinished external-provider capabilities are live.
+The implemented public story now covers that larger workflow without implying that unfinished external-provider capabilities are live.
 
 ## Product story to feature
 
@@ -158,27 +168,28 @@ Capture requirements:
 
 ### Slice A — Brief and product proof
 
-- Approve this claims matrix and screenshot list.
-- Create the sanitized demo tenant and capture the six required surfaces.
-- Record image provenance and alt text.
+- [x] Approve this claims matrix and screenshot list.
+- [x] Create the sanitized deterministic tenant fixture and capture the six required surfaces at desktop and mobile sizes.
+- [x] Record image provenance, regeneration steps, asset budgets, and alt text.
 
 ### Slice B — Homepage story
 
-- Expand the workflow narrative and product showcase.
-- Add Jobs/schedule/dispatch Kody examples.
-- Update supporting metadata, sitemap date, and SEO assertions.
+- [x] Expand the workflow narrative and product showcase.
+- [x] Add Jobs/schedule/dispatch Kody examples.
+- [x] Update supporting metadata, sitemap date, and SEO assertions.
 
 ### Slice C — Solutions and conversion paths
 
-- Extend the Solutions page and relevant trade-page links.
-- Align Pricing feature language with the implemented workflow and provider boundaries.
-- Review CTA hierarchy and remove repeated or contradictory feature blocks.
+- [x] Extend the Solutions page and relevant trade-page links.
+- [x] Align Pricing feature language with the implemented workflow and provider boundaries.
+- [x] Review CTA hierarchy and remove repeated, unsupported, or contradictory feature blocks.
 
 ### Slice D — Release QA
 
-- Run the web build, lint, i18n, SEO, and focused responsive Playwright suites.
-- Review rendered HTML, mobile/desktop screenshots, keyboard flow, reduced motion, and Axe serious/critical results.
-- Obtain independent UX, SEO, and claim-accuracy review before BCP.
+- [x] Run the web build, lint, i18n, SEO, capture, and focused responsive Playwright suites.
+- [x] Review rendered HTML, all twelve mobile/desktop screenshots, keyboard flow, reduced motion, and Axe serious/critical results.
+- [x] Obtain independent security, UX, SEO, and claim-accuracy review on the exact frozen candidate.
+- [x] Obtain final engineering review on the exact frozen candidate before BCP.
 
 ## Definition of done
 

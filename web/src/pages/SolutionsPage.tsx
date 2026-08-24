@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import {
   AirVent,
   ArrowRight,
+  BriefcaseBusiness,
+  CalendarDays,
   Check,
   CheckCircle2,
   CircleDollarSign,
@@ -13,8 +15,10 @@ import {
   Leaf,
   MessageSquareQuote,
   PanelsTopLeft,
+  ReceiptText,
   Search,
   TimerReset,
+  Truck,
   UsersRound,
   Wrench,
   type LucideIcon,
@@ -216,27 +220,39 @@ const TRADES: TradeSolution[] = [
 const WORKFLOW_STEPS = [
   {
     number: "01",
-    title: "Find the customer",
-    detail: "Search the customer list or add a new lead without leaving the quote flow.",
+    title: "Capture and price",
+    detail: "Find or add the customer, then build the scope, quantities, and customer price while the details are fresh.",
     icon: Search,
   },
   {
     number: "02",
-    title: "Price the real work",
-    detail: "Add labor, material, quantity, fees, and options with customer price kept clear.",
-    icon: CircleDollarSign,
-  },
-  {
-    number: "03",
-    title: "Review what they see",
-    detail: "Check the scope and customer-facing total before creating the final quote.",
+    title: "Review and share",
+    detail: "Check the customer-facing total and branded PDF before you create and share the quote.",
     icon: FileCheck2,
   },
   {
+    number: "03",
+    title: "Turn yes into a Job",
+    detail: "Move an accepted quote into a numbered Job without re-entering its customer or approved scope.",
+    icon: BriefcaseBusiness,
+  },
+  {
     number: "04",
-    title: "Share and follow up",
-    detail: "Open your email or text app, send the branded PDF, and keep the quote moving.",
-    icon: CheckCircle2,
+    title: "Assign and schedule",
+    detail: "Choose an active teammate, book an overlap-safe visit, and see the schedule by day or week.",
+    icon: CalendarDays,
+  },
+  {
+    number: "05",
+    title: "Dispatch and complete",
+    detail: "Move eligible appointments through dispatch, arrival, and completion from the field workspace.",
+    icon: Truck,
+  },
+  {
+    number: "06",
+    title: "Create the internal invoice",
+    detail: "Create and review an internal invoice record from an accepted quote or completed Job.",
+    icon: ReceiptText,
   },
 ];
 
@@ -264,7 +280,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
               Built for the work. <span className="text-blue-300">Not the paperwork.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
-              QuoteFly is practical quoting software for contractors who need to turn job details into a clear, customer-ready quote before the day gets away from them.
+              QuoteFly is practical quoting software for contractors who need to turn fresh job details into a clear quote, then schedule, dispatch, and finish the work without rebuilding the record.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
@@ -284,7 +300,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
             </div>
 
             <div className="mt-7 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm text-slate-300 lg:justify-start">
-              {["Customer records", "Mobile estimates", "Branded PDFs", "Quote follow-up"].map((item) => (
+              {["Customer and quote records", "Accepted-quote Jobs", "Day and week schedules", "Internal invoice records"].map((item) => (
                 <span key={item} className="inline-flex items-center gap-1.5">
                   <Check size={15} className="text-quotefly-orange" aria-hidden="true" />
                   {item}
@@ -386,12 +402,12 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
           </div>
 
           <div data-marketing-reveal>
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">One clean field workflow</p>
+            <p className="text-sm font-bold uppercase tracking-[0.18em] text-blue-800">One connected field workflow</p>
             <h2 id="workflow-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
-              From job details to a quote the customer can trust
+              From a clear quote to a scheduled, completed Job
             </h2>
             <p className="mt-4 text-lg leading-8 text-slate-600">
-              The screen stays simple because the path stays simple. QuoteFly keeps the important decisions together and leaves the busywork behind.
+              QuoteFly keeps the commercial quote separate from the operational Job, while carrying the approved customer and scope forward. You can finish with an internal invoice record; external invoice sending, payment collection, and QuickBooks invoice creation are not part of this workflow.
             </p>
 
             <ol className="mt-8 space-y-3">
@@ -413,6 +429,15 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                 );
               })}
             </ol>
+
+            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+              <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
+                Try the workflow free
+              </MarketingAction>
+              <MarketingAction href="/pricing" variant="secondary">
+                See Basic pricing
+              </MarketingAction>
+            </div>
           </div>
         </div>
       </section>
@@ -420,7 +445,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
       <section className="px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="trades-heading">
         <div className="mx-auto max-w-7xl">
           <div data-marketing-reveal className="mx-auto max-w-3xl text-center">
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-quotefly-blue">Built around real jobs</p>
+            <p className="text-sm font-bold uppercase tracking-[0.18em] text-blue-800">Built around real jobs</p>
             <h2 id="trades-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               Your trade has its own details. QuoteFly gives them a clear place.
             </h2>
@@ -471,7 +496,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                     </div>
 
                     <div className="mt-6">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">The quoting problem</p>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-600">The quoting problem</p>
                       <p className="mt-2 text-lg font-bold leading-7 text-slate-950">{trade.problem}</p>
                       <p className="mt-2 text-sm leading-6 text-slate-600">{trade.response}</p>
                     </div>
@@ -494,14 +519,14 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                     </div>
 
                     <div className="mt-auto pt-6">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">QuoteFly advantage</p>
-                      <div className="mt-3 flex flex-wrap gap-2" aria-label={`${trade.name} QuoteFly capabilities`}>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-600">QuoteFly advantage</p>
+                      <ul className="mt-3 flex flex-wrap gap-2" aria-label={`${trade.name} QuoteFly capabilities`}>
                         {trade.capabilities.map((capability) => (
-                          <span key={capability} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                          <li key={capability} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
                             {capability}
-                          </span>
+                          </li>
                         ))}
-                      </div>
+                      </ul>
                       {trade.detailPath ? (
                         <Link
                           to={trade.detailPath}

@@ -693,27 +693,27 @@ function KodyResultCard({
         </div>
         <dl className="mt-2 grid gap-1.5 text-xs text-[var(--qf-text-soft)]">
           {start && end ? (
-            <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.scheduleCard.window", { timeZone })}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{t("kody.scheduleCard.windowValue", { start, end })}</dd>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{t("kody.scheduleCard.windowValue", { start, end })}</dd>
             </div>
           ) : null}
           {jobNumber !== null || jobTitle ? (
-            <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.jobTitle")}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{t("kody.scheduleCard.job", { number: jobNumber ?? "—", title: jobTitle ?? "—" })}</dd>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{t("kody.scheduleCard.job", { number: jobNumber ?? "—", title: jobTitle ?? "—" })}</dd>
             </div>
           ) : null}
           {assigneeName ? (
-            <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.assignee")}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{assigneeName}</dd>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{assigneeName}</dd>
             </div>
           ) : null}
           {status ? (
-            <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.status")}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{localizedKnownValue(status, t)}</dd>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{localizedKnownValue(status, t)}</dd>
             </div>
           ) : null}
         </dl>

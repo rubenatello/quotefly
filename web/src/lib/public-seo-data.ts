@@ -40,24 +40,24 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-22",
-    title: "Contractor Quoting Software & Estimate App | QuoteFly",
+    lastModified: "2026-08-23",
+    title: "Contractor Quoting & Job Scheduling Software | QuoteFly",
     description:
-      "Build contractor quotes from the field with customer tracking, reusable pricing, Kody AI assistance, branded PDFs, and practical follow-up in QuoteFly.",
+      "Build contractor quotes, turn accepted work into Jobs, schedule and dispatch visits, and create internal invoice records in one practical QuoteFly workflow.",
     heading: "Build the quote while the job is still fresh.",
     summary:
-      "Keep the customer, scope, pricing, branded PDF, and follow-up in one practical workflow. Ask Kody for a useful first draft, then review every line before anything is created or sent.",
+      "Keep the customer, scope, pricing, branded PDF, Job, schedule, and internal invoice record in one practical workflow. Ask Kody for a useful first pass, then review before anything changes.",
     schemaType: "SoftwareApplication",
   },
   "/pricing": {
     path: "/pricing",
-    lastModified: "2026-08-15",
-    title: "Contractor Quoting Software Pricing | QuoteFly",
+    lastModified: "2026-08-23",
+    title: "Contractor Quoting Software Pricing & Features | QuoteFly",
     description:
-      `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial, with the first paid month 50% off. Review the contractor CRM, estimating, and PDF quote features.`,
+      `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial, with the first paid month 50% off. Includes quoting, Jobs, scheduling, dispatch, and internal invoice records.`,
     heading: "Contractor quoting software pricing",
     summary:
-      "Start with the current Basic plan for customer intake, quote creation, branded PDFs, and quote tracking.",
+      "Basic is the plan available today, with quoting, Jobs, scheduling, dispatch controls, and internal invoice records in one workspace.",
     schemaType: "SoftwareApplication",
   },
   "/services": {
@@ -73,18 +73,18 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
-    lastModified: "2026-08-17",
-    title: "Quoting Solutions for Contractors by Trade | QuoteFly",
+    lastModified: "2026-08-23",
+    title: "Contractor Quoting, Scheduling & Dispatch Solutions | QuoteFly",
     description:
-      "See how QuoteFly solves customer, estimating, pricing, PDF, and follow-up problems for HVAC, plumbing, flooring, roofing, landscaping, and construction teams.",
+      "See how QuoteFly connects contractor quoting, accepted-quote Jobs, day and week scheduling, dispatch controls, and internal invoice records across the trades.",
     heading: "Built for the work. Not the paperwork.",
     summary:
-      "Turn fresh job details into clear customer quotes with one mobile workflow for customer records, pricing, branded PDFs, and follow-up.",
+      "Turn fresh job details into a clear quote, then schedule, dispatch, and finish the work without rebuilding the customer or approved scope.",
     schemaType: "CollectionPage",
   },
   "/solutions/hvac": {
     path: "/solutions/hvac",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-23",
     title: "HVAC Quoting and Estimating Software | QuoteFly",
     description:
       "Create HVAC estimates for service, equipment replacement, ductwork, startup, maintenance, and customer upgrade options with QuoteFly.",
@@ -95,7 +95,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions/plumbing": {
     path: "/solutions/plumbing",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-23",
     title: "Plumbing Quote and Estimate Software | QuoteFly",
     description:
       "Create plumbing estimates for service calls, repairs, fixtures, water heaters, repiping, materials, and replacement options with QuoteFly.",
@@ -106,7 +106,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions/flooring": {
     path: "/solutions/flooring",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-23",
     title: "Flooring Estimating and Quote Software | QuoteFly",
     description:
       "Create flooring estimates for square footage, demolition, floor preparation, material, waste, stairs, transitions, and finishing with QuoteFly.",
@@ -117,7 +117,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions/roofing": {
     path: "/solutions/roofing",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-23",
     title: "Roofing Estimate and Quote Software | QuoteFly",
     description:
       "Create roofing estimates for repairs, tear-off, materials, underlayment, flashing, ventilation, disposal, decking allowances, and upgrades.",
@@ -128,7 +128,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions/landscaping": {
     path: "/solutions/landscaping",
-    lastModified: "2026-08-13",
+    lastModified: "2026-08-23",
     title: "Landscaping and Gardening Quote Software | QuoteFly",
     description:
       "Create landscaping and gardening estimates with hourly, per-visit, square-foot, material, and recurring-service pricing in QuoteFly.",
@@ -139,7 +139,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions/construction": {
     path: "/solutions/construction",
-    lastModified: "2026-08-14",
+    lastModified: "2026-08-23",
     title: "Construction Estimating and Quote Software | QuoteFly",
     description:
       "Create construction estimates for renovations, additions, repairs, labor, materials, subcontract work, allowances, and customer alternates.",

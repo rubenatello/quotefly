@@ -1,11 +1,142 @@
-import { ArrowRight, Monitor, ShieldCheck, Smartphone } from "lucide-react";
+import {
+  ArrowRight,
+  BellRing,
+  Bot,
+  BriefcaseBusiness,
+  CalendarDays,
+  ClipboardCheck,
+  ReceiptText,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { MarketingAction } from "./PublicPageLayout";
 
 interface LandingProductShowcaseProps {
   onOpenAuth: () => void;
 }
 
-const DEMO_LABEL = "Actual QuoteFly interface · Sanitized demo data";
+type ProductCapture = {
+  key: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  boundary: string;
+  alt: string;
+  icon: LucideIcon;
+  featured?: boolean;
+};
+
+const DEMO_LABEL = "Actual QuoteFly interface · Sanitized fictional data";
+
+const PRODUCT_CAPTURES: readonly ProductCapture[] = [
+  {
+    key: "activity-my-day",
+    eyebrow: "Activity and My Day",
+    title: "Start with the work that needs attention.",
+    description: "See assigned tasks, due work, quote momentum, and active jobs in the same workspace your team uses every day.",
+    boundary: "Tasks are internal workspace records. QuoteFly does not contact a customer from this view.",
+    alt: "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
+    icon: ClipboardCheck,
+    featured: true,
+  },
+  {
+    key: "jobs-schedule",
+    eyebrow: "Booking and schedule",
+    title: "Keep the field calendar connected to each job.",
+    description: "Review day or week appointments, assigned teammates, visit windows, and current dispatch status without rebuilding a second calendar.",
+    boundary: "This is scheduling and dispatch state, not automated route optimization or provider messaging.",
+    alt: "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
+    icon: CalendarDays,
+  },
+  {
+    key: "job-detail",
+    eyebrow: "Job detail",
+    title: "Carry the accepted scope into field operations.",
+    description: "Keep assignment, access notes, booking history, visit progress, and the source quote attached to the job.",
+    boundary: "Dispatch, arrival, and completion are deliberate team actions with an in-app audit trail.",
+    alt: "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
+    icon: BriefcaseBusiness,
+  },
+  {
+    key: "kody-review",
+    eyebrow: "Kody schedule review",
+    title: "Ask for the schedule, then review the result.",
+    description: "Kody can read tenant-scoped appointments and organize the day into a practical review without exposing access notes or contact details.",
+    boundary: "This deterministic review uses no paid AI. Kody never sends, books, or dispatches without a separate user action.",
+    alt: "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
+    icon: Bot,
+  },
+  {
+    key: "internal-invoice",
+    eyebrow: "Internal invoice ledger",
+    title: "Create the billing record without overstating payment progress.",
+    description: "Track the customer total, balance, due date, source quote, and job from a clear internal invoice record.",
+    boundary: "A draft invoice does not send, collect payment, or create anything in QuickBooks, Stripe, or Square.",
+    alt: "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
+    icon: ReceiptText,
+  },
+  {
+    key: "notification-center",
+    eyebrow: "In-app notifications",
+    title: "Keep booking changes visible to the workspace.",
+    description: "See booked, rescheduled, and dispatched visits with the related job and the time each notification was received.",
+    boundary: "The notification center is in-app only. It does not send customer email or text messages.",
+    alt: "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
+    icon: BellRing,
+  },
+] as const;
+
+function ProductCaptureCard({ capture }: { capture: ProductCapture }) {
+  const desktopPath = `/images/product/${capture.key}-desktop-v1.webp`;
+  const mobilePath = `/images/product/${capture.key}-mobile-v1.webp`;
+  const CaptureIcon = capture.icon;
+
+  return (
+    <figure
+      data-marketing-reveal
+      className={`overflow-hidden rounded-[28px] border border-white/10 bg-slate-900 shadow-[0_24px_62px_rgba(0,0,0,0.3)] ${capture.featured ? "lg:col-span-2" : ""}`}
+    >
+      <figcaption className="grid gap-4 border-b border-white/10 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.62fr)] lg:items-end">
+        <div>
+          <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-300">
+            <CaptureIcon size={17} aria-hidden="true" />
+            {capture.eyebrow}
+          </p>
+          <h3 className="mt-3 text-xl font-bold tracking-tight text-white sm:text-2xl">{capture.title}</h3>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{capture.description}</p>
+        </div>
+        <div>
+          <p className="flex items-start gap-2 text-xs leading-5 text-slate-400">
+            <ShieldCheck size={15} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden="true" />
+            {capture.boundary}
+          </p>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300">{DEMO_LABEL}</p>
+        </div>
+      </figcaption>
+      <div className="bg-slate-950 p-2 sm:p-3">
+        <picture>
+          <source
+            media="(max-width: 640px)"
+            srcSet={mobilePath}
+            width="390"
+            height="844"
+            type="image/webp"
+          />
+          <img
+            src={desktopPath}
+            alt={capture.alt}
+            width="1440"
+            height="900"
+            loading="lazy"
+            decoding="async"
+            fetchPriority="low"
+            className="h-auto w-full rounded-[18px] border border-white/10 bg-white object-contain"
+          />
+        </picture>
+      </div>
+    </figure>
+  );
+}
 
 export function LandingProductShowcase({ onOpenAuth }: LandingProductShowcaseProps) {
   return (
@@ -17,92 +148,30 @@ export function LandingProductShowcase({ onOpenAuth }: LandingProductShowcasePro
       <div className="mx-auto max-w-7xl">
         <div data-marketing-reveal className="grid items-end gap-6 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
           <div>
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-blue-300">The real QuoteFly workspace</p>
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-blue-300">The real QuoteFly operations workspace</p>
             <h2 id="product-story-heading" className="mt-3 max-w-3xl text-3xl font-bold tracking-[-0.035em] sm:text-4xl lg:text-5xl">
-              See what needs attention. Move the next job.
+              Move from accepted quote to a finished, billable job.
             </h2>
           </div>
           <div>
             <p className="max-w-3xl text-base leading-7 text-slate-300 sm:text-lg">
-              QuoteFly keeps leads, quotes, follow-up, and Kody in one practical workspace—from your phone in the field to your desktop at the office. These screens use demo data, but what you see is the real product.
+              These are real QuoteFly screens rendered with a fictional home-services workspace. They show the current product boundaries as clearly as the workflow itself.
             </p>
             <p className="mt-3 flex items-start gap-2 text-sm text-slate-400">
               <ShieldCheck size={17} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden="true" />
-              Customer contact details are removed from public product images.
+              No production or real customer data, internal costs, or margins appear in these images.
             </p>
           </div>
         </div>
 
-        <figure data-marketing-reveal className="mt-10 overflow-hidden rounded-[28px] border border-white/10 bg-slate-900 p-2 shadow-[0_30px_80px_rgba(0,0,0,0.38)] sm:p-3 lg:p-4">
-          <div className="flex min-h-11 items-center justify-between gap-3 px-2 pb-2 text-xs font-semibold text-slate-400 sm:px-3 sm:pb-3">
-            <span className="inline-flex items-center gap-2"><Monitor size={16} className="text-blue-300" aria-hidden="true" />Activity center · Desktop</span>
-            <span className="hidden sm:inline">{DEMO_LABEL}</span>
-          </div>
-          <picture>
-            <source
-              srcSet="/images/product/quotefly-activity-center-desktop-v1-960.webp 960w, /images/product/quotefly-activity-center-desktop-v1-1440.webp 1440w, /images/product/quotefly-activity-center-desktop-v1-1890.webp 1890w"
-              sizes="(max-width: 640px) calc(100vw - 48px), (max-width: 1280px) calc(100vw - 80px), 1248px"
-              type="image/webp"
-            />
-            <img
-              src="/images/product/quotefly-activity-center-desktop-v1-1890.webp"
-              alt="QuoteFly desktop activity center showing prioritized leads, quote status, and follow-up actions."
-              width="1890"
-              height="908"
-              loading="lazy"
-              decoding="async"
-              fetchPriority="low"
-              className="h-auto w-full rounded-[20px] border border-white/10 bg-white object-contain"
-            />
-          </picture>
-          <figcaption className="px-2 pb-1 pt-3 text-sm leading-6 text-slate-300 sm:px-3">
-            <strong className="text-white">Keep the whole queue visible without rebuilding your day.</strong>
-            <span className="ml-2 sm:hidden">{DEMO_LABEL}</span>
-          </figcaption>
-        </figure>
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <figure data-marketing-reveal className="grid overflow-hidden rounded-[28px] border border-white/10 bg-slate-900 p-4 shadow-[0_22px_54px_rgba(0,0,0,0.28)] sm:grid-cols-[minmax(0,1fr)_minmax(260px,0.74fr)] sm:items-center sm:gap-6 sm:p-6">
-            <figcaption className="pb-5 sm:pb-0">
-              <span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-300"><Smartphone size={16} aria-hidden="true" />Mobile dashboard</span>
-              <h3 className="mt-3 text-2xl font-bold tracking-tight text-white">Open the app and know what matters.</h3>
-              <p className="mt-3 text-sm leading-6 text-slate-300">See unquoted leads, follow-up needs, open pipeline, and the oldest customer actions before the day gets away from you.</p>
-              <p className="mt-4 text-xs font-semibold text-slate-400">{DEMO_LABEL}</p>
-            </figcaption>
-            <img
-              src="/images/product/quotefly-mobile-dashboard-v1.webp"
-              alt="QuoteFly mobile dashboard showing lead, follow-up, pipeline, and activity summaries."
-              width="373"
-              height="817"
-              loading="lazy"
-              decoding="async"
-              fetchPriority="low"
-              className="mx-auto h-auto w-full max-w-[330px] rounded-[24px] border border-white/15 bg-white shadow-[0_22px_48px_rgba(0,0,0,0.35)]"
-            />
-          </figure>
-
-          <figure data-marketing-reveal className="grid overflow-hidden rounded-[28px] border border-white/10 bg-slate-900 p-4 shadow-[0_22px_54px_rgba(0,0,0,0.28)] sm:grid-cols-[minmax(0,1fr)_minmax(260px,0.74fr)] sm:items-center sm:gap-6 sm:p-6">
-            <figcaption className="pb-5 sm:pb-0">
-              <span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-orange-300"><Smartphone size={16} aria-hidden="true" />Kody on mobile</span>
-              <h3 className="mt-3 text-2xl font-bold tracking-tight text-white">Ask for the next step without leaving the workflow.</h3>
-              <p className="mt-3 text-sm leading-6 text-slate-300">Kody can surface the tenant-scoped follow-up queue and offer reviewable actions while the customer or quote stays close at hand.</p>
-              <p className="mt-4 text-xs font-semibold text-slate-400">{DEMO_LABEL}</p>
-            </figcaption>
-            <img
-              src="/images/product/kody-follow-up-mobile-v1.webp"
-              alt="Kody assistant showing a workspace-scoped customer follow-up queue on mobile."
-              width="374"
-              height="809"
-              loading="lazy"
-              decoding="async"
-              fetchPriority="low"
-              className="mx-auto h-auto w-full max-w-[330px] rounded-[24px] border border-white/15 bg-white shadow-[0_22px_48px_rgba(0,0,0,0.35)]"
-            />
-          </figure>
+        <div className="mt-10 grid gap-6 lg:grid-cols-2">
+          {PRODUCT_CAPTURES.map((capture) => <ProductCaptureCard key={capture.key} capture={capture} />)}
         </div>
 
         <div data-marketing-reveal className="mt-8 flex flex-col items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-5 sm:flex-row sm:px-6">
-          <p className="max-w-2xl text-sm leading-6 text-slate-300">Start with the same customer, quote, and follow-up workflow shown here. Kody assists; you review every customer-facing action.</p>
+          <p className="max-w-2xl text-sm leading-6 text-slate-300">
+            Start with the same customer-to-job workflow shown here. Your team stays in control of every schedule, dispatch, invoice, and customer-facing action.
+          </p>
           <MarketingAction onClick={onOpenAuth} variant="orange" icon={<ArrowRight size={18} aria-hidden="true" />}>
             Try the real workflow free
           </MarketingAction>

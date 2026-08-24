@@ -65,6 +65,13 @@ function parseWebpDimensions(buffer: Buffer): { width: number; height: number } 
     const chunkType = buffer.toString("ascii", offset, offset + 4);
     const chunkLength = buffer.readUInt32LE(offset + 4);
     const payload = offset + 8;
+    if (chunkType === "VP8 ") {
+      assert.equal(buffer.toString("hex", payload + 3, payload + 6), "9d012a", "VP8 key-frame signature is required");
+      return {
+        width: buffer.readUInt16LE(payload + 6) & 0x3fff,
+        height: buffer.readUInt16LE(payload + 8) & 0x3fff,
+      };
+    }
     if (chunkType === "VP8L") {
       assert.equal(buffer[payload], 0x2f, "VP8L signature is required");
       const b1 = buffer[payload + 1];
@@ -76,9 +83,27 @@ function parseWebpDimensions(buffer: Buffer): { width: number; height: number } 
         height: 1 + ((b2 & 0xc0) >> 6) + (b3 << 2) + ((b4 & 0x0f) << 10),
       };
     }
+    if (chunkType === "VP8X") {
+      return {
+        width: 1 + buffer.readUIntLE(payload + 4, 3),
+        height: 1 + buffer.readUIntLE(payload + 7, 3),
+      };
+    }
     offset = payload + chunkLength + (chunkLength % 2);
   }
   throw new Error("Supported WebP dimensions were not found.");
+}
+
+function webpChunkTypes(buffer: Buffer): string[] {
+  const chunks: string[] = [];
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkLength = buffer.readUInt32LE(offset + 4);
+    chunks.push(chunkType);
+    offset += 8 + chunkLength + (chunkLength % 2);
+  }
+  return chunks;
 }
 
 function decodeHtmlText(value: string): string {
@@ -98,7 +123,8 @@ test("publishes the current Basic price, trial, and introductory offer", () => {
 test("pricing describes the paid-AI cap without hiding deterministic Kody tools", async () => {
   const html = await readFile(join(distDir, "pricing", "index.html"), "utf8");
   const text = decodeHtmlText(html);
-  assert.match(text, /AI drafting and analysis pause until the monthly reset/i);
+  assert.match(text, /billing-cycle limit/i);
+  assert.match(text, /next billing cycle/i);
   assert.match(text, /schedule, task, product-catalog, navigation, and review actions remain available/i);
   assert.doesNotMatch(text, /Kody and AI tools pause/i);
 });
@@ -285,9 +311,9 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
   for (const expected of [
     "Build the quote while the job is still fresh.",
     "Tell Kody what you are trying to get done.",
-    "See what needs attention. Move the next job.",
-    "Actual QuoteFly interface · Sanitized demo data",
-    "Find Michael Scott.",
+    "Move from accepted quote to a finished, billable job.",
+    "Actual QuoteFly interface · Sanitized fictional data",
+    "Find Elena Torres.",
     "HVAC quoting software",
     "Start your 20-day free trial",
     "First paid month $14.50",
@@ -303,26 +329,43 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
   assert.ok((await stat(kodyThumbnail)).size < 25_000, "the below-fold Kody thumbnail must stay below 25 KB");
 
   const productScreens = [
-    ["quotefly-mobile-dashboard-v1.webp", 373, 817, 70_000],
-    ["kody-follow-up-mobile-v1.webp", 374, 809, 70_000],
-    ["quotefly-activity-center-desktop-v1-960.webp", 960, 461, 180_000],
-    ["quotefly-activity-center-desktop-v1-1440.webp", 1440, 692, 180_000],
-    ["quotefly-activity-center-desktop-v1-1890.webp", 1890, 908, 180_000],
+    ["activity-my-day-desktop-v1.webp", 1440, 900, 225_000],
+    ["activity-my-day-mobile-v1.webp", 390, 844, 95_000],
+    ["jobs-schedule-desktop-v1.webp", 1440, 900, 225_000],
+    ["jobs-schedule-mobile-v1.webp", 390, 844, 95_000],
+    ["job-detail-desktop-v1.webp", 1440, 900, 225_000],
+    ["job-detail-mobile-v1.webp", 390, 844, 95_000],
+    ["kody-review-desktop-v1.webp", 1440, 900, 225_000],
+    ["kody-review-mobile-v1.webp", 390, 844, 95_000],
+    ["internal-invoice-desktop-v1.webp", 1440, 900, 225_000],
+    ["internal-invoice-mobile-v1.webp", 390, 844, 95_000],
+    ["notification-center-desktop-v1.webp", 1440, 900, 225_000],
+    ["notification-center-mobile-v1.webp", 390, 844, 95_000],
   ] as const;
   for (const [filename, width, height, maxBytes] of productScreens) {
     const assetPath = join(distDir, "images", "product", filename);
     const buffer = await readFile(assetPath);
     assert.deepEqual(parseWebpDimensions(buffer), { width, height }, `${filename} dimensions must remain stable`);
     assert.ok(buffer.length < maxBytes, `${filename} must remain below ${maxBytes} bytes`);
+    assert.deepEqual(
+      webpChunkTypes(buffer).filter((chunk) => ["EXIF", "XMP ", "ICCP"].includes(chunk)),
+      [],
+      `${filename} must not contain EXIF, XMP, or ICC metadata chunks`,
+    );
     assert.ok(html.includes(`/images/product/${filename}`), `${filename} must be present in raw homepage HTML`);
   }
   for (const altText of [
-    "QuoteFly desktop activity center showing prioritized leads, quote status, and follow-up actions.",
-    "QuoteFly mobile dashboard showing lead, follow-up, pipeline, and activity summaries.",
-    "Kody assistant showing a workspace-scoped customer follow-up queue on mobile.",
+    "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
+    "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
+    "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
+    "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
+    "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
+    "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
   ]) {
     assert.ok(html.includes(altText), `homepage raw HTML must contain screenshot alt text: ${altText}`);
   }
   assert.doesNotMatch(html, /<link[^>]+rel="preload"[^>]+images\/product/i);
-  assert.equal((html.match(/loading="lazy"/g) ?? []).length >= 3, true, "all below-fold product images must be lazy");
+  assert.equal((html.match(/loading="lazy"/g) ?? []).length >= 6, true, "all below-fold product images must be lazy");
+  assert.equal((html.match(/<picture>/g) ?? []).length >= 6, true, "product proof must use responsive pictures");
+  assert.ok(html.includes('media="(max-width: 640px)"'), "product proof must select mobile captures on narrow screens");
 });

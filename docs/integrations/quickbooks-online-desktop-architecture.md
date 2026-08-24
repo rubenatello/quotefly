@@ -1,6 +1,8 @@
 # QuickBooks Online And Desktop Architecture
 
-**Last updated:** `2026-04-10`
+> **Superseded architecture plan — provider workflows paused (2026-08-23).** This is long-term design context, not current enablement or launch guidance. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false`; see [quickbooks-api-progress.md](quickbooks-api-progress.md) for the authoritative release boundary. The supported QuickBooks handoff is CSV export.
+
+**Last updated:** `2026-08-23`
 
 ## Why This Matters
 
@@ -247,13 +249,14 @@ No urgent schema migration is required **right now** to keep the launch moving.
 
 Yes, the long-term schema **does** need to become provider-neutral before we add QuickBooks Desktop.
 
-The correct move is:
+The long-term design direction is:
 
-- launch with the current QBO-specific foundation
+- keep the current QBO-specific provider foundation paused and unmarketed
 - document the provider-neutral evolution now
-- refactor before Desktop implementation starts
+- implement the durable, tenant-isolated Online workflow before any enablement
+- refactor toward provider-neutral accounting before Desktop implementation starts
 
-That preserves momentum without creating a short-sighted schema trap.
+That preserves the sellable QuoteFly-owned invoice and CSV workflow without treating the legacy provider foundation as production-ready.
 
 ## Official References
 

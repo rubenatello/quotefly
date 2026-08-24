@@ -29,6 +29,10 @@ process.env.STRIPE_PRICE_ID_ENTERPRISE ||= "price_test_enterprise";
 process.env.QUICKBOOKS_CLIENT_ID ||= "quickbooks-integration-client";
 process.env.QUICKBOOKS_CLIENT_SECRET ||= "quickbooks-integration-secret";
 process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
+// QuickBooks route integration coverage exercises the explicitly enabled
+// workflow path. Individual containment tests override app.env to cover the
+// production-safe default-off behavior.
+process.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED ||= "true";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
 process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY ||= "quickbooks-integration-encryption-key-v2";
 process.env.ENABLE_TWILIO_SMS = "true";

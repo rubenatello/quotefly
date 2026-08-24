@@ -15,9 +15,12 @@ interface LandingPageProps {
 }
 
 const WORKFLOW = [
-  ["01", "Capture the customer", "Add or find the customer while the conversation and job details are still fresh."],
-  ["02", "Price the work", "Use saved products or a Kody-assisted draft, then set quantities, price, and scope."],
-  ["03", "Review and share", "Check the branded PDF yourself, send it, and keep the next follow-up visible."],
+  ["01", "Capture and price", "Find or add the customer, then build the scope, quantities, and customer price while the details are fresh."],
+  ["02", "Review and share", "Check the customer-facing total and branded PDF before you create and share the quote."],
+  ["03", "Turn yes into a Job", "Move an accepted quote into a numbered Job without re-entering the customer or approved scope."],
+  ["04", "Assign and schedule", "Choose an active teammate, book the visit, and see scheduled work by day or week."],
+  ["05", "Run the field visit", "Move eligible appointments through dispatch, arrival, and completion from the Jobs workspace."],
+  ["06", "Record the invoice", "Create an internal invoice record from an accepted quote or completed Job and keep the next action visible."],
 ] as const;
 
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
@@ -45,7 +48,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </h1>
 
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
-              Keep the customer, scope, pricing, branded PDF, and follow-up in one practical workflow. Ask Kody for a useful first draft, then review every line before anything is created or sent.
+              Keep the customer, scope, pricing, branded PDF, Job, schedule, and internal invoice record in one practical workflow. Ask Kody for a useful first pass, then review before anything changes.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
@@ -53,7 +56,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                 Start your {BASIC_PLAN.trialDays}-day free trial
               </MarketingAction>
               <MarketingAction href="#product-story" variant="dark-secondary">
-                Watch the quote come together
+                See the quote-to-job workflow
               </MarketingAction>
             </div>
 
@@ -78,10 +81,10 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </p>
           </div>
 
-          <ol className="mt-10 grid gap-4 md:grid-cols-3">
+          <ol aria-label="Quote to internal invoice workflow" className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {WORKFLOW.map(([step, title, description]) => (
               <li key={step} data-marketing-reveal className="rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
-                <span className="text-xs font-bold tracking-[0.2em] text-quotefly-orange">{step}</span>
+                <span className="text-xs font-bold tracking-[0.2em] text-[var(--qf-brand-orange-text)]">{step}</span>
                 <h3 className="mt-4 text-xl font-bold text-slate-950">{title}</h3>
                 <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>
               </li>
@@ -98,12 +101,19 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
         <div className="mx-auto grid max-w-6xl gap-8 overflow-hidden rounded-[32px] border border-slate-200 bg-stone-50 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.07)] sm:p-10 lg:grid-cols-[1fr_0.9fr] lg:items-center">
           <div data-marketing-reveal>
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">A simple place to start</p>
-            <h2 id="basic-plan-heading" className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">Basic has the full quoting workflow.</h2>
+            <h2 id="basic-plan-heading" className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">Basic keeps the quote and the work that follows together.</h2>
             <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-600">
               Test QuoteFly with your own customers and job scopes for {BASIC_PLAN.trialDays} days. Review the workflow before deciding whether it belongs in your business.
             </p>
             <ul className="mt-7 grid gap-3 sm:grid-cols-2">
-              {[`${BASIC_PLAN.teamMembers} included users`, `${BASIC_PLAN.quotesPerMonth} quotes each month`, "Kody AI with a monthly usage budget", "Branding, PDF preview, and follow-up"].map((item) => (
+              {[
+                `${BASIC_PLAN.teamMembers} included users`,
+                `${BASIC_PLAN.quotesPerMonth} quotes each month`,
+                `Branded PDFs and ${BASIC_PLAN.quoteHistoryDays}-day quote history`,
+                "Jobs, day/week scheduling, and dispatch controls",
+                "Kody drafting plus no-credit schedule review tools",
+                "Internal invoice records without payment collection",
+              ].map((item) => (
                 <li key={item} className="flex items-start gap-2 text-sm font-medium text-slate-700">
                   <Check size={17} className="mt-0.5 shrink-0 text-emerald-600" aria-hidden="true" />
                   {item}
@@ -114,7 +124,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <div data-marketing-reveal="scale" className="rounded-3xl bg-slate-950 p-7 text-white shadow-[0_24px_54px_rgba(15,23,42,0.18)] sm:p-9">
             <div className="flex items-center justify-between gap-3">
               <p className="text-lg font-bold">Basic</p>
-              <span className="rounded-full bg-quotefly-orange px-3 py-1 text-xs font-bold text-slate-950">Most popular</span>
+              <span className="rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-900">Available now</span>
             </div>
             <p className="mt-7 flex items-end gap-2"><span className="text-5xl font-bold tracking-tight">${BASIC_PLAN.monthlyPriceUsd}</span><span className="pb-1 text-slate-400">/month</span></p>
             <p className="mt-3 text-sm leading-6 text-slate-300">Your first paid month is {basicFirstPaidMonthPriceLabel()} after the free trial. Then the standard monthly price applies.</p>

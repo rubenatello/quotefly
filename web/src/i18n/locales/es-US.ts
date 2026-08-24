@@ -1671,6 +1671,8 @@ export const esUS = {
       foundation: "Estado de la base interna: {{status}}.",
       configured: "configurada",
       notConfigured: "no configurada",
+      workflowsPaused: "configurada, con flujos del proveedor en pausa",
+      managerFoundation: "El estado de la base de QuickBooks est\u00e1 disponible para propietarios y administradores del espacio de trabajo.",
     },
     team: {
       step: "Usuarios",

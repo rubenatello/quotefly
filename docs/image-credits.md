@@ -11,3 +11,29 @@ The optimized website derivatives under `web/public/images/solutions` come from 
 | `construction-silhouette.jpg` | Jason Richard | [Unsplash photo rFEpX_HK0FQ](https://unsplash.com/photos/rFEpX_HK0FQ) |
 
 The original downloads remain outside the repository. The checked-in files are resized, metadata-stripped JPEG derivatives for QuoteFly's public marketing site.
+
+## QuoteFly product captures
+
+The WebP files under `web/public/images/product` are first-party captures of the real QuoteFly web interface. They do not use third-party photography and require no external attribution.
+
+The current product-proof set covers six operational surfaces at desktop (`1440x900`) and mobile (`390x844`) sizes:
+
+- Activity and My Day
+- Jobs schedule
+- Job detail
+- Kody schedule review
+- Internal invoice ledger
+- In-app notification center
+
+Every capture is generated from the deterministic fictional workspace **Cedar & Stone Home Services**. The intercepted fixture uses fictional customers and teammates, fixed timestamps, and no provider calls. It contains no production data, live customer contact details, internal costs, margins, credentials, or external account identifiers.
+
+Regeneration is deliberately opt-in and does not run in the normal E2E suite:
+
+The opt-in regeneration lane requires Python 3 with Pillow available to the capture environment. Set `PYTHON` when the desired interpreter is not available as `python`. The normal application build and checked-in asset validation do not require Python or Pillow.
+
+```powershell
+$env:UPDATE_MARKETING_PRODUCT_CAPTURES='1'
+npx playwright test --config playwright.marketing-captures.config.ts
+```
+
+The capture test writes temporary PNGs under the ignored `test-results` directory, then `scripts/optimize-product-captures.py` creates metadata-free WebP assets. The checked-in SEO test enforces exact dimensions, a 225 KB desktop budget, a 95 KB mobile budget, and the absence of EXIF, XMP, and ICC chunks.

@@ -438,6 +438,20 @@ export function TradeSolutionsPage({ trade, onOpenAuth }: { trade: TradeSolution
               ))}
             </ul>
           </div>
+          <div className="mt-8 flex flex-col gap-3 border-t border-white/10 pt-6 sm:flex-row sm:items-center">
+            <Link
+              to="/solutions#workflow"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/20 px-4 text-sm font-semibold text-white transition hover:border-white/40 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 sm:justify-start"
+            >
+              See the quote-to-job workflow <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+            <Link
+              to="/pricing"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold text-slate-200 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 sm:justify-start"
+            >
+              See Basic pricing
+            </Link>
+          </div>
         </div>
       </section>
 

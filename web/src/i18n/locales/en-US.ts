@@ -1624,6 +1624,8 @@ export const enUS = {
       foundation: "Internal foundation status: {{status}}.",
       configured: "configured",
       notConfigured: "not configured",
+      workflowsPaused: "configured, with provider workflows paused",
+      managerFoundation: "QuickBooks foundation status is available to workspace owners and admins.",
     },
     team: {
       step: "Users",

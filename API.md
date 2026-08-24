@@ -886,27 +886,27 @@ Soft-removes a member. Owner-only. Owners cannot remove their own active members
 
 ### `GET /v1/integrations/quickbooks/status`
 
-Returns QuickBooks configuration status, connection state, redirect URI, webhook URL, and sync counts.
+Returns QuickBooks configuration status, connection state, redirect URI, webhook URL, and sync counts. Requires a current owner or admin membership; member roles cannot view provider identifiers or connection metadata.
 
 ### `POST /v1/integrations/quickbooks/connect`
 
-Returns an Intuit authorization URL. Requires owner or admin role.
+Returns an Intuit authorization URL. Requires a current owner or admin membership and `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true`. While paused, it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` without calling Intuit.
 
 ### `GET /v1/integrations/quickbooks/callback`
 
-OAuth callback used by Intuit. Verifies signed state, exchanges code, fetches company info, and stores encrypted tokens.
+OAuth callback used by Intuit. It verifies signed state and live owner/admin capability before exchanging code, fetching company info, or storing encrypted tokens. When provider workflows are paused it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` without a provider call.
 
 ### `POST /v1/integrations/quickbooks/disconnect`
 
-Disconnects QuickBooks and clears stored access/refresh tokens. Requires owner or admin role.
+Disconnects QuickBooks and clears stored access/refresh tokens. Requires a current owner or admin membership. This local credential-removal route remains available while provider workflows are paused.
 
 ### `GET /v1/integrations/quickbooks/quotes/:quoteId/sync-preview`
 
-Builds a preview of customer, invoice, and line-item payloads before pushing to QuickBooks.
+Builds a preview of customer, invoice, and line-item payloads before pushing to QuickBooks. Requires a current owner or admin membership because it includes provider identifiers and draft provider payloads.
 
 ### `POST /v1/integrations/quickbooks/quotes/:quoteId/push-invoice`
 
-Pushes an accepted quote to QuickBooks as an invoice.
+Pushes an accepted, non-taxable quote to QuickBooks as an invoice. Requires a current owner or admin membership and `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true`; otherwise it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` before provider activity. Taxable quotes fail closed with `422 { "error": "QUICKBOOKS_TAX_SYNC_UNSUPPORTED" }` until tax mapping is implemented.
 
 Body:
 
@@ -914,8 +914,7 @@ Body:
 {
   "createCustomerIfMissing": true,
   "createItemsIfMissing": true,
-  "dueInDays": 14,
-  "force": false
+  "dueInDays": 14
 }
 ```
 
@@ -923,11 +922,11 @@ Best practice: only call this for `ACCEPTED` quotes after previewing warnings.
 
 ### `GET /v1/integrations/quickbooks/quotes/:quoteId/invoice-status`
 
-Refreshes the synced invoice status from QuickBooks.
+Refreshes the synced invoice status from QuickBooks. Requires a current owner or admin membership and enabled provider workflows; while paused it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` before a token refresh or provider call.
 
 ### `POST /v1/integrations/quickbooks/webhook`
 
-QuickBooks webhook receiver. Requires `intuit-signature` header and raw body signature validation. Do not call this from the frontend.
+QuickBooks webhook receiver. Requires `intuit-signature` header and raw body signature validation. Do not call this from the frontend. While workflows are paused, verified callbacks return `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` without a token refresh, provider call, or durable acknowledgement; this intentionally asks Intuit to retry rather than silently discarding a provider change. Once enabled, verified callbacks are acknowledged and may run the existing downstream refresh path.
 
 ## SMS Webhook
 

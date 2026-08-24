@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import type { Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
-import type { FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import {
@@ -44,8 +44,7 @@ const QuickBooksPushInvoiceBodySchema = z.object({
   createCustomerIfMissing: z.boolean().optional().default(true),
   createItemsIfMissing: z.boolean().optional().default(true),
   dueInDays: z.coerce.number().int().min(1).max(90).optional().default(14),
-  force: z.boolean().optional().default(false),
-});
+}).strict();
 
 const QuickBooksWebhookNotificationSchema = z.object({
   specversion: z.string().optional(),
@@ -65,6 +64,9 @@ function canManageQuickBooks(role: string): boolean {
   const normalized = role.trim().toLowerCase();
   return normalized === "owner" || normalized === "admin";
 }
+
+const QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE = "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE";
+const QUICKBOOKS_TAX_SYNC_UNSUPPORTED = "QUICKBOOKS_TAX_SYNC_UNSUPPORTED";
 
 function quickBooksDocNumber(quoteId: string): string {
   return `QF-${quoteId.slice(-8).toUpperCase()}`;
@@ -100,6 +102,19 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return Boolean(membership && canManageQuickBooks(membership.role));
+  }
+
+  async function requireLiveQuickBooksManagerAccess(
+    claims: { tenantId: string; userId: string },
+    reply: FastifyReply,
+  ): Promise<boolean> {
+    if (await hasLiveQuickBooksManagerAccess(claims.tenantId, claims.userId)) return true;
+    reply.code(403).send({ error: "Only owners or admins can manage QuickBooks." });
+    return false;
+  }
+
+  function providerWorkflowsUnavailable(reply: FastifyReply) {
+    return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
   }
 
   async function loadQuickBooksSyncContext(tenantId: string, quoteId: string, dueInDays = 14) {
@@ -301,6 +316,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
   async function processQuickBooksWebhookNotifications(
     notifications: z.infer<typeof QuickBooksWebhookBodySchema>,
   ) {
+    // This defense-in-depth guard keeps future callers from turning a verified
+    // webhook into a token refresh/provider fetch while the kill switch is off.
+    if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return;
+
     for (const notification of notifications) {
       try {
         const realmId = notification.intuitaccountid;
@@ -489,6 +508,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "Invalid QuickBooks webhook payload." });
       }
 
+      // Validate ingress even while paused, then deliberately return a
+      // retryable error instead of acknowledging and discarding a provider
+      // change that may need a later refresh after workflows are re-enabled.
+      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+
       void processQuickBooksWebhookNotifications(notifications).catch((error) => {
         app.log.error({ err: error }, "QuickBooks webhook batch processing failed");
       });
@@ -501,6 +525,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
 
       const connection = await app.prisma.quickBooksConnection.findFirst({
         where: {
@@ -531,9 +557,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return {
-        enabled: isQuickBooksConfigured(app.env),
+        enabled: isQuickBooksConfigured(app.env) && app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+        configured: isQuickBooksConfigured(app.env),
+        providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
         webhookConfigured: isQuickBooksWebhookConfigured(app.env),
-        canManage: canManageQuickBooks(claims.role),
+        canManage: true,
         environment: app.env.QUICKBOOKS_ENVIRONMENT,
         redirectUri: getQuickBooksRedirectUri(app.env),
         webhookUrl: `${app.env.API_URL.replace(/\/$/, "")}/v1/integrations/quickbooks/webhook`,
@@ -567,9 +595,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
-      if (!canManageQuickBooks(claims.role)) {
-        return reply.code(403).send({ error: "Only owners or admins can connect QuickBooks." });
-      }
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+
+      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
 
       if (!isQuickBooksConfigured(app.env)) {
         return reply.code(503).send({ error: "QuickBooks integration is not configured yet." });
@@ -602,6 +630,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     const verifiedState = verifySignedQuickBooksState(app.env, query.state);
     if (!verifiedState) {
       return failureRedirect("quickbooks_invalid_state");
+    }
+
+    if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+      return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
     }
 
     if (!isQuickBooksConfigured(app.env)) {
@@ -697,9 +729,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
-      if (!canManageQuickBooks(claims.role)) {
-        return reply.code(403).send({ error: "Only owners or admins can disconnect QuickBooks." });
-      }
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
 
       const connection = await app.prisma.quickBooksConnection.findFirst({
         where: {
@@ -734,6 +764,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
 
       try {
@@ -798,12 +830,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
       const body = QuickBooksPushInvoiceBodySchema.parse(request.body ?? {});
-
-      if (!canManageQuickBooks(claims.role)) {
-        return reply.code(403).send({ error: "Only owners and admins can push invoices to QuickBooks." });
-      }
 
       let context: Awaited<ReturnType<typeof loadQuickBooksSyncContext>>;
       try {
@@ -817,6 +848,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return reply
           .code(409)
           .send({ error: "Only won/accepted quotes can be pushed into QuickBooks invoices." });
+      }
+
+      if (Number(context.quote.taxAmount) > 0) {
+        return reply.code(422).send({ error: QUICKBOOKS_TAX_SYNC_UNSUPPORTED });
       }
 
       if (context.existingSync?.quickBooksInvoiceId) {
@@ -1116,6 +1151,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const claims = getJwtClaims(request);
+
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
 
       let context: Awaited<ReturnType<typeof loadQuickBooksSyncContext>>;

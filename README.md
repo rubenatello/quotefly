@@ -120,6 +120,7 @@ Use Tailwind utility classes directly in React components.
 - `QUICKBOOKS_ENVIRONMENT`: `sandbox` or `production`
 - `QUICKBOOKS_REDIRECT_URI`: optional override for the OAuth callback URL (defaults to `${API_URL}/v1/integrations/quickbooks/callback`)
 - `QUICKBOOKS_WEBHOOK_VERIFIER`: reserved for direct QuickBooks webhook verification
+- `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED`: keep `false` for the current release; direct OAuth, provider invoice, refresh, and webhook-processing workflows are paused
 - `ENABLE_TWILIO_SMS`: set `true` to enable Twilio SMS webhook routes (default `false`)
 - `TWILIO_ACCOUNT_SID`: optional for SMS features
 - `TWILIO_AUTH_TOKEN`: optional for SMS features
@@ -144,11 +145,11 @@ Password recovery provider and production smoke-test setup is documented in
   - `docs/integrations/quickbooks-csv-import.md`
 - QuickBooks API progress:
   - `docs/integrations/quickbooks-api-progress.md`
-- QuickBooks direct connection and sync design:
+- Superseded QuickBooks direct connection and sync design (provider workflows remain paused):
   - `docs/integrations/quickbooks-oauth-sync-plan.md`
-- QuickBooks Online/Desktop architecture:
+- Superseded QuickBooks Online/Desktop architecture (long-term design only):
   - `docs/integrations/quickbooks-online-desktop-architecture.md`
-- QuickBooks owner setup checklist:
+- Current QuickBooks containment and owner boundary:
   - `docs/integrations/quickbooks-owner-setup.md`
 
 ## Backend-first scope included

@@ -24,6 +24,14 @@ import { ServiceCategory } from "@prisma/client";
 const quickBooksProviderMocks = vi.hoisted(() => ({
   exchangeAuthorizationCode: vi.fn(),
   fetchCompanyInfo: vi.fn(),
+  ensureAccessToken: vi.fn(),
+  findCustomer: vi.fn(),
+  createCustomer: vi.fn(),
+  findItem: vi.fn(),
+  resolveIncomeAccount: vi.fn(),
+  createServiceItem: vi.fn(),
+  createInvoice: vi.fn(),
+  fetchInvoice: vi.fn(),
 }));
 
 const stripeProviderMocks = vi.hoisted(() => ({
@@ -65,6 +73,14 @@ vi.mock("../../src/services/quickbooks", async () => {
     ...actual,
     exchangeQuickBooksAuthorizationCode: quickBooksProviderMocks.exchangeAuthorizationCode,
     fetchQuickBooksCompanyInfo: quickBooksProviderMocks.fetchCompanyInfo,
+    ensureQuickBooksAccessToken: quickBooksProviderMocks.ensureAccessToken,
+    findQuickBooksCustomerByDisplayName: quickBooksProviderMocks.findCustomer,
+    createQuickBooksCustomer: quickBooksProviderMocks.createCustomer,
+    findQuickBooksItemByName: quickBooksProviderMocks.findItem,
+    resolveQuickBooksIncomeAccount: quickBooksProviderMocks.resolveIncomeAccount,
+    createQuickBooksServiceItem: quickBooksProviderMocks.createServiceItem,
+    createQuickBooksInvoice: quickBooksProviderMocks.createInvoice,
+    fetchQuickBooksInvoice: quickBooksProviderMocks.fetchInvoice,
   };
 });
 
@@ -3448,6 +3464,240 @@ describe("QuoteFly API integration", () => {
       url: "/v1/integrations/quickbooks/disconnect",
     });
     expect(protectedWorkspaceResponse.statusCode).toBe(401);
+  });
+
+  test("contains QuickBooks provider workflows by default without calling Intuit", async () => {
+    const session = await signUp("quickbooks-provider-paused");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: { fullName: "Paused Provider Customer", phone: "555-010-1213" },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const customer = parseJson<CustomerResponse>(customerResponse).customer;
+    const quoteResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: authHeaders(session.cookie),
+      payload: {
+        customerId: customer.id,
+        serviceType: "ROOFING",
+        title: "Paused Provider Quote",
+        scopeText: "A provider-capable quote used only to prove containment.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 0,
+      },
+    });
+    expect(quoteResponse.statusCode).toBe(201);
+    const quote = parseJson<QuoteResponse>(quoteResponse).quote;
+    await prisma.quote.update({ where: { id: quote.id }, data: { status: "ACCEPTED" } });
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: session.tenant.id,
+        realmId: `realm-paused-${Date.now()}`,
+        environment: "sandbox",
+        accessTokenEncrypted: "opaque-access-token",
+        refreshTokenEncrypted: "opaque-refresh-token",
+      },
+    });
+    await prisma.quickBooksInvoiceSync.create({
+      data: {
+        tenantId: session.tenant.id,
+        quickBooksConnectionId: connection.id,
+        quoteId: quote.id,
+        quickBooksInvoiceId: "paused-invoice-id",
+      },
+    });
+    const workflowFlag = app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED;
+    app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = false;
+    for (const providerMock of Object.values(quickBooksProviderMocks)) providerMock.mockReset();
+
+    try {
+      const connect = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/connect",
+        headers: authHeaders(session.cookie),
+      });
+      expect(connect.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(connect)).toEqual({
+        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
+      });
+
+      const state = createSignedQuickBooksState(env, {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        role: "owner",
+      });
+      const callback = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=paused-code&realmId=paused-realm`,
+      });
+      expect(callback.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(callback)).toEqual({
+        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
+      });
+
+      const push = await app.inject({
+        method: "POST",
+        url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
+        headers: authHeaders(session.cookie),
+        payload: {},
+      });
+      expect(push.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(push)).toEqual({
+        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
+      });
+
+      const invoiceStatus = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/quotes/${quote.id}/invoice-status`,
+        headers: authHeaders(session.cookie),
+      });
+      expect(invoiceStatus.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(invoiceStatus)).toEqual({
+        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
+      });
+
+      const payload = JSON.stringify([{
+        id: `paused-webhook-${Date.now()}`,
+        type: "com.intuit.quickbooks.accounting.invoice.updated",
+        intuitaccountid: connection.realmId,
+        intuitentityid: "paused-invoice-id",
+        time: new Date().toISOString(),
+      }]);
+      const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+        .update(payload)
+        .digest("base64");
+      const webhook = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/webhook",
+        headers: { "content-type": "application/json", "intuit-signature": signature },
+        payload,
+      });
+      expect(webhook.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(webhook)).toEqual({
+        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
+      });
+      for (const providerMock of Object.values(quickBooksProviderMocks)) {
+        expect(providerMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = workflowFlag;
+    }
+  });
+
+  test("requires a live owner or admin before returning QuickBooks provider metadata", async () => {
+    const owner = await signUp("quickbooks-live-manager");
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId: `realm-private-${Date.now()}`,
+        environment: "sandbox",
+        companyName: "Private Provider Company",
+      },
+    });
+
+    const ownerStatus = await app.inject({
+      method: "GET",
+      url: "/v1/integrations/quickbooks/status",
+      headers: authHeaders(owner.cookie),
+    });
+    expect(ownerStatus.statusCode).toBe(200);
+    expect(parseJson<{ connection: { realmId: string } | null }>(ownerStatus).connection?.realmId).toMatch(/^realm-private-/);
+
+    const memberEmail = `quickbooks-private-member-${Date.now()}@example.com`;
+    const memberPassword = "MemberPassword123!";
+    const addMember = await app.inject({
+      method: "POST",
+      url: "/v1/org/users",
+      headers: authHeaders(owner.cookie),
+      payload: {
+        email: memberEmail,
+        fullName: "QuickBooks Private Member",
+        password: memberPassword,
+        role: "member",
+      },
+    });
+    expect(addMember.statusCode).toBe(201);
+    const memberSignIn = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signin",
+      payload: { email: memberEmail, password: memberPassword },
+    });
+    expect(memberSignIn.statusCode).toBe(200);
+    const memberHeaders = authHeaders(extractSessionCookie(memberSignIn));
+
+    for (const request of [
+      { method: "GET" as const, url: "/v1/integrations/quickbooks/status" },
+      { method: "GET" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/sync-preview" },
+      { method: "GET" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/invoice-status" },
+      { method: "POST" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/push-invoice" },
+    ]) {
+      const response = await app.inject({ ...request, headers: memberHeaders, payload: request.method === "POST" ? {} : undefined });
+      expect(response.statusCode).toBe(403);
+      expect(parseJson<{ error: string }>(response)).toEqual({ error: "Only owners or admins can manage QuickBooks." });
+      expect(response.body).not.toContain("realm-private-");
+    }
+  });
+
+  test("fails closed for taxable QuickBooks invoice pushes before provider activity", async () => {
+    const session = await signUp("quickbooks-tax-fail-closed");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "Taxable QuickBooks Customer",
+        phone: "555-010-1212",
+      },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const customer = parseJson<CustomerResponse>(customerResponse).customer;
+    const quoteResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: authHeaders(session.cookie),
+      payload: {
+        customerId: customer.id,
+        serviceType: "ROOFING",
+        title: "Taxable QuickBooks Quote",
+        scopeText: "Tax mapping must be implemented before this can be pushed.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 15,
+      },
+    });
+    expect(quoteResponse.statusCode).toBe(201);
+    const quote = parseJson<QuoteResponse>(quoteResponse).quote;
+    await prisma.quote.update({ where: { id: quote.id }, data: { status: "ACCEPTED" } });
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: session.tenant.id,
+        realmId: `realm-tax-${Date.now()}`,
+        environment: "sandbox",
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
+      headers: authHeaders(session.cookie),
+      payload: { force: true },
+    });
+    expect(response.statusCode).toBe(400);
+
+    const taxableResponse = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
+      headers: authHeaders(session.cookie),
+      payload: {},
+    });
+    expect(taxableResponse.statusCode).toBe(422);
+    expect(parseJson<{ error: string }>(taxableResponse)).toEqual({
+      error: "QUICKBOOKS_TAX_SYNC_UNSUPPORTED",
+    });
   });
 
   test("rejects stale QuickBooks OAuth state before provider exchange or credential writes", async () => {

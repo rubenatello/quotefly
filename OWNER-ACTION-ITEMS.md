@@ -17,7 +17,7 @@ These are the owner-side items that still matter most before launch:
 2. Confirm `quotefly.us`, `www.quotefly.us`, and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values
-5. Run one real QuickBooks Online sync test and one CSV fallback import test if you have access
+5. Keep direct QuickBooks provider workflows disabled; test only the supported QuickBooks-friendly CSV handoff
 6. Review final legal/support copy before public launch
 7. Verify quote board desktop column headers align with row values after latest UI fix
 8. Run `node scripts/tier-unit-economics.mjs` and confirm AI budget caps before launch pricing is finalized
@@ -35,7 +35,8 @@ JWT_SECRET=your-secure-random-secret
 OPENAI_API_KEY=sk-...your-openai-api-key...
 OPENAI_MODEL=gpt-4o-mini   # default if omitted
 
-# Optional — required for direct QuickBooks OAuth linking
+# Reserved provider foundation — do not enable for the current release
+QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false
 QUICKBOOKS_CLIENT_ID=...
 QUICKBOOKS_CLIENT_SECRET=...
 QUICKBOOKS_ENVIRONMENT=production
@@ -52,14 +53,13 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 6. Do not put the OpenAI secret in Vercel frontend env vars; QuoteFly calls OpenAI from the API layer only
 
 ### QuickBooks app setup
-1. Create an Intuit developer app
-2. Enable QuickBooks Online Accounting scope
-3. Set the redirect URI to `https://api.quotefly.us/v1/integrations/quickbooks/callback`
-4. Put the client id/secret into Railway env vars
-5. Use `production` once the Intuit app is approved/live; use `sandbox` only for testing
-6. Full owner checklist: `docs/integrations/quickbooks-owner-setup.md`
-7. Progress/status doc: `docs/integrations/quickbooks-api-progress.md`
-8. Online/Desktop architecture doc: `docs/integrations/quickbooks-online-desktop-architecture.md`
+1. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every release environment.
+2. Do not complete OAuth consent, subscribe provider webhooks, push invoices, or market direct QuickBooks Online sync for this release.
+3. Inventory any retained provider credentials or connections because rolling back to a pre-containment binary could reopen provider calls.
+4. Use the QuickBooks-friendly CSV export as the supported handoff.
+5. Current containment runbook: `docs/integrations/quickbooks-owner-setup.md`
+6. Authoritative provider status: `docs/integrations/quickbooks-api-progress.md`
+7. Online/Desktop architecture is long-term context only: `docs/integrations/quickbooks-online-desktop-architecture.md`
 
 ### AI Model Options (set via `OPENAI_MODEL`)
 | Model | Cost (input/output per 1M tokens) | Speed | Best For |

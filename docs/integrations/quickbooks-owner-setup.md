@@ -1,57 +1,37 @@
-# QuickBooks Owner Setup
+# QuickBooks Owner Setup — Provider Workflows Paused
 
-## Goal
+Status: Legacy provider foundation only. Do not enable or market QuickBooks Online connection, invoice push, status refresh, or webhook processing for the current release.
 
-Connect one QuickBooks Online company to one QuoteFly tenant, then push accepted quotes into QuickBooks invoices.
+## Current production boundary
 
-## What Works Now
+- Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every deployed API environment.
+- Connect, OAuth callback exchange, invoice push, remote invoice refresh, and enabled webhook processing return stable `503 QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE` before any Intuit provider call.
+- A correctly signed webhook is validated and then receives retryable `503` while paused; QuoteFly does not acknowledge and discard the event.
+- With the release flag false, every invoice-push request returns provider-unavailable `503` first. If the legacy path is explicitly enabled in a controlled future test, taxable pushes return `422 QUICKBOOKS_TAX_SYNC_UNSUPPORTED` rather than omitting tax or asking the user to repair it after creation.
+- QuickBooks status, local preview, and disconnect require a current owner/admin membership. Disconnect remains available for local credential cleanup.
+- QuickBooks-friendly CSV export remains the supported accounting handoff.
 
-- tenant-level QuickBooks OAuth connection
-- connection status in QuoteFly Admin
-- quote-level sync preview
-- automatic QuickBooks customer creation when missing
-- automatic QuickBooks service item creation when missing
-- direct invoice push from accepted QuoteFly quotes
-- refresh remote invoice status to see whether the invoice is still open or effectively paid
-- webhook endpoint with signature verification
-- webhook intake and storage for QuickBooks notifications
-- invoice webhook refresh for already-synced invoice ids
+Do not add `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true` to Railway, Render, a local production profile, or any launch checklist. Existing credentials alone do not authorize provider activity.
 
-## What Is Not Finished Yet
+## Why the legacy workflow is paused
 
-- full webhook-driven payment reconciliation back into QuoteFly
-- automatic tax mapping into QuickBooks tax codes
-- bulk invoice push
-- two-way sync for QuickBooks customer edits
-- automatic invoice list import into QuoteFly pipeline
+The existing Quote-based push path does not yet have the release controls required for provider-safe production use:
 
-## Intuit Developer Setup
+- a durable Invoice-based `PROCESSING` claim before the provider call;
+- uncertain-result and crash reconciliation that prevents duplicate invoices;
+- a durable webhook inbox/worker before acknowledgement;
+- forced tenant RLS and composite tenant integrity across QuickBooks tables;
+- approved tax mapping and reconciliation behavior;
+- concurrent push, restart, replay, and two-tenant provider tests.
 
-1. Sign in to Intuit Developer and open the QuickBooks app you want QuoteFly to use.
-2. Make sure the app has the QuickBooks Online Accounting scope.
-3. In the Production keys/OAuth section, add this redirect URI exactly:
+Until that separate Phase 4 slice is complete, do not run an owner connection or invoice-push test against Intuit.
 
-```text
-https://api.quotefly.us/v1/integrations/quickbooks/callback
-```
+## Safe environment posture
 
-4. Copy these values:
-   - Client ID
-   - Client Secret
-5. Add this webhook endpoint:
-
-```text
-https://api.quotefly.us/v1/integrations/quickbooks/webhook
-```
-
-6. Copy the webhook **Verifier Token**.
-7. If you plan to use sandbox first, repeat the same redirect URI and webhook endpoint under the Development environment too.
-
-## Railway Env Vars
-
-Add these to the API service in Railway:
+The deployed environment may retain credentials for future development or local credential cleanup, but the kill switch must remain false:
 
 ```env
+QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false
 QUICKBOOKS_CLIENT_ID=
 QUICKBOOKS_CLIENT_SECRET=
 QUICKBOOKS_ENVIRONMENT=production
@@ -59,75 +39,17 @@ QUICKBOOKS_REDIRECT_URI=https://api.quotefly.us/v1/integrations/quickbooks/callb
 QUICKBOOKS_WEBHOOK_VERIFIER=
 ```
 
-Notes:
+Before any rollout, inventory whether a live connection or webhook subscription already exists. A rollback to a binary that predates the kill switch can reopen provider calls if credentials remain configured, so rollback must either preserve an equivalent external block or remove/rotate provider credentials first.
 
-- `QUICKBOOKS_WEBHOOK_VERIFIER` is now required for webhook validation.
-- without it, the webhook endpoint will reject QuickBooks notifications.
+## Approved external wording
 
-## First Connection Test
+Current public wording may say:
 
-1. Deploy the latest API and web app.
-2. Sign in as the tenant owner/admin.
-3. Open `Admin`.
-4. In the `QuickBooks Online` section, click `Connect QuickBooks`.
-5. Complete the Intuit consent flow.
-6. Confirm Admin shows:
-   - company name
-   - realm id
-   - status `CONNECTED`
+- `Create an internal QuoteFly invoice record.`
+- `Export invoice data in a QuickBooks-friendly CSV.`
 
-## First Invoice Push Test
+Do not claim QuickBooks Online connection, invoice creation, invoice-status refresh, payment reconciliation, tax sync, or webhook automation is available.
 
-1. Create a test customer in QuoteFly.
-2. Create a quote with real line items.
-3. Mark the quote `Won`.
-4. Open the quote desk.
-5. In the `QuickBooks` section:
-   - click `Preview Mapping`
-   - review warnings
-   - click `Push Invoice`
-6. Then click `Refresh Status`.
+## Future enablement gate
 
-Expected result:
-
-- customer gets mapped or created in QuickBooks
-- service items get mapped or created in QuickBooks
-- invoice appears in QuickBooks with the QuoteFly doc number
-- QuoteFly shows invoice id, total, balance, and `Open` or `Paid`
-
-## Current Tax Limitation
-
-QuoteFly does **not** yet push tax codes or full QuickBooks tax configuration.
-
-Current rule:
-
-- if the quote has tax, QuoteFly warns the user before push
-- user should review the invoice tax settings inside QuickBooks after sync
-
-This is deliberate. QuickBooks tax behavior varies by company configuration, so a half-correct tax sync is worse than a clear review step.
-
-## Recommended Launch Positioning
-
-Use this wording externally for now:
-
-- `QuickBooks Online connection and invoice push available`
-- `Invoice/payment status refresh available`
-- `Advanced two-way sync and webhook automation coming next`
-
-Do **not** claim:
-
-- fully automatic payment reconciliation
-- automatic tax sync
-- full accounting sync
-
-## Owner Test Matrix
-
-Run the full owner-side verification flow here:
-
-- [quickbooks-owner-testing-checklist.md](c:\Users\rcazarez\Projects\quotefly\docs\integrations\quickbooks-owner-testing-checklist.md)
-
-## Next Engineering Step After This
-
-1. Add Intuit webhook endpoint and signature verification
-2. Subscribe to `Invoice` and `Payment` events
-3. Update local invoice sync state automatically when invoices are edited or paid in QuickBooks
+Create a new owner setup guide only after the durable provider workflow has migrated, passed security and two-tenant review, completed reconciliation tests, and received explicit production-enable authorization. The paused test checklist is retained at [quickbooks-owner-testing-checklist.md](quickbooks-owner-testing-checklist.md) only as a record of future acceptance work, not as a launch procedure.

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
 test("public navigation, services, legal pages, and consent work on mobile", async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto("/");
   await page.evaluate(() => localStorage.removeItem("qf_cookie_consent"));
   await page.reload();
@@ -13,7 +14,7 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   expect(Math.abs((essentialButtonBox?.y ?? 0) - (analyticsButtonBox?.y ?? 0))).toBeLessThanOrEqual(2);
   await consent.getByRole("button", { name: "Essential only" }).click();
 
-  const demoView = page.getByRole("group", { name: "Quote demo view" });
+  const demoView = page.getByRole("group", { name: "Quote workflow preview" });
   await demoView.scrollIntoViewIfNeeded();
   await demoView.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.getByText("Quote preview", { exact: true })).toBeVisible();
@@ -23,19 +24,19 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await expect(page.getByRole("button", { name: "Pause workflow highlights" })).toHaveCount(0);
   await expect(page.locator(".qf-momentum-track")).toHaveCount(0);
 
-  const productStory = page.getByRole("region", { name: "See what needs attention. Move the next job." });
+  const productStory = page.locator("#product-story");
   await productStory.scrollIntoViewIfNeeded();
-  const desktopProduct = productStory.getByRole("img", { name: /desktop activity center showing prioritized leads/i });
-  const mobileDashboard = productStory.getByRole("img", { name: /mobile dashboard showing lead, follow-up/i });
-  const mobileKody = productStory.getByRole("img", { name: /Kody assistant showing a workspace-scoped/i });
-  for (const image of [desktopProduct, mobileDashboard, mobileKody]) {
+  await expect(productStory.getByRole("heading", { name: "Move from accepted quote to a finished, billable job." })).toBeVisible();
+  const productImages = productStory.getByRole("img");
+  await expect(productImages).toHaveCount(6);
+  for (const image of await productImages.all()) {
     await image.scrollIntoViewIfNeeded();
     await expect(image).toBeVisible();
     await expect(image).toHaveAttribute("loading", "lazy");
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
   }
-  expect((await mobileDashboard.boundingBox())?.width).toBeGreaterThanOrEqual(300);
-  expect((await mobileKody.boundingBox())?.width).toBeGreaterThanOrEqual(300);
+  expect((await productImages.first().boundingBox())?.width).toBeGreaterThanOrEqual(300);
+  expect((await productImages.last().boundingBox())?.width).toBeGreaterThanOrEqual(300);
   const productCta = productStory.getByRole("button", { name: "Try the real workflow free" });
   expect((await productCta.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 

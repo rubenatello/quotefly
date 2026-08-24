@@ -1,12 +1,14 @@
 # QuickBooks OAuth And Sync Plan
 
+> **Superseded provider design — workflows paused (2026-08-23).** This document describes a legacy/future architecture, not a current launch procedure. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` and use [quickbooks-api-progress.md](quickbooks-api-progress.md) as the authoritative release boundary. QuickBooks-friendly CSV export is the only supported QuickBooks handoff until the durable provider-sync phase is separately approved.
+
 ## Goal
 
 Move QuoteFly from CSV-only QuickBooks support to a tenant-linked QuickBooks Online integration that can push quotes into invoices safely.
 
 ## V1 Integration Scope
 
-Current implemented scope covers:
+The repository's legacy provider foundation covers:
 
 - tenant-level QuickBooks Online connection
 - OAuth 2.0 connect and disconnect flow
@@ -205,15 +207,13 @@ QUICKBOOKS_REDIRECT_URI=https://api.quotefly.us/v1/integrations/quickbooks/callb
 QUICKBOOKS_WEBHOOK_VERIFIER=
 ```
 
-## Launch Recommendation
+## Future Enablement Recommendation
 
-Before public launch:
+Do not enable these workflows for the current public launch. For a future provider release:
 
-1. Ship OAuth connection and status first
-2. Keep CSV export as the fallback
-3. Add invoice push only after:
-   - one sandbox test company works
-   - one real production company works
-   - customer/item mapping is deterministic
+1. Keep CSV export as the supported handoff.
+2. Add a durable Invoice-based processing claim, uncertain-result reconciliation, forced tenant RLS, and a durable webhook inbox/worker.
+3. Add approved tax mapping and deterministic customer/item review.
+4. Complete sandbox, concurrency, restart, two-tenant, rollback, and production-readiness evidence.
 
-That avoids turning QuickBooks sync into a launch blocker while still building the right foundation.
+Only a separate reviewed release may change `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED` to `true`. With the current release flag set to `false`, invoice push returns provider-unavailable `503` before payload-specific tax validation; the legacy enabled test path separately rejects taxable pushes with `422`.

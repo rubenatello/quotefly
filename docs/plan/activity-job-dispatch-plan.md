@@ -1,6 +1,6 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phases 0 through 4A are deployed and verified on `main` at `db832b7`; the Phase 2 legacy quote-status cleanup, Phase 3B calendar, Phase 3C durable in-app notifications, deterministic Kody schedule/booking/dispatch tools, and atomic paid-AI usage ledger are complete in the current verified release candidate and await BCP; external email, SMS, payment, and accounting-provider workflows remain gated
+Status: Phases 0 through 4A, the Phase 2 Job-authority cleanup, Phase 3B calendar, Phase 3C in-app notifications and retention, deterministic Kody schedule tools, and the atomic paid-AI ledger are committed and pushed to `main` at `543fc69`; production deployment is not asserted. The current local sellability candidate adds the public product story and default-off QuickBooks containment and is independently approved for the next explicitly authorized BCP. External email, SMS, payment, and durable accounting-provider workflows remain gated.
 
 Last updated: 2026-08-23
 
@@ -22,7 +22,7 @@ The commercial and operational records stay separate:
 
 ## Phase 0 — Workspace UX foundation
 
-Status: Deployed and verified; core database-backed responsive E2E evidence complete
+Status: Implemented and release-verified on `main`; core database-backed responsive E2E evidence complete
 
 - [x] Rename the existing Follow-up workspace surface to Activity while keeping `/app/follow-up` as a compatible route.
 - [x] Put Home and Activity in the mobile bottom navigation.
@@ -37,7 +37,7 @@ Exit evidence:
 
 ## Phase 1 — Assignable ActivityTask
 
-Status: Deployed with migrated PostgreSQL, responsive browser evidence, full `verify:ci`, and final security/Opera approval
+Status: Implemented on `main` with migrated PostgreSQL, responsive browser evidence, full `verify:ci`, and final security/Opera approval
 
 Add a dedicated `ActivityTask`; do not overload immutable `CustomerActivityEvent` history.
 
@@ -97,7 +97,7 @@ Permissions:
 
 ## Phase 2 — Accepted Quote to Job
 
-Status: Phase 2A deployed; the Job-authoritative compatibility cleanup is complete and verified in the current release candidate, awaiting BCP
+Status: Phase 2A and the Job-authoritative compatibility cleanup are committed and pushed on `main` at `543fc69`; rolling compatibility fields remain intentionally until post-deployment client-drain evidence supports removal
 
 - [x] Centralize quote acceptance in one transactional service.
 - [x] Add locked tenant job-number sequence and one-job-per-accepted-quote invariant.
@@ -125,7 +125,7 @@ Acceptance must call one shared transactional service. The unique `(tenantId, so
 
 ## Phase 3 — Booking and dispatch
 
-Status: Phase 3A is deployed; the Phase 3B day/week schedule and safe rescheduling workspace plus the Phase 3C durable in-app notification center are complete in the current verified release candidate and await BCP; external email/SMS delivery remains gated
+Status: Phase 3A, the Phase 3B day/week schedule and safe rescheduling workspace, and the Phase 3C durable in-app notification center/retention worker are committed and pushed on `main` at `543fc69`; external email/SMS delivery remains gated
 
 - [x] Add job appointments, notes, and immutable events.
 - [x] Add overlap-safe booking API with tenant/member advisory locking.
@@ -176,7 +176,7 @@ Phase 3C release-candidate evidence:
 
 ## Phase 4 — Invoicing and payments
 
-Status: Partial accounting export exists; Phase 4A invoice/payment ledger, internal API, and responsive Quote/Job workflow are deployed; provider-safe creation/reconciliation is still pending
+Status: Partial accounting export exists; Phase 4A invoice/payment ledger, internal API, and responsive Quote/Job workflow are committed and release-verified on `main` at `543fc69`, but production deployment is not asserted. Provider-safe creation/reconciliation remains pending, and legacy QuickBooks provider workflows are default-off in the current local containment candidate.
 
 - [x] QuickBooks CSV export and QuickBooks Online connection/sync foundation.
 - [x] Add tenant-scoped QuoteFly `Invoice`, `InvoicePayment`, and immutable `InvoiceEvent` ledger tables with forced RLS, provider-safe identifiers, and governance classification.
@@ -185,6 +185,14 @@ Status: Partial accounting export exists; Phase 4A invoice/payment ledger, inter
 - [ ] Add a durable PROCESSING claim and uncertain-result reconciliation before exposing concurrent Jobs-to-QuickBooks invoice creation.
 - [ ] Keep provider payment handling in Stripe/Square/QuickBooks; QuoteFly stores only provider-safe identifiers and status.
 - [ ] Add webhook idempotency, refunds/disputes policy, tenant permissions, and reconciliation tests.
+
+Current containment candidate:
+
+- `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED` defaults off. Connect, callback exchange, provider push, provider refresh, and enabled webhook processing fail with a stable retryable `503` while paused and make no provider calls.
+- QuickBooks status, preview, disconnect, and provider-capable routes require a current owner/admin membership; disconnect remains available for local credential cleanup.
+- Taxable legacy invoice pushes fail closed instead of silently omitting tax, and the removed `force` input is rejected.
+- Focused containment evidence passes `60/60` API/security integration tests, and the exact candidate database-backed gate passes `213/213` integration tests with 113/113 inventoried routes.
+- This containment does not complete Phase 4 provider sync. A durable Invoice-based claim/reconciliation workflow, provider-specific tenant/RLS hardening, and production provider enablement still require a separate reviewed slice.
 
 Phase 4A release evidence:
 

@@ -59,6 +59,7 @@ const EnvSchema = z.object({
   QUICKBOOKS_CLIENT_ID: z.string().default(""),
   QUICKBOOKS_CLIENT_SECRET: z.string().default(""),
   QUICKBOOKS_ENVIRONMENT: z.enum(["sandbox", "production"]).default("production"),
+  QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: BooleanFromEnv.default(false),
   QUICKBOOKS_REDIRECT_URI: OptionalUrlFromEnv,
   QUICKBOOKS_WEBHOOK_VERIFIER: z.string().default(""),
   QUICKBOOKS_TOKEN_ENCRYPTION_KEY: z.string().default(""),
@@ -225,6 +226,14 @@ const EnvSchema = z.object({
     });
   }
 
+  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && (!quickBooksClientConfigured || !quickBooksSecretConfigured)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED"],
+      message: "QuickBooks client credentials must be configured before provider workflows can be enabled.",
+    });
+  }
+
   const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
   const quickBooksPreviousEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim();
   if (quickBooksClientConfigured && quickBooksSecretConfigured && quickBooksEncryptionKey.length < 32) {
@@ -264,6 +273,23 @@ const EnvSchema = z.object({
         code: "custom",
         path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
         message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be independent from current encryption and JWT keys.",
+      });
+    }
+  }
+
+  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && value.NODE_ENV === "production") {
+    if (value.QUICKBOOKS_ENVIRONMENT !== "production") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_ENVIRONMENT"],
+        message: "Production QuickBooks provider workflows must use QUICKBOOKS_ENVIRONMENT=production.",
+      });
+    }
+    if (value.QUICKBOOKS_REDIRECT_URI && new URL(value.QUICKBOOKS_REDIRECT_URI).protocol !== "https:") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_REDIRECT_URI"],
+        message: "QUICKBOOKS_REDIRECT_URI must use HTTPS when production QuickBooks provider workflows are enabled.",
       });
     }
   }

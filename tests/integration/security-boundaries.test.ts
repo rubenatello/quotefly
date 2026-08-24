@@ -18,6 +18,7 @@ afterEach(() => {
 describe("security boundary helpers", () => {
   const productionDatabaseEnv = {
     DATABASE_URL: "postgresql://quotefly_runtime:test@example.invalid/quotefly",
+    QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "false",
   } as const;
 
   it("keeps browser and API legal acceptance versions synchronized", () => {
@@ -173,6 +174,27 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "short-previous-key",
     })).toThrow(/PREVIOUS must be at least 32 characters/i);
+
+    expect(parseEnv(productionEnv).QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED).toBe(false);
+    expect(() => parseEnv({
+      ...productionEnv,
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_CLIENT_ID: "",
+      QUICKBOOKS_CLIENT_SECRET: "",
+    })).toThrow(/client credentials must be configured/i);
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+    })).toThrow(/must use QUICKBOOKS_ENVIRONMENT=production/i);
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_ENVIRONMENT: "production",
+      QUICKBOOKS_REDIRECT_URI: "http://api.quotefly.example/v1/integrations/quickbooks/callback",
+    })).toThrow(/QUICKBOOKS_REDIRECT_URI must use HTTPS/i);
   });
 
   it("validates the shared production rate-limit store when scale-out is enforced", () => {

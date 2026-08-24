@@ -1,199 +1,57 @@
 # QuickBooks API Progress
 
-**Last updated:** `2026-04-10`
+Last updated: 2026-08-23
 
-## Objective
+Status: Provider foundation present but production workflows paused and unmarketed.
 
-Track exactly what QuoteFly already supports for QuickBooks, what is partially implemented, and what is still missing before we can market the integration more aggressively.
+## Current supported accounting workflow
 
-## Current Status
+- Create and review an internal QuoteFly invoice from an accepted quote or completed Job.
+- Export accounting data through the QuickBooks-friendly CSV workflow.
+- Allow current owners/admins to inspect local QuickBooks configuration state or disconnect locally stored credentials.
 
-### Implemented now
+QuoteFly does not currently offer production QuickBooks Online connection, invoice creation, invoice-status refresh, payment reconciliation, tax sync, or webhook automation.
 
-- QuickBooks Online OAuth 2.0 tenant connection
-- QuickBooks Online disconnect
-- encrypted token storage
-- automatic access-token refresh
-- Admin connection status UI
-- quote-level sync preview
-- QuickBooks customer lookup by display name
-- QuickBooks customer creation when missing
-- QuickBooks item lookup by name
-- QuickBooks service item creation when missing
-- direct invoice push from accepted/won quotes
-- remote invoice status refresh
-- webhook signature verification
-- webhook event intake and storage
-- invoice webhook refresh for existing synced invoice ids
-- QuickBooks-friendly CSV export fallback
+## Paused provider foundation
 
-### Current supported workflow
+The repository contains legacy foundations for OAuth, encrypted token storage, customer/item mapping, Quote-based invoice push, remote status refresh, webhook signature verification, and webhook event records. These paths are not safe enough to enable or market yet.
 
-1. Tenant owner/admin connects a QuickBooks Online company.
-2. User marks a quote as `Won`.
-3. User opens the quote desk and previews QuickBooks mapping.
-4. QuoteFly resolves or creates:
-   - customer
-   - service items
-5. QuoteFly creates an invoice in QuickBooks Online.
-6. User refreshes invoice status from QuoteFly.
+`QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` is the required release posture:
 
-## API Surface
+- provider-capable connect/callback/push/refresh paths fail with stable `503` before provider activity;
+- signed webhooks are validated and return retryable `503` without acknowledgement or provider refresh;
+- when the legacy provider flag is explicitly enabled in a controlled test, taxable pushes fail with stable `422`; while the release flag is false, push requests return provider-unavailable `503` first;
+- current owner/admin membership is required for connection metadata, local preview, disconnect, or provider-capable actions.
 
-### Admin / connection
+## API surface while paused
 
-- `GET /v1/integrations/quickbooks/status`
-- `POST /v1/integrations/quickbooks/connect`
-- `GET /v1/integrations/quickbooks/callback`
-- `POST /v1/integrations/quickbooks/disconnect`
+- `GET /v1/integrations/quickbooks/status` — owner/admin local configuration state.
+- `GET /v1/integrations/quickbooks/quotes/:quoteId/sync-preview` — owner/admin local preview only.
+- `POST /v1/integrations/quickbooks/disconnect` — owner/admin local credential cleanup.
+- `POST /v1/integrations/quickbooks/connect` — stable provider-unavailable `503`.
+- `GET /v1/integrations/quickbooks/callback` — stable provider-unavailable `503` before token exchange.
+- `POST /v1/integrations/quickbooks/quotes/:quoteId/push-invoice` — stable provider-unavailable `503`; taxable legacy requests remain blocked until the tax contract is approved.
+- `GET /v1/integrations/quickbooks/quotes/:quoteId/invoice-status` — stable provider-unavailable `503` before refresh/fetch.
+- `POST /v1/integrations/quickbooks/webhook` — signature/body validation followed by retryable provider-unavailable `503`.
 
-### Quote sync
+## Database foundation and remaining isolation work
 
-- `GET /v1/integrations/quickbooks/quotes/:quoteId/sync-preview`
-- `POST /v1/integrations/quickbooks/quotes/:quoteId/push-invoice`
-- `GET /v1/integrations/quickbooks/quotes/:quoteId/invoice-status`
+Existing records include `QuickBooksConnection`, `QuickBooksCustomerMap`, `QuickBooksItemMap`, `QuickBooksInvoiceSync`, and `QuickBooksWebhookEvent`. Before enablement, the provider release must add forced RLS, composite tenant integrity, and two-tenant runtime-role denial coverage for every table and relation.
 
-## Current Database Coverage
+## Launch blockers for provider enablement
 
-### `QuickBooksConnection`
+1. Replace the legacy Quote push with a durable Invoice-based `PROCESSING` claim.
+2. Reconcile timeout/crash/unknown provider results without replaying invoice creation.
+3. Persist webhooks durably before acknowledgement and process them through a leased retry worker.
+4. Add approved tax mapping; do not downgrade tax failure to a warning.
+5. Add explicit customer/item mapping review and duplicate protection.
+6. Add provider reconciliation, replay, process-restart, concurrent request, role-removal, and tenant-isolation tests.
+7. Produce provider inventory, alerts, rollback, credential rotation, and sandbox-to-production evidence.
 
-Stores tenant-level QuickBooks Online connection details:
+These are Phase 4 provider-sync requirements, not post-launch enhancements. QuickBooks Desktop remains a separate integration architecture.
 
-- realm id
-- company name
-- encrypted access token
-- encrypted refresh token
-- connection state
-- sync and webhook timestamps
-- last error
+## Official references
 
-### `QuickBooksCustomerMap`
-
-Maps QuoteFly customer ids to QuickBooks customer ids.
-
-### `QuickBooksItemMap`
-
-Maps QuoteFly line-item keys to QuickBooks item ids.
-
-### `QuickBooksInvoiceSync`
-
-Stores per-quote sync state:
-
-- QuickBooks invoice id
-- QuickBooks doc number
-- request id
-- sync status
-- payload snapshot
-- last error
-
-### `QuickBooksWebhookEvent`
-
-Reserved for webhook replay, verification, and debugging.
-
-## Current Product Behavior
-
-### What we can honestly say today
-
-- QuoteFly connects to QuickBooks Online
-- accepted quotes can be pushed into QuickBooks invoices
-- QuoteFly can refresh invoice balance status from QuickBooks
-- QuoteFly can accept and verify QuickBooks webhook notifications
-- QuoteFly still offers CSV fallback if a tenant prefers import
-
-### What we should not claim yet
-
-- full two-way accounting sync
-- automatic payment reconciliation into the CRM
-- automatic tax sync into QuickBooks tax codes
-- full invoice list import back into QuoteFly
-- QuickBooks Desktop support
-
-## Known Limitations
-
-### Tax
-
-Quoted tax is not mapped into QuickBooks tax settings yet.
-
-Current behavior:
-
-- QuoteFly warns before invoice push if the quote includes tax
-- user should verify tax inside QuickBooks after sync
-
-### Customer matching
-
-Current matching strategy:
-
-- use saved customer map first
-- fallback to exact display-name lookup
-- create customer if missing and allowed
-
-This is safe enough for launch but not strong enough for duplicate-heavy books.
-
-### Item matching
-
-Current matching strategy:
-
-- use saved item map first
-- fallback to exact item-name lookup
-- create service item if missing and allowed
-
-This is good for v1 but still needs user-controlled mapping tools later.
-
-### Payment visibility
-
-Current invoice payment visibility is still primarily refresh-based.
-
-That means:
-
-- user can see current balance when they ask for it
-- invoice webhook intake now exists, but full payment reconciliation is not finished
-
-## Immediate Next Steps
-
-### Launch-critical
-
-1. Expand webhook processing for payment events
-2. Update `QuickBooksInvoiceSync` automatically when payments settle invoices
-3. Add visible local invoice state in QuoteFly UI
-4. Add replay/recovery path for missed events
-
-### Post-launch but important
-
-1. Add explicit customer matching review
-2. Add explicit item mapping review
-3. Add bulk invoice push
-4. Add invoice list and payment summary views inside the CRM
-
-## Desktop Reality Check
-
-QuickBooks Desktop is **not** the same integration problem.
-
-QuickBooks Online:
-
-- OAuth 2.0
-- REST APIs
-- webhooks
-- cloud-first flow
-
-QuickBooks Desktop:
-
-- Windows-only integration path
-- QuickBooks Desktop SDK or Web Connector
-- qbXML request/response model
-- no QuickBooks Online OAuth flow
-- no QuickBooks Online webhook model
-
-Desktop support needs a separate compatibility layer and operational model. See:
-
-- `docs/integrations/quickbooks-online-desktop-architecture.md`
-
-## Official References
-
-- QuickBooks Online OAuth 2.0:
-  - https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0
-- QuickBooks Online invoice workflow:
-  - https://developer.intuit.com/app/developer/qbo/docs/workflows/create-an-invoice
-- QuickBooks Online query syntax:
-  - https://developer.intuit.com/app/developer/qbo/docs/learn/explore-the-quickbooks-online-api/data-queries
-- QuickBooks Online webhooks:
-  - https://developer.intuit.com/app/developer/qbo/docs/develop/webhooks
+- [QuickBooks Online OAuth 2.0](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0)
+- [QuickBooks Online invoice workflow](https://developer.intuit.com/app/developer/qbo/docs/workflows/create-an-invoice)
+- [QuickBooks Online webhooks](https://developer.intuit.com/app/developer/qbo/docs/develop/webhooks)

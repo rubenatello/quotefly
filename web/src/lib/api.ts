@@ -1584,6 +1584,8 @@ export type QuickBooksConnectionStatus = "CONNECTED" | "NEEDS_REAUTH" | "ERROR" 
 
 export type QuickBooksStatusPayload = {
   enabled: boolean;
+  configured: boolean;
+  providerWorkflowsEnabled: boolean;
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";

@@ -1,137 +1,42 @@
-# QuickBooks Owner Testing Checklist
+# QuickBooks Owner Testing Checklist — Paused
 
-**Goal:** verify the QuickBooks Online connection, invoice push path, and the new webhook intake path from a real tenant.
+Status: Not a current production or launch checklist. `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED` must remain `false` until a separate durable provider-sync release is approved.
 
-## 1. Intuit App Configuration
+## Current release acceptance
 
-In your Intuit Developer app:
+- [x] Provider workflows default off.
+- [x] Owner/admin authorization is revalidated from current membership state.
+- [x] Connect, callback, push, refresh/fetch, and a correctly signed nonempty webhook make zero provider calls while paused.
+- [x] Paused provider routes return stable retryable `503 QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE`.
+- [x] The paused release returns provider-unavailable `503` before invoice validation; the explicitly enabled legacy test path separately fails taxable pushes closed with `422 QUICKBOOKS_TAX_SYNC_UNSUPPORTED`.
+- [x] The removed legacy `force` body field is rejected.
+- [x] Public product and Pricing copy do not claim QuickBooks invoice creation or reconciliation.
 
-1. Confirm the QuickBooks Online Accounting scope is enabled.
-2. Confirm this callback URL is registered exactly:
+Do not enable Invoice or Payment webhook subscriptions, complete OAuth consent, push an invoice, or record a provider payment as part of the current launch.
 
-```text
-https://api.quotefly.us/v1/integrations/quickbooks/callback
-```
+## Required future provider release
 
-3. Add this webhook endpoint:
+Before this checklist can become executable, the provider slice must add and independently verify:
 
-```text
-https://api.quotefly.us/v1/integrations/quickbooks/webhook
-```
+1. A durable Invoice-based `PROCESSING` claim and idempotent request identity before any Intuit mutation.
+2. Explicit handling for provider timeout, crash-after-create, and unknown result reconciliation.
+3. A durable webhook inbox/lease/retry worker before acknowledging callbacks.
+4. Forced RLS and composite tenant foreign keys for QuickBooks connection, mapping, sync, and webhook records.
+5. Approved tax mapping; taxable invoices must remain blocked until then.
+6. Duplicate-customer and duplicate-item review instead of blind exact-name creation.
+7. Concurrent push, retry, process-restart, webhook replay, cross-tenant, role-removal, and rollback tests.
+8. A production inventory of provider credentials, connections, webhook subscriptions, alert destinations, and an approved credential-safe rollback procedure.
 
-4. In the Webhooks area, copy the **Verifier Token**.
+## Future owner verification outline
 
-## 2. Railway Environment Variables
+Only after the requirements above are release-approved:
 
-Confirm these exist in Railway for the API service:
+- Connect one sanitized test tenant to a dedicated QuickBooks sandbox.
+- Verify customer and item mapping through an explicit review surface.
+- Create one non-taxable invoice through the durable claim path and prove an idempotent retry creates no duplicate.
+- Simulate provider timeout and process restart, then reconcile the uncertain result without replaying the mutation.
+- Persist a signed webhook before acknowledgement, replay it, and prove one durable outcome.
+- Verify a removed/downgraded member cannot view provider metadata or act.
+- Keep taxable creation blocked until the tax contract is separately approved.
 
-```env
-QUICKBOOKS_CLIENT_ID=
-QUICKBOOKS_CLIENT_SECRET=
-QUICKBOOKS_ENVIRONMENT=production
-QUICKBOOKS_REDIRECT_URI=https://api.quotefly.us/v1/integrations/quickbooks/callback
-QUICKBOOKS_WEBHOOK_VERIFIER=
-```
-
-Set `QUICKBOOKS_WEBHOOK_VERIFIER` to the exact Intuit webhook verifier token.
-
-## 3. Webhook Event Selection
-
-For launch, enable these QuickBooks Online webhook entities:
-
-1. `Invoice`
-2. `Payment`
-
-That gives us the event stream we need for invoice-change and payment-status work.
-
-## 4. First Connection Test
-
-1. Sign in as the tenant owner.
-2. Open `Admin`.
-3. In `QuickBooks Online`, click `Connect QuickBooks`.
-4. Complete OAuth consent.
-5. Confirm QuoteFly shows:
-   - company name
-   - realm id
-   - connected status
-
-## 5. First Invoice Push Test
-
-1. Create a test customer in QuoteFly.
-2. Create a quote with at least 2 line items.
-3. Mark the quote `Won`.
-4. Open the quote desk.
-5. Click:
-   - `Preview Mapping`
-   - `Push Invoice`
-   - `Refresh Status`
-6. In QuickBooks Online, confirm:
-   - customer was found or created correctly
-   - service items were found or created correctly
-   - invoice exists with the QuoteFly doc number
-   - total looks correct
-
-## 6. Duplicate-Safety Test
-
-Run one test where the QuickBooks company already has:
-
-1. a customer with a similar name
-2. a service item with a similar name
-
-Confirm whether QuoteFly:
-
-1. matches correctly
-2. creates an unwanted duplicate
-3. needs a manual mapping review screen next
-
-This is the most important real-world quality check left.
-
-## 7. Tax Warning Test
-
-1. Create a quote in QuoteFly with tax.
-2. Push that quote to QuickBooks.
-3. Confirm QuoteFly shows the warning.
-4. In QuickBooks, confirm whether tax still needs manual review.
-
-Current expected result:
-
-- QuoteFly warns correctly
-- QuickBooks tax still needs manual confirmation
-
-## 8. Webhook Intake Test
-
-After webhooks are configured:
-
-1. Edit an invoice directly inside QuickBooks Online.
-2. Wait a few minutes.
-3. Confirm the API remains healthy.
-4. Confirm the QuickBooks connection in QuoteFly still shows as connected.
-
-For now, the main success condition is that the webhook is accepted and stored safely.
-
-## 9. Payment Refresh Test
-
-1. Record a payment in QuickBooks Online for a pushed invoice.
-2. In QuoteFly, use `Refresh Status` on that quote.
-3. Confirm:
-   - balance updates correctly
-   - paid/open state reflects the QBO invoice
-
-Current rule:
-
-- automatic webhook-driven payment reconciliation is **not finished yet**
-- manual refresh should still show the current balance correctly
-
-## 10. Report Back
-
-After running the above, report:
-
-1. Did OAuth connect successfully?
-2. Did invoice push succeed?
-3. Did customer matching behave correctly?
-4. Did item matching behave correctly?
-5. Did tax need manual repair?
-6. Did manual refresh show payment status correctly?
-7. Did QuickBooks create any duplicates?
-
-That result set is what we need to raise confidence from “implemented” to “production-trustworthy.”
+Passing this future outline still does not authorize production enablement; that remains an explicit owner and release-operations decision.
