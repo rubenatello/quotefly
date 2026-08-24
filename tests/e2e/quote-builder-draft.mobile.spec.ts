@@ -16,9 +16,9 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customer.fullName);
+  await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(customer.fullName);
   await page
-    .getByRole("button", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") })
+    .getByRole("option", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") })
     .click();
 
   await page.getByLabel("Quote title").fill("Mobile navigation-safe draft");

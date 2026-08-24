@@ -178,7 +178,7 @@ test.describe("mobile launch smoke", () => {
     expect(quickQuoteHeadingBox?.x ?? -1).toBeGreaterThanOrEqual(0);
     await expect(page.locator("button button, [role=button] button")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Quick quote" })).toBeVisible();
-    await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill("Mobile Beta Customer");
+    await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill("Mobile Beta Customer");
     await expect(page.getByText("Mobile Beta Customer").filter({ visible: true })).toBeVisible();
 
     const addCustomerTrigger = page.getByRole("button", { name: "Add customer", exact: true }).first();

@@ -10,6 +10,14 @@ type Session = {
   user: { id: string; email: string; fullName: string };
 };
 
+let testRemoteAddressSequence = 1;
+
+function nextTestRemoteAddress() {
+  const address = `198.51.100.${testRemoteAddressSequence}`;
+  testRemoteAddressSequence += 1;
+  return address;
+}
+
 function cookieFrom(response: { headers: Record<string, number | string | string[] | undefined> }) {
   const header = response.headers["set-cookie"];
   const value = Array.isArray(header) ? header[0] : header;
@@ -39,6 +47,7 @@ async function signUp(label: string): Promise<Session> {
   const response = await app.inject({
     method: "POST",
     url: "/v1/auth/signup",
+    remoteAddress: nextTestRemoteAddress(),
     payload: {
       email: `${label}-${unique}@example.com`,
       password: "TestPassword123!",
@@ -71,6 +80,7 @@ async function addWorkspaceUser(owner: Session, role: "admin" | "member"): Promi
   const signedIn = await app.inject({
     method: "POST",
     url: "/v1/auth/signin",
+    remoteAddress: nextTestRemoteAddress(),
     payload: { email, password },
   });
   expect(signedIn.statusCode).toBe(200);
@@ -2003,7 +2013,7 @@ describe("AI assistant", () => {
     expect(quoteDraft.json()).toMatchObject({
       assistant: {
         tool: "DRAFT_QUOTE",
-        answer: expect.stringMatching(/Preparé una vista previa de la cotización/),
+        answer: expect.stringMatching(/Preparé un borrador con precios de techado/),
         results: [expect.objectContaining({
           customerName: "María López",
           serviceType: "ROOFING",

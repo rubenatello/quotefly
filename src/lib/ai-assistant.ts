@@ -221,8 +221,10 @@ const PRODUCT_SEARCH_INTENT_PATTERN =
   /(?:\b(?:find|search|look\s*up|show|list|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|cual|cuales|que)\b.{0,72}\b(?:products?|services?|catalog(?:\s+items?)?|line[-\s]*items?|productos?|servicios?|catalogo|partidas?)\b)|(?:\b(?:products?|services?|catalog(?:\s+items?)?|line[-\s]*items?|productos?|servicios?|catalogo|partidas?)\b.{0,72}\b(?:do\s+(?:i|we)\s+have|find|search|look\s*up|show|list|tengo|tenemos|buscar|busca|mostrar|muestra|muestrame|listar|lista)\b)|(?:\b(?:do\s+(?:i|we)\s+have|tengo|tenemos|hay)\b.{0,72}\b(?:products?|services?|catalog(?:\s+items?)?|line[-\s]*items?|productos?|servicios?|catalogo|partidas?)\b)|(?:\b(?:is|are|esta|estan)\b.{0,72}\b(?:en\s+)?(?:my|our|the|mi|nuestro|el)\s+(?:catalog|products?|services?|catalogo|productos?|servicios?)\b)/i;
 const CUSTOMER_DRAFT_INTENT_PATTERN =
   /(?:\b(?:add|create|save|set\s+up|new|agregar|agrega|anadir|anade|crear|crea|guardar|guarda|nuevo|nueva)\b.{0,56}\b(?:customer(?!\s+(?:price|pricing|amount|rate))|client|contact|cliente|contacto)\b)|(?:\b(?:customer(?!\s+(?:price|pricing|amount|rate))|client|contact|cliente|contacto)\b.{0,56}\b(?:add|create|save|set\s+up|agregar|agrega|anadir|anade|crear|crea|guardar|guarda)\b)/i;
+const CUSTOMER_DRAFT_COMMAND_PATTERN =
+  /^(?:please\s+|por\s+favor\s+)?(?:add|create|save|set\s+up|agregar|agrega|anadir|anade|crear|crea|guardar|guarda)\b/i;
 const QUOTE_SEND_INTENT_PATTERN =
-  /(?:\b(?:send|email|text|share|enviar|envia|mandar|manda|correo|texto|compartir|comparte)\b.{0,72}\b(?:quote|estimate|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:\b(?:quote|estimate|proposal|cotizacion|presupuesto|estimado|propuesta)\b.{0,72}\b(?:send|email|text|share|enviar|envia|mandar|manda|correo|texto|compartir|comparte)\b)/i;
+  /(?:\b(?:send|email|text|share|enviar|envia|mandar|manda|correo|texto|compartir|comparte)\b.{0,72}\b(?:quote|estimate|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:\b(?:quote|estimate|proposal|cotizacion|presupuesto|estimado|propuesta)\b.{0,72}\b(?:send|email(?!\s*(?:address\s*)?(?:is\s*)?[:=-]?\s*[A-Z0-9._%+-]+@)|text|share|enviar|envia|mandar|manda|correo(?!\s*(?:electronico\s*)?(?:es\s*)?[:=-]?\s*[A-Z0-9._%+-]+@)|texto|compartir|comparte)\b)/i;
 const CUSTOMER_DRAFT_DETAIL_PATTERN =
   /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
 const QUOTE_SEND_FOLLOW_UP_PATTERN =
@@ -899,6 +901,7 @@ export function resolveAssistantTool(
     ? normalizedMessage.slice(0, overrideMatch.index).trim()
     : normalizedMessage;
   if (SENSITIVE_SCOPE_ESCAPE_PATTERN.test(routingMessage)) return "OUT_OF_SCOPE";
+  const previousTool = previousOperationalTool(conversation);
 
   // A review-only product draft is a stronger intent than a stale UI tool
   // selection. This also protects older clients that opened Kody from a
@@ -910,7 +913,15 @@ export function resolveAssistantTool(
   if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
   if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage)) return "PRIORITIZE_MY_DAY";
   if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
-  if (CUSTOMER_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_CUSTOMER";
+  if (
+    previousTool === "DRAFT_QUOTE"
+    && CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)
+    && !CUSTOMER_DRAFT_COMMAND_PATTERN.test(routingMessage)
+  ) return "DRAFT_QUOTE";
+  if (
+    CUSTOMER_DRAFT_INTENT_PATTERN.test(routingMessage)
+    && !QUOTE_DRAFT_INTENT_PATTERN.test(routingMessage)
+  ) return "DRAFT_CUSTOMER";
   if (QUOTE_SEND_INTENT_PATTERN.test(routingMessage)) return "PREPARE_QUOTE_SEND";
   const lower = routingMessage.toLowerCase();
   // Catalog lookup is deterministic and should not inherit a stale customer
@@ -958,7 +969,6 @@ export function resolveAssistantTool(
   if (PIPELINE_INTENT_PATTERN.test(lower)) return "SUMMARIZE_PIPELINE";
   if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
 
-  const previousTool = previousOperationalTool(conversation);
   if (previousTool === "DRAFT_QUOTE" && CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)) {
     return "DRAFT_QUOTE";
   }
@@ -3745,6 +3755,15 @@ function spanishQuoteTitle(serviceType: ServiceCategory) {
   return "Cotización de construcción";
 }
 
+function spanishTradeName(serviceType: ServiceCategory) {
+  if (serviceType === "ROOFING") return "techado";
+  if (serviceType === "HVAC") return "HVAC";
+  if (serviceType === "PLUMBING") return "plomería";
+  if (serviceType === "FLOORING") return "pisos";
+  if (serviceType === "GARDENING") return "jardinería y paisajismo";
+  return "construcción";
+}
+
 async function runDraftQuotePreview(
   prisma: PrismaClient,
   params: AiAssistantInput,
@@ -3988,7 +4007,7 @@ async function runDraftQuotePreview(
       priorUserQueries: params.conversation
         ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
         .map((turn) => turn.message),
-      refreshIndex: Boolean(selectedQuote),
+      refreshIndex: Boolean(selectedQuote || selectedCustomer),
     });
   } catch (error) {
     if (error instanceof AiUsageLedgerError) throw error;
@@ -4008,13 +4027,16 @@ async function runDraftQuotePreview(
   const maxClassification = highestClassification(promptClassification, retrievalClassification);
   const retrievedSourceCount = governedRetrieval?.citations.length ?? 0;
   const catalogMatchedCount = preparedCatalog.lines.filter((lineItem) => lineItem.catalogMatched).length;
+  const localizedTradeName = isSpanishAssistant(params)
+    ? spanishTradeName(serviceType)
+    : serviceType.toLowerCase();
   const answer = customerCandidates.length > 1
     ? localeText(params, `I found ${customerCandidates.length} active assigned customers matching ${draft.customerName ?? "those contact details"}. Choose the correct customer before opening the review draft.`, `Encontré ${customerCandidates.length} clientes activos asignados que coinciden con ${draft.customerName ?? "esos datos de contacto"}. Elige al cliente correcto antes de abrir el borrador para revisión.`)
     : retrievedSourceCount
-    ? localeText(params, `Prepared a priced ${serviceType.toLowerCase()} review draft for ${title} using ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"} and ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios para revisar de ${title} usando ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo y ${retrievedSourceCount} fuente${retrievedSourceCount === 1 ? " relevante" : "s relevantes"} del espacio de trabajo. Revisa el alcance y los precios antes de guardar o enviar.`)
+    ? localeText(params, `Prepared a priced ${localizedTradeName} review draft for ${title} using ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"} and ${retrievedSourceCount} relevant workspace source${retrievedSourceCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios de ${localizedTradeName} para revisar: ${title}, usando ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo y ${retrievedSourceCount} fuente${retrievedSourceCount === 1 ? " relevante" : "s relevantes"} del espacio de trabajo. Revisa el alcance y los precios antes de guardar o enviar.`)
     : !selectedCustomer
-      ? localeText(params, `Prepared a ${serviceType.toLowerCase()} review draft with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. I could not match an active assigned customer, so add or select the customer before saving.`, `Preparé un borrador de ${serviceType.toLowerCase()} para revisar con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. No pude encontrar un cliente activo asignado, así que agrega o selecciona el cliente antes de guardar.`)
-      : localeText(params, `Prepared a priced ${serviceType.toLowerCase()} review draft for ${title} with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios de ${serviceType.toLowerCase()} para revisar de ${title} con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. Revisa el alcance y los precios antes de guardar o enviar.`);
+      ? localeText(params, `Prepared a ${localizedTradeName} review draft with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. I could not match an active assigned customer, so add or select the customer before saving.`, `Preparé un borrador de ${localizedTradeName} para revisar con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. No pude encontrar un cliente activo asignado, así que agrega o selecciona el cliente antes de guardar.`)
+      : localeText(params, `Prepared a priced ${localizedTradeName} review draft for ${title} with ${catalogMatchedCount} saved catalog item${catalogMatchedCount === 1 ? "" : "s"}. Review the scope and pricing before saving or sending.`, `Preparé un borrador con precios de ${localizedTradeName} para revisar: ${title}, con ${catalogMatchedCount} elemento${catalogMatchedCount === 1 ? "" : "s"} guardado${catalogMatchedCount === 1 ? "" : "s"} del catálogo. Revisa el alcance y los precios antes de guardar o enviar.`);
   const results = [{
     title,
     serviceType,

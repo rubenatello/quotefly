@@ -1987,6 +1987,9 @@ function buildStandardCatalogMatchesForAiContext(params: {
 }
 
 function startAiSuggestionStream(reply: FastifyReply) {
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
   reply.hijack();
   reply.raw.statusCode = 200;
   reply.raw.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");

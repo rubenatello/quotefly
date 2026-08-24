@@ -1465,14 +1465,6 @@ export function QuoteBuilderView() {
     const firstLineId = draftLines[0]?.id ?? null;
     setFocusedKodyLineId(firstLineId);
     setMobilePane("editor");
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const lineControls = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="quote-line-row-1"] input, [data-testid="quote-line-row-1"] textarea'));
-        const firstVisibleControl = lineControls.find((control) => control.getClientRects().length > 0);
-        firstVisibleControl?.scrollIntoView({ block: "center", behavior: "smooth" });
-        firstVisibleControl?.focus({ preventScroll: true });
-      });
-    });
   }
 
   const mobileBuilderStep = mobilePane === "preview" ? 3 : activeCustomer ? 2 : 1;
@@ -2387,6 +2379,8 @@ function DraftLineEditorRow({
   const { t, i18n } = useTranslation();
   const formatLineMoney = (value: string | number) => money(value, i18n.resolvedLanguage ?? "en-US");
   const [expanded, setExpanded] = useState(startExpanded ?? false);
+  const mobileTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const desktopTitleInputRef = useRef<HTMLInputElement | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(
     Boolean(line.details.trim() || Number(line.unitCost) > 0 || line.sectionType === "ALTERNATE"),
   );
@@ -2403,6 +2397,20 @@ function DraftLineEditorRow({
   useEffect(() => {
     if (startExpanded || forceExpanded) setExpanded(true);
   }, [forceExpanded, line.id, startExpanded]);
+
+  useEffect(() => {
+    if (!forceExpanded || !expanded) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = mobileTitleInputRef.current?.getClientRects().length
+        ? mobileTitleInputRef.current
+        : desktopTitleInputRef.current;
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      target?.focus({ preventScroll: true });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [expanded, forceExpanded, line.id]);
 
   function updateSectionType(nextSectionType: "INCLUDED" | "ALTERNATE") {
     onChange(line.id, "sectionType", nextSectionType);
@@ -2462,6 +2470,7 @@ function DraftLineEditorRow({
           <div className={expanded ? "border-t border-[var(--qf-border)] px-3 py-3" : "hidden"}>
             <div className="space-y-3">
               <Input
+                ref={mobileTitleInputRef}
                 label={t("quoteBuilder.line.workItem")}
                 aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })}
                 placeholder={t("quoteBuilder.line.workPlaceholder")}
@@ -2539,6 +2548,7 @@ function DraftLineEditorRow({
             compact
           />
           <Input
+            ref={desktopTitleInputRef}
             aria-label={t("quoteDesk.line.titleAria", { number: index + 1 })}
             className="min-h-[38px] rounded-lg"
             placeholder={t("quoteDesk.line.title")}

@@ -84,9 +84,9 @@ test.describe("controlled beta core workflow", () => {
 
     await page.goto("/app/build");
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customerName);
+    await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(customerName);
     await page
-      .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") })
+      .getByRole("option", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use`, "i") })
       .click();
 
     const quoteTitle = `Beta Condenser Replacement ${uniqueRunLabel("quote")}`;

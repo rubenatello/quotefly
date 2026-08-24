@@ -81,8 +81,21 @@ test("routes operational Kody prompts before broad customer and quote intents", 
     resolveAssistantTool("Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review."),
     "DRAFT_QUOTE",
   );
+  assert.equal(
+    resolveAssistantTool("Draft a plumbing quote for faucet replacement for Brand New Customer."),
+    "DRAFT_QUOTE",
+  );
+  assert.equal(
+    resolveAssistantTool("Kody I need a plumbing quote for faucet replacement for Maria Lopez, email maria@example.com. Please prepare it for review."),
+    "DRAFT_QUOTE",
+  );
+  assert.equal(
+    resolveAssistantTool("Draft a plumbing quote for Maria Lopez; her email is maria@example.com."),
+    "DRAFT_QUOTE",
+  );
   assert.equal(resolveAssistantTool("Send quote to customer"), "PREPARE_QUOTE_SEND");
   assert.equal(resolveAssistantTool("Email the latest quote to Maria Lopez"), "PREPARE_QUOTE_SEND");
+  assert.equal(resolveAssistantTool("Email maria@example.com the latest quote"), "PREPARE_QUOTE_SEND");
   assert.equal(
     resolveAssistantTool("Prioritize my day", "SEARCH_CUSTOMERS", { currentPage: "customers" }),
     "PRIORITIZE_MY_DAY",
@@ -203,6 +216,24 @@ test("bounded conversation hints route genuine follow-ups but never override exp
       [{ message: "Draft a plumbing quote for faucet replacement", resolvedTool: "DRAFT_QUOTE" }],
     ),
     "DRAFT_QUOTE",
+  );
+  assert.equal(
+    resolveAssistantTool(
+      "Brand New Customer",
+      "AUTO",
+      { currentPage: "dashboard" },
+      [{ message: "Draft a plumbing quote for faucet replacement", resolvedTool: "DRAFT_QUOTE" }],
+    ),
+    "DRAFT_QUOTE",
+  );
+  assert.equal(
+    resolveAssistantTool(
+      "Add a new customer named Maria Lopez",
+      "AUTO",
+      { currentPage: "dashboard" },
+      [{ message: "Draft a plumbing quote for faucet replacement", resolvedTool: "DRAFT_QUOTE" }],
+    ),
+    "DRAFT_CUSTOMER",
   );
   assert.deepEqual(resolveAssistantConversationState(conversation, "SUMMARIZE_PIPELINE"), {
     mode: "CONTINUING",

@@ -689,8 +689,8 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
 
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customer.fullName);
-  await page.getByRole("button", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") }).click();
+  await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(customer.fullName);
+  await page.getByRole("option", { name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Use`, "i") }).click();
   await page.getByLabel("Quote title").fill("Existing mobile draft should stay");
   await expect(page.locator(".qf-mobile-action-dock")).toBeVisible();
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
@@ -728,7 +728,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyHandoff).toContainText(customer.fullName);
   await expect(kodyHandoff).toContainText("Kody Mobile Roof Replacement");
   await expect(kodyHandoff).toContainText("Tear-off, disposal, and roof prep");
-  await expect(kodyHandoff).toContainText("Nothing is saved or sent automatically");
+  await expect(kodyHandoff).toContainText("Nothing is saved to the quote list or sent to the customer");
   await expect(kodyHandoff).toContainText(customer.email);
   await expect(kodyHandoff).toContainText("alternate.maria@example.com");
   await expect(kodyHandoff).toContainText("Merge keeps the current customer; Replace uses Kody's customer.");
@@ -893,11 +893,14 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await expect(page.getByLabel("Quote overview")).toHaveValue(/Replace asphalt shingle roof/);
   await expect(page.getByTestId("quote-line-row-1")).toContainText("Tear-off, disposal, and roof prep");
   await expect(page.getByTestId("quote-line-row-2")).toContainText("Install asphalt shingles and flashing");
-  await expect(page.getByLabel("Existing line 1 price")).toHaveValue("4200.00");
-  await expect(page.getByLabel("Existing line 2 price")).toHaveValue("7800.00");
+  await expect(page.getByTestId("quote-line-row-1")).toContainText("Price $4,200.00");
+  await expect(page.getByTestId("quote-line-row-2")).toContainText("Price $7,800.00");
   await page.getByTestId("kody-draft-handoff").getByRole("button", { name: "Review line items" }).click();
-  await expect(page.getByLabel("Existing line 1 title")).toBeVisible();
-  await expect(page.getByLabel("Existing line 1 title")).toBeFocused();
+  const firstVisibleLineTitle = page.getByTestId("quote-line-row-1").locator('[aria-label="Existing line 1 title"]:visible');
+  const firstVisibleLinePrice = page.getByTestId("quote-line-row-1").locator('[aria-label="Existing line 1 price"]:visible');
+  await expect(firstVisibleLineTitle).toBeVisible();
+  await expect(firstVisibleLineTitle).toBeFocused();
+  await expect(firstVisibleLinePrice).toHaveValue("4200.00");
   expect(aiRequests).toEqual([
     expect.objectContaining({
       tool: "DRAFT_QUOTE",

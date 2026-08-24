@@ -36,9 +36,9 @@ test("Spanish quote creation stays localized through preview, sending, and histo
   await expect(page.getByRole("heading", { level: 1, name: "Cotización rápida", exact: true })).toBeVisible();
   await expect(page.getByRole("list", { name: "Progreso de la cotización" })).toBeVisible();
 
-  await page.getByRole("textbox", { name: "Buscar un cliente", exact: true }).fill(customer.fullName);
+  await page.getByRole("combobox", { name: "Buscar un cliente", exact: true }).fill(customer.fullName);
   await page
-    .getByRole("button", {
+    .getByRole("option", {
       name: new RegExp(`${escapeRegExp(customer.fullName)}[\\s\\S]*Usar cliente`, "i"),
     })
     .click();

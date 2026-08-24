@@ -31,9 +31,9 @@ async function getServerDraft(request: APIRequestContext, account: E2eAccount) {
 }
 
 async function selectCustomer(page: Page, customerName: string) {
-  await page.getByRole("textbox", { name: "Find a customer", exact: true }).fill(customerName);
+  await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(customerName);
   await page
-    .getByRole("button", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use customer`, "i") })
+    .getByRole("option", { name: new RegExp(`${escapeRegExp(customerName)}[\\s\\S]*Use customer`, "i") })
     .click();
 }
 
