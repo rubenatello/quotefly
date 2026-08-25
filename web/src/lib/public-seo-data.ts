@@ -40,13 +40,13 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-23",
-    title: "Contractor Quoting & Job Scheduling Software | QuoteFly",
+    lastModified: "2026-08-25",
+    title: "Contractor Quoting, CRM & Dispatch Software | QuoteFly",
     description:
-      "Build contractor quotes, turn accepted work into Jobs, schedule and dispatch visits, and create internal invoice records in one practical QuoteFly workflow.",
+      "QuoteFly connects contractor quoting, customer management, scheduling, dispatch, and internal invoice records for solo operators and small service teams.",
     heading: "Build the quote while the job is still fresh.",
     summary:
-      "Keep the customer, scope, pricing, branded PDF, Job, schedule, and internal invoice record in one practical workflow. Ask Kody for a useful first pass, then review before anything changes.",
+      "QuoteFly is quoting, customer management, scheduling, and dispatch software for solo contractors and small service teams. Keep each customer, quote, accepted Job, scheduled visit, dispatch update, and internal invoice record connected.",
     schemaType: "SoftwareApplication",
   },
   "/pricing": {

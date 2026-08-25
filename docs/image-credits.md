@@ -16,7 +16,7 @@ The original downloads remain outside the repository. The checked-in files are r
 
 The WebP files under `web/public/images/product` are first-party captures of the real QuoteFly web interface. They do not use third-party photography and require no external attribution.
 
-The current product-proof set covers six operational surfaces at desktop (`1440x900`) and mobile (`390x844`) sizes:
+The current product-proof set covers six operational surfaces with two responsive densities: desktop `1440x900` (`v1`) and `2880x1800` (`v2`), plus mobile `390x844` (`v1`) and `780x1688` (`v2`):
 
 - Activity and My Day
 - Jobs schedule
@@ -36,4 +36,4 @@ $env:UPDATE_MARKETING_PRODUCT_CAPTURES='1'
 npx playwright test --config playwright.marketing-captures.config.ts
 ```
 
-The capture test writes temporary PNGs under the ignored `test-results` directory, then `scripts/optimize-product-captures.py` creates metadata-free WebP assets. The checked-in SEO test enforces exact dimensions, a 225 KB desktop budget, a 95 KB mobile budget, and the absence of EXIF, XMP, and ICC chunks.
+The capture test records the interface at device scale factor 2, writes temporary PNGs under the ignored `test-results` directory, then `scripts/optimize-product-captures.py` creates metadata-free WebP assets. The responsive `<picture>` sources let standard-density screens use the compact `v1` files while Retina-class screens select the sharper `v2` files. The checked-in SEO test enforces exact dimensions, budgets of 225 KB/600 KB for desktop `v1`/`v2`, budgets of 95 KB/260 KB for mobile `v1`/`v2`, and the absence of EXIF, XMP, and ICC chunks.

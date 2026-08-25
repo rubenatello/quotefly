@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingProductShowcase } from "../components/marketing/LandingProductShowcase";
@@ -23,6 +23,18 @@ const WORKFLOW = [
   ["06", "Record the invoice", "Create an internal invoice record from an accepted quote or completed Job and keep the next action visible."],
 ] as const;
 
+const QUOTEFLY_FIT = [
+  "Solo contractors who quote and run the work themselves",
+  "Small service teams that need one customer-to-Job handoff",
+  "Field businesses that want reusable pricing without giving up review",
+] as const;
+
+const QUOTEFLY_BOUNDARIES = [
+  "Kody prepares drafts and reviews; a user confirms every action",
+  "Scheduling and dispatch are deliberate controls, not route optimization",
+  "Invoice records track billing state without collecting customer payment",
+] as const;
+
 export function LandingPage({ onOpenAuth }: LandingPageProps) {
   useMarketingReveal();
 
@@ -40,7 +52,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           <div className="text-center lg:text-left">
             <div className="qf-hero-badge mb-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.07] px-4 py-2 text-sm font-semibold text-blue-200 shadow-sm backdrop-blur">
               <span aria-hidden="true" className="h-2 w-2 rounded-full bg-quotefly-orange shadow-[0_0_16px_rgba(255,137,18,0.8)]" />
-              Quoting software built for contractors
+              Quoting, customer management, and dispatch software
             </div>
 
             <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-[-0.05em] text-white sm:text-5xl lg:mx-0 lg:text-[3.8rem] lg:leading-[1.01]">
@@ -48,7 +60,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </h1>
 
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl lg:mx-0">
-              Keep the customer, scope, pricing, branded PDF, Job, schedule, and internal invoice record in one practical workflow. Ask Kody for a useful first pass, then review before anything changes.
+              QuoteFly is quoting, customer management, scheduling, and dispatch software for solo contractors and small service teams. Keep each customer, quote, accepted Job, scheduled visit, dispatch update, and internal invoice record connected. Ask Kody to prepare a first pass, then review every customer, line item, price, and action before anything changes.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
@@ -96,6 +108,46 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       <LandingProductShowcase onOpenAuth={onOpenAuth} />
       <LandingKodyShowcase onOpenAuth={onOpenAuth} />
       <LandingTradeRail />
+
+      <section className="border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="who-uses-quotefly-heading">
+        <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[0.78fr_1.22fr] lg:items-start">
+          <div data-marketing-reveal>
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-quotefly-blue">A practical fit for small teams</p>
+            <h2 id="who-uses-quotefly-heading" className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">
+              Who is QuoteFly for?
+            </h2>
+            <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-600">
+              QuoteFly is built for solo operators and small service crews that need to quote clearly, keep customer context close, and move accepted work into a scheduled Job without rebuilding the paperwork.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <article data-marketing-reveal className="rounded-[26px] border border-blue-200 bg-blue-50/70 p-6 shadow-[0_16px_38px_rgba(15,23,42,0.06)] sm:p-7">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-800">A strong fit</p>
+              <ul className="mt-5 space-y-4">
+                {QUOTEFLY_FIT.map((item) => (
+                  <li key={item} className="flex items-start gap-3 text-sm leading-6 text-slate-700">
+                    <Check size={18} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </article>
+
+            <article data-marketing-reveal className="rounded-[26px] border border-orange-200 bg-orange-50/75 p-6 shadow-[0_16px_38px_rgba(15,23,42,0.06)] sm:p-7">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--qf-brand-orange-text)]">Clear boundaries today</p>
+              <ul className="mt-5 space-y-4">
+                {QUOTEFLY_BOUNDARIES.map((item) => (
+                  <li key={item} className="flex items-start gap-3 text-sm leading-6 text-slate-700">
+                    <ShieldCheck size={18} className="mt-0.5 shrink-0 text-[var(--qf-brand-orange-text)]" aria-hidden="true" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
 
       <section id="landing-basic-plan" className="scroll-mt-24 border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="basic-plan-heading">
         <div className="mx-auto grid max-w-6xl gap-8 overflow-hidden rounded-[32px] border border-slate-200 bg-stone-50 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.07)] sm:p-10 lg:grid-cols-[1fr_0.9fr] lg:items-center">

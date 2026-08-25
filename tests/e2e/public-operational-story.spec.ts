@@ -119,6 +119,10 @@ test("operational marketing pages stay responsive at release widths", async ({ p
   expect(kodyControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   const trialControlBox = await page.getByRole("button", { name: /Start your 20-day free trial/i }).first().boundingBox();
   expect(trialControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  for (const controlName of ["My Day", "Kody review", "Schedule", "Job detail", "Invoice record", "Notifications"]) {
+    const controlBox = await page.locator("#product-story").getByRole("button", { name: controlName, exact: true }).boundingBox();
+    expect(controlBox?.height ?? 0, `${controlName} must remain touchable at 390px`).toBeGreaterThanOrEqual(44);
+  }
 
   await page.goto("/about");
   const aboutTrialBox = await page.getByRole("button", { name: "Start free trial" }).first().boundingBox();
@@ -161,6 +165,13 @@ test("Kody examples support keyboard use and reduced motion", async ({ page }) =
   await expect(bookingControl).toBeFocused();
   await bookingControl.press("Space");
   await expect(page.locator("#kody-example-response")).toContainText(/Nothing is booked until/i);
+
+  const jobDetailControl = page.locator("#product-story").getByRole("button", { name: "Job detail", exact: true });
+  await jobDetailControl.focus();
+  await expect(jobDetailControl).toBeFocused();
+  await jobDetailControl.press("Enter");
+  await expect(jobDetailControl).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("img", { name: /QuoteFly job detail showing/i })).toBeVisible();
 
   const animatedStyles = await page.locator(".qf-demo-pane-enter").evaluateAll((elements) =>
     elements.map((element) => {

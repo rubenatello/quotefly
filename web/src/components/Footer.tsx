@@ -36,7 +36,7 @@ export function Footer() {
           <div className="max-w-md">
             <img src="/logo.png" alt="QuoteFly" className="h-9 w-auto" />
             <p className="mt-3 text-sm text-slate-600">
-              QuoteFly helps contractors add leads, build quotes, and send branded PDFs from one clean, mobile-first CRM.
+              QuoteFly connects customer management, quoting, accepted Jobs, scheduling, dispatch, and internal invoice records for solo contractors and small service teams.
             </p>
             <div className="mt-4 space-y-1 text-sm text-slate-600">
               <p>

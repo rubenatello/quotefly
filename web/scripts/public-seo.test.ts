@@ -202,15 +202,37 @@ test("every public route has unique raw crawlable HTML", async () => {
     );
     const jsonLd = JSON.parse(jsonLdText) as {
       "@type"?: string;
+      "@id"?: string;
       url?: string;
       offers?: { price?: string };
-      "@graph"?: Array<{ "@type"?: string; url?: string; offers?: { price?: string } }>;
+      "@graph"?: Array<{
+        "@type"?: string;
+        "@id"?: string;
+        url?: string;
+        offers?: { price?: string };
+        about?: { "@id"?: string };
+        primaryImageOfPage?: { "@id"?: string };
+        width?: number;
+        height?: number;
+      }>;
     };
     const schemaNodes = jsonLd["@graph"] ?? [jsonLd];
     assert.ok(schemaNodes.some((node) => node.url === canonical), `${path} schema must include its canonical URL`);
     if (path === "/" || path === "/pricing") {
       const application = schemaNodes.find((node) => node["@type"] === "SoftwareApplication");
       assert.equal(application?.offers?.price, String(PUBLIC_BASIC_PLAN.monthlyPriceUsd));
+    }
+    if (path === "/") {
+      const webPage = schemaNodes.find((node) => node["@type"] === "WebPage");
+      const primaryImage = schemaNodes.find((node) => node["@type"] === "ImageObject");
+      assert.equal(webPage?.about?.["@id"], `${PUBLIC_SITE_URL}/#software`);
+      assert.equal(webPage?.primaryImageOfPage?.["@id"], `${PUBLIC_SITE_URL}/#primaryimage`);
+      assert.equal(primaryImage?.["@id"], `${PUBLIC_SITE_URL}/#primaryimage`);
+      assert.equal(primaryImage?.url, PUBLIC_OG_IMAGE_URL);
+      assert.deepEqual(
+        { width: primaryImage?.width, height: primaryImage?.height },
+        { width: 1200, height: 630 },
+      );
     }
     if (path.startsWith("/solutions/")) {
       assert.ok(schemaNodes.some((node) => node["@type"] === "BreadcrumbList"));
@@ -350,13 +372,19 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
   const html = decodeHtmlAttribute(await readFile(join(distDir, "index.html"), "utf8"));
   for (const expected of [
     "Build the quote while the job is still fresh.",
+    "QuoteFly is quoting, customer management, scheduling, and dispatch software for solo contractors and small service teams.",
+    "Who is QuoteFly for?",
     "Tell Kody what you are trying to get done.",
     "Move from accepted quote to a finished, billable job.",
-    "Actual QuoteFly interface · Sanitized fictional data",
+    "Actual QuoteFly interface · Sanitized fictional data · No production customer data, internal costs, or margins.",
+    "See the day, then ask Kody what deserves attention.",
+    "Keep the accepted scope connected to the field visit.",
+    "Create the billing record and keep changes visible.",
     "Find Elena Torres.",
     "HVAC quoting software",
     "Start your 20-day free trial",
     "First paid month $14.50",
+    "QuoteFly connects customer management, quoting, accepted Jobs, scheduling, dispatch, and internal invoice records for solo contractors and small service teams.",
   ]) {
     assert.ok(html.includes(expected), `homepage raw HTML must include: ${expected}`);
   }
@@ -370,17 +398,29 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
 
   const productScreens = [
     ["activity-my-day-desktop-v1.webp", 1440, 900, 225_000],
+    ["activity-my-day-desktop-v2.webp", 2880, 1800, 600_000],
     ["activity-my-day-mobile-v1.webp", 390, 844, 95_000],
+    ["activity-my-day-mobile-v2.webp", 780, 1688, 260_000],
     ["jobs-schedule-desktop-v1.webp", 1440, 900, 225_000],
+    ["jobs-schedule-desktop-v2.webp", 2880, 1800, 600_000],
     ["jobs-schedule-mobile-v1.webp", 390, 844, 95_000],
+    ["jobs-schedule-mobile-v2.webp", 780, 1688, 260_000],
     ["job-detail-desktop-v1.webp", 1440, 900, 225_000],
+    ["job-detail-desktop-v2.webp", 2880, 1800, 600_000],
     ["job-detail-mobile-v1.webp", 390, 844, 95_000],
+    ["job-detail-mobile-v2.webp", 780, 1688, 260_000],
     ["kody-review-desktop-v1.webp", 1440, 900, 225_000],
+    ["kody-review-desktop-v2.webp", 2880, 1800, 600_000],
     ["kody-review-mobile-v1.webp", 390, 844, 95_000],
+    ["kody-review-mobile-v2.webp", 780, 1688, 260_000],
     ["internal-invoice-desktop-v1.webp", 1440, 900, 225_000],
+    ["internal-invoice-desktop-v2.webp", 2880, 1800, 600_000],
     ["internal-invoice-mobile-v1.webp", 390, 844, 95_000],
+    ["internal-invoice-mobile-v2.webp", 780, 1688, 260_000],
     ["notification-center-desktop-v1.webp", 1440, 900, 225_000],
+    ["notification-center-desktop-v2.webp", 2880, 1800, 600_000],
     ["notification-center-mobile-v1.webp", 390, 844, 95_000],
+    ["notification-center-mobile-v2.webp", 780, 1688, 260_000],
   ] as const;
   for (const [filename, width, height, maxBytes] of productScreens) {
     const assetPath = join(distDir, "images", "product", filename);
@@ -392,20 +432,37 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
       [],
       `${filename} must not contain EXIF, XMP, or ICC metadata chunks`,
     );
+  }
+
+  for (const filename of [
+    "activity-my-day-desktop-v1.webp",
+    "activity-my-day-desktop-v2.webp",
+    "activity-my-day-mobile-v1.webp",
+    "activity-my-day-mobile-v2.webp",
+    "jobs-schedule-desktop-v1.webp",
+    "jobs-schedule-desktop-v2.webp",
+    "jobs-schedule-mobile-v1.webp",
+    "jobs-schedule-mobile-v2.webp",
+    "internal-invoice-desktop-v1.webp",
+    "internal-invoice-desktop-v2.webp",
+    "internal-invoice-mobile-v1.webp",
+    "internal-invoice-mobile-v2.webp",
+  ]) {
     assert.ok(html.includes(`/images/product/${filename}`), `${filename} must be present in raw homepage HTML`);
   }
   for (const altText of [
     "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
     "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
-    "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
-    "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
     "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
-    "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
   ]) {
     assert.ok(html.includes(altText), `homepage raw HTML must contain screenshot alt text: ${altText}`);
   }
   assert.doesNotMatch(html, /<link[^>]+rel="preload"[^>]+images\/product/i);
-  assert.equal((html.match(/loading="lazy"/g) ?? []).length >= 6, true, "all below-fold product images must be lazy");
-  assert.equal((html.match(/<picture>/g) ?? []).length >= 6, true, "product proof must use responsive pictures");
-  assert.ok(html.includes('media="(max-width: 640px)"'), "product proof must select mobile captures on narrow screens");
+  assert.equal((html.match(/loading="lazy"/g) ?? []).length >= 3, true, "all below-fold product images must be lazy");
+  assert.equal((html.match(/<picture/g) ?? []).length >= 3, true, "product proof must use responsive pictures");
+  assert.ok(html.includes('media="(max-width: 639px)"'), "product proof must select mobile captures on narrow screens");
+  assert.ok(html.includes("390w") && html.includes("780w"), "mobile product proof must expose 1x and 2x width candidates");
+  assert.ok(html.includes("1440w") && html.includes("2880w"), "desktop product proof must expose 1x and 2x width candidates");
+  assert.ok(html.includes('sizes="min(430px, calc(100vw - 48px))"'), "mobile product proof must describe its rendered size");
+  assert.ok(html.includes('aria-pressed="true"') && html.includes("aria-controls="), "product-story controls must be explicit in raw HTML");
 });

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ArrowRight,
   BellRing,
@@ -17,124 +18,205 @@ interface LandingProductShowcaseProps {
 
 type ProductCapture = {
   key: string;
+  label: string;
+  alt: string;
+  icon: LucideIcon;
+};
+
+type ProductStory = {
+  key: string;
+  step: string;
   eyebrow: string;
   title: string;
   description: string;
   boundary: string;
-  alt: string;
-  icon: LucideIcon;
-  featured?: boolean;
+  captures: readonly [ProductCapture, ProductCapture];
 };
 
-const DEMO_LABEL = "Actual QuoteFly interface · Sanitized fictional data";
-
-const PRODUCT_CAPTURES: readonly ProductCapture[] = [
+const PRODUCT_STORIES: readonly ProductStory[] = [
   {
-    key: "activity-my-day",
-    eyebrow: "Activity and My Day",
-    title: "Start with the work that needs attention.",
-    description: "See assigned tasks, due work, quote momentum, and active jobs in the same workspace your team uses every day.",
-    boundary: "Tasks are internal workspace records. QuoteFly does not contact a customer from this view.",
-    alt: "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
-    icon: ClipboardCheck,
-    featured: true,
+    key: "focus",
+    step: "01",
+    eyebrow: "Focus and review",
+    title: "See the day, then ask Kody what deserves attention.",
+    description:
+      "Start with assigned tasks, quote momentum, and active jobs. When the schedule needs a second look, Kody can organize tenant-scoped appointments into a practical review.",
+    boundary:
+      "Tasks and Kody reviews are workspace guidance. These views do not contact customers or change the schedule.",
+    captures: [
+      {
+        key: "activity-my-day",
+        label: "My Day",
+        alt: "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
+        icon: ClipboardCheck,
+      },
+      {
+        key: "kody-review",
+        label: "Kody review",
+        alt: "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
+        icon: Bot,
+      },
+    ],
   },
   {
-    key: "jobs-schedule",
-    eyebrow: "Booking and schedule",
-    title: "Keep the field calendar connected to each job.",
-    description: "Review day or week appointments, assigned teammates, visit windows, and current dispatch status without rebuilding a second calendar.",
-    boundary: "This is scheduling and dispatch state, not automated route optimization or provider messaging.",
-    alt: "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
-    icon: CalendarDays,
+    key: "field-work",
+    step: "02",
+    eyebrow: "Schedule and dispatch",
+    title: "Keep the accepted scope connected to the field visit.",
+    description:
+      "Book day or week appointments, assign an active teammate, and carry the source quote, access notes, and visit history into the Job workspace.",
+    boundary:
+      "Scheduling, dispatch, arrival, and completion remain deliberate team actions. QuoteFly does not perform route optimization.",
+    captures: [
+      {
+        key: "jobs-schedule",
+        label: "Schedule",
+        alt: "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
+        icon: CalendarDays,
+      },
+      {
+        key: "job-detail",
+        label: "Job detail",
+        alt: "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
+        icon: BriefcaseBusiness,
+      },
+    ],
   },
   {
-    key: "job-detail",
-    eyebrow: "Job detail",
-    title: "Carry the accepted scope into field operations.",
-    description: "Keep assignment, access notes, booking history, visit progress, and the source quote attached to the job.",
-    boundary: "Dispatch, arrival, and completion are deliberate team actions with an in-app audit trail.",
-    alt: "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
-    icon: BriefcaseBusiness,
-  },
-  {
-    key: "kody-review",
-    eyebrow: "Kody schedule review",
-    title: "Ask for the schedule, then review the result.",
-    description: "Kody can read tenant-scoped appointments and organize the day into a practical review without exposing access notes or contact details.",
-    boundary: "This deterministic review uses no paid AI. Kody never sends, books, or dispatches without a separate user action.",
-    alt: "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
-    icon: Bot,
-  },
-  {
-    key: "internal-invoice",
-    eyebrow: "Internal invoice ledger",
-    title: "Create the billing record without overstating payment progress.",
-    description: "Track the customer total, balance, due date, source quote, and job from a clear internal invoice record.",
-    boundary: "A draft invoice does not send, collect payment, or create anything in QuickBooks, Stripe, or Square.",
-    alt: "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
-    icon: ReceiptText,
-  },
-  {
-    key: "notification-center",
-    eyebrow: "In-app notifications",
-    title: "Keep booking changes visible to the workspace.",
-    description: "See booked, rescheduled, and dispatched visits with the related job and the time each notification was received.",
-    boundary: "The notification center is in-app only. It does not send customer email or text messages.",
-    alt: "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
-    icon: BellRing,
+    key: "billing",
+    step: "03",
+    eyebrow: "Invoice and follow-through",
+    title: "Create the billing record and keep changes visible.",
+    description:
+      "Record the customer total, balance, due date, source quote, and Job, then keep booking and dispatch updates visible inside the workspace.",
+    boundary:
+      "Internal invoice records do not collect payment. In-app notifications do not send customer email or text messages.",
+    captures: [
+      {
+        key: "internal-invoice",
+        label: "Invoice record",
+        alt: "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
+        icon: ReceiptText,
+      },
+      {
+        key: "notification-center",
+        label: "Notifications",
+        alt: "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
+        icon: BellRing,
+      },
+    ],
   },
 ] as const;
 
-function ProductCaptureCard({ capture }: { capture: ProductCapture }) {
+function ProductPicture({ capture, panelId }: { capture: ProductCapture; panelId: string }) {
   const desktopPath = `/images/product/${capture.key}-desktop-v1.webp`;
+  const desktopRetinaPath = `/images/product/${capture.key}-desktop-v2.webp`;
   const mobilePath = `/images/product/${capture.key}-mobile-v1.webp`;
-  const CaptureIcon = capture.icon;
+  const mobileRetinaPath = `/images/product/${capture.key}-mobile-v2.webp`;
 
   return (
-    <figure
-      data-marketing-reveal
-      className={`overflow-hidden rounded-[28px] border border-white/10 bg-slate-900 shadow-[0_24px_62px_rgba(0,0,0,0.3)] ${capture.featured ? "lg:col-span-2" : ""}`}
+    <div
+      key={capture.key}
+      id={panelId}
+      className="qf-demo-pane-enter overflow-hidden rounded-[22px] border border-white/15 bg-slate-950 shadow-[0_28px_70px_rgba(0,0,0,0.38)]"
     >
-      <figcaption className="grid gap-4 border-b border-white/10 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.62fr)] lg:items-end">
-        <div>
-          <p className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-300">
-            <CaptureIcon size={17} aria-hidden="true" />
-            {capture.eyebrow}
-          </p>
-          <h3 className="mt-3 text-xl font-bold tracking-tight text-white sm:text-2xl">{capture.title}</h3>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{capture.description}</p>
+      <div className="flex min-h-11 items-center justify-between gap-3 border-b border-white/10 bg-slate-900 px-4 py-2.5 sm:px-5">
+        <div aria-hidden="true" className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-quotefly-orange" />
+          <span className="h-2.5 w-2.5 rounded-full bg-blue-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-slate-600" />
         </div>
-        <div>
-          <p className="flex items-start gap-2 text-xs leading-5 text-slate-400">
-            <ShieldCheck size={15} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden="true" />
-            {capture.boundary}
-          </p>
-          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300">{DEMO_LABEL}</p>
-        </div>
-      </figcaption>
+        <p className="truncate text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">
+          {capture.label} · QuoteFly workspace
+        </p>
+      </div>
       <div className="bg-slate-950 p-2 sm:p-3">
-        <picture>
+        <picture className="mx-auto block max-w-[430px] sm:max-w-none">
           <source
-            media="(max-width: 640px)"
-            srcSet={mobilePath}
+            media="(max-width: 639px)"
+            srcSet={`${mobilePath} 390w, ${mobileRetinaPath} 780w`}
+            sizes="min(430px, calc(100vw - 48px))"
             width="390"
             height="844"
             type="image/webp"
           />
           <img
             src={desktopPath}
+            srcSet={`${desktopPath} 1440w, ${desktopRetinaPath} 2880w`}
+            sizes="(min-width: 1280px) 1216px, calc(100vw - 64px)"
             alt={capture.alt}
             width="1440"
             height="900"
             loading="lazy"
             decoding="async"
             fetchPriority="low"
-            className="h-auto w-full rounded-[18px] border border-white/10 bg-white object-contain"
+            className="h-auto w-full rounded-[14px] border border-white/10 bg-white object-contain sm:rounded-[16px]"
           />
         </picture>
       </div>
-    </figure>
+    </div>
+  );
+}
+
+function ProductStoryModule({ story }: { story: ProductStory }) {
+  const [activeKey, setActiveKey] = useState(story.captures[0].key);
+  const activeCapture = story.captures.find((capture) => capture.key === activeKey) ?? story.captures[0];
+  const panelId = `product-story-${story.key}-panel`;
+
+  return (
+    <article
+      data-marketing-reveal
+      className="overflow-hidden rounded-[30px] border border-white/10 bg-slate-900/85 p-4 shadow-[0_26px_70px_rgba(0,0,0,0.24)] sm:p-6 lg:p-8"
+    >
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)] lg:items-end">
+        <div>
+          <p className="flex items-center gap-3 text-xs font-bold uppercase tracking-[0.19em] text-blue-300">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-quotefly-orange/35 bg-quotefly-orange/10 text-quotefly-orange">
+              {story.step}
+            </span>
+            {story.eyebrow}
+          </p>
+          <h3 className="mt-4 max-w-3xl text-2xl font-bold tracking-[-0.03em] text-white sm:text-3xl">
+            {story.title}
+          </h3>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{story.description}</p>
+        </div>
+
+        <div>
+          <div role="group" aria-label={`Choose the ${story.eyebrow.toLowerCase()} product view`} className="grid grid-cols-2 gap-2">
+            {story.captures.map((capture) => {
+              const CaptureIcon = capture.icon;
+              const active = capture.key === activeCapture.key;
+              return (
+                <button
+                  key={capture.key}
+                  type="button"
+                  aria-pressed={active}
+                  aria-controls={panelId}
+                  onClick={() => setActiveKey(capture.key)}
+                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-quotefly-orange/35 ${
+                    active
+                      ? "border-quotefly-orange bg-quotefly-orange text-slate-950 shadow-[0_10px_24px_rgba(255,137,18,0.2)]"
+                      : "border-white/15 bg-white/[0.06] text-slate-200 hover:border-blue-300/60 hover:bg-white/[0.1]"
+                  }`}
+                >
+                  <CaptureIcon size={17} aria-hidden="true" />
+                  {capture.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-400">
+            <ShieldCheck size={16} className="mt-0.5 shrink-0 text-orange-300" aria-hidden="true" />
+            {story.boundary}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-6 sm:mt-8">
+        <ProductPicture capture={activeCapture} panelId={panelId} />
+      </div>
+    </article>
   );
 }
 
@@ -155,17 +237,17 @@ export function LandingProductShowcase({ onOpenAuth }: LandingProductShowcasePro
           </div>
           <div>
             <p className="max-w-3xl text-base leading-7 text-slate-300 sm:text-lg">
-              These are real QuoteFly screens rendered with a fictional home-services workspace. They show the current product boundaries as clearly as the workflow itself.
+              Follow three real product stories, then switch views to inspect the workspace at each step. Every screen uses the same deterministic fictional home-services business.
             </p>
             <p className="mt-3 flex items-start gap-2 text-sm text-slate-400">
-              <ShieldCheck size={17} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden="true" />
-              No production or real customer data, internal costs, or margins appear in these images.
+              <ShieldCheck size={17} className="mt-0.5 shrink-0 text-orange-300" aria-hidden="true" />
+              Actual QuoteFly interface · Sanitized fictional data · No production customer data, internal costs, or margins.
             </p>
           </div>
         </div>
 
-        <div className="mt-10 grid gap-6 lg:grid-cols-2">
-          {PRODUCT_CAPTURES.map((capture) => <ProductCaptureCard key={capture.key} capture={capture} />)}
+        <div className="mt-10 space-y-6 sm:space-y-8">
+          {PRODUCT_STORIES.map((story) => <ProductStoryModule key={story.key} story={story} />)}
         </div>
 
         <div data-marketing-reveal className="mt-8 flex flex-col items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-5 sm:flex-row sm:px-6">

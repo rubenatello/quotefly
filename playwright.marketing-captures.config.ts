@@ -14,6 +14,7 @@ export default defineConfig({
   reporter: "list",
   use: {
     ...devices["Desktop Chrome"],
+    deviceScaleFactor: 2,
     baseURL: `http://127.0.0.1:${webPort}`,
     colorScheme: "light",
     locale: "en-US",
@@ -29,5 +30,5 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
   },
-  projects: [{ name: "marketing-captures", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "marketing-captures" }],
 });

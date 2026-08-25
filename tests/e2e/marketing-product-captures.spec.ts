@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -498,6 +498,40 @@ async function installProductCaptureApi(page: Page) {
         scope: { mine: false },
       });
     }
+    if (path === `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`) {
+      return json(route, {
+        providerWorkflowsEnabled: false,
+        preview: {
+          invoice: {
+            id: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
+            version: invoice.version,
+            status: invoice.status,
+            customerName: jobs[1].customer.fullName,
+            currency: invoice.currency,
+            subtotalAmount: invoice.subtotalAmount,
+            taxAmount: invoice.taxAmount,
+            totalAmount: invoice.totalAmount,
+            dueAtUtc: invoice.dueAtUtc,
+          },
+          connection: null,
+          quickBooksCustomerName: null,
+          providerDocNumber: "QF-001042",
+          lineItems: [{
+            description: jobs[1].title,
+            quantity: 1,
+            unitPrice: invoice.subtotalAmount,
+            amount: invoice.subtotalAmount,
+            mapped: false,
+            quickBooksItemName: null,
+          }],
+          blockers: ["QUICKBOOKS_NOT_CONNECTED"],
+          ready: false,
+          reviewBinding: null,
+          operation: null,
+        },
+      });
+    }
     if (path === "/v1/ai/assistant") {
       return json(route, {
         assistant: {
@@ -562,7 +596,15 @@ async function settle(page: Page) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 }
 
-async function writeCapture(page: Page, name: string, maxBytes: number) {
+type CaptureBudgets = {
+  v1: number;
+  v2: number;
+};
+
+const desktopCaptureBudgets: CaptureBudgets = { v1: 225_000, v2: 600_000 };
+const mobileCaptureBudgets: CaptureBudgets = { v1: 95_000, v2: 260_000 };
+
+async function writeCapture(page: Page, name: string, budgets: CaptureBudgets) {
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
     const planLabels = page.getByText("Basic", { exact: true });
     const visiblePlanLabels = await planLabels.count().then(async (count) => {
@@ -574,12 +616,22 @@ async function writeCapture(page: Page, name: string, maxBytes: number) {
     });
     expect(visiblePlanLabels, "Desktop product captures must visibly show the sellable Basic plan.").toBeGreaterThan(0);
   }
-  const pngPath = resolve(stagingDirectory, `${name}.png`);
-  const webpPath = resolve(outputDirectory, `${name}.webp`);
+  const pngPath = resolve(stagingDirectory, `${name}-dpr2.png`);
+  const v1WebpPath = resolve(outputDirectory, `${name}-v1.webp`);
+  const v2WebpPath = resolve(outputDirectory, `${name}-v2.webp`);
   await page.screenshot({ path: pngPath, fullPage: false, animations: "disabled" });
   const result = spawnSync(
     process.env.PYTHON || "python",
-    [optimizer, pngPath, webpPath, "--max-bytes", String(maxBytes)],
+    [
+      optimizer,
+      pngPath,
+      v1WebpPath,
+      v2WebpPath,
+      "--v1-max-bytes",
+      String(budgets.v1),
+      "--v2-max-bytes",
+      String(budgets.v2),
+    ],
     { encoding: "utf8" },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -608,6 +660,12 @@ async function showNotifications(page: Page) {
   await expect(page.getByRole("dialog", { name: "Notifications" })).toBeVisible();
 }
 
+async function expectLocalizedQuickBooksBlocker(invoicePanel: Locator) {
+  const quickBooksPanel = invoicePanel.getByTestId("quickbooks-invoice-panel");
+  await expect(quickBooksPanel).toContainText("Connect QuickBooks in workspace settings.");
+  await expect(quickBooksPanel).not.toContainText("invoices.quickBooks");
+}
+
 test.skip(!captureEnabled, "Set UPDATE_MARKETING_PRODUCT_CAPTURES=1 to regenerate checked-in product images.");
 
 test("regenerates sanitized product-proof captures from deterministic QuoteFly UI", async ({ page }) => {
@@ -632,33 +690,34 @@ test("regenerates sanitized product-proof captures from deterministic QuoteFly U
   await page.goto("/app");
   await expect(page.getByTestId("workspace-home")).toBeVisible();
   await settle(page);
-  await writeCapture(page, "activity-my-day-desktop-v1", 225_000);
+  await writeCapture(page, "activity-my-day-desktop", desktopCaptureBudgets);
 
   await page.goto("/app/jobs?view=schedule&range=day&date=2026-08-24&assignee=all");
   await expect(page.getByText("Today and upcoming work", { exact: true })).toBeVisible();
   await settle(page);
-  await writeCapture(page, "jobs-schedule-desktop-v1", 225_000);
+  await writeCapture(page, "jobs-schedule-desktop", desktopCaptureBudgets);
 
   await page.goto(`/app/jobs/${jobs[0].id}`);
   await expect(page.getByText("Job #1041", { exact: true })).toBeVisible();
   await page.evaluate(() => window.scrollTo(0, 0));
   await settle(page);
-  await writeCapture(page, "job-detail-desktop-v1", 225_000);
+  await writeCapture(page, "job-detail-desktop", desktopCaptureBudgets);
 
   await showKodyScheduleReview(page, true);
   await settle(page);
-  await writeCapture(page, "kody-review-desktop-v1", 225_000);
+  await writeCapture(page, "kody-review-desktop", desktopCaptureBudgets);
 
   await page.goto(`/app/jobs/${jobs[1].id}`);
   const invoicePanel = page.getByTestId("invoice-panel");
   await expect(invoicePanel.getByText("Invoice #1042", { exact: true })).toBeVisible();
   await invoicePanel.scrollIntoViewIfNeeded();
+  await expectLocalizedQuickBooksBlocker(invoicePanel);
   await settle(page);
-  await writeCapture(page, "internal-invoice-desktop-v1", 225_000);
+  await writeCapture(page, "internal-invoice-desktop", desktopCaptureBudgets);
 
   await showNotifications(page);
   await settle(page);
-  await writeCapture(page, "notification-center-desktop-v1", 225_000);
+  await writeCapture(page, "notification-center-desktop", desktopCaptureBudgets);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/app");
@@ -668,7 +727,7 @@ test("regenerates sanitized product-proof captures from deterministic QuoteFly U
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Workspace navigation" })).toBeHidden();
   await settle(page);
-  await writeCapture(page, "activity-my-day-mobile-v1", 95_000);
+  await writeCapture(page, "activity-my-day-mobile", mobileCaptureBudgets);
 
   await page.goto("/app/jobs?view=schedule&range=day&date=2026-08-24&assignee=all");
   await expect(page.getByText("Today and upcoming work", { exact: true })).toBeVisible();
@@ -677,13 +736,13 @@ test("regenerates sanitized product-proof captures from deterministic QuoteFly U
   await firstMobileVisit.scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollBy(0, -180));
   await settle(page);
-  await writeCapture(page, "jobs-schedule-mobile-v1", 95_000);
+  await writeCapture(page, "jobs-schedule-mobile", mobileCaptureBudgets);
 
   await page.goto(`/app/jobs/${jobs[0].id}`);
   await expect(page.getByText("Job #1041", { exact: true })).toBeVisible();
   await page.evaluate(() => window.scrollTo(0, 115));
   await settle(page);
-  await writeCapture(page, "job-detail-mobile-v1", 95_000);
+  await writeCapture(page, "job-detail-mobile", mobileCaptureBudgets);
 
   await showKodyScheduleReview(page, true);
   const mobileScheduleWindow = page.getByTestId("kody-schedule-card").first().locator("dd").first();
@@ -691,17 +750,19 @@ test("regenerates sanitized product-proof captures from deterministic QuoteFly U
   expect(mobileScheduleWindowBox?.width ?? 0).toBeGreaterThan(180);
   expect(mobileScheduleWindowBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThan(96);
   await settle(page);
-  await writeCapture(page, "kody-review-mobile-v1", 95_000);
+  await writeCapture(page, "kody-review-mobile", mobileCaptureBudgets);
 
   await page.goto(`/app/jobs/${jobs[1].id}`);
-  await expect(page.getByTestId("invoice-panel").getByText("Invoice #1042", { exact: true })).toBeVisible();
-  await page.getByTestId("invoice-panel").scrollIntoViewIfNeeded();
+  const mobileInvoicePanel = page.getByTestId("invoice-panel");
+  await expect(mobileInvoicePanel.getByText("Invoice #1042", { exact: true })).toBeVisible();
+  await mobileInvoicePanel.scrollIntoViewIfNeeded();
+  await expectLocalizedQuickBooksBlocker(mobileInvoicePanel);
   await settle(page);
-  await writeCapture(page, "internal-invoice-mobile-v1", 95_000);
+  await writeCapture(page, "internal-invoice-mobile", mobileCaptureBudgets);
 
   await showNotifications(page);
   await settle(page);
-  await writeCapture(page, "notification-center-mobile-v1", 95_000);
+  await writeCapture(page, "notification-center-mobile", mobileCaptureBudgets);
 
   expect([...unhandled]).toEqual([]);
   expect([...unexpectedExternal], "Capture generation must not request any unexpected external origin.").toEqual([]);

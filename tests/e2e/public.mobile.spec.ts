@@ -28,15 +28,31 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await productStory.scrollIntoViewIfNeeded();
   await expect(productStory.getByRole("heading", { name: "Move from accepted quote to a finished, billable job." })).toBeVisible();
   const productImages = productStory.getByRole("img");
-  await expect(productImages).toHaveCount(6);
+  await expect(productImages).toHaveCount(3);
   for (const image of await productImages.all()) {
     await image.scrollIntoViewIfNeeded();
     await expect(image).toBeVisible();
     await expect(image).toHaveAttribute("loading", "lazy");
-    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.currentSrc)).toContain("-mobile-v2.webp");
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThanOrEqual(300);
   }
   expect((await productImages.first().boundingBox())?.width).toBeGreaterThanOrEqual(300);
   expect((await productImages.last().boundingBox())?.width).toBeGreaterThanOrEqual(300);
+
+  for (const [controlName, imageName] of [
+    ["Kody review", /Kody displaying a review/i],
+    ["Job detail", /QuoteFly job detail/i],
+    ["Notifications", /QuoteFly notification center/i],
+  ] as const) {
+    const control = productStory.getByRole("button", { name: controlName, exact: true });
+    expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    await control.click();
+    await expect(control).toHaveAttribute("aria-pressed", "true");
+    const selectedImage = productStory.getByRole("img", { name: imageName });
+    await expect(selectedImage).toBeVisible();
+    await expect.poll(() => selectedImage.evaluate((element: HTMLImageElement) => element.currentSrc)).toContain("-mobile-v2.webp");
+    await expect.poll(() => selectedImage.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThanOrEqual(300);
+  }
   const productCta = productStory.getByRole("button", { name: "Try the real workflow free" });
   expect((await productCta.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
