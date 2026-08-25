@@ -1,4 +1,5 @@
 import { LeadFollowUpStatus, Prisma, PrismaClient, QuoteOutboundChannel, QuoteRevisionEventType } from "@prisma/client";
+import { createHash, randomUUID } from "node:crypto";
 import { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
@@ -132,6 +133,62 @@ const CreateQuoteSchema = z.object({
     .max(300)
     .optional(),
 });
+
+const QuoteCreateIdempotencyKeySchema = z.string()
+  .trim()
+  .min(16)
+  .max(191)
+  .regex(/^[A-Za-z0-9._:-]+$/);
+
+const QUOTE_CREATE_IDEMPOTENCY_COMPATIBILITY_HEADER = "X-QuoteFly-Quote-Idempotency-Compatibility";
+
+function canonicalizeQuoteCreateValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeQuoteCreateValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalizeQuoteCreateValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function quoteCreateSha256(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function resolveQuoteCreateIdempotency(
+  rawHeader: string | string[] | undefined,
+  tenantId: string,
+  requestId: string,
+) {
+  const raw = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const usedLegacyFallback = raw === undefined;
+  const key = usedLegacyFallback
+    ? `legacy:${quoteCreateSha256(`${requestId}:${randomUUID()}`)}`
+    : QuoteCreateIdempotencyKeySchema.parse(raw);
+  return {
+    keyHash: quoteCreateSha256(`quote-create:${tenantId}:${key}`),
+    usedLegacyFallback,
+  };
+}
+
+function quoteCreateRequestHash(payload: z.infer<typeof CreateQuoteSchema>) {
+  return quoteCreateSha256(JSON.stringify(canonicalizeQuoteCreateValue(payload)));
+}
+
+class QuoteCreateError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly code: string,
+    message: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
 
 const UpdateQuoteSchema = z
   .object({
@@ -3301,19 +3358,20 @@ function inferPresetQuantity(
 }
 
 /**
- * Defense-in-depth for historical rows created before prompt minimization.
+ * Defense-in-depth for historical rows created before prompt minimization and
+ * for content-free quote-create hashes that are restricted operational data.
  * Quote handlers return several different Prisma projections, so the scoped
  * serialization hook removes raw prompt fields from every JSON shape without
  * changing dates, decimals, streams, or binary PDF responses.
  */
-function stripRestrictedAiPromptFields(payload: unknown, seen = new WeakSet<object>()): unknown {
+function stripRestrictedQuoteFields(payload: unknown, seen = new WeakSet<object>()): unknown {
   if (!payload || typeof payload !== "object") return payload;
   if (payload instanceof Date || Buffer.isBuffer(payload)) return payload;
   if (seen.has(payload)) return payload;
   seen.add(payload);
 
   if (Array.isArray(payload)) {
-    for (const value of payload) stripRestrictedAiPromptFields(value, seen);
+    for (const value of payload) stripRestrictedQuoteFields(value, seen);
     return payload;
   }
 
@@ -3323,8 +3381,10 @@ function stripRestrictedAiPromptFields(payload: unknown, seen = new WeakSet<obje
   const record = payload as Record<string, unknown>;
   delete record.aiPromptText;
   delete record.promptText;
+  delete record.createIdempotencyKeyHash;
+  delete record.createRequestHash;
   for (const value of Object.values(record)) {
-    stripRestrictedAiPromptFields(value, seen);
+    stripRestrictedQuoteFields(value, seen);
   }
   return payload;
 }
@@ -3357,7 +3417,7 @@ function stripInternalFinancialFields(payload: unknown, seen = new WeakSet<objec
 }
 
 async function resolveRequestedQuoteAssignee(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   access: AccessContext,
   requested: string | null | undefined,
   inherited: string | null | undefined,
@@ -3374,6 +3434,174 @@ async function resolveRequestedQuoteAssignee(
     tenantUserId: candidate,
   });
   return valid ? { allowed: true, assignedTenantUserId: candidate } : { allowed: false };
+}
+
+async function lockQuoteCreateCommand(
+  transaction: Prisma.TransactionClient,
+  keyHash: string,
+) {
+  await transaction.$queryRaw(Prisma.sql`
+    SELECT 1::int AS "locked"
+    FROM (SELECT pg_advisory_xact_lock(hashtextextended(${keyHash}, 0))) acquired
+  `);
+}
+
+async function findQuoteCreateReplay(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  input: {
+    tenantId: string;
+    keyHash: string;
+    requestHash: string;
+    assignedTenantUserId?: string;
+  },
+) {
+  const quote = await prisma.quote.findFirst({
+    where: {
+      tenantId: input.tenantId,
+      createIdempotencyKeyHash: input.keyHash,
+    },
+  });
+  if (!quote) return null;
+  if (quote.createRequestHash !== input.requestHash) {
+    throw new QuoteCreateError(
+      409,
+      "IDEMPOTENCY_KEY_REUSED",
+      "This Idempotency-Key was already used with a different quote request.",
+    );
+  }
+  if (
+    quote.archivedAtUtc
+    || quote.deletedAtUtc
+    || (input.assignedTenantUserId && quote.assignedTenantUserId !== input.assignedTenantUserId)
+  ) {
+    throw new QuoteCreateError(
+      409,
+      "QUOTE_CREATE_REPLAY_UNAVAILABLE",
+      "The quote created by this request is no longer available to this account.",
+    );
+  }
+  return quote;
+}
+
+async function lockActiveCustomerForQuoteCreate(
+  transaction: Prisma.TransactionClient,
+  input: { customerId: string; tenantId: string; assignedTenantUserId?: string },
+) {
+  const assignmentScope = input.assignedTenantUserId
+    ? Prisma.sql`AND customer."assignedTenantUserId" = ${input.assignedTenantUserId}`
+    : Prisma.empty;
+  const [locked] = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT customer.id
+    FROM "Customer" customer
+    WHERE customer.id = ${input.customerId}
+      AND customer."tenantId" = ${input.tenantId}
+      AND customer."archivedAtUtc" IS NULL
+      AND customer."deletedAtUtc" IS NULL
+      ${assignmentScope}
+    FOR UPDATE OF customer
+  `);
+  if (!locked) return null;
+  return transaction.customer.findFirst({
+    where: {
+      id: input.customerId,
+      ...tenantActiveCustomerScope(input.tenantId),
+      ...(input.assignedTenantUserId ? { assignedTenantUserId: input.assignedTenantUserId } : {}),
+    },
+    select: {
+      id: true,
+      assignedTenantUserId: true,
+      preferredLocale: true,
+      tenant: { select: { defaultCustomerLocale: true } },
+    },
+  });
+}
+
+async function resolveQuoteCreateLineItems(
+  transaction: Prisma.TransactionClient,
+  access: AccessContext,
+  lineItems: NonNullable<z.infer<typeof CreateQuoteSchema>["lineItems"]>,
+) {
+  const canViewInternalCosts = hasCapability(access, "viewInternalCosts");
+  const presetIds = Array.from(new Set(
+    canViewInternalCosts
+      ? []
+      : lineItems.flatMap((lineItem) => lineItem.sourcePresetId ? [lineItem.sourcePresetId] : []),
+  ));
+  const presets = presetIds.length
+    ? await transaction.workPreset.findMany({
+        where: {
+          tenantId: access.tenantId,
+          id: { in: presetIds },
+          deletedAtUtc: null,
+        },
+        select: { id: true, unitCost: true },
+      })
+    : [];
+  const presetCosts = new Map(presets.map((preset) => [preset.id, Number(preset.unitCost)]));
+  return lineItems.map((lineItem) => {
+    const quantity = roundCurrency(lineItem.quantity);
+    if (quantity <= 0) {
+      throw new QuoteCreateError(
+        422,
+        "LINE_ITEM_QUANTITY_TOO_SMALL",
+        "Line-item quantities must be at least 0.01 after rounding.",
+      );
+    }
+    const resolvedUnitCost = canViewInternalCosts
+      ? lineItem.unitCost
+      : lineItem.sourcePresetId
+        ? presetCosts.get(lineItem.sourcePresetId) ?? 0
+        : 0;
+    return {
+      ...lineItem,
+      quantity,
+      unitCost: roundCurrency(resolvedUnitCost),
+      unitPrice: roundCurrency(lineItem.unitPrice),
+    };
+  });
+}
+
+async function lockAndValidateQuoteAiProvenance(
+  transaction: Prisma.TransactionClient,
+  input: {
+    aiUsageEventId: string;
+    tenantId: string;
+    actorUserId: string;
+    customerId: string;
+  },
+) {
+  await transaction.$queryRaw(Prisma.sql`
+    SELECT event.id
+    FROM "AiUsageEvent" event
+    WHERE event.id = ${input.aiUsageEventId}
+      AND event."tenantId" = ${input.tenantId}
+    FOR UPDATE OF event
+  `);
+  const event = await transaction.aiUsageEvent.findFirst({
+    where: {
+      id: input.aiUsageEventId,
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      quoteId: null,
+      deletedAtUtc: null,
+      OR: [
+        { eventType: "DRAFT", purpose: "QUOTE_DRAFT" },
+        // A new, unsaved Builder sheet can already contain title/scope/lines.
+        // The AI suggestion route correctly audits that operation as a
+        // revision, but quoteId remains null until this create transaction.
+        { eventType: "REVISE", purpose: "QUOTE_REVISION" },
+      ],
+    },
+    select: { id: true, customerId: true },
+  });
+  if (!event || (event.customerId && event.customerId !== input.customerId)) {
+    throw new QuoteCreateError(
+      422,
+      "AI_PROVENANCE_INVALID",
+      "That Kody draft can no longer be linked to this quote. Prepare a new Kody draft and try again.",
+    );
+  }
+  return event;
 }
 
 async function resolveMemberLineUnitCost(
@@ -3399,7 +3627,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
   } as const;
 
   app.addHook("preSerialization", async (request, _reply, payload) => {
-    stripRestrictedAiPromptFields(payload);
+    stripRestrictedQuoteFields(payload);
     const membership = request.liveAuthMembership;
     if (membership && !hasCapability(buildAccessContext(request), "viewInternalCosts")) {
       stripInternalFinancialFields(payload);
@@ -4105,7 +4333,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
       const finalSnapshot = (await assertAiUsageAvailable(app.prisma, claims.tenantId, finalEntitlements)).snapshot;
       const projectedResult = structuredClone(operationResult.result);
-      stripRestrictedAiPromptFields(projectedResult);
+      stripRestrictedQuoteFields(projectedResult);
       if (!includeFinancialContext) stripInternalFinancialFields(projectedResult);
       const output = stream.flushTo(reply);
       output.write({
@@ -4150,192 +4378,224 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const recordScope = assignedRecordScope(access);
-    const totalAmount = calculateQuoteTotal(payload.customerPriceSubtotal, payload.taxAmount);
-    const entitlements = await loadTenantEntitlements(app.prisma, claims.tenantId, {
-      userEmail: claims.email,
-    });
+    const idempotency = resolveQuoteCreateIdempotency(
+      request.headers["idempotency-key"],
+      claims.tenantId,
+      request.id,
+    );
+    const requestHash = quoteCreateRequestHash(payload);
+    if (idempotency.usedLegacyFallback) {
+      reply.header(QUOTE_CREATE_IDEMPOTENCY_COMPATIBILITY_HEADER, "synthesized-request-key");
+      request.log.warn(
+        { route: "/v1/quotes", requestId: request.id, compatibility: "legacy-missing-idempotency-key" },
+        "Accepted quote creation without an Idempotency-Key through the compatibility fallback.",
+      );
+    }
+    const [entitlements, actor] = await Promise.all([
+      loadTenantEntitlements(app.prisma, claims.tenantId, {
+        userEmail: claims.email,
+      }),
+      resolveActivityActor(app.prisma, claims),
+    ]);
 
     if (!entitlements) {
       return reply.code(404).send({ error: "Tenant not found for account." });
     }
 
-    const periodStart = entitlements.usagePeriod.periodStartUtc;
-    const periodEnd = entitlements.usagePeriod.periodEndUtc;
-    const [monthlyQuoteCount, customer, actor] = await Promise.all([
-      entitlements.limits.quotesPerMonth !== null
-        ? app.prisma.quote.count({
-            where: {
-              tenantId: claims.tenantId,
-              createdAt: {
-                gte: periodStart,
-                lt: periodEnd,
-              },
-            },
-          })
-        : Promise.resolve<number | null>(null),
-      app.prisma.customer.findFirst({
-        where: {
-          id: payload.customerId,
-          ...tenantActiveCustomerScope(claims.tenantId),
-          ...recordScope,
-        },
-        select: {
-          id: true,
-          assignedTenantUserId: true,
-          preferredLocale: true,
-          tenant: { select: { defaultCustomerLocale: true } },
-        },
-      }),
-      resolveActivityActor(app.prisma, claims),
-    ]);
-
-    if (
-      entitlements.limits.quotesPerMonth !== null &&
-      monthlyQuoteCount !== null &&
-      monthlyQuoteCount >= entitlements.limits.quotesPerMonth
-    ) {
-      const requiredPlan =
-        entitlements.planCode === "starter" ? "professional" : "enterprise";
-      return reply.code(403).send({
-        code: "PLAN_LIMIT_EXCEEDED",
-        error: `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
-        feature: "quotesPerMonth",
-        currentPlan: entitlements.planCode,
-        requiredPlan,
-        limit: entitlements.limits.quotesPerMonth,
-        used: monthlyQuoteCount,
-      });
-    }
-
-    if (!customer) {
-      return reply.code(404).send({ error: "Customer not found for tenant." });
-    }
-
-    const assignee = await resolveRequestedQuoteAssignee(
-      app.prisma,
-      access,
-      payload.assignedTenantUserId,
-      customer.assignedTenantUserId,
-    );
-    if (!assignee.allowed) {
-      return reply.code(403).send({ error: "Choose an active member from this workspace." });
-    }
-    const resolvedLineItems = payload.lineItems
-      ? await Promise.all(payload.lineItems.map(async (lineItem) => ({
-          ...lineItem,
-          unitCost: await resolveMemberLineUnitCost(app.prisma, {
-            access,
-            sourcePresetId: lineItem.sourcePresetId,
-            requestedUnitCost: lineItem.unitCost,
-          }),
-        })))
-      : [];
-    const internalCostSubtotal = resolvedLineItems.length
-      ? roundCurrency(resolvedLineItems.reduce((sum, lineItem) =>
-          sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitCost : 0), 0))
-      : hasCapability(access, "viewInternalCosts")
-        ? payload.internalCostSubtotal
-        : 0;
-
-    const quote = await app.prisma.$transaction(async (tx) => {
-      if (
-        assignee.assignedTenantUserId
-        && !await lockActiveTenantAssignee(tx, {
-          tenantId: claims.tenantId,
-          tenantUserId: assignee.assignedTenantUserId,
-        })
-      ) {
-        return null;
-      }
-      const createdQuote = await tx.quote.create({
-        data: {
-          tenantId: claims.tenantId,
-          customerId: payload.customerId,
-          assignedTenantUserId: assignee.assignedTenantUserId,
-          serviceType: payload.serviceType,
-          title: payload.title,
-          scopeText: payload.scopeText,
-          documentLocale: normalizeSupportedLocale(
-            payload.documentLocale ??
-              customer.preferredLocale ??
-              customer.tenant.defaultCustomerLocale,
-          ),
-          internalCostSubtotal,
-          customerPriceSubtotal: payload.customerPriceSubtotal,
-          taxAmount: payload.taxAmount,
-          totalAmount,
-        },
-      });
-
-      if (payload.aiUsageEventId) {
-        await tx.aiUsageEvent.updateMany({
-          where: {
-            id: payload.aiUsageEventId,
-            tenantId: claims.tenantId,
-            deletedAtUtc: null,
-            quoteId: null,
-          },
-          data: {
-            quoteId: createdQuote.id,
-            customerId: payload.customerId,
-          },
-        });
-      }
-
-      if (resolvedLineItems.length) {
-        await tx.quoteLineItem.createMany({
-          data: resolvedLineItems.map((lineItem, position) => ({
-            tenantId: claims.tenantId,
-            quoteId: createdQuote.id,
-            description: lineItem.description,
-            sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
-            sectionLabel: lineItem.sectionLabel?.trim() || null,
-            position,
-            quantity: lineItem.quantity,
-            unitCost: lineItem.unitCost,
-            unitPrice: lineItem.unitPrice,
-          })),
-        });
-      }
-
-      await createQuoteRevision(tx, {
+    try {
+      const earlyReplay = await findQuoteCreateReplay(app.prisma, {
         tenantId: claims.tenantId,
-        quoteId: createdQuote.id,
-        eventType: "CREATED",
-        actor,
-        changedFields: [
-          "customerId",
-          "serviceType",
-          "title",
-          "scopeText",
-          "internalCostSubtotal",
-          "customerPriceSubtotal",
-          "taxAmount",
-          "totalAmount",
-          ...(payload.lineItems?.length
-            ? [
-                "lineItems.description",
-                "lineItems.sectionType",
-                "lineItems.sectionLabel",
-                "lineItems.quantity",
-                "lineItems.unitCost",
-                "lineItems.unitPrice",
-              ]
-            : []),
-        ],
+        keyHash: idempotency.keyHash,
+        requestHash,
+        assignedTenantUserId: recordScope.assignedTenantUserId,
+      });
+      if (earlyReplay) return reply.send({ quote: earlyReplay, duplicate: true });
+
+      const outcome = await app.prisma.$transaction(async (tx) => {
+        await lockQuoteCreateCommand(tx, idempotency.keyHash);
+        const replay = await findQuoteCreateReplay(tx, {
+          tenantId: claims.tenantId,
+          keyHash: idempotency.keyHash,
+          requestHash,
+          assignedTenantUserId: recordScope.assignedTenantUserId,
+        });
+        if (replay) return { quote: replay, duplicate: true as const };
+
+        const monthlyQuoteCount = entitlements.limits.quotesPerMonth !== null
+          ? await tx.quote.count({
+              where: {
+                tenantId: claims.tenantId,
+                createdAt: {
+                  gte: entitlements.usagePeriod.periodStartUtc,
+                  lt: entitlements.usagePeriod.periodEndUtc,
+                },
+              },
+            })
+          : null;
+        if (
+          entitlements.limits.quotesPerMonth !== null
+          && monthlyQuoteCount !== null
+          && monthlyQuoteCount >= entitlements.limits.quotesPerMonth
+        ) {
+          throw new QuoteCreateError(
+            403,
+            "PLAN_LIMIT_EXCEEDED",
+            `${entitlements.planName} allows up to ${entitlements.limits.quotesPerMonth} quotes per month.`,
+            {
+              feature: "quotesPerMonth",
+              currentPlan: entitlements.planCode,
+              requiredPlan: entitlements.planCode === "starter" ? "professional" : "enterprise",
+              limit: entitlements.limits.quotesPerMonth,
+              used: monthlyQuoteCount,
+            },
+          );
+        }
+
+        const customer = await lockActiveCustomerForQuoteCreate(tx, {
+          customerId: payload.customerId,
+          tenantId: claims.tenantId,
+          assignedTenantUserId: recordScope.assignedTenantUserId,
+        });
+        if (!customer) {
+          throw new QuoteCreateError(404, "CUSTOMER_NOT_FOUND", "Customer not found for tenant.");
+        }
+
+        const assignee = await resolveRequestedQuoteAssignee(
+          tx,
+          access,
+          payload.assignedTenantUserId,
+          customer.assignedTenantUserId,
+        );
+        if (!assignee.allowed) {
+          throw new QuoteCreateError(403, "ASSIGNEE_INVALID", "Choose an active member from this workspace.");
+        }
+        if (
+          assignee.assignedTenantUserId
+          && !await lockActiveTenantAssignee(tx, {
+            tenantId: claims.tenantId,
+            tenantUserId: assignee.assignedTenantUserId,
+          })
+        ) {
+          throw new QuoteCreateError(
+            409,
+            "ASSIGNEE_INACTIVE",
+            "That team member is no longer active. Choose another assignee.",
+          );
+        }
+
+        const resolvedLineItems = payload.lineItems?.length
+          ? await resolveQuoteCreateLineItems(tx, access, payload.lineItems)
+          : [];
+        const internalCostSubtotal = resolvedLineItems.length
+          ? roundCurrency(resolvedLineItems.reduce((sum, lineItem) =>
+              sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitCost : 0), 0))
+          : hasCapability(access, "viewInternalCosts")
+            ? payload.internalCostSubtotal
+            : 0;
+        const customerPriceSubtotal = resolvedLineItems.length
+          ? roundCurrency(resolvedLineItems.reduce((sum, lineItem) =>
+              sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitPrice : 0), 0))
+          : payload.customerPriceSubtotal;
+        const totalAmount = calculateQuoteTotal(customerPriceSubtotal, payload.taxAmount);
+
+        if (payload.aiUsageEventId) {
+          await lockAndValidateQuoteAiProvenance(tx, {
+            aiUsageEventId: payload.aiUsageEventId,
+            tenantId: claims.tenantId,
+            actorUserId: claims.userId,
+            customerId: payload.customerId,
+          });
+        }
+
+        const createdQuote = await tx.quote.create({
+          data: {
+            tenantId: claims.tenantId,
+            customerId: payload.customerId,
+            assignedTenantUserId: assignee.assignedTenantUserId,
+            serviceType: payload.serviceType,
+            title: payload.title,
+            scopeText: payload.scopeText,
+            documentLocale: normalizeSupportedLocale(
+              payload.documentLocale ??
+                customer.preferredLocale ??
+                customer.tenant.defaultCustomerLocale,
+            ),
+            internalCostSubtotal,
+            customerPriceSubtotal,
+            taxAmount: payload.taxAmount,
+            totalAmount,
+            createIdempotencyKeyHash: idempotency.keyHash,
+            createRequestHash: requestHash,
+          },
+        });
+
+        if (payload.aiUsageEventId) {
+          await tx.aiUsageEvent.update({
+            where: { id: payload.aiUsageEventId },
+            data: {
+              quoteId: createdQuote.id,
+              customerId: payload.customerId,
+            },
+          });
+        }
+
+        if (resolvedLineItems.length) {
+          await tx.quoteLineItem.createMany({
+            data: resolvedLineItems.map((lineItem, position) => ({
+              tenantId: claims.tenantId,
+              quoteId: createdQuote.id,
+              description: lineItem.description,
+              sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+              sectionLabel: lineItem.sectionLabel?.trim() || null,
+              position,
+              quantity: lineItem.quantity,
+              unitCost: lineItem.unitCost,
+              unitPrice: lineItem.unitPrice,
+            })),
+          });
+        }
+
+        await createQuoteRevision(tx, {
+          tenantId: claims.tenantId,
+          quoteId: createdQuote.id,
+          eventType: "CREATED",
+          actor,
+          changedFields: [
+            "customerId",
+            "serviceType",
+            "title",
+            "scopeText",
+            "internalCostSubtotal",
+            "customerPriceSubtotal",
+            "taxAmount",
+            "totalAmount",
+            ...(payload.lineItems?.length
+              ? [
+                  "lineItems.description",
+                  "lineItems.sectionType",
+                  "lineItems.sectionLabel",
+                  "lineItems.quantity",
+                  "lineItems.unitCost",
+                  "lineItems.unitPrice",
+                ]
+              : []),
+          ],
+        });
+
+        return { quote: createdQuote, duplicate: false as const };
       });
 
-      return createdQuote;
-    });
-
-    if (!quote) {
-      return reply.code(409).send({
-        code: "ASSIGNEE_INACTIVE",
-        error: "That team member is no longer active. Choose another assignee.",
-      });
+      return reply.code(outcome.duplicate ? 200 : 201).send(outcome);
+    } catch (error) {
+      if (error instanceof QuoteCreateError) {
+        return reply.code(error.statusCode).send({
+          code: error.code,
+          error: error.message,
+          ...(error.details ?? {}),
+        });
+      }
+      throw error;
     }
-
-    return reply.code(201).send({ quote });
   });
 
   app.get("/quotes", { preHandler: [app.authenticate] }, async (request) => {

@@ -757,7 +757,7 @@ function KodyResponse({
 }: {
   response: AiAssistantResponse["assistant"];
   usageNotice?: string;
-  onAction: (action: AiAssistantAction) => void;
+  onAction: (action: AiAssistantAction, auditEventId: string) => void;
   displayTimeZone?: string | null;
 }) {
   const { t } = useTranslation();
@@ -834,7 +834,7 @@ function KodyResponse({
                 type="button"
                 size="sm"
                 variant={action.type === "REQUEST_ADMIN_ACCESS" || index > 0 ? "outline" : "kody"}
-                onClick={() => onAction(action)}
+                onClick={() => onAction(action, response.auditEventId)}
                 className="w-full sm:w-auto"
               >
                 {localizedActionLabel(action, t)}
@@ -1051,6 +1051,7 @@ export function KodyAssistant({
   const conversationRef = useRef<HTMLDivElement>(null);
   const quickPromptsRef = useRef<HTMLDetailsElement>(null);
   const pendingMessageIdRef = useRef<string | null>(null);
+  const submitInFlightRef = useRef(false);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc, locale);
@@ -1259,12 +1260,13 @@ export function KodyAssistant({
 
   async function submitPrompt(options?: { prompt?: string; tool?: AiAssistantTool | "AUTO" }) {
     const messageText = (options?.prompt ?? prompt).trim();
-    if (!messageText || loading) return;
+    if (!messageText || loading || submitInFlightRef.current) return;
     const tool = options?.tool ?? selectedTool;
     if (aiPaidActionsUnavailable && assistantToolConsumesAiBudget(tool)) {
       setError(aiUsageUnavailableMessage);
       return;
     }
+    submitInFlightRef.current = true;
     const routeJobId = workspacePage === "jobs" ? jobIdFromPath(location.pathname) : null;
     const context = {
       ...(contextOverride ?? {}),
@@ -1371,6 +1373,7 @@ export function KodyAssistant({
           : [...current, replacement];
       });
     } finally {
+      submitInFlightRef.current = false;
       if (pendingMessageIdRef.current === pendingMessageId) {
         pendingMessageIdRef.current = null;
       }
@@ -1568,13 +1571,22 @@ export function KodyAssistant({
     }
   }
 
-  function handleAction(action: AiAssistantAction) {
-    if (action.requiresConfirmation) {
-      setPendingAction(action);
-      track("kody_action_confirmation_requested", { type: action.type });
+  function handleAction(action: AiAssistantAction, auditEventId: string) {
+    const boundAction = action.type === "OPEN_QUOTE_DRAFT" && auditEventId !== "audit-unavailable"
+      ? {
+          ...action,
+          payload: {
+            ...action.payload,
+            auditEventId,
+          },
+        }
+      : action;
+    if (boundAction.requiresConfirmation) {
+      setPendingAction(boundAction);
+      track("kody_action_confirmation_requested", { type: boundAction.type });
       return;
     }
-    executeAction(action, "direct");
+    executeAction(boundAction, "direct");
   }
 
   const pendingActionCopy = pendingAction

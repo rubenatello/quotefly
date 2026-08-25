@@ -32,14 +32,22 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, ApiError, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
 import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import {
+  applyKodyQuoteAiProvenance,
+  clearQuoteAiProvenanceForAudit,
   quoteBuilderDraftStorageKey,
+  hashQuoteCreateCommand,
   isQuoteDraftTimestampFresh,
   readQuoteBuilderDraft,
+  readQuoteCreateRetryIdentity,
+  reconcileQuoteAiProvenanceCustomer,
   removeQuoteBuilderDraft,
+  resolveQuoteCreateRetryIdentity,
   writeQuoteBuilderDraft,
+  type QuoteAiProvenance,
+  type QuoteCreateRetryIdentity,
 } from "../lib/quote-builder-draft-storage";
 import { QUOTE_LINE_CHANGE_LIMIT, validateQuoteHeading, validateQuoteLine } from "../lib/quote-form-validation";
 import {
@@ -142,6 +150,8 @@ type BuilderDraftData = {
   quickCustomerOpen: boolean;
   quickCustomerForm: QuickCustomerForm;
   lastAppliedAiRunId: string | null;
+  lastAppliedAiCustomerId: string | null;
+  quoteCreateRetryIdentity: QuoteCreateRetryIdentity | null;
 };
 type StoredBuilderDraft = BuilderDraftData & { version: 1; savedAtUtc: string };
 type KodyQuoteDraftHandoff = {
@@ -153,8 +163,11 @@ type KodyQuoteDraftHandoff = {
   serviceType: BuilderDraftData["quote"]["serviceType"] | null;
   title: string | null;
   scopeText: string | null;
+  estimatedDurationHoursLow: number | null;
+  estimatedDurationHoursHigh: number | null;
   estimatedTotalAmount: number | null;
   estimatedTaxAmount: number | null;
+  auditEventId: string | null;
   lineItems: Array<{
     description: string;
     quantity: number | null;
@@ -288,8 +301,11 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
   const customerPhone = cleanKodyDraftText(draft.customerPhone, 100);
   const customerEmail = cleanKodyDraftText(draft.customerEmail, 500);
   const lineItems = readKodyDraftLineItems(draft.lineItems);
+  const estimatedDurationHoursLow = readKodyDraftNumber(draft.estimatedDurationHoursLow);
+  const estimatedDurationHoursHigh = readKodyDraftNumber(draft.estimatedDurationHoursHigh);
   const estimatedTotalAmount = readKodyDraftNumber(draft.estimatedTotalAmount);
   const estimatedTaxAmount = readKodyDraftNumber(draft.estimatedTaxAmount);
+  const auditEventId = cleanKodyDraftText(draft.auditEventId, 200);
   const useWorkspaceContext = draft.useWorkspaceContext === true;
   const retrievedSourceLabels = readKodySourceLabels(draft.retrievedSourceLabels);
   const retrievedSourceCount = Math.max(
@@ -312,6 +328,12 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
         ].join("\n")
       : "",
     estimatedTotalAmount !== null ? t("quoteBuilder.handoff.promptEstimate", { amount: estimatedTotalAmount }) : "",
+    estimatedDurationHoursLow !== null && estimatedDurationHoursHigh !== null
+      ? t("quoteBuilder.handoff.promptDurationRange", {
+          low: estimatedDurationHoursLow,
+          high: estimatedDurationHoursHigh,
+        })
+      : "",
   ].filter(Boolean);
   const serviceType = isDraftString(draft.serviceType, 32) && SERVICE_TYPE_SET.has(draft.serviceType)
     ? draft.serviceType as BuilderDraftData["quote"]["serviceType"]
@@ -328,6 +350,8 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
       title ||
       scopeText ||
       lineItems.length ||
+      estimatedDurationHoursLow !== null ||
+      estimatedDurationHoursHigh !== null ||
       estimatedTotalAmount !== null ||
       estimatedTaxAmount !== null,
   );
@@ -341,8 +365,11 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
     serviceType,
     title,
     scopeText,
+    estimatedDurationHoursLow,
+    estimatedDurationHoursHigh,
     estimatedTotalAmount,
     estimatedTaxAmount,
+    auditEventId,
     lineItems,
     editableLines,
     hasStructuredDraft,
@@ -381,6 +408,11 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
     !isDraftString(quickCustomerForm.notes, 20_000)
   ) return null;
   if (value.lastAppliedAiRunId !== null && !isDraftString(value.lastAppliedAiRunId, 200)) return null;
+  if (
+    value.lastAppliedAiCustomerId !== undefined
+    && value.lastAppliedAiCustomerId !== null
+    && !isDraftString(value.lastAppliedAiCustomerId, 200)
+  ) return null;
 
   const lines: BuilderDraftLine[] = [];
   for (const candidate of value.lines) {
@@ -430,6 +462,12 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
       notes: quickCustomerForm.notes,
     },
     lastAppliedAiRunId: value.lastAppliedAiRunId as string | null,
+    lastAppliedAiCustomerId: value.lastAppliedAiRunId
+      ? value.lastAppliedAiCustomerId === undefined
+        ? value.quote.customerId || null
+        : value.lastAppliedAiCustomerId as string | null
+      : null,
+    quoteCreateRetryIdentity: readQuoteCreateRetryIdentity(value.quoteCreateRetryIdentity),
   };
 }
 
@@ -486,13 +524,19 @@ export function QuoteBuilderView() {
   const [draftSavedAtUtc, setDraftSavedAtUtc] = useState<string | null>(null);
   const [draftPersistenceFailed, setDraftPersistenceFailed] = useState(false);
   const [draftRecoveryMessage, setDraftRecoveryMessage] = useState<string | null>(null);
+  const [draftRecoveryStatus, setDraftRecoveryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [draftRecoveryAttempt, setDraftRecoveryAttempt] = useState(0);
   const [conflictingStoredDraft, setConflictingStoredDraft] = useState<StoredBuilderDraft | null>(null);
   const [discardDraftConfirmOpen, setDiscardDraftConfirmOpen] = useState(false);
   const keepDraftButtonRef = useRef<HTMLButtonElement | null>(null);
   const latestDraftRef = useRef<BuilderDraftData | null>(null);
   const quoteCreationCompletedRef = useRef(false);
+  const quoteCreateInFlightRef = useRef(false);
+  const draftAutosaveEpochRef = useRef(0);
+  const draftAutosaveInFlightRef = useRef<Promise<string | null> | null>(null);
   const draftRecoveryStorageKeyRef = useRef<string | null>(null);
   const handledKodyDraftStateRef = useRef<unknown>(null);
+  const kodyCustomerRequestIdRef = useRef(0);
   const [presetLibrary, setPresetLibrary] = useState<WorkPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [presetLoadError, setPresetLoadError] = useState<string | null>(null);
@@ -509,8 +553,10 @@ export function QuoteBuilderView() {
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
-  const [lastAppliedAiRunId, setLastAppliedAiRunId] = useState<string | null>(null);
+  const [lastAppliedAiProvenance, setLastAppliedAiProvenance] = useState<QuoteAiProvenance | null>(null);
+  const [quoteCreateRetryIdentity, setQuoteCreateRetryIdentity] = useState<QuoteCreateRetryIdentity | null>(null);
   const [kodyDraftHandoff, setKodyDraftHandoff] = useState<KodyQuoteDraftHandoff | null>(null);
+  const [kodyCustomerStatus, setKodyCustomerStatus] = useState<"idle" | "loading" | "error" | "stale">("idle");
   const [replaceKodyDraftConfirmOpen, setReplaceKodyDraftConfirmOpen] = useState(false);
   const [focusedKodyLineId, setFocusedKodyLineId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<BuilderPane>("editor");
@@ -537,8 +583,10 @@ export function QuoteBuilderView() {
     selectedQuoteId,
     navigateToQuote,
     loadCustomers,
+    ensureCustomerLoaded,
   } = useDashboard();
   const selectedCustomerIdRef = useRef(quoteForm.customerId);
+  const lastAppliedAiRunId = lastAppliedAiProvenance?.auditEventId ?? null;
 
   const activeCustomer = useMemo(
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
@@ -592,8 +640,10 @@ export function QuoteBuilderView() {
       quickCustomerOpen,
       quickCustomerForm,
       lastAppliedAiRunId,
+      lastAppliedAiCustomerId: lastAppliedAiProvenance?.customerId ?? null,
+      quoteCreateRetryIdentity,
     }),
-    [draftLines, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteForm],
+    [draftLines, lastAppliedAiProvenance, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteCreateRetryIdentity, quoteForm],
   );
   const hasMeaningfulDraft = useMemo(() => hasMeaningfulBuilderDraft(currentBuilderDraft), [currentBuilderDraft]);
   const {
@@ -608,21 +658,36 @@ export function QuoteBuilderView() {
   selectedCustomerIdRef.current = quoteForm.customerId;
 
   useEffect(() => {
+    setLastAppliedAiProvenance((current) => reconcileQuoteAiProvenanceCustomer(current, quoteForm.customerId));
+  }, [quoteForm.customerId]);
+
+  useEffect(() => {
     if (!draftStorageKey) return;
     let cancelled = false;
     quoteCreationCompletedRef.current = false;
     setDraftRestored(false);
+    setDraftRecoveryStatus("loading");
+    setHydratedDraftStorageKey((current) => current === draftStorageKey ? null : current);
     if (draftRecoveryStorageKeyRef.current !== draftStorageKey) {
       draftRecoveryStorageKeyRef.current = draftStorageKey;
       setDraftRecoveryMessage(null);
     }
     void (async () => {
       let hydrationDeferred = false;
+      let recoveryFailed = false;
       try {
-        const raw = await readQuoteBuilderDraft(draftStorageKey);
+        const result = await readQuoteBuilderDraft(draftStorageKey);
         if (cancelled) return;
-        if (!raw) return;
-        const stored = parseStoredBuilderDraft(raw);
+        if (result.status === "error") {
+          recoveryFailed = true;
+          setDraftRecoveryStatus("error");
+          return;
+        }
+        if (result.status === "not-found") {
+          setDraftRecoveryStatus("ready");
+          return;
+        }
+        const stored = parseStoredBuilderDraft(result.raw);
         if (!stored || !hasMeaningfulBuilderDraft(stored)) {
           await removeQuoteBuilderDraft(draftStorageKey);
           if (!cancelled) setDraftRecoveryMessage(t("quoteBuilder.recovery.incompatible"));
@@ -648,22 +713,33 @@ export function QuoteBuilderView() {
         setMobilePane(stored.mobilePane);
         setQuickCustomerOpen(stored.quickCustomerOpen);
         setQuickCustomerForm(stored.quickCustomerForm);
-        setLastAppliedAiRunId(stored.lastAppliedAiRunId);
+        setLastAppliedAiProvenance(stored.lastAppliedAiRunId ? {
+          auditEventId: stored.lastAppliedAiRunId,
+          customerId: stored.lastAppliedAiCustomerId,
+        } : null);
+        setQuoteCreateRetryIdentity(stored.quoteCreateRetryIdentity);
         setDraftSavedAtUtc(stored.savedAtUtc);
         setDraftPersistenceFailed(false);
         setDraftRestored(true);
         setConflictingStoredDraft(null);
+        setDraftRecoveryStatus("ready");
       } catch {
         await removeQuoteBuilderDraft(draftStorageKey);
-        if (!cancelled) setDraftRecoveryMessage(t("quoteBuilder.recovery.unreadable"));
+        if (!cancelled) {
+          setDraftRecoveryStatus("ready");
+          setDraftRecoveryMessage(t("quoteBuilder.recovery.unreadable"));
+        }
       } finally {
-        if (!cancelled && !hydrationDeferred) setHydratedDraftStorageKey(draftStorageKey);
+        if (!cancelled && !hydrationDeferred && !recoveryFailed) {
+          setDraftRecoveryStatus("ready");
+          setHydratedDraftStorageKey(draftStorageKey);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [draftStorageKey, setQuoteForm, t]);
+  }, [draftRecoveryAttempt, draftStorageKey, setQuoteForm, t]);
 
   useEffect(() => {
     if (draftStorageKey && hydratedDraftStorageKey !== draftStorageKey) return;
@@ -675,6 +751,39 @@ export function QuoteBuilderView() {
     const canApplyKodyContext = !hasMeaningfulDraft;
     if (canApplyKodyContext && draft.customerId) {
       selectQuoteCustomer(draft.customerId);
+      const requestId = ++kodyCustomerRequestIdRef.current;
+      setKodyCustomerStatus("loading");
+      void ensureCustomerLoaded(draft.customerId)
+        .then((customer) => {
+          if (kodyCustomerRequestIdRef.current !== requestId) return;
+          if (!customer) {
+            setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, draft.auditEventId));
+            setQuoteForm((current) => current.customerId === draft.customerId
+              ? { ...current, customerId: "" }
+              : current);
+            setKodyDraftHandoff((current) => current?.customerId === draft.customerId
+              ? { ...current, customerId: null }
+              : current);
+            setKodyCustomerStatus("stale");
+            return;
+          }
+          setKodyCustomerStatus("idle");
+        })
+        .catch((error: unknown) => {
+          if (kodyCustomerRequestIdRef.current !== requestId) return;
+          if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+            setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, draft.auditEventId));
+            setQuoteForm((current) => current.customerId === draft.customerId
+              ? { ...current, customerId: "" }
+              : current);
+            setKodyDraftHandoff((current) => current?.customerId === draft.customerId
+              ? { ...current, customerId: null }
+              : current);
+            setKodyCustomerStatus("stale");
+            return;
+          }
+          setKodyCustomerStatus("error");
+        });
     }
     if (canApplyKodyContext && !draft.customerId && draft.hasQuickCustomerDraft) {
       setQuickCustomerForm((current) => ({
@@ -697,6 +806,12 @@ export function QuoteBuilderView() {
     if (canApplyKodyContext && draft.editableLines.length) {
       setDraftLines(draft.editableLines);
     }
+    if (canApplyKodyContext && draft.auditEventId) {
+      setLastAppliedAiProvenance({
+        auditEventId: draft.auditEventId,
+        customerId: draft.customerId,
+      });
+    }
     if (draft.prompt) {
       setChatPrompt(draft.prompt);
     }
@@ -715,6 +830,7 @@ export function QuoteBuilderView() {
     location.state,
     navigate,
     draftStorageKey,
+    ensureCustomerLoaded,
     hasMeaningfulDraft,
     hydratedDraftStorageKey,
     selectQuoteCustomer,
@@ -727,12 +843,22 @@ export function QuoteBuilderView() {
   useEffect(() => {
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || quoteCreationCompletedRef.current) return;
     let cancelled = false;
+    const autosaveEpoch = draftAutosaveEpochRef.current;
     const timer = window.setTimeout(() => {
-      void writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft).then((savedAtUtc) => {
-        if (cancelled) return;
-        setDraftSavedAtUtc(savedAtUtc);
-        setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
-      });
+      if (quoteCreationCompletedRef.current || autosaveEpoch !== draftAutosaveEpochRef.current) return;
+      const writePromise = writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft);
+      draftAutosaveInFlightRef.current = writePromise;
+      void writePromise
+        .then((savedAtUtc) => {
+          if (cancelled || autosaveEpoch !== draftAutosaveEpochRef.current) return;
+          setDraftSavedAtUtc(savedAtUtc);
+          setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
+        })
+        .finally(() => {
+          if (draftAutosaveInFlightRef.current === writePromise) {
+            draftAutosaveInFlightRef.current = null;
+          }
+        });
     }, 650);
     return () => {
       cancelled = true;
@@ -1074,7 +1200,10 @@ export function QuoteBuilderView() {
         }
 
         setAiInsight(insight);
-        setLastAppliedAiRunId(aiRunId);
+        setLastAppliedAiProvenance({
+          auditEventId: aiRunId,
+          customerId: (customer?.id ?? quoteForm.customerId) || null,
+        });
         setKodyDraftHandoff(null);
         void loadCustomers();
         setAiModalOpen(false);
@@ -1095,7 +1224,10 @@ export function QuoteBuilderView() {
       }));
       setDraftLines((current) => applyAiQuoteLinePatch(current, patch));
       setAiInsight(insight);
-      setLastAppliedAiRunId(aiRunId);
+      setLastAppliedAiProvenance({
+        auditEventId: aiRunId,
+        customerId: (customer?.id ?? quoteForm.customerId) || null,
+      });
       setKodyDraftHandoff(null);
       void loadCustomers();
       setAiModalOpen(false);
@@ -1263,34 +1395,127 @@ export function QuoteBuilderView() {
     setMobilePane(stored.mobilePane);
     setQuickCustomerOpen(stored.quickCustomerOpen);
     setQuickCustomerForm(stored.quickCustomerForm);
-    setLastAppliedAiRunId(stored.lastAppliedAiRunId);
+    setLastAppliedAiProvenance(stored.lastAppliedAiRunId ? {
+      auditEventId: stored.lastAppliedAiRunId,
+      customerId: stored.lastAppliedAiCustomerId,
+    } : null);
+    setQuoteCreateRetryIdentity(stored.quoteCreateRetryIdentity);
     setDraftSavedAtUtc(stored.savedAtUtc);
     setDraftRestored(true);
     setConflictingStoredDraft(null);
+    setDraftRecoveryStatus("ready");
+    setDraftRecoveryMessage(null);
     setHydratedDraftStorageKey(draftStorageKey);
     setNotice(t("quoteBuilder.notices.draftRestored"));
   }
 
-  function startFreshForSelectedCustomer() {
+  function retryBuilderDraftRecovery() {
+    if (!draftStorageKey || draftRecoveryStatus === "loading") return;
+    setDraftRecoveryMessage(null);
+    setDraftRecoveryAttempt((current) => current + 1);
+  }
+
+  async function startFreshAfterRecoveryError() {
     if (!draftStorageKey) return;
-    void removeQuoteBuilderDraft(draftStorageKey);
+    setDraftRecoveryStatus("loading");
+    setDraftRecoveryMessage(null);
+    const cleared = await removeQuoteBuilderDraft(draftStorageKey);
+    if (!cleared) {
+      setDraftRecoveryStatus("error");
+      setDraftRecoveryMessage(t("quoteBuilder.recovery.clearFailed"));
+      return;
+    }
+    setDraftRecoveryStatus("ready");
+    setHydratedDraftStorageKey(draftStorageKey);
+    setNotice(t("quoteBuilder.notices.recoveryFresh"));
+  }
+
+  function retryKodyCustomerVerification() {
+    const customerId = kodyDraftHandoff?.customerId;
+    const handoffAuditEventId = kodyDraftHandoff?.auditEventId ?? null;
+    if (!customerId || kodyCustomerStatus === "loading") return;
+    const requestId = ++kodyCustomerRequestIdRef.current;
+    setKodyCustomerStatus("loading");
+    void ensureCustomerLoaded(customerId)
+      .then((customer) => {
+        if (kodyCustomerRequestIdRef.current !== requestId) return;
+        if (!customer) {
+          setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, handoffAuditEventId));
+          setQuoteForm((current) => current.customerId === customerId
+            ? { ...current, customerId: "" }
+            : current);
+          setKodyDraftHandoff((current) => current?.customerId === customerId
+            ? { ...current, customerId: null }
+            : current);
+          setKodyCustomerStatus("stale");
+          return;
+        }
+        selectQuoteCustomer(customerId);
+        setKodyCustomerStatus("idle");
+      })
+      .catch((error: unknown) => {
+        if (kodyCustomerRequestIdRef.current !== requestId) return;
+        if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+          setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, handoffAuditEventId));
+          setQuoteForm((current) => current.customerId === customerId
+            ? { ...current, customerId: "" }
+            : current);
+          setKodyDraftHandoff((current) => current?.customerId === customerId
+            ? { ...current, customerId: null }
+            : current);
+          setKodyCustomerStatus("stale");
+          return;
+        }
+        setKodyCustomerStatus("error");
+      });
+  }
+
+  async function startFreshForSelectedCustomer() {
+    if (!draftStorageKey || quoteCreationCompletedRef.current) return;
+    quoteCreationCompletedRef.current = true;
+    draftAutosaveEpochRef.current += 1;
+    await draftAutosaveInFlightRef.current;
+    const cleared = await removeQuoteBuilderDraft(draftStorageKey);
+    if (!cleared) {
+      quoteCreationCompletedRef.current = false;
+      setDraftRecoveryStatus("error");
+      setDraftRecoveryMessage(t("quoteBuilder.recovery.clearFailed"));
+      return;
+    }
     setConflictingStoredDraft(null);
     setDraftRestored(false);
     setDraftSavedAtUtc(null);
+    setDraftPersistenceFailed(false);
+    setQuoteCreateRetryIdentity(null);
+    setDraftRecoveryStatus("ready");
+    setDraftRecoveryMessage(null);
     setHydratedDraftStorageKey(draftStorageKey);
     setNotice(t("quoteBuilder.notices.freshForCustomer"));
+    window.setTimeout(() => {
+      quoteCreationCompletedRef.current = false;
+    }, 0);
   }
 
-  function clearStoredBuilderDraft() {
+  async function clearStoredBuilderDraft() {
     quoteCreationCompletedRef.current = true;
-    if (draftStorageKey) void removeQuoteBuilderDraft(draftStorageKey);
+    draftAutosaveEpochRef.current += 1;
+    await draftAutosaveInFlightRef.current;
+    if (draftStorageKey && hydratedDraftStorageKey === draftStorageKey) {
+      const cleared = await removeQuoteBuilderDraft(draftStorageKey);
+      if (!cleared) {
+        quoteCreationCompletedRef.current = false;
+        setError(t("quoteBuilder.recovery.clearFailed"));
+        return false;
+      }
+    }
     setDraftSavedAtUtc(null);
     setDraftPersistenceFailed(false);
     setDraftRestored(false);
+    return true;
   }
 
-  function startBuilderOver() {
-    clearStoredBuilderDraft();
+  async function startBuilderOver() {
+    if (!(await clearStoredBuilderDraft())) return;
     setQuoteForm({
       customerId: "",
       serviceType: session?.primaryTrade ?? "HVAC",
@@ -1307,7 +1532,8 @@ export function QuoteBuilderView() {
     setMobilePane("editor");
     setAiModalOpen(false);
     setAiInsight(null);
-    setLastAppliedAiRunId(null);
+    setLastAppliedAiProvenance(null);
+    setQuoteCreateRetryIdentity(null);
     setKodyDraftHandoff(null);
     setChatPrompt("");
     setChatParsed(null);
@@ -1322,6 +1548,7 @@ export function QuoteBuilderView() {
   }
 
   async function handleCreateQuote() {
+    if (quoteCreateInFlightRef.current) return;
     if (!quoteForm.customerId) {
       setError(t("quoteBuilder.errors.customerRequired"));
       return;
@@ -1351,6 +1578,14 @@ export function QuoteBuilderView() {
       setError(localizedQuoteLineError(t, linesToCreate[invalidLineIndex], t("quoteDesk.line.number", { number: invalidLineIndex + 1 })));
       return;
     }
+    if (kodyCustomerStatus === "loading" || kodyCustomerStatus === "error") {
+      setError(t("quoteBuilder.errors.customerVerification"));
+      return;
+    }
+    if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || draftRecoveryStatus !== "ready") {
+      setError(t("quoteBuilder.errors.recoveryNotReady"));
+      return;
+    }
     const promptCandidate = canManageCatalog ?
       [...linesToCreate]
         .reverse()
@@ -1364,48 +1599,106 @@ export function QuoteBuilderView() {
             ),
         ) ?? null : null;
 
+    const initialLineItems = linesToCreate.map((line) => ({
+      description: joinQuoteLineDescription(line.title, line.details),
+      sectionType: line.sectionType,
+      sectionLabel: line.sectionLabel || null,
+      quantity: Number(line.quantity) || 1,
+      unitCost: Number(line.unitCost) || 0,
+      unitPrice: Number(line.unitPrice) || 0,
+      sourcePresetId: line.sourcePresetId ?? undefined,
+    }));
+    quoteCreateInFlightRef.current = true;
     track("builder_quote_create");
-    const createdQuote = await createQuoteDraftFromForm({
-      quoteOverride: {
+    try {
+      const serializedCreateCommand = JSON.stringify({
+        customerId: quoteForm.customerId,
+        serviceType: quoteForm.serviceType,
+        title: quoteForm.title,
         scopeText,
-        internalCostSubtotal: internalSubtotal.toFixed(2),
-        customerPriceSubtotal: customerSubtotal.toFixed(2),
-      },
-      aiUsageEventId: lastAppliedAiRunId ?? undefined,
-      initialLineItems: linesToCreate.map((line) => ({
-        description: joinQuoteLineDescription(line.title, line.details),
-        sectionType: line.sectionType,
-        sectionLabel: line.sectionLabel || null,
-        quantity: Number(line.quantity) || 1,
-        unitCost: Number(line.unitCost) || 0,
-        unitPrice: Number(line.unitPrice) || 0,
-        sourcePresetId: line.sourcePresetId ?? undefined,
-      })),
-      successNotice: t("quoteBuilder.notices.quoteReady"),
-    });
+        internalCostSubtotal: Number(internalSubtotal.toFixed(2)),
+        customerPriceSubtotal: Number(customerSubtotal.toFixed(2)),
+        taxAmount: Number(quoteForm.taxAmount),
+        documentLocale: quoteForm.documentLocale,
+        aiUsageEventId: lastAppliedAiRunId ?? undefined,
+        lineItems: initialLineItems,
+      });
+      const payloadHash = await hashQuoteCreateCommand(serializedCreateCommand);
+      if (quoteCreateRetryIdentity && quoteCreateRetryIdentity.payloadHash !== payloadHash) {
+        setError(t("quoteBuilder.errors.retryPayloadChanged"));
+        return;
+      }
+      const retryIdentity = resolveQuoteCreateRetryIdentity(payloadHash, quoteCreateRetryIdentity);
+      draftAutosaveEpochRef.current += 1;
+      await draftAutosaveInFlightRef.current;
+      const draftWithRetryIdentity: BuilderDraftData = {
+        ...currentBuilderDraft,
+        quoteCreateRetryIdentity: retryIdentity,
+      };
+      const retryIdentitySavedAtUtc = await writeStoredBuilderDraft(draftStorageKey, draftWithRetryIdentity);
+      if (!retryIdentitySavedAtUtc) {
+        setError(t("quoteBuilder.errors.retryIdentitySave"));
+        return;
+      }
+      latestDraftRef.current = draftWithRetryIdentity;
+      setQuoteCreateRetryIdentity(retryIdentity);
+      setDraftSavedAtUtc(retryIdentitySavedAtUtc);
+      setDraftPersistenceFailed(false);
 
-    if (createdQuote) {
-      if (kodyDraftHandoff) {
-        publishKodyOutcome({
-          type: "QUOTE_CREATED",
-          quoteTitle: createdQuote.title,
-          customerName: activeCustomer?.fullName,
-        });
+      const createdQuote = await createQuoteDraftFromForm({
+        quoteOverride: {
+          scopeText,
+          internalCostSubtotal: internalSubtotal.toFixed(2),
+          customerPriceSubtotal: customerSubtotal.toFixed(2),
+        },
+        aiUsageEventId: lastAppliedAiRunId ?? undefined,
+        initialLineItems,
+        idempotencyKey: retryIdentity.idempotencyKey,
+        beforeSuccessNavigation: async () => {
+          quoteCreationCompletedRef.current = true;
+          draftAutosaveEpochRef.current += 1;
+          await draftAutosaveInFlightRef.current;
+          const cleared = await removeQuoteBuilderDraft(draftStorageKey);
+          if (!cleared) {
+            quoteCreationCompletedRef.current = false;
+            setError(t("quoteBuilder.errors.createdCleanupFailed"));
+            return false;
+          }
+          setQuoteCreateRetryIdentity(null);
+          setDraftSavedAtUtc(null);
+          setDraftPersistenceFailed(false);
+          setDraftRestored(false);
+          return true;
+        },
+        successNotice: t("quoteBuilder.notices.quoteReady"),
+      });
+
+      if (createdQuote) {
+        if (kodyDraftHandoff) {
+          publishKodyOutcome({
+            type: "QUOTE_CREATED",
+            quoteTitle: createdQuote.title,
+            customerName: activeCustomer?.fullName,
+          });
+        }
+        setDraftLines([makeEditableQuoteLine()]);
+        setAiInsight(null);
+        setLastAppliedAiProvenance(null);
+        if (!presetPromptLine && promptCandidate) {
+          setPresetPromptLine(promptCandidate);
+        }
       }
-      clearStoredBuilderDraft();
-      setDraftLines([makeEditableQuoteLine()]);
-      setAiInsight(null);
-      setLastAppliedAiRunId(null);
-      if (!presetPromptLine && promptCandidate) {
-        setPresetPromptLine(promptCandidate);
-      }
+    } finally {
+      quoteCreateInFlightRef.current = false;
     }
   }
 
   function applyKodyDraftChoice(strategy: "merge" | "replace") {
     const handoff = kodyDraftHandoff;
     if (!handoff) return;
-
+    const finalCustomerId = strategy === "replace"
+      ? handoff.customerId ?? ""
+      : quoteForm.customerId || handoff.customerId || "";
     setQuoteForm((current) => ({
       ...current,
       customerId: strategy === "replace"
@@ -1441,6 +1734,42 @@ export function QuoteBuilderView() {
     });
 
     const shouldAdoptHandoffCustomer = strategy === "replace" || !quoteForm.customerId;
+    if (shouldAdoptHandoffCustomer && handoff.customerId) {
+      const customerId = handoff.customerId;
+      const requestId = ++kodyCustomerRequestIdRef.current;
+      setKodyCustomerStatus("loading");
+      void ensureCustomerLoaded(customerId)
+        .then((customer) => {
+          if (kodyCustomerRequestIdRef.current !== requestId) return;
+          if (!customer) {
+            setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, handoff.auditEventId));
+            setQuoteForm((current) => current.customerId === customerId
+              ? { ...current, customerId: "" }
+              : current);
+            setKodyDraftHandoff((current) => current?.customerId === customerId
+              ? { ...current, customerId: null }
+              : current);
+            setKodyCustomerStatus("stale");
+            return;
+          }
+          setKodyCustomerStatus("idle");
+        })
+        .catch((error: unknown) => {
+          if (kodyCustomerRequestIdRef.current !== requestId) return;
+          if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+            setLastAppliedAiProvenance((current) => clearQuoteAiProvenanceForAudit(current, handoff.auditEventId));
+            setQuoteForm((current) => current.customerId === customerId
+              ? { ...current, customerId: "" }
+              : current);
+            setKodyDraftHandoff((current) => current?.customerId === customerId
+              ? { ...current, customerId: null }
+              : current);
+            setKodyCustomerStatus("stale");
+            return;
+          }
+          setKodyCustomerStatus("error");
+        });
+    }
     if (shouldAdoptHandoffCustomer && !handoff.customerId && handoff.hasQuickCustomerDraft) {
       setQuickCustomerForm({
         fullName: handoff.customerName ?? "",
@@ -1457,6 +1786,7 @@ export function QuoteBuilderView() {
     setKodyDraftHandoff({ ...handoff, needsDraftChoice: false });
     setReplaceKodyDraftConfirmOpen(false);
     setAiModalOpen(false);
+    setLastAppliedAiProvenance((current) => applyKodyQuoteAiProvenance(current, handoff, finalCustomerId));
     setMobilePane("editor");
     setNotice(t("quoteBuilder.notices.kodyReviewDraft"));
   }
@@ -1488,6 +1818,20 @@ export function QuoteBuilderView() {
       {draftRecoveryMessage ? (
         <Alert tone="warning" onDismiss={() => setDraftRecoveryMessage(null)}>{draftRecoveryMessage}</Alert>
       ) : null}
+      {draftRecoveryStatus === "error" ? (
+        <div
+          role="alert"
+          data-testid="quote-builder-recovery-error"
+          className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
+        >
+          <p className="text-sm font-semibold">{t("quoteBuilder.recovery.loadFailedTitle")}</p>
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteBuilder.recovery.loadFailedDescription")}</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={retryBuilderDraftRecovery}>{t("quoteBuilder.recovery.retry")}</Button>
+            <Button onClick={() => void startFreshAfterRecoveryError()}>{t("quoteBuilder.recovery.startFresh")}</Button>
+          </div>
+        </div>
+      ) : null}
       {kodyDraftHandoff ? (
           <KodyDraftHandoffBanner
           handoff={kodyDraftHandoff}
@@ -1505,6 +1849,29 @@ export function QuoteBuilderView() {
             setKodyDraftHandoff(null);
           }}
         />
+      ) : null}
+      {kodyCustomerStatus === "error" || kodyCustomerStatus === "stale" ? (
+        <div
+          role="alert"
+          data-testid="kody-customer-recovery"
+          className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
+        >
+          <p className="text-sm font-semibold">
+            {kodyCustomerStatus === "stale"
+              ? t("quoteBuilder.handoff.customerStaleTitle")
+              : t("quoteBuilder.handoff.customerVerifyTitle")}
+          </p>
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
+            {kodyCustomerStatus === "stale"
+              ? t("quoteBuilder.handoff.customerStaleDescription")
+              : t("quoteBuilder.handoff.customerVerifyDescription")}
+          </p>
+          {kodyCustomerStatus === "error" ? (
+            <Button className="mt-3" variant="outline" onClick={retryKodyCustomerVerification}>
+              {t("quoteBuilder.handoff.retryCustomer")}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {conflictingStoredDraft ? (
         <div
@@ -2243,6 +2610,16 @@ function KodyDraftHandoffBanner({
           {handoff.pricingNeedsReview ? (
             <p className="mt-2 text-sm font-semibold text-[var(--qf-warning-text)]">
               {t("quoteBuilder.handoff.pricingReview")}
+            </p>
+          ) : null}
+          {handoff.estimatedDurationHoursLow !== null
+          && handoff.estimatedDurationHoursHigh !== null
+          && handoff.estimatedDurationHoursHigh > handoff.estimatedDurationHoursLow ? (
+            <p className="mt-2 text-sm font-semibold text-[var(--qf-info-text)]" data-testid="kody-duration-range-note">
+              {t("quoteBuilder.handoff.durationRange", {
+                low: new Intl.NumberFormat(locale).format(handoff.estimatedDurationHoursLow),
+                high: new Intl.NumberFormat(locale).format(handoff.estimatedDurationHoursHigh),
+              })}
             </p>
           ) : null}
           {customerConflict ? (

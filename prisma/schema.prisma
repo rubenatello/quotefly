@@ -619,6 +619,8 @@ model Quote {
   aiGeneratedAtUtc                DateTime?               @db.Timestamptz(3)
   aiPromptText                    String?
   aiModel                         String?
+  createIdempotencyKeyHash       String?                 @db.VarChar(64)
+  createRequestHash              String?                 @db.VarChar(64)
   sentAt                          DateTime?               @db.Timestamptz(3)
   closedAtUtc                     DateTime?               @db.Timestamptz(3)
   jobCompletedAtUtc               DateTime?               @db.Timestamptz(3)
@@ -643,6 +645,7 @@ model Quote {
 
   @@unique([id, tenantId])
   @@unique([id, customerId, tenantId])
+  @@unique([tenantId, createIdempotencyKeyHash])
   @@index([tenantId, customerId])
   @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc], map: "Quote_tenantId_assignee_lifecycle_idx")
   @@index([tenantId, status])

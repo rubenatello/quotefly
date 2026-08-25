@@ -1413,6 +1413,7 @@ describe("AI assistant", () => {
       payload: expect.objectContaining({
         customerId: customer.id,
         serviceType: "ROOFING",
+        auditEventId: body.assistant.auditEventId,
         useWorkspaceContext: true,
         retrievedSourceCount: expect.any(Number),
       }),
@@ -1434,6 +1435,215 @@ describe("AI assistant", () => {
     expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
     expect(audit.retrievalAuditEvent?.purpose).toBe("QUOTE_DRAFT");
     expect(audit.retrievalAuditEvent?.resultCount).toBeGreaterThan(0);
+  });
+
+  test("links same-run Kody provenance and rejects cross-actor or wrong-purpose events", async () => {
+    const owner = await signUp("assistant-quote-provenance-owner");
+    const workspaceAdmin = await addWorkspaceUser(owner, "admin");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Provenance Customer",
+      phoneDigits: "5556060707",
+    });
+    const assistantResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "assistant-quote-provenance-draft-0001",
+      },
+      payload: {
+        message: "Draft a roofing quote for Provenance Customer for a leak inspection and repair.",
+        tool: "DRAFT_QUOTE",
+        context: { customerId: customer.id },
+      },
+    });
+    expect(assistantResponse.statusCode).toBe(200);
+    const assistantBody = assistantResponse.json() as {
+      assistant: {
+        auditEventId: string;
+        actions: Array<{ type: string; payload: Record<string, unknown> }>;
+      };
+    };
+    const quoteAction = assistantBody.assistant.actions.find((action) => action.type === "OPEN_QUOTE_DRAFT");
+    expect(quoteAction?.payload.auditEventId).toBe(assistantBody.assistant.auditEventId);
+
+    const quotePayload = {
+      customerId: customer.id,
+      serviceType: "ROOFING",
+      title: "Kody provenance-linked quote",
+      scopeText: "Inspect the roof leak, document damage, and complete the approved repair.",
+      internalCostSubtotal: 100,
+      customerPriceSubtotal: 250,
+      taxAmount: 0,
+      aiUsageEventId: quoteAction?.payload.auditEventId,
+      lineItems: [{
+        description: "Roof leak inspection and repair",
+        quantity: 1,
+        unitCost: 100,
+        unitPrice: 250,
+      }],
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "kody-linked-quote-create-0001" },
+      payload: quotePayload,
+    });
+    expect(created.statusCode).toBe(201);
+    const createdBody = created.json() as { quote: { id: string } };
+    await expect(
+      prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: assistantBody.assistant.auditEventId } }),
+    ).resolves.toMatchObject({
+      tenantId: owner.tenant.id,
+      actorUserId: owner.user.id,
+      customerId: customer.id,
+      quoteId: createdBody.quote.id,
+      eventType: "DRAFT",
+      purpose: "QUOTE_DRAFT",
+    });
+
+    const crossActorEvent = await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: owner.tenant.id,
+        actorUserId: owner.user.id,
+        customerId: customer.id,
+        eventType: "DRAFT",
+        purpose: "QUOTE_DRAFT",
+      },
+    });
+    const crossActor = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: workspaceAdmin.cookie, "idempotency-key": "cross-actor-provenance-create-0001" },
+      payload: {
+        ...quotePayload,
+        title: "Cross actor provenance rejection",
+        aiUsageEventId: crossActorEvent.id,
+      },
+    });
+    expect(crossActor.statusCode).toBe(422);
+    expect(crossActor.json()).toMatchObject({ code: "AI_PROVENANCE_INVALID" });
+
+    const wrongPurposeEvent = await prisma.aiUsageEvent.create({
+      data: {
+        tenantId: owner.tenant.id,
+        actorUserId: owner.user.id,
+        customerId: customer.id,
+        eventType: "BUSINESS_INSIGHT",
+        purpose: "BUSINESS_INSIGHT",
+      },
+    });
+    const wrongPurpose = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "wrong-purpose-provenance-create-0001" },
+      payload: {
+        ...quotePayload,
+        title: "Wrong purpose provenance rejection",
+        aiUsageEventId: wrongPurposeEvent.id,
+      },
+    });
+    expect(wrongPurpose.statusCode).toBe(422);
+    expect(wrongPurpose.json()).toMatchObject({ code: "AI_PROVENANCE_INVALID" });
+    await expect(
+      prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    ).resolves.toBe(1);
+  });
+
+  test("links revision-classified AI assistance from a new Builder sheet to the created quote", async () => {
+    const owner = await signUp("builder-ai-create-provenance-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Builder AI Customer",
+      phoneDigits: "5556060808",
+    });
+    const suggestionResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "builder-ai-create-suggestion-0001",
+      },
+      payload: {
+        prompt: "Prepare a roofing quote for a roof leak inspection and flashing repair for $450.",
+        customerId: customer.id,
+        serviceType: "ROOFING",
+        currentTitle: "New roofing quote",
+        currentScopeText: "Draft started in the quote Builder.",
+        currentLineItems: [],
+      },
+    });
+    expect(suggestionResponse.statusCode).toBe(200);
+    const completeEvent = suggestionResponse.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete");
+    expect(completeEvent?.result).toBeDefined();
+    const result = completeEvent!.result as {
+      aiRunId: string;
+      suggestion: {
+        serviceType: "ROOFING" | "HVAC" | "PLUMBING" | "FLOORING" | "GARDENING" | "CONSTRUCTION";
+        title: string;
+        scopeText: string;
+        internalCostSubtotal: number;
+        customerPriceSubtotal: number;
+        taxAmount: number;
+        lineItems: Array<{
+          description: string;
+          sectionType?: "INCLUDED" | "ALTERNATE";
+          sectionLabel?: string | null;
+          quantity: number;
+          unitCost: number;
+          unitPrice: number;
+        }>;
+      };
+    };
+    expect(result.suggestion.lineItems.length).toBeGreaterThan(0);
+    await expect(
+      prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: result.aiRunId } }),
+    ).resolves.toMatchObject({
+      tenantId: owner.tenant.id,
+      actorUserId: owner.user.id,
+      customerId: customer.id,
+      quoteId: null,
+      eventType: "REVISE",
+      purpose: "QUOTE_REVISION",
+    });
+
+    const createPayload = {
+      customerId: customer.id,
+      serviceType: result.suggestion.serviceType,
+      title: result.suggestion.title,
+      scopeText: result.suggestion.scopeText,
+      internalCostSubtotal: result.suggestion.internalCostSubtotal,
+      customerPriceSubtotal: result.suggestion.customerPriceSubtotal,
+      taxAmount: result.suggestion.taxAmount,
+      aiUsageEventId: result.aiRunId,
+      lineItems: result.suggestion.lineItems,
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "builder-ai-created-quote-0001" },
+      payload: createPayload,
+    });
+    expect(created.statusCode).toBe(201);
+    const createdQuoteId = (created.json() as { quote: { id: string } }).quote.id;
+    await expect(
+      prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: result.aiRunId } }),
+    ).resolves.toMatchObject({ quoteId: createdQuoteId, customerId: customer.id });
+
+    const linkedEventReuse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "builder-ai-linked-event-reuse-0001" },
+      payload: { ...createPayload, title: "Linked provenance must not create twice" },
+    });
+    expect(linkedEventReuse.statusCode).toBe(422);
+    expect(linkedEventReuse.json()).toMatchObject({ code: "AI_PROVENANCE_INVALID" });
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(1);
   });
 
   test("natural Kody quote prompts resolve customers, duration, and priced catalog lines in one review handoff", async () => {

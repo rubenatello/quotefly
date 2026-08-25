@@ -566,6 +566,128 @@ describe("QuoteFly API integration", () => {
     expect(betaCannotUseAlphaCustomer.statusCode).toBe(404);
   });
 
+  test("derives quote totals from included lines and replays concurrent create commands exactly once", async () => {
+    const owner = await signUp("quote-create-idempotency");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(owner.cookie),
+      payload: {
+        fullName: "Idempotent Quote Customer",
+        phone: "555-010-4411",
+      },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const { customer } = parseJson<CustomerResponse>(customerResponse);
+    const idempotencyKey = "quote-create-concurrent-command-0001";
+    const payload = {
+      customerId: customer.id,
+      serviceType: "ROOFING",
+      title: "Server-derived quote totals",
+      scopeText: "Use included work for quote totals and keep alternates outside the total.",
+      internalCostSubtotal: 888,
+      customerPriceSubtotal: 999,
+      taxAmount: 0.67,
+      lineItems: [
+        {
+          description: "Included fractional work",
+          sectionType: "INCLUDED",
+          quantity: 0.3333,
+          unitCost: 4.006,
+          unitPrice: 10.006,
+        },
+        {
+          description: "Optional premium upgrade",
+          sectionType: "ALTERNATE",
+          quantity: 2,
+          unitCost: 400,
+          unitPrice: 900,
+        },
+      ],
+    };
+
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/quotes",
+        headers: { ...authHeaders(owner.cookie), "idempotency-key": idempotencyKey },
+        payload,
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/quotes",
+        headers: { ...authHeaders(owner.cookie), "idempotency-key": idempotencyKey },
+        payload,
+      }),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 201]);
+    const responseBodies = responses.map((response) => response.json() as {
+      quote: Record<string, unknown> & { id: string };
+      duplicate: boolean;
+    });
+    expect(new Set(responseBodies.map((body) => body.quote.id)).size).toBe(1);
+    expect(responseBodies.map((body) => body.duplicate).sort()).toEqual([false, true]);
+    for (const body of responseBodies) {
+      expect(body.quote).not.toHaveProperty("createIdempotencyKeyHash");
+      expect(body.quote).not.toHaveProperty("createRequestHash");
+    }
+
+    const quoteId = responseBodies[0]!.quote.id;
+    const storedQuote = await prisma.quote.findUniqueOrThrow({
+      where: { id: quoteId },
+      include: { lineItems: { orderBy: { position: "asc" } }, revisions: true },
+    });
+    expect(Number(storedQuote.internalCostSubtotal)).toBe(1.32);
+    expect(Number(storedQuote.customerPriceSubtotal)).toBe(3.3);
+    expect(Number(storedQuote.taxAmount)).toBe(0.67);
+    expect(Number(storedQuote.totalAmount)).toBe(3.97);
+    expect(storedQuote.lineItems).toHaveLength(2);
+    expect(storedQuote.lineItems.map((lineItem) => ({
+      quantity: Number(lineItem.quantity),
+      unitCost: Number(lineItem.unitCost),
+      unitPrice: Number(lineItem.unitPrice),
+    }))).toEqual([
+      { quantity: 0.33, unitCost: 4.01, unitPrice: 10.01 },
+      { quantity: 2, unitCost: 400, unitPrice: 900 },
+    ]);
+    expect(storedQuote.revisions).toHaveLength(1);
+    expect(storedQuote.revisions[0]?.eventType).toBe("CREATED");
+    await expect(
+      prisma.quote.count({
+        where: { tenantId: owner.tenant.id, customerId: customer.id, title: payload.title },
+      }),
+    ).resolves.toBe(1);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { ...authHeaders(owner.cookie), "idempotency-key": idempotencyKey },
+      payload: { ...payload, title: "Different quote under reused key" },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toEqual({
+      code: "IDEMPOTENCY_KEY_REUSED",
+      error: "This Idempotency-Key was already used with a different quote request.",
+    });
+
+    await expect(
+      prisma.quote.update({
+        where: { id: quoteId },
+        data: { createRequestHash: null },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.quote.findUniqueOrThrow({
+        where: { id: quoteId },
+        select: { createIdempotencyKeyHash: true, createRequestHash: true },
+      }),
+    ).resolves.toMatchObject({
+      createIdempotencyKeyHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      createRequestHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+  });
+
   test("signup copies immutable catalog definitions into independent tenant-owned products", async () => {
     const definitions = getStandardWorkPresetCatalog(ServiceCategory.ROOFING);
     const alpha = await signUp("starter-copy-alpha");

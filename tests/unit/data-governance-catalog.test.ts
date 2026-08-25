@@ -54,6 +54,8 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     "User.passwordHash",
     "PasswordResetToken.tokenHash",
     "TenantBrandAsset.data",
+    "Quote.createIdempotencyKeyHash",
+    "Quote.createRequestHash",
     "BillingWebhookEvent.payload",
     "QuickBooksConnection.accessTokenEncrypted",
     "QuickBooksConnection.refreshTokenEncrypted",

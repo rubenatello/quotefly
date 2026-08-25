@@ -575,9 +575,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
               serviceType: "ROOFING",
               title: "Kody Mobile Roof Replacement",
               scopeText: "Replace asphalt shingle roof, include tear-off, underlayment, flashing, cleanup, and disposal.",
+              auditEventId: "audit-kody-mobile-draft-1234567890",
               lineItems: [
-                { description: "Tear-off, disposal, and roof prep", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
-                { description: "Install asphalt shingles and flashing", quantity: 1, sectionType: "INCLUDED", sectionLabel: null },
+                { description: "Tear-off, disposal, and roof prep", quantity: 1, unitPrice: 1_000, sectionType: "INCLUDED", sectionLabel: null },
+                { description: "Install asphalt shingles and flashing", quantity: 1, unitPrice: 11_000, sectionType: "INCLUDED", sectionLabel: null },
               ],
             },
           }],
@@ -742,6 +743,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(page.getByTestId("quote-line-row-1")).toContainText("Tear-off, disposal, and roof prep");
   await expect(page.getByTestId("quote-line-row-2")).toContainText("Install asphalt shingles and flashing");
   expect(quoteCreateRequests).toHaveLength(0);
+  await page.getByRole("button", { name: "Review quote", exact: true }).click();
+  await page.getByRole("button", { name: "Create Quote" }).first().click();
+  await expect.poll(() => quoteCreateRequests.length).toBe(1);
+  expect((quoteCreateRequests[0] as { aiUsageEventId?: string }).aiUsageEventId).toBeUndefined();
 
   expect(aiRequests).toEqual(expect.arrayContaining([
     expect.objectContaining({
@@ -768,7 +773,19 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
     phone: "555-018-1199",
     email: "kody-prefill@example.com",
   });
+  const replacementCustomer = await createCustomerViaApi(request, account, {
+    fullName: "Manual Replacement Customer",
+    phone: "555-018-1200",
+    email: "manual-replacement@example.com",
+  });
   const aiRequests: Array<{ tool?: string; message?: string; context?: Record<string, unknown> }> = [];
+  const recoveryWrites: Array<{
+    payload?: {
+      quote?: { customerId?: string };
+      lastAppliedAiRunId?: string | null;
+      lastAppliedAiCustomerId?: string | null;
+    };
+  }> = [];
 
   await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
     const body = route.request().postDataJSON() as {
@@ -858,6 +875,12 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
       }),
     });
   });
+  await page.route(`${apiBaseUrl}/v1/quote-drafts/new`, async (route) => {
+    if (route.request().method() === "PUT") {
+      recoveryWrites.push(route.request().postDataJSON());
+    }
+    await route.fallback();
+  });
 
   await addSessionCookie(context, account);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -901,6 +924,20 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await expect(firstVisibleLineTitle).toBeVisible();
   await expect(firstVisibleLineTitle).toBeFocused();
   await expect(firstVisibleLinePrice).toHaveValue("4200.00");
+  await expect.poll(() => recoveryWrites.some(({ payload }) =>
+    payload?.lastAppliedAiRunId === "audit-kody-prefill-draft-1234567890"
+    && payload.lastAppliedAiCustomerId === customer.id,
+  )).toBe(true);
+
+  await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(replacementCustomer.fullName);
+  await page
+    .getByRole("option", { name: new RegExp(`${escapeRegExp(replacementCustomer.fullName)}[\\s\\S]*Use`, "i") })
+    .click();
+  await expect.poll(() => recoveryWrites.some(({ payload }) =>
+    payload?.quote?.customerId === replacementCustomer.id
+    && payload.lastAppliedAiRunId === null
+    && payload.lastAppliedAiCustomerId === null,
+  )).toBe(true);
   expect(aiRequests).toEqual([
     expect.objectContaining({
       tool: "DRAFT_QUOTE",

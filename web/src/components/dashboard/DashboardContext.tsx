@@ -405,6 +405,7 @@ export interface DashboardContextValue {
   loadAll: () => Promise<void>;
   loadQuotes: () => Promise<void>;
   loadCustomers: () => Promise<void>;
+  ensureCustomerLoaded: (customerId: string) => Promise<Customer | null>;
   loadQuoteHistory: () => Promise<void>;
   refreshSelectedQuote: () => Promise<void>;
   retrySelectedQuote: () => Promise<void>;
@@ -421,6 +422,8 @@ export interface DashboardContextValue {
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
     aiUsageEventId?: string;
+    idempotencyKey?: string;
+    beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
   persistSelectedQuote: () => Promise<boolean>;
@@ -508,6 +511,7 @@ export function DashboardProvider({
 
   const [customerForm, setCustomerForm] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [quoteForm, setQuoteForm] = useState<QuoteForm>(EMPTY_QUOTE);
+  const quoteFormCustomerIdRef = useRef(quoteForm.customerId);
   const [quoteEditForm, setQuoteEditForm] = useState<QuoteEditForm>(EMPTY_EDIT);
   const quoteEditBaselineQuoteIdRef = useRef<string | null>(null);
   const quoteEditBaselineRef = useRef<QuoteEditForm | null>(null);
@@ -528,6 +532,7 @@ export function DashboardProvider({
   );
 
   const canUseChatToQuote = session?.entitlements?.features.aiAutomation ?? true;
+  quoteFormCustomerIdRef.current = quoteForm.customerId;
   const aiQuoteLimit = session?.entitlements?.limits.aiQuotesPerMonth ?? null;
   const canViewQuoteHistory = session?.entitlements?.features.quoteVersionHistory ?? true;
   const canViewCommunicationLog = session?.entitlements?.features.communicationLog ?? true;
@@ -634,22 +639,47 @@ export function DashboardProvider({
   const loadCustomers = useCallback(async () => {
     try {
       const res = await api.customers.list({ limit: 100 });
-      setCustomers(res.customers);
+      setCustomers((current) => {
+        const selectedCustomerId = quoteFormCustomerIdRef.current;
+        const selectedCustomer = selectedCustomerId
+          ? current.find((customer) => customer.id === selectedCustomerId) ?? null
+          : null;
+        return selectedCustomer && !res.customers.some((customer) => customer.id === selectedCustomer.id)
+          ? [...res.customers, selectedCustomer]
+          : res.customers;
+      });
       setQuoteForm((prev) => {
-        const nextCustomerId =
-          prev.customerId && res.customers.some((customer) => customer.id === prev.customerId)
-            ? prev.customerId
-            : "";
+        const listedCustomer = res.customers.find((customer) => customer.id === prev.customerId) ?? null;
         return {
           ...prev,
-          customerId: nextCustomerId,
-          documentLocale: resolveCustomerDocumentLocale(nextCustomerId, res.customers, defaultCustomerLocale),
+          documentLocale: listedCustomer
+            ? resolveCustomerDocumentLocale(prev.customerId, res.customers, defaultCustomerLocale)
+            : prev.documentLocale,
         };
       });
     } catch (err) {
       setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.load.customers" }));
     }
   }, [defaultCustomerLocale, t]);
+
+  const ensureCustomerLoaded = useCallback(async (customerId: string) => {
+    const existing = customers.find((customer) => customer.id === customerId) ?? null;
+    if (existing && !existing.archivedAtUtc && !existing.deletedAtUtc) return existing;
+
+    const { customer } = await api.customers.get(customerId);
+    if (customer.archivedAtUtc || customer.deletedAtUtc) return null;
+    setCustomers((current) => {
+      const withoutCustomer = current.filter((candidate) => candidate.id !== customer.id);
+      return [...withoutCustomer, customer];
+    });
+    setQuoteForm((current) => current.customerId === customer.id
+      ? {
+          ...current,
+          documentLocale: customer.preferredLocale ?? defaultCustomerLocale,
+        }
+      : current);
+    return customer;
+  }, [customers, defaultCustomerLocale]);
 
   const loadOutboundEvents = useCallback(async (quoteId: string) => {
     if (!canViewCommunicationLog) { setOutboundEvents([]); return; }
@@ -884,6 +914,8 @@ export function DashboardProvider({
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
     aiUsageEventId?: string;
+    idempotencyKey?: string;
+    beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => {
     setSaving(true); setError(null);
     try {
@@ -891,7 +923,7 @@ export function DashboardProvider({
         ...quoteForm,
         ...(options?.quoteOverride ?? {}),
       };
-      const { quote } = await api.quotes.create({
+      const createPayload = {
         customerId: mergedQuoteForm.customerId,
         serviceType: mergedQuoteForm.serviceType,
         title: mergedQuoteForm.title,
@@ -910,7 +942,12 @@ export function DashboardProvider({
           unitPrice: lineItem.unitPrice,
           sourcePresetId: lineItem.sourcePresetId,
         })),
-      });
+      };
+      const idempotencyKey = options?.idempotencyKey ?? `qf-quote-${crypto.randomUUID()}`;
+      const { quote } = await api.quotes.create(createPayload, { idempotencyKey });
+      if (options?.beforeSuccessNavigation && !(await options.beforeSuccessNavigation(quote))) {
+        return null;
+      }
       setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId, documentLocale: prev.documentLocale }));
       focusQuoteDesk(quote.id);
       setNotice(options?.successNotice ?? t("quoteFeedback.quote.created"));
@@ -1420,7 +1457,7 @@ export function DashboardProvider({
     setCustomerForm, setQuoteForm, setQuoteEditForm, setLineItemForm,
     setChatPrompt, setChatParsed, setSetupTrade, setSetupSqFtMode, setSetupSqFtUnitCost, setSetupSqFtUnitPrice,
     setDuplicateModal, setSendComposer,
-    loadAll, loadQuotes, loadCustomers, loadQuoteHistory, refreshSelectedQuote, retrySelectedQuote,
+    loadAll, loadQuotes, loadCustomers, ensureCustomerLoaded, loadQuoteHistory, refreshSelectedQuote, retrySelectedQuote,
     focusQuoteDesk, selectQuoteCustomer, navigateToBuilder, createCustomer, mergeDuplicateCustomer, createDuplicateAsNew,
     createQuoteFromChatPrompt, applyTradeSetup, createQuoteDraftFromForm, createQuote, persistSelectedQuote, saveQuoteSheet, updateQuoteLifecycle, saveQuote,
     sendDecision, openSendComposer, confirmSendComposer,

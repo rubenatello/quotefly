@@ -181,6 +181,7 @@ function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown)
     for (const [key, maxLength] of [
       ["prompt", 2_000], ["customerId", 200], ["customerName", 500], ["customerEmail", 500],
       ["customerPhone", 100], ["quoteId", 200], ["serviceType", 32], ["title", 500], ["scopeText", 4_000],
+      ["auditEventId", 200],
     ] as const) copyString(payload, value, key, maxLength);
     for (const key of ["squareFeetEstimate", "squareFeetEstimateLow", "squareFeetEstimateHigh", "estimatedDurationHoursLow", "estimatedDurationHoursHigh", "estimatedTotalAmount", "estimatedTaxAmount", "estimatedInternalCostAmount", "retrievedSourceCount"] as const) {
       copyNumber(payload, value, key);

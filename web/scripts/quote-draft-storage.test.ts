@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyKodyQuoteAiProvenance,
+  clearQuoteAiProvenanceForAudit,
   isQuoteDraftTimestampFresh,
+  hashQuoteCreateCommand,
   prepareQuoteBuilderDraftStorage,
   purgeQuoteBuilderDraftStorage,
   quoteBuilderDraftStorageKey,
   quoteDeskDraftStorageKey,
   readQuoteBuilderDraft,
+  readQuoteCreateRetryIdentity,
+  reconcileQuoteAiProvenanceCustomer,
   removeQuoteBuilderDraft,
+  resolveQuoteCreateRetryIdentity,
   writeQuoteBuilderDraft,
 } from "../src/lib/quote-builder-draft-storage";
 
@@ -73,6 +79,67 @@ test("draft timestamps expire after the bounded recovery window", () => {
   assert.equal(isQuoteDraftTimestampFresh("2026-08-09T23:00:00.000Z", now), false);
 });
 
+test("opaque quote-create retry identity stays locked until explicit reset or successful cleanup", async () => {
+  const firstHash = await hashQuoteCreateCommand(JSON.stringify({ customerId: "customer-a", title: "Repair" }));
+  const sameHash = await hashQuoteCreateCommand(JSON.stringify({ customerId: "customer-a", title: "Repair" }));
+  const changedHash = await hashQuoteCreateCommand(JSON.stringify({ customerId: "customer-a", title: "Replace" }));
+  const first = resolveQuoteCreateRetryIdentity(firstHash, null, () => "00000000-0000-4000-8000-000000000001");
+  const reused = resolveQuoteCreateRetryIdentity(sameHash, first, () => "00000000-0000-4000-8000-000000000002");
+  const rotated = resolveQuoteCreateRetryIdentity(changedHash, first, () => "00000000-0000-4000-8000-000000000003");
+
+  assert.deepEqual(reused, first);
+  assert.deepEqual(rotated, first);
+  assert.equal(readQuoteCreateRetryIdentity(first)?.idempotencyKey, first.idempotencyKey);
+  assert.doesNotMatch(JSON.stringify(first), /customer-a|Repair/);
+});
+
+test("manual customer replacement clears quote AI provenance", () => {
+  const customerAProvenance = {
+    auditEventId: "audit-customer-a",
+    customerId: "customer-a",
+  };
+
+  assert.equal(reconcileQuoteAiProvenanceCustomer(customerAProvenance, "customer-b"), null);
+  assert.deepEqual(reconcileQuoteAiProvenanceCustomer(customerAProvenance, "customer-a"), customerAProvenance);
+});
+
+test("stale or unauthorized Kody customer clears only its handoff audit provenance", () => {
+  const customerAProvenance = {
+    auditEventId: "audit-customer-a",
+    customerId: "customer-a",
+  };
+
+  assert.equal(clearQuoteAiProvenanceForAudit(customerAProvenance, "audit-customer-a"), null);
+  assert.deepEqual(
+    clearQuoteAiProvenanceForAudit(customerAProvenance, "audit-different"),
+    customerAProvenance,
+  );
+});
+
+test("Kody merge adopts audit provenance only when the final customer is compatible", () => {
+  const customerAProvenance = {
+    auditEventId: "audit-customer-a",
+    customerId: "customer-a",
+  };
+
+  assert.deepEqual(
+    applyKodyQuoteAiProvenance(
+      customerAProvenance,
+      { auditEventId: "audit-customer-b", customerId: "customer-b" },
+      "customer-a",
+    ),
+    customerAProvenance,
+  );
+  assert.deepEqual(
+    applyKodyQuoteAiProvenance(
+      customerAProvenance,
+      { auditEventId: "audit-customer-b", customerId: "customer-b" },
+      "customer-b",
+    ),
+    { auditEventId: "audit-customer-b", customerId: "customer-b" },
+  );
+});
+
 test("session preparation physically removes every legacy plaintext browser draft", () => {
   const { localStorage, sessionStorage } = installWindow();
   localStorage.setItem("qf:quote-draft:v1:tenant:user:new", "sensitive quote data");
@@ -96,7 +163,9 @@ test("write, read, remove, and keepalive use only the authenticated server recov
 
   const savedAtUtc = await writeQuoteBuilderDraft(scope, value, { keepalive: true });
   assert.ok(savedAtUtc);
-  assert.match(await readQuoteBuilderDraft(scope) ?? "", /Repair/);
+  const readResult = await readQuoteBuilderDraft(scope);
+  assert.equal(readResult.status, "found");
+  assert.match(readResult.status === "found" ? readResult.raw : "", /Repair/);
   assert.equal(localStorage.length, 0);
   assert.equal(sessionStorage.length, 0);
   assert.equal(drafts.size, 1);

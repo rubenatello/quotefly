@@ -2836,9 +2836,10 @@ export const api = {
         unitPrice: number;
         sourcePresetId?: string;
       }>;
-    }) =>
-      request<{ quote: Quote }>(`/v1/quotes`, {
+    }, options?: { idempotencyKey?: string }) =>
+      request<{ quote: Quote; duplicate?: boolean }>(`/v1/quotes`, {
         method: "POST",
+        headers: activityCommandHeaders(options?.idempotencyKey),
         body: JSON.stringify(body),
       }),
 

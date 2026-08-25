@@ -4231,6 +4231,17 @@ async function runDraftQuotePreview(
       ? `${composition.riskNote} Retrieved excerpts were tenant-scoped, policy-filtered, and treated as untrusted source material.`
       : composition.riskNote,
   });
+  const provenanceLinkedActions = actions.map((action) =>
+    action.type === "OPEN_QUOTE_DRAFT"
+      ? {
+          ...action,
+          payload: {
+            ...action.payload,
+            auditEventId: event.id,
+          },
+        }
+      : action,
+  );
 
   return {
     consumedCredits: 1,
@@ -4243,7 +4254,7 @@ async function runDraftQuotePreview(
       answer: composition.answer,
       results,
       citations,
-      actions,
+      actions: provenanceLinkedActions,
       auditEventId: event.id,
       fieldsExcluded,
       diagnostics: composedDiagnostics(baseDiagnostics, composition),

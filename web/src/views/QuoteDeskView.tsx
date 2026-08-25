@@ -342,6 +342,8 @@ export function QuoteDeskView() {
   const [deskDraftSavedAtUtc, setDeskDraftSavedAtUtc] = useState<string | null>(null);
   const [deskDraftPersistenceFailed, setDeskDraftPersistenceFailed] = useState(false);
   const [deskDraftRecoveryMessage, setDeskDraftRecoveryMessage] = useState<string | null>(null);
+  const [deskDraftRecoveryStatus, setDeskDraftRecoveryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [deskDraftRecoveryAttempt, setDeskDraftRecoveryAttempt] = useState(0);
   const [conflictingDeskDraft, setConflictingDeskDraft] = useState<StoredDeskDraft | null>(null);
   const latestDeskDraftRef = useRef<{ draft: StoredDeskDraft; hasChanges: boolean } | null>(null);
   const handledKodySendRef = useRef<string | null>(null);
@@ -840,13 +842,20 @@ export function QuoteDeskView() {
     preventDeskDraftPersistenceRef.current = false;
     setDeskDraftRestored(false);
     setDeskDraftRecoveryMessage(null);
+    setDeskDraftRecoveryStatus("loading");
     void (async () => {
       let hydrationDeferred = false;
+      let recoveryFailed = false;
       try {
-        const raw = await readQuoteDeskDraft(deskDraftStorageKey);
+        const result = await readQuoteDeskDraft(deskDraftStorageKey);
         if (cancelled) return;
-        if (!raw) return;
-        const stored = parseStoredDeskDraft(raw);
+        if (result.status === "error") {
+          recoveryFailed = true;
+          setDeskDraftRecoveryStatus("error");
+          return;
+        }
+        if (result.status === "not-found") return;
+        const stored = parseStoredDeskDraft(result.raw);
         if (!stored || stored.quoteId !== selectedQuote.id) {
           await removeQuoteDeskDraft(deskDraftStorageKey);
           if (!cancelled) setDeskDraftRecoveryMessage(t("quoteDesk.recovery.incompatible"));
@@ -862,16 +871,20 @@ export function QuoteDeskView() {
         await removeQuoteDeskDraft(deskDraftStorageKey);
         if (!cancelled) setDeskDraftRecoveryMessage(t("quoteDesk.recovery.unreadable"));
       } finally {
-        if (!cancelled && !hydrationDeferred) setHydratedDeskDraftKey(deskDraftStorageKey);
+        if (!cancelled && !hydrationDeferred && !recoveryFailed) {
+          setDeskDraftRecoveryStatus("ready");
+          setHydratedDeskDraftKey(deskDraftStorageKey);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [applyStoredDeskDraft, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote, t]);
+  }, [applyStoredDeskDraft, deskDraftRecoveryAttempt, deskDraftStorageKey, hydratedDeskDraftKey, selectedQuote, t]);
 
   useEffect(() => {
     if (!deskDraftStorageKey || hydratedDeskDraftKey !== deskDraftStorageKey || !currentDeskDraft) return;
+    if (preventDeskDraftPersistenceRef.current) return;
     if (!hasUnsavedQuoteSheetChanges) {
       void removeQuoteDeskDraft(deskDraftStorageKey);
       setDeskDraftSavedAtUtc(null);
@@ -879,7 +892,6 @@ export function QuoteDeskView() {
       setDeskDraftRestored(false);
       return;
     }
-    if (preventDeskDraftPersistenceRef.current) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void persistStoredDeskDraft(deskDraftStorageKey, currentDeskDraft).then((savedAtUtc) => {
@@ -917,11 +929,39 @@ export function QuoteDeskView() {
 
   function clearStoredDeskDraft() {
     preventDeskDraftPersistenceRef.current = true;
-    if (deskDraftStorageKey) void removeQuoteDeskDraft(deskDraftStorageKey);
+    if (deskDraftStorageKey && hydratedDeskDraftKey === deskDraftStorageKey) {
+      void removeQuoteDeskDraft(deskDraftStorageKey);
+    }
     setDeskDraftSavedAtUtc(null);
     setDeskDraftPersistenceFailed(false);
     setDeskDraftRestored(false);
     setConflictingDeskDraft(null);
+    window.setTimeout(() => {
+      preventDeskDraftPersistenceRef.current = false;
+    }, 0);
+  }
+
+  function retryDeskDraftRecovery() {
+    if (!deskDraftStorageKey || deskDraftRecoveryStatus === "loading") return;
+    setDeskDraftRecoveryMessage(null);
+    setDeskDraftRecoveryAttempt((current) => current + 1);
+  }
+
+  async function startFreshAfterDeskRecoveryError() {
+    if (!deskDraftStorageKey || !selectedQuote) return;
+    setDeskDraftRecoveryStatus("loading");
+    setDeskDraftRecoveryMessage(null);
+    const cleared = await removeQuoteDeskDraft(deskDraftStorageKey);
+    if (!cleared) {
+      setDeskDraftRecoveryStatus("error");
+      setDeskDraftRecoveryMessage(t("quoteDesk.recovery.clearFailed"));
+      return;
+    }
+    preventDeskDraftPersistenceRef.current = true;
+    restoreQuoteSheetFromSelectedQuote();
+    setDeskDraftRecoveryStatus("ready");
+    setHydratedDeskDraftKey(deskDraftStorageKey);
+    setNotice(t("quoteDesk.notices.recoveryFresh"));
     window.setTimeout(() => {
       preventDeskDraftPersistenceRef.current = false;
     }, 0);
@@ -1452,7 +1492,7 @@ export function QuoteDeskView() {
     }
   }
 
-  function revertQuoteSheetToLastSaved() {
+  function restoreQuoteSheetFromSelectedQuote() {
     if (!selectedQuote) return;
     setQuoteEditForm({
       serviceType: selectedQuote.serviceType,
@@ -1466,6 +1506,10 @@ export function QuoteDeskView() {
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
     setPresetPromptLine(null);
+  }
+
+  function revertQuoteSheetToLastSaved() {
+    restoreQuoteSheetFromSelectedQuote();
     clearStoredDeskDraft();
     setNotice(t("quoteDesk.notices.reverted"));
   }
@@ -1712,6 +1756,20 @@ export function QuoteDeskView() {
       ) : null}
       {deskDraftRecoveryMessage ? (
         <Alert tone="warning" onDismiss={() => setDeskDraftRecoveryMessage(null)}>{deskDraftRecoveryMessage}</Alert>
+      ) : null}
+      {deskDraftRecoveryStatus === "error" ? (
+        <div
+          role="alert"
+          data-testid="quote-desk-recovery-error"
+          className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
+        >
+          <p className="text-sm font-semibold">{t("quoteDesk.recovery.loadFailedTitle")}</p>
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("quoteDesk.recovery.loadFailedDescription")}</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={retryDeskDraftRecovery}>{t("quoteDesk.recovery.retry")}</Button>
+            <Button onClick={() => void startFreshAfterDeskRecoveryError()}>{t("quoteDesk.recovery.startFresh")}</Button>
+          </div>
+        </div>
       ) : null}
       {conflictingDeskDraft ? (
         <div role="alert" className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]">
