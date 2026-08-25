@@ -224,6 +224,65 @@ describe("security boundary helpers", () => {
     expect(() => parseEnv({ ...base, RATE_LIMIT_REQUIRE_SHARED_STORE: "true", RATE_LIMIT_REDIS_URL: "rediss://redis.example:6380" })).not.toThrow();
   });
 
+  it("keeps production RAG default-off and validates shadow, allowlist, and worker rollout boundaries", () => {
+    const base = {
+      ...process.env,
+      NODE_ENV: "production",
+      ...productionDatabaseEnv,
+      JWT_SECRET: "unique-production-jwt-secret-that-is-long-enough",
+      APP_URL: "https://app.quotefly.example",
+      API_URL: "https://api.quotefly.example",
+      SESSION_COOKIE_SAME_SITE: "lax",
+      ENABLE_TWILIO_SMS: "false",
+      STRIPE_SECRET_KEY: ["sk", "live", "quotefly", "test", "value"].join("_"),
+      STRIPE_WEBHOOK_SECRET: ["whsec", "quotefly", "test", "value"].join("_"),
+      STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
+      STRIPE_COUPON_ID_BASIC_FIRST_MONTH_HALF_OFF: "quotefly_basic_first_month_half_off",
+      RESEND_API_KEY: "re_quotefly_test_value",
+      PASSWORD_RESET_EMAIL_FROM: "QuoteFly <support@quotefly.example>",
+      OPENAI_API_KEY: "",
+      AI_RAG_ROLLOUT_MODE: undefined,
+      AI_RAG_TENANT_ALLOWLIST: "",
+      ENABLE_AI_INDEX_WORKER: "false",
+      AI_INDEX_INLINE_REFRESH: "true",
+    } satisfies NodeJS.ProcessEnv;
+
+    expect(parseEnv(base).AI_RAG_ROLLOUT_MODE).toBe("off");
+    expect(() => parseEnv({ ...base, AI_RAG_ROLLOUT_MODE: "all" })).toThrow(
+      /OPENAI_API_KEY is required before production RAG can be enabled/i,
+    );
+    expect(() => parseEnv({
+      ...base,
+      AI_RAG_ROLLOUT_MODE: "allowlist",
+      OPENAI_API_KEY: "test-openai-key",
+    })).toThrow(/must contain at least one tenant id/i);
+    expect(() => parseEnv({
+      ...base,
+      AI_RAG_ROLLOUT_MODE: "allowlist",
+      AI_RAG_TENANT_ALLOWLIST: "tenant good",
+      OPENAI_API_KEY: "test-openai-key",
+    })).toThrow(/only comma-separated tenant ids/i);
+    expect(() => parseEnv({
+      ...base,
+      AI_RAG_ROLLOUT_MODE: "off",
+      ENABLE_AI_INDEX_WORKER: "true",
+    })).toThrow(/cannot be enabled while AI_RAG_ROLLOUT_MODE=off/i);
+    expect(() => parseEnv({
+      ...base,
+      AI_RAG_ROLLOUT_MODE: "allowlist",
+      AI_RAG_TENANT_ALLOWLIST: "tenant-a",
+      OPENAI_API_KEY: "test-openai-key",
+      AI_INDEX_INLINE_REFRESH: "false",
+      ENABLE_AI_INDEX_WORKER: "false",
+    })).toThrow(/requires AI_INDEX_INLINE_REFRESH=true or ENABLE_AI_INDEX_WORKER=true/i);
+    expect(parseEnv({
+      ...base,
+      AI_RAG_ROLLOUT_MODE: "shadow_allowlist",
+      AI_RAG_TENANT_ALLOWLIST: "tenant-a",
+      OPENAI_API_KEY: "test-openai-key",
+    }).AI_RAG_ROLLOUT_MODE).toBe("shadow_allowlist");
+  });
+
   it("neutralizes spreadsheet formulas in tenant-controlled QuickBooks CSV cells", () => {
     const csv = buildQuickBooksInvoiceCsv(
       [

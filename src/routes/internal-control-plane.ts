@@ -1,8 +1,10 @@
 import { Prisma } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { env } from "../config/env";
 import { CAPABILITIES, capabilitiesForRole } from "../lib/access-policy";
 import { mapWithConcurrency } from "../lib/bounded-concurrency";
+import { isAiRagEnabledForTenant, summarizeAiRagRollout } from "../lib/ai-rag-rollout";
 import {
   getDataClassificationCatalog,
   validateDataGovernanceSchema,
@@ -271,7 +273,11 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;
 
-    const tenantIds = await app.prisma.tenant.findMany({ select: { id: true } });
+    const tenantIds = await app.prisma.tenant.findMany({
+      where: { deletedAtUtc: null },
+      select: { id: true },
+    });
+    const rollout = summarizeAiRagRollout(env, tenantIds.map(({ id }) => id));
     const summaries = await mapWithConcurrency(tenantIds, 4, ({ id: tenantId }) => withTenantRlsContext(
       app.prisma,
       tenantId,
@@ -296,37 +302,40 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           successfulJobMetrics,
           oldestPendingJob,
         ] = await Promise.all([
-          tx.aiRetrievalDocument.count(),
-          tx.aiRetrievalDocument.count({ where: { status: "ACTIVE", deletedAtUtc: null } }),
-          tx.aiRetrievalDocument.count({ where: { OR: [{ status: "DELETED" }, { deletedAtUtc: { not: null } }] } }),
-          tx.aiRetrievalChunk.count(),
-          tx.aiRetrievalChunk.count({ where: activeChunkWhere }),
-          tx.aiRetrievalChunk.count({ where: { deletedAtUtc: { not: null } } }),
-          tx.aiRetrievalDocument.groupBy({ by: ["status"], _count: { _all: true } }),
+          tx.aiRetrievalDocument.count({ where: { tenantId } }),
+          tx.aiRetrievalDocument.count({ where: { tenantId, status: "ACTIVE", deletedAtUtc: null } }),
+          tx.aiRetrievalDocument.count({ where: { tenantId, OR: [{ status: "DELETED" }, { deletedAtUtc: { not: null } }] } }),
+          tx.aiRetrievalChunk.count({ where: { tenantId } }),
+          tx.aiRetrievalChunk.count({ where: { tenantId, ...activeChunkWhere } }),
+          tx.aiRetrievalChunk.count({ where: { tenantId, deletedAtUtc: { not: null } } }),
+          tx.aiRetrievalDocument.groupBy({ by: ["status"], where: { tenantId }, _count: { _all: true } }),
           tx.aiRetrievalChunk.groupBy({
             by: ["classification"],
-            where: activeChunkWhere,
+            where: { tenantId, ...activeChunkWhere },
             _count: { _all: true },
           }),
           tx.aiRetrievalChunk.groupBy({
             by: ["sourceType"],
-            where: activeChunkWhere,
+            where: { tenantId, ...activeChunkWhere },
             _count: { _all: true },
           }),
           tx.aiRetrievalDocument.findFirst({
+            where: { tenantId },
             orderBy: { indexedAtUtc: "desc" },
             select: { indexedAtUtc: true, policyVersion: true },
           }),
           tx.aiRetrievalChunk.findFirst({
+            where: { tenantId },
             orderBy: { indexedAtUtc: "desc" },
             select: { indexedAtUtc: true, policyVersion: true },
           }),
           tx.aiIndexJob.groupBy({
             by: ["status"],
+            where: { tenantId },
             _count: { _all: true },
           }),
           tx.aiIndexJob.aggregate({
-            where: { status: "SUCCEEDED" },
+            where: { tenantId, status: "SUCCEEDED" },
             _count: { _all: true },
             _sum: {
               lastChunkCount: true,
@@ -335,12 +344,13 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
             },
           }),
           tx.aiIndexJob.findFirst({
-            where: { status: "PENDING" },
+            where: { tenantId, status: "PENDING" },
             orderBy: [{ availableAtUtc: "asc" }, { createdAt: "asc" }],
             select: { availableAtUtc: true, createdAt: true },
           }),
         ]);
         return {
+          rolloutEnabled: isAiRagEnabledForTenant(env, tenantId),
           documentCount,
           activeDocumentCount,
           deletedDocumentCount,
@@ -386,26 +396,36 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       .map(([sourceType, count]) => ({ sourceType, chunkCount: count }))
       .sort((left, right) => right.chunkCount - left.chunkCount)
       .slice(0, 20);
-    const indexJobsByStatus = sumGroupedCounts(summaries.flatMap((summary) => summary.indexJobsByStatus.map(
+    const rolloutEnabledSummaries = summaries.filter((summary) => summary.rolloutEnabled);
+    const outOfRolloutSummaries = summaries.filter((summary) => !summary.rolloutEnabled);
+    const indexJobsByStatus = sumGroupedCounts(rolloutEnabledSummaries.flatMap((summary) => summary.indexJobsByStatus.map(
       (row) => ({ key: row.status, count: row._count._all ?? 0 }),
     )));
-    const successfulJobCount = summaries.reduce(
+    const outOfRolloutJobsByStatus = sumGroupedCounts(outOfRolloutSummaries.flatMap((summary) => summary.indexJobsByStatus.map(
+      (row) => ({ key: row.status, count: row._count._all ?? 0 }),
+    )));
+    const successfulJobCount = rolloutEnabledSummaries.reduce(
       (sum, summary) => sum + (summary.successfulJobMetrics._count._all ?? 0),
       0,
     );
-    const indexedChunkCount = summaries.reduce(
+    const indexedChunkCount = rolloutEnabledSummaries.reduce(
       (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastChunkCount ?? 0),
       0,
     );
-    const embeddingCacheHitCount = summaries.reduce(
+    const embeddingCacheHitCount = rolloutEnabledSummaries.reduce(
       (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastEmbeddingCacheHitCount ?? 0),
       0,
     );
-    const successfulJobDurationMs = summaries.reduce(
+    const successfulJobDurationMs = rolloutEnabledSummaries.reduce(
       (sum, summary) => sum + (summary.successfulJobMetrics._sum.lastDurationMs ?? 0),
       0,
     );
-    const oldestPendingAtUtc = summaries
+    const oldestPendingAtUtc = rolloutEnabledSummaries
+      .map((summary) => summary.oldestPendingJob)
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .map((row) => row.availableAtUtc < row.createdAt ? row.availableAtUtc : row.createdAt)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
+    const outOfRolloutOldestPendingAtUtc = outOfRolloutSummaries
       .map((summary) => summary.oldestPendingJob)
       .filter((row): row is NonNullable<typeof row> => Boolean(row))
       .map((row) => row.availableAtUtc < row.createdAt ? row.availableAtUtc : row.createdAt)
@@ -425,11 +445,19 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
         documentCount,
         activeDocumentCount,
         activeChunkCount,
+        rolloutMode: rollout.mode,
+        enabledActiveTenantCount: rollout.enabledActiveTenantCount,
+        exposedActiveTenantCount: rollout.exposedActiveTenantCount,
       },
     });
 
     return {
       generatedAtUtc: new Date(),
+      rollout: {
+        ...rollout,
+        inlineRefreshEnabled: env.AI_INDEX_INLINE_REFRESH,
+        workerEnabled: env.ENABLE_AI_INDEX_WORKER,
+      },
       policyVersion: latestRecord?.policyVersion ?? null,
       totals: {
         documents: documentCount,
@@ -443,6 +471,8 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       activeChunksByClassification,
       activeChunksBySourceType,
       indexingQueue: {
+        scope: "rollout_enabled_active_tenants",
+        activeTenantCount: rolloutEnabledSummaries.length,
         jobsByStatus: indexJobsByStatus,
         successfulJobs: successfulJobCount,
         averageSuccessfulDurationMs: successfulJobCount > 0
@@ -452,6 +482,12 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           ? Number((embeddingCacheHitCount / indexedChunkCount).toFixed(4))
           : null,
         oldestPendingAtUtc,
+        outOfRollout: {
+          activeTenantCount: outOfRolloutSummaries.length,
+          jobsByStatus: outOfRolloutJobsByStatus,
+          oldestPendingAtUtc: outOfRolloutOldestPendingAtUtc,
+          expectedWhileDisabled: true,
+        },
       },
       latestIndexedAtUtc: latestRecord?.indexedAtUtc ?? null,
       fieldsExcluded: [

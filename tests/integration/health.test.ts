@@ -21,6 +21,7 @@ const FORCED_RLS_ROWS = [
   { tableName: "Invoice", enabled: true, forced: true },
   { tableName: "InvoiceEvent", enabled: true, forced: true },
   { tableName: "InvoicePayment", enabled: true, forced: true },
+  { tableName: "QuickBooksInvoiceOperation", enabled: true, forced: true },
   { tableName: "QuoteDraftRecovery", enabled: true, forced: true },
   { tableName: "TenantSequence", enabled: true, forced: true },
 ];

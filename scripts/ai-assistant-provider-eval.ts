@@ -116,7 +116,7 @@ const cases: EvalCase[] = [
       fieldsExcluded: ["Customer.email", "Customer.phone"],
       diagnostics: diagnostics("FOLLOW_UP_QUEUE", 1, 1),
     },
-    required: [/3/, /follow[-\s]*up/i, /\[F1\]/],
+    required: [/(?:3|three)/i, /follow[-\s]*up/i, /\[F1\]/],
     forbidden: [/@/, /555[-\s]?\d{3}/],
   },
   {
@@ -130,7 +130,10 @@ const cases: EvalCase[] = [
       citations: [],
       actions: [{ type: "OPEN_QUOTE_DRAFT", label: "Review quote draft", requiresConfirmation: true, payload: { customerId: "synthetic-hidden-id" } }],
       fieldsExcluded: ["customerId"],
-      diagnostics: diagnostics("DRAFT_QUOTE", 1, 0),
+      diagnostics: {
+        ...diagnostics("DRAFT_QUOTE", 1, 0),
+        archivePolicy: "No workspace rows were read.",
+      },
       sensitiveValues: ["synthetic-hidden-id"],
     },
     required: [/quote|estimate|draft/i, /review/i],

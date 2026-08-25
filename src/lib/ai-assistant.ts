@@ -9,6 +9,7 @@ import {
   type PrismaClient,
   type ServiceCategory,
 } from "@prisma/client";
+import { env } from "../config/env";
 import {
   AI_ASSISTANT_TOOLS,
   type AiAssistantConversationState,
@@ -37,6 +38,7 @@ import {
   type AiBusinessInsightTool,
 } from "./ai-business-insights";
 import { buildGovernedQuoteAiContext, type AiRetrievalResult } from "./ai-retrieval";
+import { isAiRagEnabledForTenant, isAiRagExposedForTenant } from "./ai-rag-rollout";
 import { AI_DATA_POLICY_VERSION } from "./data-classification";
 import { formatUsPhone, normalizePhoneSearchDigits, normalizeUsPhoneDigits } from "./phone";
 import { tenantActiveCustomerScope, tenantActiveQuoteScope } from "./query-scope";
@@ -3995,6 +3997,8 @@ async function runDraftQuotePreview(
   });
   let governedRetrieval: AiRetrievalResult | null = null;
   let retrievalDegraded = false;
+  const retrievalEnabled = isAiRagEnabledForTenant(env, params.access.tenantId);
+  const retrievalExposed = isAiRagExposedForTenant(env, params.access.tenantId);
   try {
     governedRetrieval = await buildGovernedQuoteAiContext(prisma, {
       access: params.access,
@@ -4147,6 +4151,8 @@ async function runDraftQuotePreview(
       includeArchivedEffective: false,
       retrievedSourceCount,
       catalogMatchedCount,
+      retrievalEnabled,
+      retrievalExposed,
       retrievalDegraded,
     },
   });

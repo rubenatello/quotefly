@@ -51,10 +51,22 @@ export type QuickBooksInvoiceEntity = {
   DocNumber?: string;
   TxnDate?: string;
   DueDate?: string;
+  PrivateNote?: string;
+  CustomerRef?: QuickBooksApiRef;
   TotalAmt?: number;
   Balance?: number;
   EmailStatus?: string;
-  CurrencyRef?: { name?: string };
+  CurrencyRef?: QuickBooksApiRef;
+  Line?: Array<{
+    Description?: string;
+    Amount?: number;
+    DetailType?: string;
+    SalesItemLineDetail?: {
+      Qty?: number;
+      UnitPrice?: number;
+      ItemRef?: QuickBooksApiRef;
+    };
+  }>;
   LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
 };
 
@@ -70,6 +82,26 @@ export type QuickBooksInvoiceStatus = {
   linkedPayments: Array<{ txnId: string; txnType: string }>;
   paid: boolean;
 };
+
+export class QuickBooksProviderError extends Error {
+  constructor(
+    readonly code: string,
+    readonly ambiguous: boolean,
+    readonly statusCode?: number,
+  ) {
+    super(code);
+  }
+}
+
+export function classifyQuickBooksProviderFailure(error: unknown): {
+  code: string;
+  ambiguous: boolean;
+} {
+  if (error instanceof QuickBooksProviderError) {
+    return { code: error.code, ambiguous: error.ambiguous };
+  }
+  return { code: "QUICKBOOKS_PROVIDER_RESULT_UNKNOWN", ambiguous: true };
+}
 
 type SignedStatePayload = {
   tenantId: string;
@@ -116,22 +148,40 @@ async function quickBooksApiRequest<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...(init.headers ?? {}),
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+  const mutation = (init.method ?? "GET").toUpperCase() !== "GET";
+  let response: Response;
+  try {
+    response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+  } catch {
+    throw new QuickBooksProviderError(
+      mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_NETWORK_ERROR",
+      mutation,
+    );
+  }
 
   const responseBody = await response.text();
   if (!response.ok) {
-    throw new Error(`QuickBooks API request failed with status ${response.status}.`);
+    const ambiguous = mutation && (response.status === 408 || response.status === 429 || response.status >= 500);
+    throw new QuickBooksProviderError(`QUICKBOOKS_HTTP_${response.status}`, ambiguous, response.status);
   }
 
-  return responseBody ? (JSON.parse(responseBody) as T) : (undefined as T);
+  try {
+    return responseBody ? (JSON.parse(responseBody) as T) : (undefined as T);
+  } catch {
+    throw new QuickBooksProviderError(
+      mutation ? "QUICKBOOKS_MUTATION_RESPONSE_INVALID" : "QUICKBOOKS_RESPONSE_INVALID",
+      mutation,
+      response.status,
+    );
+  }
 }
 
 export async function queryQuickBooksEntity<T>(
@@ -141,24 +191,34 @@ export async function queryQuickBooksEntity<T>(
   query: string,
   entityName: string,
 ): Promise<T[]> {
-  const response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}/query`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-      "Content-Type": "application/text",
-    },
-    body: query,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/text",
+      },
+      body: query,
+    });
+  } catch {
+    throw new QuickBooksProviderError("QUICKBOOKS_QUERY_NETWORK_ERROR", false);
+  }
 
   const responseBody = await response.text();
   if (!response.ok) {
-    throw new Error(`QuickBooks query failed with status ${response.status}.`);
+    throw new QuickBooksProviderError(`QUICKBOOKS_QUERY_HTTP_${response.status}`, false, response.status);
   }
 
-  const payload = responseBody
-    ? (JSON.parse(responseBody) as { QueryResponse?: Record<string, T[] | undefined> })
-    : {};
+  let payload: { QueryResponse?: Record<string, T[] | undefined> };
+  try {
+    payload = responseBody
+      ? (JSON.parse(responseBody) as { QueryResponse?: Record<string, T[] | undefined> })
+      : {};
+  } catch {
+    throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
+  }
 
   const results = payload.QueryResponse?.[entityName];
   return Array.isArray(results) ? results : [];
@@ -310,12 +370,16 @@ export async function createQuickBooksInvoice(
   realmId: string,
   accessToken: string,
   payload: Record<string, unknown>,
+  providerRequestId?: string,
 ): Promise<QuickBooksInvoiceEntity> {
+  const requestQuery = providerRequestId
+    ? `?requestid=${encodeURIComponent(providerRequestId)}`
+    : "";
   const response = await quickBooksApiRequest<{ Invoice: QuickBooksInvoiceEntity }>(
     runtimeEnv,
     realmId,
     accessToken,
-    "/invoice",
+    `/invoice${requestQuery}`,
     {
       method: "POST",
       body: JSON.stringify(payload),
@@ -323,6 +387,73 @@ export async function createQuickBooksInvoice(
   );
 
   return response.Invoice;
+}
+
+export async function findQuickBooksInvoicesByDocNumber(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  docNumber: string,
+): Promise<QuickBooksInvoiceEntity[]> {
+  return queryQuickBooksEntity<QuickBooksInvoiceEntity>(
+    runtimeEnv,
+    realmId,
+    accessToken,
+    `SELECT * FROM Invoice WHERE DocNumber = '${escapeQuickBooksQueryValue(docNumber)}' MAXRESULTS 100`,
+    "Invoice",
+  );
+}
+
+function normalizedFingerprintText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized || null;
+}
+
+function normalizedFingerprintNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : null;
+}
+
+type QuickBooksInvoiceFingerprintInput = Record<string, unknown> | QuickBooksInvoiceEntity;
+
+/**
+ * Hashes only the immutable business fields QuoteFly reviewed before publishing.
+ * QuickBooks-generated IDs, sync tokens, payment links, and response metadata are
+ * deliberately excluded so reconciliation cannot bind a same-number collision.
+ */
+export function quickBooksInvoiceFingerprint(input: QuickBooksInvoiceFingerprintInput): string {
+  const record = input as Record<string, unknown>;
+  const customerRef = (record.CustomerRef ?? {}) as Record<string, unknown>;
+  const currencyRef = (record.CurrencyRef ?? {}) as Record<string, unknown>;
+  const lines = Array.isArray(record.Line)
+    ? record.Line
+      .filter((line): line is Record<string, unknown> => Boolean(line) && typeof line === "object")
+      .filter((line) => line.DetailType === "SalesItemLineDetail")
+      .map((line) => {
+        const detail = (line.SalesItemLineDetail ?? {}) as Record<string, unknown>;
+        const itemRef = (detail.ItemRef ?? {}) as Record<string, unknown>;
+        return {
+          description: normalizedFingerprintText(line.Description),
+          amount: normalizedFingerprintNumber(line.Amount),
+          quantity: normalizedFingerprintNumber(detail.Qty),
+          unitPrice: normalizedFingerprintNumber(detail.UnitPrice),
+          itemRef: normalizedFingerprintText(itemRef.value),
+        };
+      })
+    : [];
+  const calculatedTotal = Number(lines.reduce((sum, line) => sum + (line.amount ?? 0), 0).toFixed(2));
+  const canonical = {
+    docNumber: normalizedFingerprintText(record.DocNumber),
+    txnDate: normalizedFingerprintText(record.TxnDate),
+    dueDate: normalizedFingerprintText(record.DueDate),
+    marker: normalizedFingerprintText(record.PrivateNote),
+    customerRef: normalizedFingerprintText(customerRef.value),
+    currency: normalizedFingerprintText(currencyRef.value ?? currencyRef.name) ?? "USD",
+    totalAmount: normalizedFingerprintNumber(record.TotalAmt) ?? calculatedTotal,
+    lines,
+  };
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
 }
 
 export async function fetchQuickBooksInvoice(

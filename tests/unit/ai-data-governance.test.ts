@@ -98,6 +98,17 @@ test("prompt governance removes complete credential-bearing service URIs", () =>
   assert.doesNotMatch(redacted, /root|s3cret|owner|password|example\.com|3306|\/app|quotefly/i);
 });
 
+test("prompt governance redacts international contacts and bare restricted credential forms", () => {
+  const redacted = redactAiPrompt([
+    "Call +44 20 7946 0958 or +52 55 1234 5678.",
+    "Cloud id AKIAIOSFODNN7EXAMPLE.",
+    "JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJxdW90ZWZseS10ZXN0In0.c2lnbmF0dXJlLWZpeHR1cmU.",
+  ].join(" "));
+
+  assert.doesNotMatch(redacted, /7946 0958|1234 5678|AKIAIOSFODNN7EXAMPLE|eyJhbGci/);
+  assert.match(redacted, /REDACTED_PHONE|REDACTED_SECRET/);
+});
+
 test("prompt governance redacts Spanish credential labels", () => {
   const redacted = redactAiPrompt([
     "contraseña: NuncaGuardarEsto",

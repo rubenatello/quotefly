@@ -485,7 +485,9 @@ function OverviewPanel({
       <Card variant="elevated" padding="lg">
         <CardHeader
           title="RAG retrieval index"
-          subtitle={ragIndex?.policyVersion ? `Policy ${ragIndex.policyVersion}` : "No indexed retrieval chunks yet"}
+          subtitle={ragIndex
+            ? `${ragIndex.rollout.mode} · ${ragIndex.rollout.enabledActiveTenantCount} enabled · ${ragIndex.rollout.exposedActiveTenantCount} exposed`
+            : "No indexed retrieval chunks yet"}
           actions={<Button variant="outline" size="sm" icon={<RefreshCw size={15} />} onClick={onRefresh}>Refresh</Button>}
         />
         {ragIndex ? (
@@ -495,8 +497,8 @@ function OverviewPanel({
               <MetricCompact label="Retired docs" value={ragIndex.totals.deletedDocuments.toLocaleString()} />
               <MetricCompact label="Active chunks" value={ragIndex.totals.activeChunks.toLocaleString()} />
               <MetricCompact label="Retired chunks" value={ragIndex.totals.deletedChunks.toLocaleString()} />
-              <MetricCompact label="Jobs pending" value={(ragIndex.indexingQueue.jobsByStatus.PENDING ?? 0).toLocaleString()} />
-              <MetricCompact label="Jobs failed" value={(ragIndex.indexingQueue.jobsByStatus.DEAD ?? 0).toLocaleString()} />
+              <MetricCompact label="Enabled jobs pending" value={(ragIndex.indexingQueue.jobsByStatus.PENDING ?? 0).toLocaleString()} />
+              <MetricCompact label="Enabled jobs failed" value={(ragIndex.indexingQueue.jobsByStatus.DEAD ?? 0).toLocaleString()} />
               <MetricCompact
                 label="Embedding cache"
                 value={ragIndex.indexingQueue.embeddingCacheHitRate === null
@@ -529,8 +531,9 @@ function OverviewPanel({
               <p className="text-xs text-slate-500">
                 Latest index write: {ragIndex.latestIndexedAtUtc ? formatDate(ragIndex.latestIndexedAtUtc) : "None"}.
                 {ragIndex.indexingQueue.oldestPendingAtUtc
-                  ? ` Oldest pending job: ${formatDate(ragIndex.indexingQueue.oldestPendingAtUtc)}.`
-                  : " No jobs are waiting."}
+                  ? ` Oldest enabled pending job: ${formatDate(ragIndex.indexingQueue.oldestPendingAtUtc)}.`
+                  : " No enabled jobs are waiting."}
+                {` Outside rollout: ${(ragIndex.indexingQueue.outOfRollout.jobsByStatus.PENDING ?? 0).toLocaleString()} pending across ${ragIndex.indexingQueue.outOfRollout.activeTenantCount.toLocaleString()} active tenants; these jobs are expected to wait while disabled.`}
                 Excludes {ragIndex.fieldsExcluded.join(", ")}.
               </p>
             </div>

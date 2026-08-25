@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AI_RAG_ROLLOUT_MODES, parseAiRagTenantAllowlist } from "../lib/ai-rag-rollout";
 
 const DEFAULT_JWT_SECRET = "change-me-in-production-must-be-32-chars-min";
 const APPROVED_OPENAI_PRICING = {
@@ -31,6 +32,8 @@ const EnvSchema = z.object({
   OPENAI_ASSISTANT_MODEL: z.string().default(""),
   OPENAI_ASSISTANT_COMPOSITION_ENABLED: BooleanFromEnv.default(true),
   OPENAI_ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(12_000),
+  AI_RAG_ROLLOUT_MODE: z.enum(AI_RAG_ROLLOUT_MODES).default("all"),
+  AI_RAG_TENANT_ALLOWLIST: z.string().max(8_192).default(""),
   ENABLE_AI_INDEX_WORKER: BooleanFromEnv.default(false),
   AI_INDEX_INLINE_REFRESH: BooleanFromEnv.default(true),
   ENABLE_NOTIFICATION_RETENTION_WORKER: BooleanFromEnv.default(false),
@@ -76,7 +79,51 @@ const EnvSchema = z.object({
       message: "Unread notification retention must be longer than read notification retention.",
     });
   }
+  const ragAllowlist = parseAiRagTenantAllowlist(value.AI_RAG_TENANT_ALLOWLIST);
+  if (ragAllowlist.invalidTenantIds.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["AI_RAG_TENANT_ALLOWLIST"],
+      message: "AI_RAG_TENANT_ALLOWLIST must contain only comma-separated tenant ids.",
+    });
+  }
+  if (
+    (value.AI_RAG_ROLLOUT_MODE === "allowlist" || value.AI_RAG_ROLLOUT_MODE === "shadow_allowlist")
+    && ragAllowlist.tenantIds.length === 0
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["AI_RAG_TENANT_ALLOWLIST"],
+      message: "AI_RAG_TENANT_ALLOWLIST must contain at least one tenant id for allowlist rollout modes.",
+    });
+  }
+  if (value.AI_RAG_ROLLOUT_MODE === "off" && value.ENABLE_AI_INDEX_WORKER) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ENABLE_AI_INDEX_WORKER"],
+      message: "ENABLE_AI_INDEX_WORKER cannot be enabled while AI_RAG_ROLLOUT_MODE=off.",
+    });
+  }
+  if (
+    value.AI_RAG_ROLLOUT_MODE !== "off"
+    && !value.AI_INDEX_INLINE_REFRESH
+    && !value.ENABLE_AI_INDEX_WORKER
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["AI_INDEX_INLINE_REFRESH"],
+      message: "Enabled RAG requires AI_INDEX_INLINE_REFRESH=true or ENABLE_AI_INDEX_WORKER=true.",
+    });
+  }
   if (value.NODE_ENV !== "production") return;
+
+  if (value.AI_RAG_ROLLOUT_MODE !== "off" && !value.OPENAI_API_KEY.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["OPENAI_API_KEY"],
+      message: "OPENAI_API_KEY is required before production RAG can be enabled.",
+    });
+  }
 
   let runtimeDatabaseUrl: URL | null = null;
   try {
@@ -341,6 +388,8 @@ const EnvSchema = z.object({
 export function parseEnv(input: NodeJS.ProcessEnv) {
   return EnvSchema.parse({
     ...input,
+    AI_RAG_ROLLOUT_MODE: input.AI_RAG_ROLLOUT_MODE
+      ?? (input.NODE_ENV === "production" ? "off" : "all"),
     OPENAI_API_KEY: input.OPENAI_API_KEY ?? input.OPEN_API_KEY ?? "",
   });
 }

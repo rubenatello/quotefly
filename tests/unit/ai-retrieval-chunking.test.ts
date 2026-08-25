@@ -84,14 +84,14 @@ test("normalization and chunking are deterministic for Unicode and whitespace", 
 
 test("durable RAG content redacts contact details without treating ordinary quote scope as a secret", () => {
   const governed = governAiRetrievalContent(
-    "Replace the 24-inch gate latch. Call alex.contractor@example.com or (619) 555-1212 before arrival.",
+    "Replace the 24-inch gate latch. Email alex.contractor@example.com, call (619) 555-1212, +44 20 7946 0958, or +52 55 1234 5678 before arrival.",
   );
 
   assert.match(governed.content, /Replace the 24-inch gate latch/);
   assert.match(governed.content, /CONTACT_EMAIL_REDACTED/);
   assert.match(governed.content, /CONTACT_PHONE_REDACTED/);
-  assert.doesNotMatch(governed.content, /alex\.contractor@example\.com|619\) 555-1212/);
-  assert.equal(governed.redactionCount, 2);
+  assert.doesNotMatch(governed.content, /alex\.contractor@example\.com|619\) 555-1212|7946 0958|1234 5678/);
+  assert.equal(governed.redactionCount, 4);
   assert.doesNotThrow(() => governAiRetrievalContent(
     "Authorization: approved by the homeowner to replace the damaged gate latch.",
   ));
@@ -194,6 +194,28 @@ test("credential-like source text is quarantined before an embedding or persiste
   assert.equal(writes.length, 0);
 });
 
+test("common bare credentials are quarantined while benign long trade identifiers remain usable", () => {
+  const restricted = [
+    "AKIAIOSFODNN7EXAMPLE",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJxdW90ZWZseS10ZXN0In0.c2lnbmF0dXJlLWZpeHR1cmU",
+    "-----BEGIN PRIVATE KEY----- synthetic-test-material -----END PRIVATE KEY-----",
+    "b7Aq9Zx2Lm4Np8Rs6Tv1Wy3Ck5Jh0Gu7Fd9Pe2Ui4Oo8Vv6S",
+  ];
+  for (const fixture of restricted) {
+    assert.throws(
+      () => governAiRetrievalContent(`Inspection note ${fixture}`),
+      (error) => error instanceof AiRetrievalContentQuarantinedError,
+    );
+  }
+
+  assert.doesNotThrow(() => governAiRetrievalContent(
+    "Install model QF-SUPER-DUTY-CONDENSER-2026-REVISION-000000000000000001 using 24-inch supports.",
+  ));
+  assert.doesNotThrow(() => governAiRetrievalContent(
+    "pneumonoultramicroscopicsilicovolcanoconiosis is included only as a benign long-word regression.",
+  ));
+});
+
 test("RAG ingestion rejects fields that do not belong to the source adapter", async () => {
   const { upsertAiRetrievalSource } = await loadAiRetrieval();
   const { client } = fakeRetrievalPersistence();
@@ -211,7 +233,7 @@ test("RAG ingestion rejects fields that do not belong to the source adapter", as
 
 test("governance version invalidates legacy index compatibility", async () => {
   const { AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION } = await loadAiRetrieval();
-  assert.match(AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION, /rag-content-governance-v1$/);
+  assert.match(AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION, /rag-content-governance-v2$/);
   assert.notEqual(AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION, AI_CHUNKER_VERSION);
   assert.ok(AI_RETRIEVAL_GOVERNED_CHUNKER_VERSION.length <= 64);
 });
@@ -305,6 +327,59 @@ test("a quarantined source is purged without blocking safe sibling indexing", as
   assert.match(providerInputs.join("\n"), /Garden cleanup|Prune shrubs/);
   assert.doesNotMatch(providerInputs.join("\n"), /fake-password|postgresql:/);
   assert.doesNotMatch(JSON.stringify(writes), /fake-password|postgresql:/);
+});
+
+test("inline refresh bounds source fanout and skips tenant-wide quote scans without an explicit quote", async () => {
+  const { deterministicEmbedding, refreshQuoteAiRetrievalIndex } = await loadAiRetrieval();
+  let quoteFindManyCalls = 0;
+  const client = {
+    $queryRaw: async () => [],
+    customer: { findFirst: async () => null },
+    customerActivityEvent: { findMany: async () => [] },
+    quote: {
+      findMany: async () => {
+        quoteFindManyCalls += 1;
+        return [];
+      },
+    },
+    quoteLineItem: {},
+    workPreset: {
+      findMany: async () => Array.from({ length: 30 }, (_, index) => ({
+        id: `preset-${index}`,
+        name: `Bounded service ${index}`,
+        description: null,
+        serviceType: "GARDENING",
+        category: "SERVICE",
+        createdAt: new Date("2026-08-20T00:00:00.000Z"),
+        updatedAt: new Date("2026-08-20T00:00:00.000Z"),
+      })),
+    },
+    aiRetrievalDocument: {
+      upsert: async () => ({ id: "bounded-document" }),
+    },
+    aiRetrievalChunk: {
+      upsert: async () => ({ id: "bounded-chunk" }),
+      updateMany: async () => ({ count: 0 }),
+    },
+    aiIndexJob: {},
+  };
+
+  const result = await refreshQuoteAiRetrievalIndex(client as never, {
+    access: {
+      tenantId: "tenant-bounded-refresh",
+      tenantUserId: "tenant-user-bounded-refresh",
+      userId: "user-bounded-refresh",
+      role: "owner",
+      capabilities: new Set(),
+      requestId: "request-bounded-refresh",
+    },
+    serviceType: "GARDENING",
+    embedText: async (text) => deterministicEmbedding(text),
+  });
+
+  assert.equal(result.sourceCount, 16);
+  assert.equal(result.indexedSourceCount, 16);
+  assert.equal(quoteFindManyCalls, 0);
 });
 
 test("new workers reconcile stale governed documents without requeueing in-flight work", async () => {

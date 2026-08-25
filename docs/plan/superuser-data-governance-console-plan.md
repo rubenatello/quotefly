@@ -84,7 +84,7 @@ The first release is intentionally not a database editor. Tenant mutation, arbit
 
 ### SGA-5 — Retrieval/data-plane hardening
 
-- [ ] Add PostgreSQL RLS defense in depth for tenant-scoped retrieval tables.
+- [x] Add forced PostgreSQL RLS defense in depth for tenant-scoped retrieval tables; production-like Neon role and migration rehearsal remains an operations gate.
 - [ ] Use a least-privileged runtime DB role in Neon; keep migration role separate.
 - [ ] Add tenant-scoped embeddings with composite tenant/source constraints.
 - [ ] Add asynchronous re-indexing with idempotency and deletion propagation.

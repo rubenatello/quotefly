@@ -286,6 +286,19 @@ enum InvoiceEventType {
   PAYMENT_UPDATED
   VOIDED
   DELETED
+  PROVIDER_SYNC_STARTED
+  PROVIDER_SYNC_SUCCEEDED
+  PROVIDER_SYNC_FAILED
+  PROVIDER_RECONCILIATION_REQUIRED
+  PROVIDER_RECONCILED
+}
+
+enum QuickBooksInvoiceOperationStatus {
+  PROCESSING
+  RECONCILING
+  SUCCEEDED
+  FAILED
+  RECONCILIATION_REQUIRED
 }
 
 model TenantBranding {
@@ -326,22 +339,22 @@ model TenantBrandAsset {
 }
 
 model Tenant {
-  id                                String                   @id @default(cuid())
+  id                                String                       @id @default(cuid())
   name                              String
-  slug                              String                   @unique
-  timezone                          String                   @default("UTC")
-  defaultCustomerLocale             String                   @default("en-US") @db.VarChar(5)
+  slug                              String                       @unique
+  timezone                          String                       @default("UTC")
+  defaultCustomerLocale             String                       @default("en-US") @db.VarChar(5)
   primaryTrade                      ServiceCategory?
-  onboardingCompletedAtUtc          DateTime?                @db.Timestamptz(3)
-  subscriptionStatus                String                   @default("inactive")
+  onboardingCompletedAtUtc          DateTime?                    @db.Timestamptz(3)
+  subscriptionStatus                String                       @default("inactive")
   subscriptionPlanCode              String?
-  trialStartsAtUtc                  DateTime?                @db.Timestamptz(3)
-  trialEndsAtUtc                    DateTime?                @db.Timestamptz(3)
-  subscriptionCurrentPeriodStartUtc DateTime?                @db.Timestamptz(3)
-  subscriptionCurrentPeriodEndUtc   DateTime?                @db.Timestamptz(3)
-  createdAt                         DateTime                 @default(now()) @db.Timestamptz(3)
-  updatedAt                         DateTime                 @updatedAt @db.Timestamptz(3)
-  deletedAtUtc                      DateTime?                @db.Timestamptz(3)
+  trialStartsAtUtc                  DateTime?                    @db.Timestamptz(3)
+  trialEndsAtUtc                    DateTime?                    @db.Timestamptz(3)
+  subscriptionCurrentPeriodStartUtc DateTime?                    @db.Timestamptz(3)
+  subscriptionCurrentPeriodEndUtc   DateTime?                    @db.Timestamptz(3)
+  createdAt                         DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt                         DateTime                     @updatedAt @db.Timestamptz(3)
+  deletedAtUtc                      DateTime?                    @db.Timestamptz(3)
   phoneNumber                       TenantPhoneNumber?
   users                             TenantUser[]
   customers                         Customer[]
@@ -357,6 +370,7 @@ model Tenant {
   invoices                          Invoice[]
   invoicePayments                   InvoicePayment[]
   invoiceEvents                     InvoiceEvent[]
+  quickBooksInvoiceOperations       QuickBooksInvoiceOperation[]
   activityTasks                     ActivityTask[]
   activityTaskEvents                ActivityTaskEvent[]
   customerActivityEvents            CustomerActivityEvent[]
@@ -370,13 +384,13 @@ model Tenant {
   aiAssistantFeedback               AiAssistantFeedback[]
   quoteDecisionSessions             QuoteDecisionSession[]
   smsMessages                       SmsMessage[]
-  stripeCustomerId                  String?                  @unique
-  stripeSubscriptionId              String?                  @unique
-  stripeCheckoutSessionId           String?                  @unique
-  stripeCheckoutSessionExpiresAtUtc DateTime?                @db.Timestamptz(3)
+  stripeCustomerId                  String?                      @unique
+  stripeSubscriptionId              String?                      @unique
+  stripeCheckoutSessionId           String?                      @unique
+  stripeCheckoutSessionExpiresAtUtc DateTime?                    @db.Timestamptz(3)
   stripeCheckoutAttemptId           String?
-  stripeCheckoutAttemptExpiresAtUtc DateTime?                @db.Timestamptz(3)
-  billingStateEventCreatedAtUtc     DateTime?                @db.Timestamptz(3)
+  stripeCheckoutAttemptExpiresAtUtc DateTime?                    @db.Timestamptz(3)
+  billingStateEventCreatedAtUtc     DateTime?                    @db.Timestamptz(3)
   billingStateEventId               String?
   branding                          TenantBranding?
   brandAssets                       TenantBrandAsset[]
@@ -467,30 +481,31 @@ model QuoteDraftRecovery {
 }
 
 model TenantUser {
-  id                      String               @id @default(cuid())
-  tenantId                String
-  userId                  String
-  role                    String               @default("owner")
-  createdAt               DateTime             @default(now()) @db.Timestamptz(3)
-  deletedAtUtc            DateTime?            @db.Timestamptz(3)
-  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  assignedCustomers       Customer[]           @relation("CustomerAssignee")
-  assignedQuotes          Quote[]              @relation("QuoteAssignee")
-  assignedJobs            Job[]                @relation("JobAssignee")
-  assignedJobAppointments JobAppointment[]     @relation("JobAppointmentAssignee")
-  createdJobAppointments  JobAppointment[]     @relation("JobAppointmentCreator")
-  jobNotes                JobNote[]            @relation("JobNoteCreator")
-  jobEvents               JobEvent[]
-  receivedNotifications   NotificationOutbox[] @relation("NotificationRecipient")
-  actedNotifications      NotificationOutbox[] @relation("NotificationActor")
-  invoiceEvents           InvoiceEvent[]
-  assignedActivityTasks   ActivityTask[]       @relation("ActivityTaskAssignee")
-  createdActivityTasks    ActivityTask[]       @relation("ActivityTaskCreator")
-  completedActivityTasks  ActivityTask[]       @relation("ActivityTaskCompleter")
-  activityTaskEvents      ActivityTaskEvent[]
-  quoteDrafts             QuoteDraftRecovery[]
-  aiUsageReservations     AiUsageReservation[]
+  id                          String                       @id @default(cuid())
+  tenantId                    String
+  userId                      String
+  role                        String                       @default("owner")
+  createdAt                   DateTime                     @default(now()) @db.Timestamptz(3)
+  deletedAtUtc                DateTime?                    @db.Timestamptz(3)
+  tenant                      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                        User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedCustomers           Customer[]                   @relation("CustomerAssignee")
+  assignedQuotes              Quote[]                      @relation("QuoteAssignee")
+  assignedJobs                Job[]                        @relation("JobAssignee")
+  assignedJobAppointments     JobAppointment[]             @relation("JobAppointmentAssignee")
+  createdJobAppointments      JobAppointment[]             @relation("JobAppointmentCreator")
+  jobNotes                    JobNote[]                    @relation("JobNoteCreator")
+  jobEvents                   JobEvent[]
+  receivedNotifications       NotificationOutbox[]         @relation("NotificationRecipient")
+  actedNotifications          NotificationOutbox[]         @relation("NotificationActor")
+  invoiceEvents               InvoiceEvent[]
+  quickBooksInvoiceOperations QuickBooksInvoiceOperation[]
+  assignedActivityTasks       ActivityTask[]               @relation("ActivityTaskAssignee")
+  createdActivityTasks        ActivityTask[]               @relation("ActivityTaskCreator")
+  completedActivityTasks      ActivityTask[]               @relation("ActivityTaskCompleter")
+  activityTaskEvents          ActivityTaskEvent[]
+  quoteDrafts                 QuoteDraftRecovery[]
+  aiUsageReservations         AiUsageReservation[]
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId])
@@ -801,39 +816,40 @@ model NotificationOutbox {
 }
 
 model Invoice {
-  id             String               @id @default(cuid())
-  tenantId       String
-  customerId     String
-  jobId          String
-  sourceQuoteId  String
-  invoiceNumber  Int
-  status         InvoiceStatus        @default(DRAFT)
-  paymentStatus  InvoicePaymentStatus @default(PENDING)
-  titleSnapshot  String               @db.VarChar(191)
-  scopeSnapshot  String?
-  documentLocale String               @default("en-US") @db.VarChar(5)
-  currency       String               @default("USD") @db.VarChar(3)
-  subtotalAmount Decimal              @db.Decimal(10, 2)
-  taxAmount      Decimal              @db.Decimal(10, 2)
-  totalAmount    Decimal              @db.Decimal(10, 2)
-  amountPaid     Decimal              @default(0) @db.Decimal(10, 2)
-  balanceDue     Decimal              @db.Decimal(10, 2)
-  issuedAtUtc    DateTime?            @db.Timestamptz(3)
-  dueAtUtc       DateTime?            @db.Timestamptz(3)
-  sentAtUtc      DateTime?            @db.Timestamptz(3)
-  paidAtUtc      DateTime?            @db.Timestamptz(3)
-  voidedAtUtc    DateTime?            @db.Timestamptz(3)
-  version        Int                  @default(1)
-  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
-  archivedAtUtc  DateTime?            @db.Timestamptz(3)
-  deletedAtUtc   DateTime?            @db.Timestamptz(3)
-  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer       Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  job            Job                  @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
-  sourceQuote    Quote                @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
-  payments       InvoicePayment[]
-  events         InvoiceEvent[]
+  id                   String                       @id @default(cuid())
+  tenantId             String
+  customerId           String
+  jobId                String
+  sourceQuoteId        String
+  invoiceNumber        Int
+  status               InvoiceStatus                @default(DRAFT)
+  paymentStatus        InvoicePaymentStatus         @default(PENDING)
+  titleSnapshot        String                       @db.VarChar(191)
+  scopeSnapshot        String?
+  documentLocale       String                       @default("en-US") @db.VarChar(5)
+  currency             String                       @default("USD") @db.VarChar(3)
+  subtotalAmount       Decimal                      @db.Decimal(10, 2)
+  taxAmount            Decimal                      @db.Decimal(10, 2)
+  totalAmount          Decimal                      @db.Decimal(10, 2)
+  amountPaid           Decimal                      @default(0) @db.Decimal(10, 2)
+  balanceDue           Decimal                      @db.Decimal(10, 2)
+  issuedAtUtc          DateTime?                    @db.Timestamptz(3)
+  dueAtUtc             DateTime?                    @db.Timestamptz(3)
+  sentAtUtc            DateTime?                    @db.Timestamptz(3)
+  paidAtUtc            DateTime?                    @db.Timestamptz(3)
+  voidedAtUtc          DateTime?                    @db.Timestamptz(3)
+  version              Int                          @default(1)
+  createdAt            DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                     @default(now()) @updatedAt @db.Timestamptz(3)
+  archivedAtUtc        DateTime?                    @db.Timestamptz(3)
+  deletedAtUtc         DateTime?                    @db.Timestamptz(3)
+  tenant               Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer             Customer                     @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  job                  Job                          @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
+  sourceQuote          Quote                        @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
+  payments             InvoicePayment[]
+  events               InvoiceEvent[]
+  quickBooksOperations QuickBooksInvoiceOperation[]
 
   @@unique([id, tenantId])
   @@unique([tenantId, jobId])
@@ -895,6 +911,45 @@ model InvoiceEvent {
   @@unique([tenantId, providerEventId])
   @@index([tenantId, invoiceId, createdAt, id], map: "InvoiceEvent_invoice_created_idx")
   @@index([tenantId, actorTenantUserId, createdAt], map: "InvoiceEvent_actor_created_idx")
+}
+
+model QuickBooksInvoiceOperation {
+  id                      String                           @id @default(cuid())
+  tenantId                String
+  invoiceId               String
+  quickBooksConnectionId  String
+  requestedByTenantUserId String
+  status                  QuickBooksInvoiceOperationStatus @default(PROCESSING)
+  commandKeyHash          String                           @db.VarChar(64)
+  payloadHash             String                           @db.VarChar(64)
+  providerRealmId         String                           @db.VarChar(191)
+  claimTokenHash          String?                          @db.VarChar(64)
+  providerRequestId       String                           @db.VarChar(191)
+  providerInvoiceId       String?                          @db.VarChar(191)
+  providerDocNumber       String                           @db.VarChar(191)
+  attemptCount            Int                              @default(1)
+  reconciliationCount     Int                              @default(0)
+  processingStartedAtUtc  DateTime                         @db.Timestamptz(3)
+  claimExpiresAtUtc       DateTime?                        @db.Timestamptz(3)
+  lastAttemptAtUtc        DateTime                         @db.Timestamptz(3)
+  lastReconciledAtUtc     DateTime?                        @db.Timestamptz(3)
+  succeededAtUtc          DateTime?                        @db.Timestamptz(3)
+  failedAtUtc             DateTime?                        @db.Timestamptz(3)
+  lastFailureCode         String?                          @db.VarChar(191)
+  createdAt               DateTime                         @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime                         @default(now()) @updatedAt @db.Timestamptz(3)
+  archivedAtUtc           DateTime?                        @db.Timestamptz(3)
+  tenant                  Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice                 Invoice                          @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  connection              QuickBooksConnection             @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  requestedByTenantUser   TenantUser                       @relation(fields: [requestedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, invoiceId])
+  @@unique([tenantId, providerRequestId])
+  @@unique([quickBooksConnectionId, providerInvoiceId])
+  @@index([tenantId, status, archivedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "QuickBooksInvoiceOperation_status_updated_idx")
+  @@index([tenantId, claimExpiresAtUtc, status], map: "QuickBooksInvoiceOperation_claim_expiry_idx")
 }
 
 model AiUsageEvent {
@@ -1412,30 +1467,31 @@ model BillingWebhookEvent {
 }
 
 model QuickBooksConnection {
-  id                       String                     @id @default(cuid())
-  tenantId                 String                     @unique
-  realmId                  String                     @unique
+  id                       String                       @id @default(cuid())
+  tenantId                 String                       @unique
+  realmId                  String                       @unique
   environment              String
   companyName              String?
-  status                   QuickBooksConnectionStatus @default(CONNECTED)
-  scopes                   String[]                   @default([])
+  status                   QuickBooksConnectionStatus   @default(CONNECTED)
+  scopes                   String[]                     @default([])
   accessTokenEncrypted     String?
   refreshTokenEncrypted    String?
-  accessTokenExpiresAtUtc  DateTime?                  @db.Timestamptz(3)
-  refreshTokenRotatedAtUtc DateTime?                  @db.Timestamptz(3)
-  connectedAtUtc           DateTime                   @default(now()) @db.Timestamptz(3)
-  disconnectedAtUtc        DateTime?                  @db.Timestamptz(3)
-  lastTokenRefreshAtUtc    DateTime?                  @db.Timestamptz(3)
-  lastSyncAtUtc            DateTime?                  @db.Timestamptz(3)
-  lastWebhookAtUtc         DateTime?                  @db.Timestamptz(3)
+  accessTokenExpiresAtUtc  DateTime?                    @db.Timestamptz(3)
+  refreshTokenRotatedAtUtc DateTime?                    @db.Timestamptz(3)
+  connectedAtUtc           DateTime                     @default(now()) @db.Timestamptz(3)
+  disconnectedAtUtc        DateTime?                    @db.Timestamptz(3)
+  lastTokenRefreshAtUtc    DateTime?                    @db.Timestamptz(3)
+  lastSyncAtUtc            DateTime?                    @db.Timestamptz(3)
+  lastWebhookAtUtc         DateTime?                    @db.Timestamptz(3)
   lastError                String?
-  createdAt                DateTime                   @default(now()) @db.Timestamptz(3)
-  updatedAt                DateTime                   @updatedAt @db.Timestamptz(3)
-  deletedAtUtc             DateTime?                  @db.Timestamptz(3)
-  tenant                   Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt                DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime                     @updatedAt @db.Timestamptz(3)
+  deletedAtUtc             DateTime?                    @db.Timestamptz(3)
+  tenant                   Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerMaps             QuickBooksCustomerMap[]
   itemMaps                 QuickBooksItemMap[]
   invoiceSyncs             QuickBooksInvoiceSync[]
+  invoiceOperations        QuickBooksInvoiceOperation[]
   webhookEvents            QuickBooksWebhookEvent[]
 
   @@unique([id, tenantId])

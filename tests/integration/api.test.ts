@@ -32,6 +32,7 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
   createServiceItem: vi.fn(),
   createInvoice: vi.fn(),
   fetchInvoice: vi.fn(),
+  findInvoiceByDocNumber: vi.fn(),
 }));
 
 const stripeProviderMocks = vi.hoisted(() => ({
@@ -81,6 +82,7 @@ vi.mock("../../src/services/quickbooks", async () => {
     createQuickBooksServiceItem: quickBooksProviderMocks.createServiceItem,
     createQuickBooksInvoice: quickBooksProviderMocks.createInvoice,
     fetchQuickBooksInvoice: quickBooksProviderMocks.fetchInvoice,
+    findQuickBooksInvoicesByDocNumber: quickBooksProviderMocks.findInvoiceByDocNumber,
   };
 });
 
@@ -3686,7 +3688,10 @@ describe("QuoteFly API integration", () => {
       headers: authHeaders(session.cookie),
       payload: { force: true },
     });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(410);
+    expect(parseJson<{ code: string }>(response)).toMatchObject({
+      code: "QUICKBOOKS_LEGACY_QUOTE_PUSH_RETIRED",
+    });
 
     const taxableResponse = await app.inject({
       method: "POST",
@@ -3694,9 +3699,9 @@ describe("QuoteFly API integration", () => {
       headers: authHeaders(session.cookie),
       payload: {},
     });
-    expect(taxableResponse.statusCode).toBe(422);
-    expect(parseJson<{ error: string }>(taxableResponse)).toEqual({
-      error: "QUICKBOOKS_TAX_SYNC_UNSUPPORTED",
+    expect(taxableResponse.statusCode).toBe(410);
+    expect(parseJson<{ code: string }>(taxableResponse)).toMatchObject({
+      code: "QUICKBOOKS_LEGACY_QUOTE_PUSH_RETIRED",
     });
   });
 

@@ -1,10 +1,10 @@
 # QuoteFly Site Improvements
 
-Status: The quote-to-job public-site improvements are committed on `main`; the current uncommitted workspace adds the Kody prompt-to-priced-review-draft improvement, passes the full local gate and independent source review, and remains blocked on exact-candidate database, browser, live-provider, staging, and owner-operated release evidence
+Status: The quote-to-job site and Kody prompt-to-priced-review workflow are committed on `main` at `b72ec1b`. The exact-sha CI launch gate is green, but the separate live-provider Kody evaluation failed 4/6 on 2026-08-24. The current uncommitted workspace repairs the tightly bounded citation-free synthetic review-draft validator and count-preservation evaluation, adds the default-off Phase 4B QuickBooks Invoice review/publish/reconciliation foundation, and passes the exact local launch gate plus independent Opera review. An exact-sha provider rerun, staging/mobile smoke, and owner-operated release evidence remain pending.
 
 Last reviewed: 2026-08-24
 
-Product baseline: `8ceecb1` (`feat: complete sellable quote-to-job product story`)
+Product baseline: `b72ec1b` (`fix: stabilize Kody quote workflows`)
 
 ## Implementation record
 
@@ -15,7 +15,9 @@ Product baseline: `8ceecb1` (`feat: complete sellable quote-to-job product story
 - Trade pages link to the shared quote-to-job workflow and Basic pricing instead of duplicating thin operational content.
 - Legacy QuickBooks provider workflows are default-off in the current candidate; public copy does not market automatic provider invoicing, reconciliation, or payment collection.
 - Exact integrated evidence currently includes the database-backed CI gate with `213/213` integration tests, web build, lint, i18n `12/12`, 16-route prerender, SEO `9/9`, capture generation `1/1`, focused public responsive/Axe/keyboard/reduced-motion coverage `4/4`, QuickBooks API/security integration coverage `60/60`, `88/88` executed browser scenarios plus one intentional opt-in capture skip, and the focused member/manager QuickBooks Settings regression `2/2`. Independent security, UX (`97/100`), SEO, release-operations, and final engineering reviews approve the candidate for the next explicitly authorized BCP.
-- The current workspace improves Kody quote drafting so a single natural request can resolve an active visible customer, preserve an estimated labor-hour range, match the tenant's saved products/services, and hand the Quote Builder separate priced, source-linked lines for review. Missing customer or work details produce a bounded clarification instead of a guessed or silently created record.
+- `main` now lets one natural Kody request resolve an active visible customer, preserve an estimated labor-hour range, match saved tenant products/services, and hand the Quote Builder separate priced, source-linked lines for review. Missing customer or work details produce a bounded clarification instead of a guessed or silently created record.
+- GitHub run `32784331528` proved that the provider secret and isolated database were available, then failed the synthetic Kody quality gate at 4/6: one follow-up response did not preserve the requested total count in the evaluator's accepted form, and one safe quote-draft response was forced into deterministic fallback because no citation had been authorized. The current workspace addresses both cases without relaxing mutation, hidden-field, or citation validation.
+- Current-worktree evidence passes `verify:launch` with all 58 migrations, 116 inventoried routes, zero unmatched declarations, 240/240 integration tests, 92 executed browser scenarios plus one intentional opt-in capture skip, parser evaluation 17/17, assistant evaluation 83/83, retrieval evaluation 12/12, and clean dependency audits. Focused migrated-PostgreSQL QuickBooks Invoice coverage passes 18/18, including immutable realm/payload review binding, expired-claim recovery, exact reconciliation, tenant/RLS boundaries, and concurrency. This local evidence does not replace the required exact-SHA live-provider 6/6 rerun after an explicitly authorized BCP.
 
 ## Purpose
 
@@ -220,7 +222,9 @@ Capture requirements:
 - [x] Preserve clarification context and remove the automatic second AI pass from the Kody handoff.
 - [x] Add parser, routing, catalog, handoff-normalization, and database-backed acceptance coverage.
 - [x] Run the exact-candidate full local gate, specialist source reviews, and independent Opera source verdict.
-- [ ] Run the database-backed launch gate, responsive browser scenarios, repaired live-provider evaluation, staging/mobile smoke checks, and owner-operated release evidence.
+- [x] Run the exact-`b72ec1b` database-backed launch gate and responsive browser scenarios.
+- [ ] Commit the current composer/evaluator repair only after explicit BCP authorization, then rerun the live-provider evaluation on that exact SHA and require 6/6.
+- [ ] Run staging/mobile smoke checks and collect owner-operated release evidence.
 
 ## Definition of done
 

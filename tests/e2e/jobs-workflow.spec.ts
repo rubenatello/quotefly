@@ -314,3 +314,249 @@ test("invoice panel ignores a late response after the selected quote changes", a
   await expect(firstPanel.getByText("Invoice #1", { exact: true })).toBeVisible();
   await expect(firstPanel.getByText("Invoice #99", { exact: true })).toHaveCount(0);
 });
+
+test("QuickBooks review uses mapped targets and recovers from a stale preview version", async ({
+  context,
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  await page.setViewportSize({ width: 320, height: 844 });
+
+  const owner = await signUpViaApi(request, "quickbooks-review-version");
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: "Very Long QuoteFly Customer Name That Must Remain Fully Reviewable On Mobile",
+    phone: "555-014-7799",
+    email: "quickbooks-review@example.com",
+  });
+  const quote = await createQuoteViaApi(request, owner, customer.id, {
+    title: "UNBROKEN-SERVICE-SKU-THAT-MUST-WRAP-ON-A-NARROW-MOBILE-SCREEN-1234567890",
+  });
+  const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { status: "ACCEPTED" },
+  });
+  expect(accepted.status()).toBe(200);
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: owner.cookieHeader,
+      "Idempotency-Key": `quickbooks-review-invoice-${Date.now()}`,
+    },
+    data: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+  });
+  expect(created.status()).toBe(201);
+  const invoice = (await created.json()) as { invoice: { id: string; version: number } };
+
+  let previewVersion = invoice.invoice.version;
+  const publishVersions: number[] = [];
+  const publishBindings: string[] = [];
+  let previewOperation: null | {
+    status: "PROCESSING";
+    providerDocNumber: string;
+    reconciliationAvailable: boolean;
+  } = null;
+  let reconciliationCalls = 0;
+  const previewResponse = () => ({
+    providerWorkflowsEnabled: true,
+    preview: {
+      invoice: {
+        id: invoice.invoice.id,
+        invoiceNumber: 1,
+        version: previewVersion,
+        status: "DRAFT",
+        customerName: customer.fullName,
+        currency: "USD",
+        subtotalAmount: 150,
+        taxAmount: 0,
+        totalAmount: 150,
+        dueAtUtc: "2026-10-01T17:00:00.000Z",
+      },
+      connection: { companyName: "Acme Field Services QuickBooks", status: "CONNECTED" },
+      quickBooksCustomerName: "Acme QB Customer Target",
+      providerDocNumber: "QF-000001",
+      lineItems: [{
+        description: quote.title,
+        quantity: 1,
+        unitPrice: 150,
+        amount: 150,
+        mapped: true,
+        quickBooksItemName: "QuickBooks Service Item Target With A Long Name",
+      }],
+      blockers: [],
+      ready: true,
+      reviewBinding: previewVersion === invoice.invoice.version ? "A".repeat(43) : "B".repeat(43),
+      operation: previewOperation,
+    },
+  });
+  await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/sync-preview`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(previewResponse()) });
+  });
+  await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/publish`, async (route) => {
+    const body = route.request().postDataJSON() as { invoiceVersion: number; reviewBinding: string };
+    publishVersions.push(body.invoiceVersion);
+    publishBindings.push(body.reviewBinding);
+    if (publishVersions.length === 1) {
+      previewVersion += 1;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "Synthetic raw backend prose must not render.",
+          code: "INVOICE_VERSION_CONFLICT",
+          currentVersion: previewVersion,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        duplicate: false,
+        reconciliationRequired: false,
+        operation: { status: "SUCCEEDED", providerDocNumber: "QF-000001", reconciliationAvailable: false },
+      }),
+    });
+  });
+  await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/reconcile`, async (route) => {
+    reconciliationCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        found: false,
+        operation: {
+          status: "RECONCILIATION_REQUIRED",
+          providerDocNumber: "QF-000001",
+          reconciliationAvailable: true,
+        },
+      }),
+    });
+  });
+
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/quotes/${quote.id}`);
+  const panel = page.getByTestId("quickbooks-invoice-panel");
+  await expect(panel.getByRole("button", { name: "Review QuickBooks draft" })).toBeVisible({ timeout: 30_000 });
+  await panel.getByRole("button", { name: "Review QuickBooks draft" }).click();
+  const dialog = page.getByRole("dialog", { name: "Publish this invoice to QuickBooks?" });
+  await expect(dialog).toContainText("Acme Field Services QuickBooks");
+  await expect(dialog).toContainText(customer.fullName);
+  await expect(dialog).toContainText("QuickBooks: Acme QB Customer Target");
+  await expect(dialog).toContainText("QuickBooks: QuickBooks Service Item Target With A Long Name");
+  await expect(dialog).toContainText("1 × $150.00 each");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+
+  await dialog.getByRole("button", { name: "Publish to QuickBooks" }).click();
+  await expect(panel).toContainText("This invoice changed after the review. Review the updated details before publishing.");
+  await expect(panel).not.toContainText("Synthetic raw backend prose must not render.");
+  await panel.getByRole("button", { name: "Review QuickBooks draft" }).click();
+  await page.getByRole("dialog", { name: "Publish this invoice to QuickBooks?" })
+    .getByRole("button", { name: "Publish to QuickBooks" })
+    .click();
+  await expect(panel.getByText("Published once to QuickBooks as QF-000001.", { exact: true })).toBeVisible();
+  expect(publishVersions).toEqual([invoice.invoice.version, invoice.invoice.version + 1]);
+  expect(publishBindings).toEqual(["A".repeat(43), "B".repeat(43)]);
+
+  previewOperation = {
+    status: "PROCESSING",
+    providerDocNumber: "QF-000001",
+    reconciliationAvailable: true,
+  };
+  await page.reload();
+  await expect(panel.getByRole("button", { name: "Check QuickBooks" })).toBeVisible();
+  await panel.getByRole("button", { name: "Check QuickBooks" }).click();
+  await expect(panel).toContainText("QuoteFly could not confirm whether QuickBooks created the invoice. Do not publish again yet.");
+  expect(reconciliationCalls).toBe(1);
+  expect(publishVersions).toHaveLength(2);
+});
+
+test("QuickBooks blocker actions remain usable in Spanish at 320px", async ({
+  context,
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "es-US"));
+  await page.setViewportSize({ width: 320, height: 844 });
+
+  const owner = await signUpViaApi(request, "quickbooks-spanish-mobile");
+  const preference = await request.patch(`${apiBaseUrl}/v1/auth/me/preferences`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { preferredLocale: "es-US" },
+  });
+  expect(preference.status()).toBe(200);
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: "Cliente de QuoteFly con un nombre largo para revisar en móvil",
+    phone: "555-014-7800",
+    email: "quickbooks-spanish-mobile@example.com",
+  });
+  const quote = await createQuoteViaApi(request, owner, customer.id, {
+    title: "Servicio que necesita una asignación de QuickBooks antes de publicarse",
+  });
+  const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { status: "ACCEPTED" },
+  });
+  expect(accepted.status()).toBe(200);
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: owner.cookieHeader,
+      "Idempotency-Key": `quickbooks-spanish-mobile-${Date.now()}`,
+    },
+    data: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+  });
+  expect(created.status()).toBe(201);
+  const invoice = (await created.json()) as { invoice: { id: string; version: number } };
+
+  await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/sync-preview`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        providerWorkflowsEnabled: true,
+        preview: {
+          invoice: {
+            id: invoice.invoice.id,
+            invoiceNumber: 1,
+            version: invoice.invoice.version,
+            status: "DRAFT",
+            customerName: customer.fullName,
+            currency: "USD",
+            subtotalAmount: 150,
+            taxAmount: 0,
+            totalAmount: 150,
+            dueAtUtc: "2026-10-01T17:00:00.000Z",
+          },
+          connection: { companyName: "Empresa de servicios de campo", status: "CONNECTED" },
+          quickBooksCustomerName: null,
+          providerDocNumber: "QF-000001",
+          lineItems: [{
+            description: quote.title,
+            quantity: 1,
+            unitPrice: 150,
+            amount: 150,
+            mapped: false,
+            quickBooksItemName: null,
+          }],
+          blockers: ["QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED", "QUICKBOOKS_ITEM_MAPPING_REQUIRED"],
+          ready: false,
+          reviewBinding: null,
+          operation: null,
+        },
+      }),
+    });
+  });
+
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/quotes/${quote.id}`);
+  await expect(page.locator("html")).toHaveAttribute("lang", "es-US");
+  const panel = page.getByTestId("quickbooks-invoice-panel");
+  const settingsButton = panel.getByRole("button", { name: "Abrir configuración de QuickBooks" });
+  await expect(settingsButton).toBeVisible({ timeout: 30_000 });
+  await expect(panel).toContainText("Vincula este cliente con un cliente existente de QuickBooks.");
+  await expect(panel).toContainText("Vincula cada partida con un artículo existente de QuickBooks.");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+  await expect.poll(async () => (await settingsButton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+});

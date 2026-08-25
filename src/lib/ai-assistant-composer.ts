@@ -159,6 +159,7 @@ const SYSTEM_PROMPT = [
   "Sound calm, collaborative, and natural. Use contractions when they help, and never scold, argue with, blame, or talk down to the user.",
   "Treat the latest request as authoritative when it changes direction. QuoteFly renders any context-shift acknowledgement separately, so do not repeat or dramatize it.",
   "Actions marked requiresConfirmation are proposals only. Explain what is ready to review and never claim it was created, saved, sent, deleted, or otherwise changed.",
+  "Preserve counts, amounts, dates, and other concrete facts from the deterministic answer when they directly answer the user's request. You may spell out a small count, but do not omit or change it.",
   "Keep the answer practical for a contractor using a phone: 2-4 short sentences, concrete numbers when provided, and one useful next step.",
   "Use provided citation keys like [A1] when you rely on retrieved data.",
 ].join("\n");
@@ -574,8 +575,19 @@ function citationMarkerKeys(answer: string) {
   return Array.from(answer.matchAll(CITATION_MARKER_PATTERN), (match) => match[1]);
 }
 
+function isSyntheticReviewDraft(params: AiAssistantCompositionInput) {
+  return (params.tool === "DRAFT_QUOTE" || params.tool === "DRAFT_PRODUCT")
+    && params.results.length > 0
+    && params.citations.length === 0
+    && (params.retrievalExcerpts?.length ?? 0) === 0
+    && /no workspace (?:rows|data) (?:were )?read/i.test(params.diagnostics.archivePolicy)
+    && params.actions.length > 0
+    && params.actions.every((action) => action.requiresConfirmation);
+}
+
 function answerRequiresGroundedCitation(params: AiAssistantCompositionInput) {
-  return params.results.length > 0 || (params.retrievalExcerpts?.length ?? 0) > 0;
+  const hasData = params.results.length > 0 || (params.retrievalExcerpts?.length ?? 0) > 0;
+  return hasData && !isSyntheticReviewDraft(params);
 }
 
 function financialFieldsWereExcluded(params: AiAssistantCompositionInput) {

@@ -25,7 +25,7 @@ Target launch stage: controlled beta for blue-collar contractors. The beta goal 
 | Billing | Provider setup required | Billing webhook integration test; billing-required UI manual smoke | Stripe test mode can be used for beta. Basic is sellable; advanced tiers remain disabled | Production Stripe price IDs, webhook secret, customer portal, tax/account settings |
 | QuickBooks | Provider setup required | Manual smoke; CSV/export path available behind app surfaces | Direct QuickBooks connection remains off-sale for beta unless Intuit sandbox and callback are configured | Intuit app review, sandbox test, production redirect URI, error-state E2E |
 | Twilio/SMS provider | Provider setup required | Manual smoke only; native SMS app is the beta send path | Twilio inbound webhook is disabled unless `ENABLE_TWILIO_SMS=true` | Twilio credentials, webhook validation, compliance copy, opt-out handling |
-| AI quoting/revision | Beta | Parser eval in `npm run verify`; manual AI prompt smoke | AI is a drafting assistant only. Users must review every quote before sending | Production OpenAI key, usage monitoring, AI quality review, prompt/limit E2E |
+| AI quoting/revision | Beta | Parser/assistant/retrieval evals, tenant/RLS retrieval integration, and manual AI prompt smoke | Deterministic customer/catalog/Jobs/dispatch/invoice tools and review-only drafting are available. RAG is production-default-off and limited to a controlled `shadow_allowlist` pilot; users must review every quote before sending | Exact-SHA provider 6/6, OpenAI account/data-control evidence, Neon migration/RLS rehearsal, pilot alerts, signed shadow review, and production-scale FTS/semantic latency evidence before exposure |
 | Legal/privacy | Ready | Playwright page smoke | Privacy, data privacy, terms, and cookie policy pages exist | Legal review before public paid launch |
 | Internal admin/AI quality | Beta | Manual superuser smoke | Superuser-gated; not tenant-visible | Add audit logging and production access review |
 
@@ -51,9 +51,9 @@ Required manual smoke before production handoff:
 - Branding save and PDF visual output.
 - QuickBooks disconnected/configured states and CSV export.
 - AI enabled, limit, and provider-error states.
+- Kody RAG `off` and internal `shadow_allowlist` states, including zero exposed tenants and separately scoped enabled/out-of-rollout queue health.
 - iOS/Android email/SMS/PDF native app behavior.
 
 ## Current Launch Decision
 
-QuoteFly is on track for controlled beta when `npm run verify` passes locally and `npm run verify:launch` passes against a dedicated `TEST_DATABASE_URL`. Do not move to broad paid launch until provider-dependent rows are moved out of `Provider setup required` or deliberately moved to `Post-launch`.
-
+QuoteFly is on track for controlled beta when `npm run verify` passes locally and `npm run verify:launch` passes against a dedicated `TEST_DATABASE_URL`. Kody RAG remains a separate controlled-pilot gate: production `off`, then internal `shadow_allowlist`, then exposed `allowlist` only after the evidence in `OWNER-ACTION-ITEMS.md` is complete. Do not move to broad paid launch until provider-dependent rows are moved out of `Provider setup required` or deliberately moved to `Post-launch`.

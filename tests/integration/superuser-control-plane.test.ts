@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
+import { env } from "../../src/config/env";
 import { prisma } from "../../src/lib/prisma";
 
 type Session = {
@@ -404,8 +405,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 46,
-      fieldCount: 696,
+      modelCount: 47,
+      fieldCount: 721,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);
@@ -442,6 +443,14 @@ describe("superuser data-governance control plane", () => {
     });
     expect(ragIndex.statusCode).toBe(200);
     const ragIndexBody = ragIndex.json() as {
+      rollout: {
+        mode: string;
+        configuredAllowlistSize: number;
+        enabledActiveTenantCount: number;
+        exposedActiveTenantCount: number;
+        inlineRefreshEnabled: boolean;
+        workerEnabled: boolean;
+      };
       totals: {
         documents: number;
         activeDocuments: number;
@@ -449,9 +458,15 @@ describe("superuser data-governance control plane", () => {
         activeChunks: number;
       };
       indexingQueue: {
+        scope: string;
+        activeTenantCount: number;
         jobsByStatus: Record<string, number>;
         successfulJobs: number;
         embeddingCacheHitRate: number | null;
+        outOfRollout: {
+          activeTenantCount: number;
+          jobsByStatus: Record<string, number>;
+        };
       };
       fieldsExcluded: string[];
     };
@@ -461,13 +476,101 @@ describe("superuser data-governance control plane", () => {
       chunks: 0,
       activeChunks: 0,
     });
+    expect(ragIndexBody.rollout).toMatchObject({
+      mode: "all",
+      configuredAllowlistSize: 0,
+      inlineRefreshEnabled: true,
+      workerEnabled: false,
+    });
+    expect(ragIndexBody.rollout.enabledActiveTenantCount).toBeGreaterThan(0);
+    expect(ragIndexBody.rollout.exposedActiveTenantCount).toBe(ragIndexBody.rollout.enabledActiveTenantCount);
     expect(ragIndexBody.fieldsExcluded).toEqual(expect.arrayContaining([
       "chunk content",
       "embedding vectors",
       "source row ids",
     ]));
     expect(ragIndexBody.indexingQueue.jobsByStatus.PENDING).toBeGreaterThan(0);
+    expect(ragIndexBody.indexingQueue.scope).toBe("rollout_enabled_active_tenants");
+    expect(ragIndexBody.indexingQueue.activeTenantCount).toBe(ragIndexBody.rollout.enabledActiveTenantCount);
+    expect(ragIndexBody.indexingQueue.outOfRollout).toMatchObject({
+      activeTenantCount: 0,
+      jobsByStatus: {},
+    });
     expect(ragIndexBody.indexingQueue.successfulJobs).toBe(0);
     expect(ragIndexBody.indexingQueue.embeddingCacheHitRate).toBeNull();
+  });
+
+  test("reports active allowlisted queue health separately from disabled and deleted tenants", async () => {
+    const superuser = await signUp("superuser-integration@example.com", "RAG allowlisted");
+    const outside = await signUp("rag-outside-rollout@example.com", "RAG outside");
+    const deleted = await signUp("rag-deleted-rollout@example.com", "RAG deleted");
+    await prisma.aiIndexJob.createMany({
+      data: [superuser, outside, deleted].map((session, index) => ({
+        tenantId: session.tenant.id,
+        sourceType: "WorkPreset",
+        sourceId: `control-plane-rollout-${index}`,
+        operation: "UPSERT",
+      })),
+    });
+    await prisma.tenant.update({
+      where: { id: deleted.tenant.id },
+      data: { deletedAtUtc: new Date() },
+    });
+
+    const originalMode = env.AI_RAG_ROLLOUT_MODE;
+    const originalAllowlist = env.AI_RAG_TENANT_ALLOWLIST;
+    env.AI_RAG_ROLLOUT_MODE = "allowlist";
+    env.AI_RAG_TENANT_ALLOWLIST = superuser.tenant.id;
+    try {
+      const [enabledPending, outsidePending, deletedPending] = await Promise.all([
+        prisma.aiIndexJob.count({ where: { tenantId: superuser.tenant.id, status: "PENDING" } }),
+        prisma.aiIndexJob.count({ where: { tenantId: outside.tenant.id, status: "PENDING" } }),
+        prisma.aiIndexJob.count({ where: { tenantId: deleted.tenant.id, status: "PENDING" } }),
+      ]);
+      expect(deletedPending).toBeGreaterThan(0);
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/internal/control-plane/rag-index",
+        headers: { cookie: superuser.cookie },
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        rollout: {
+          enabledActiveTenantCount: number;
+          exposedActiveTenantCount: number;
+        };
+        indexingQueue: {
+          activeTenantCount: number;
+          jobsByStatus: Record<string, number>;
+          oldestPendingAtUtc: string | null;
+          outOfRollout: {
+            activeTenantCount: number;
+            jobsByStatus: Record<string, number>;
+            oldestPendingAtUtc: string | null;
+            expectedWhileDisabled: boolean;
+          };
+        };
+      };
+      expect(body.rollout).toMatchObject({
+        enabledActiveTenantCount: 1,
+        exposedActiveTenantCount: 1,
+      });
+      expect(body.indexingQueue).toMatchObject({
+        activeTenantCount: 1,
+        jobsByStatus: { PENDING: enabledPending },
+        outOfRollout: {
+          activeTenantCount: 1,
+          jobsByStatus: { PENDING: outsidePending },
+          expectedWhileDisabled: true,
+        },
+      });
+      expect(body.indexingQueue.oldestPendingAtUtc).not.toBeNull();
+      expect(body.indexingQueue.outOfRollout.oldestPendingAtUtc).not.toBeNull();
+      expect(body.indexingQueue.jobsByStatus.PENDING).not.toBe(enabledPending + outsidePending + deletedPending);
+    } finally {
+      env.AI_RAG_ROLLOUT_MODE = originalMode;
+      env.AI_RAG_TENANT_ALLOWLIST = originalAllowlist;
+    }
   });
 });

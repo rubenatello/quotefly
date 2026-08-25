@@ -6,6 +6,7 @@ import {
 } from "../lib/ai-index-jobs";
 import { assertAiRetrievalRlsReady } from "../lib/tenant-rls";
 import { env } from "../config/env";
+import { isAiRagEnabledForTenant } from "../lib/ai-rag-rollout";
 
 const workerId = `ai-index-${process.pid}`;
 const GOVERNANCE_RECONCILIATION_BATCH_SIZE = 100;
@@ -25,6 +26,9 @@ async function run() {
   if (!env.ENABLE_AI_INDEX_WORKER) {
     throw new Error("AI index worker is rollout-gated. Set ENABLE_AI_INDEX_WORKER=true only after mutation coverage and staging race tests pass.");
   }
+  if (env.AI_RAG_ROLLOUT_MODE === "off") {
+    throw new Error("AI index worker cannot start while AI_RAG_ROLLOUT_MODE=off.");
+  }
   await assertAiRetrievalRlsReady(prisma, {
     requireRuntimeRole: process.env.NODE_ENV === "production",
   });
@@ -41,6 +45,7 @@ async function run() {
       });
       for (const tenant of tenants) {
         if (stopping) break;
+        if (!isAiRagEnabledForTenant(env, tenant.id)) continue;
         const nowMs = Date.now();
         const nextReconciliationAtMs = nextGovernanceReconciliationAtByTenant.get(tenant.id) ?? 0;
         if (nowMs >= nextReconciliationAtMs) {

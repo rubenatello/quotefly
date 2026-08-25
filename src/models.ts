@@ -126,6 +126,13 @@ export type QuickBooksInvoiceSyncStatus =
   | "SYNCED"
   | "FAILED";
 
+export type QuickBooksInvoiceOperationStatus =
+  | "PROCESSING"
+  | "RECONCILING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "RECONCILIATION_REQUIRED";
+
 export interface BrandingComponentColors {
   headerBgColor?: string;
   headerTextColor?: string;
@@ -532,6 +539,34 @@ export interface QuickBooksInvoiceSyncRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface QuickBooksInvoiceOperationRow {
+  id: string;
+  tenantId: string;
+  invoiceId: string;
+  quickBooksConnectionId: string;
+  requestedByTenantUserId: string;
+  status: QuickBooksInvoiceOperationStatus;
+  commandKeyHash: string;
+  payloadHash: string;
+  providerRealmId: string;
+  claimTokenHash: string | null;
+  providerRequestId: string;
+  providerInvoiceId: string | null;
+  providerDocNumber: string;
+  attemptCount: number;
+  reconciliationCount: number;
+  processingStartedAtUtc: UtcDate;
+  claimExpiresAtUtc: UtcDate | null;
+  lastAttemptAtUtc: UtcDate;
+  lastReconciledAtUtc: UtcDate | null;
+  succeededAtUtc: UtcDate | null;
+  failedAtUtc: UtcDate | null;
+  lastFailureCode: string | null;
+  createdAt: UtcDate;
+  updatedAt: UtcDate;
+  archivedAtUtc: UtcDate | null;
+}
+
 export interface QuickBooksWebhookEventRow {
   id: string;
   tenantId: string | null;
@@ -569,6 +604,7 @@ export const TABLE_RELATION_MAP = {
       "QuickBooksCustomerMap",
       "QuickBooksItemMap",
       "QuickBooksInvoiceSync",
+      "QuickBooksInvoiceOperation",
       "QuickBooksWebhookEvent",
       "TenantSequence",
       "Job",
@@ -582,7 +618,7 @@ export const TABLE_RELATION_MAP = {
   },
   TenantUser: {
     belongsTo: ["Tenant", "User"],
-    hasMany: ["Job", "JobEvent", "NotificationOutbox"],
+    hasMany: ["Job", "JobEvent", "NotificationOutbox", "QuickBooksInvoiceOperation"],
   },
   TenantPhoneNumber: {
     belongsTo: ["Tenant"],
@@ -637,7 +673,7 @@ export const TABLE_RELATION_MAP = {
   },
   QuickBooksConnection: {
     belongsTo: ["Tenant"],
-    hasMany: ["QuickBooksCustomerMap", "QuickBooksItemMap", "QuickBooksInvoiceSync", "QuickBooksWebhookEvent"],
+    hasMany: ["QuickBooksCustomerMap", "QuickBooksItemMap", "QuickBooksInvoiceSync", "QuickBooksInvoiceOperation", "QuickBooksWebhookEvent"],
   },
   QuickBooksCustomerMap: {
     belongsTo: ["Tenant", "QuickBooksConnection", "Customer"],
@@ -647,6 +683,9 @@ export const TABLE_RELATION_MAP = {
   },
   QuickBooksInvoiceSync: {
     belongsTo: ["Tenant", "QuickBooksConnection", "Quote"],
+  },
+  QuickBooksInvoiceOperation: {
+    belongsTo: ["Tenant", "Invoice", "QuickBooksConnection", "TenantUser"],
   },
   QuickBooksWebhookEvent: {
     belongsTo: ["Tenant", "QuickBooksConnection"],

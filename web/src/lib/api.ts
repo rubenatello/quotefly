@@ -735,6 +735,14 @@ export type AiAssistantResponse = {
 export type InternalRagIndexSummary = {
   generatedAtUtc: string;
   policyVersion: string | null;
+  rollout: {
+    mode: "off" | "shadow_allowlist" | "allowlist" | "all";
+    configuredAllowlistSize: number;
+    enabledActiveTenantCount: number;
+    exposedActiveTenantCount: number;
+    inlineRefreshEnabled: boolean;
+    workerEnabled: boolean;
+  };
   totals: {
     documents: number;
     activeDocuments: number;
@@ -747,11 +755,19 @@ export type InternalRagIndexSummary = {
   activeChunksByClassification: Partial<Record<DataClassification, number>>;
   activeChunksBySourceType: Array<{ sourceType: string; chunkCount: number }>;
   indexingQueue: {
+    scope: "rollout_enabled_active_tenants";
+    activeTenantCount: number;
     jobsByStatus: Record<string, number>;
     successfulJobs: number;
     averageSuccessfulDurationMs: number | null;
     embeddingCacheHitRate: number | null;
     oldestPendingAtUtc: string | null;
+    outOfRollout: {
+      activeTenantCount: number;
+      jobsByStatus: Record<string, number>;
+      oldestPendingAtUtc: string | null;
+      expectedWhileDisabled: boolean;
+    };
   };
   latestIndexedAtUtc: string | null;
   fieldsExcluded: string[];
@@ -1550,6 +1566,59 @@ export type Invoice = {
   };
 };
 
+export type QuickBooksInvoiceOperationStatus =
+  | "PROCESSING"
+  | "RECONCILING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "RECONCILIATION_REQUIRED";
+
+export type QuickBooksInvoiceOperation = {
+  status: QuickBooksInvoiceOperationStatus;
+  providerDocNumber: string;
+  reconciliationAvailable: boolean;
+};
+
+export type QuickBooksInvoiceSyncPreview = {
+  invoice: {
+    id: string;
+    invoiceNumber: number;
+    version: number;
+    status: InvoiceStatus;
+    customerName: string;
+    currency: string;
+    subtotalAmount: number;
+    taxAmount: number;
+    totalAmount: number;
+    dueAtUtc: string | null;
+  };
+  connection: null | {
+    companyName: string | null;
+    status: QuickBooksConnectionStatus;
+  };
+  quickBooksCustomerName: string | null;
+  providerDocNumber: string;
+  lineItems: Array<{
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    amount: number;
+    mapped: boolean;
+    quickBooksItemName: string | null;
+  }>;
+  blockers: string[];
+  ready: boolean;
+  reviewBinding: string | null;
+  operation: QuickBooksInvoiceOperation | null;
+};
+
+export type QuickBooksInvoiceOperationResponse = {
+  duplicate?: boolean;
+  reconciliationRequired?: boolean;
+  found?: boolean;
+  operation: QuickBooksInvoiceOperation;
+};
+
 export type QuoteAcceptedJobSummary = {
   id: string;
   jobNumber: number;
@@ -2050,6 +2119,31 @@ export const api = {
           sync: QuickBooksInvoiceSyncRecord;
           invoice: QuickBooksInvoiceStatusPayload;
         }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
+
+      invoiceSyncPreview: (invoiceId: string) =>
+        request<{
+          providerWorkflowsEnabled: boolean;
+          preview: QuickBooksInvoiceSyncPreview;
+        }>(`/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/sync-preview`),
+
+      publishQuoteFlyInvoice: (
+        invoiceId: string,
+        body: { invoiceVersion: number; reviewBinding: string },
+        idempotencyKey: string,
+      ) => request<QuickBooksInvoiceOperationResponse>(
+        `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/publish`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+          body: JSON.stringify(body),
+        },
+      ),
+
+      reconcileQuoteFlyInvoice: (invoiceId: string) =>
+        request<QuickBooksInvoiceOperationResponse>(
+          `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/reconcile`,
+          { method: "POST" },
+        ),
     },
   },
 

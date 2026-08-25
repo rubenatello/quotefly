@@ -3671,7 +3671,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         customerId: selectedCustomer?.id ?? null,
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
       });
-      accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
+      accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
     } catch (retrievalErr) {
       if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
       request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] governed retrieval context unavailable");
@@ -3767,7 +3767,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           customerId: selectedCustomer.id,
           quoteId: existingQuote?.id ?? payload.quoteId ?? null,
         });
-        accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval.telemetry);
+        accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
       } catch (retrievalErr) {
         if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
         request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] customer-specific retrieval context unavailable");

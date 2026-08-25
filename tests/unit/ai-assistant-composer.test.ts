@@ -375,6 +375,85 @@ test("assistant composer rejects a data-backed answer that omits its required ci
   }
 });
 
+test("assistant composer accepts a synthetic review-only draft when no workspace data was read", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  setAssistantCompositionProviderForTest(async () => ({
+    outputText: JSON.stringify({
+      answer: "Your fence repair quote draft is ready to review. Check the customer, scope, and pricing before creating it.",
+      sourceKeys: [],
+      safetyNotes: [],
+    }),
+    model: "test-review-only-draft",
+    telemetry: null,
+  }));
+  try {
+    const result = await composeAssistantAnswer({
+      userMessage: "Draft a fence repair quote for this customer.",
+      tool: "DRAFT_QUOTE",
+      deterministicAnswer: "I prepared a fence repair quote preview with labor and materials. Review the customer, scope, and pricing before creating it.",
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      results: [{ title: "Fence repair", estimatedTotalUsd: 1_850, lineCount: 2 }],
+      citations: [],
+      actions: [{ type: "OPEN_QUOTE_DRAFT", label: "Review quote draft", requiresConfirmation: true }],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "DRAFT_QUOTE",
+        resolvedTool: "DRAFT_QUOTE",
+        resultCount: 1,
+        citationCount: 0,
+        emptyReason: null,
+        archivePolicy: "No workspace rows were read.",
+        filters: {},
+      },
+    });
+
+    assert.equal(result.answerMode, "LLM_COMPOSED");
+    assert.match(result.answer, /review/i);
+    assert.doesNotMatch(result.answer, /I(?:'ve| have) (?:created|saved|sent)/i);
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+  }
+});
+
+test("assistant composer fails closed for citation-free workspace lookup results", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  setAssistantCompositionProviderForTest(async () => ({
+    outputText: JSON.stringify({
+      answer: "I found Ruben Roofing in the active customer list.",
+      sourceKeys: [],
+      safetyNotes: [],
+    }),
+    model: "test-citation-free-workspace-result",
+    telemetry: null,
+  }));
+  try {
+    const result = await composeAssistantAnswer({
+      userMessage: "Find Ruben Roofing.",
+      tool: "SEARCH_CUSTOMERS",
+      deterministicAnswer: "Found Ruben Roofing in the active customer list.",
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      results: [{ fullName: "Ruben Roofing" }],
+      citations: [],
+      actions: [],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "SEARCH_CUSTOMERS",
+        resolvedTool: "SEARCH_CUSTOMERS",
+        resultCount: 1,
+        citationCount: 0,
+        emptyReason: null,
+        archivePolicy: "Active tenant customers were read.",
+        filters: {},
+      },
+    });
+
+    assert.equal(result.answerMode, "DETERMINISTIC");
+    assert.match(result.insightReasons.join(" "), /no authorized citation/i);
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+  }
+});
+
 test("assistant composer preserves citation-free composition for non-data help", async () => {
   const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
   setAssistantCompositionProviderForTest(async () => ({

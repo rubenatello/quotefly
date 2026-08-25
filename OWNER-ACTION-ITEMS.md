@@ -34,6 +34,13 @@ JWT_SECRET=your-secure-random-secret
 # Optional — enables AI-powered Chat-to-Quote via OpenAI
 OPENAI_API_KEY=sk-...your-openai-api-key...
 OPENAI_MODEL=gpt-4o-mini   # default if omitted
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+# RAG stays off until the controlled-pilot checklist below is signed off
+AI_RAG_ROLLOUT_MODE=off
+AI_RAG_TENANT_ALLOWLIST=
+AI_INDEX_INLINE_REFRESH=true
+ENABLE_AI_INDEX_WORKER=false
 
 # Reserved provider foundation — do not enable for the current release
 QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false
@@ -51,6 +58,16 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 4. The AI service gracefully falls back to the regex parser if the key is missing
 5. Set `OPENAI_API_KEY` and `OPENAI_MODEL` in Railway for production API runtime
 6. Do not put the OpenAI secret in Vercel frontend env vars; QuoteFly calls OpenAI from the API layer only
+
+### Kody RAG controlled-pilot checklist
+
+1. Use a dedicated server-side OpenAI project/key and record dated evidence for its retention/data-control posture, data-sharing setting, intended region, provider agreement, and subprocessor review.
+2. Rehearse all checked-in migrations on a production-like Neon branch. Verify forced RLS with the non-owner runtime role, the v2 derived-index purge/requeue, backup/restore, readiness, and the forward-fix rollback plan.
+3. Keep `AI_RAG_ROLLOUT_MODE=off` and `ENABLE_AI_INDEX_WORKER=false` until the exact release candidate passes `npm run verify:launch` and the provider-backed `npm run eval:assistant:provider` suite passes 6/6 on that exact committed SHA.
+4. Begin with `shadow_allowlist`, one approved internal tenant id, inline refresh on, and the worker off. Shadow retrieval records content-free quality/cost evidence but cannot expose excerpts or citations to the model or user.
+5. Assign named alert owners and destinations for enabled-queue age, `DEAD` jobs, deletion backlog, credential quarantine, retrieval/provider failures, p50/p95 latency, and AI spend. Pending jobs outside the rollout are expected and are reported separately.
+6. Record a signed internal review of relevance, leakage, freshness, latency, and spend before changing to exposed `allowlist`. Do not use `all` for the pilot.
+7. Enable the separate index worker only after its deployment, heartbeat, mutation coverage, stale-lease recovery, and rollback evidence are complete.
 
 ### QuickBooks app setup
 1. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every release environment.

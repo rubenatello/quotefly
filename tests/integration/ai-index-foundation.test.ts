@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
   claimAiIndexJob,
@@ -218,6 +219,83 @@ describe("AI indexing foundation", () => {
     expect(job.attempts).toBe(0);
     expect(job.lastErrorCode).toBe("AI_BUDGET_EXHAUSTED");
     expect(job.availableAtUtc.getTime()).toBeGreaterThan(Date.now() + 24 * 60 * 60_000);
+  });
+
+  test("v2 governance migration purges legacy derived content and requeues active sources", async () => {
+    const tenant = await createTenant("governance-v2-upgrade");
+    const restrictedLegacyContent = "Legacy note accidentally stored AWS key AKIAIOSFODNN7EXAMPLE";
+    const customer = await prisma.customer.create({
+      data: {
+        tenantId: tenant.id,
+        fullName: "Legacy governance customer",
+        phone: "555-0210",
+        notes: restrictedLegacyContent,
+      },
+    });
+    const document = await prisma.aiRetrievalDocument.create({
+      data: {
+        tenantId: tenant.id,
+        sourceType: "Customer",
+        sourceId: customer.id,
+        sourceUpdatedAtUtc: customer.updatedAt,
+        maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+        contentHash: "a".repeat(64),
+        citationLabel: "Legacy customer notes",
+        policyVersion: "2026-08-11",
+        chunkerVersion: "nfkc-tiktoken-cl100k-300-overlap36-v1:rag-content-governance-v1",
+      },
+    });
+    await prisma.aiRetrievalChunk.create({
+      data: {
+        tenantId: tenant.id,
+        documentId: document.id,
+        sourceType: "Customer",
+        sourceId: customer.id,
+        sourceField: "Customer.notes",
+        chunkIndex: 0,
+        content: restrictedLegacyContent,
+        contentHash: "b".repeat(64),
+        embedding: [1, 0],
+        embeddingModel: "legacy-test",
+        embeddingDimensions: 2,
+        classification: "C2_CUSTOMER_CONFIDENTIAL",
+        citationLabel: "Legacy customer notes",
+        policyVersion: "2026-08-11",
+        chunkerVersion: "nfkc-tiktoken-cl100k-300-overlap36-v1:rag-content-governance-v1",
+      },
+    });
+
+    const migrationSql = readFileSync(
+      new URL("../../prisma/migrations/20260824230000_requeue_ai_retrieval_governance_v2/migration.sql", import.meta.url),
+      "utf8",
+    );
+    const statements = migrationSql.split(/;\s*(?:\r?\n|$)/u).map((statement) => statement.trim()).filter(Boolean);
+    for (const statement of statements) await prisma.$executeRawUnsafe(statement);
+
+    expect(await prisma.aiRetrievalDocument.count({
+      where: { tenantId: tenant.id, chunkerVersion: { not: "nfkc-tiktoken-cl100k-300-overlap36-v1:rag-content-governance-v2" } },
+    })).toBe(0);
+    expect(await prisma.aiRetrievalChunk.count({
+      where: { tenantId: tenant.id, content: { contains: "AKIAIOSFODNN7EXAMPLE" } },
+    })).toBe(0);
+    const queued = await prisma.aiIndexJob.findUniqueOrThrow({
+      where: { tenantId_sourceType_sourceId: { tenantId: tenant.id, sourceType: "Customer", sourceId: customer.id } },
+    });
+    expect(queued.status).toBe("PENDING");
+
+    const outcome = await processNextAiIndexJob(prisma, {
+      tenantId: tenant.id,
+      workerId: "governance-v2-upgrade-worker",
+    });
+    expect(outcome.outcome).toBe("quarantined");
+    const finalJob = await prisma.aiIndexJob.findUniqueOrThrow({
+      where: { tenantId_sourceType_sourceId: { tenantId: tenant.id, sourceType: "Customer", sourceId: customer.id } },
+    });
+    expect(finalJob).toMatchObject({
+      status: "SUCCEEDED",
+      lastErrorCode: "SOURCE_CONTENT_QUARANTINED",
+    });
+    expect(await prisma.aiRetrievalChunk.count({ where: { tenantId: tenant.id } })).toBe(0);
   });
 
   test("quarantines restricted source content as a terminal content-free job outcome", async () => {

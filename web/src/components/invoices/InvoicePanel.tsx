@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CalendarDays, ExternalLink, ReceiptText } from "lucide-react";
+import { CalendarDays, ExternalLink, FileCheck2, ReceiptText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { money, useDashboard } from "../dashboard/DashboardContext";
@@ -16,6 +16,8 @@ import {
   type Invoice,
   type InvoicePaymentStatus,
   type InvoiceStatus,
+  type QuickBooksInvoiceOperationStatus,
+  type QuickBooksInvoiceSyncPreview,
 } from "../../lib/api";
 import { localizedApiError } from "../../lib/localized-api-error";
 import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../../lib/tenant-time";
@@ -62,6 +64,14 @@ function paymentStatusTone(status: InvoicePaymentStatus): "slate" | "emerald" | 
   return "slate";
 }
 
+function quickBooksStatusTone(status: QuickBooksInvoiceOperationStatus): "slate" | "blue" | "emerald" | "red" | "amber" {
+  if (status === "SUCCEEDED") return "emerald";
+  if (status === "FAILED") return "red";
+  if (status === "RECONCILIATION_REQUIRED") return "amber";
+  if (status === "PROCESSING" || status === "RECONCILING") return "blue";
+  return "slate";
+}
+
 export function InvoicePanel({
   jobId,
   sourceQuoteId,
@@ -81,20 +91,37 @@ export function InvoicePanel({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [quickBooksConfirmOpen, setQuickBooksConfirmOpen] = useState(false);
+  const [quickBooksPreview, setQuickBooksPreview] = useState<QuickBooksInvoiceSyncPreview | null>(null);
+  const [quickBooksEnabled, setQuickBooksEnabled] = useState(false);
+  const [quickBooksLoading, setQuickBooksLoading] = useState(false);
+  const [quickBooksSaving, setQuickBooksSaving] = useState(false);
+  const [quickBooksError, setQuickBooksError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ message: string; tone: "success" | "warning" } | null>(null);
   const [dueDate, setDueDate] = useState(() => defaultDueDate(timeZone));
   const commandRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const sourceRef = useRef(sourceKey);
   const operationGenerationRef = useRef(0);
+  const quickBooksGenerationRef = useRef(0);
+  const quickBooksOperationGenerationRef = useRef(0);
+  const quickBooksCommandRef = useRef<{ fingerprint: string; key: string } | null>(null);
   if (sourceRef.current !== sourceKey) {
     sourceRef.current = sourceKey;
     operationGenerationRef.current += 1;
+    quickBooksGenerationRef.current += 1;
+    quickBooksOperationGenerationRef.current += 1;
   }
 
   const operationIsCurrent = useCallback(
     (operationSource: string, generation: number) =>
       sourceRef.current === operationSource && operationGenerationRef.current === generation,
+    [],
+  );
+
+  const quickBooksOperationIsCurrent = useCallback(
+    (operationSource: string, generation: number) =>
+      sourceRef.current === operationSource && quickBooksOperationGenerationRef.current === generation,
     [],
   );
 
@@ -129,19 +156,55 @@ export function InvoicePanel({
     }
   }, [jobId, operationIsCurrent, sourceKey, sourceQuoteId, t]);
 
+  const loadQuickBooksPreview = useCallback(async (
+    currentInvoice: Invoice,
+    options: { clearError?: boolean } = {},
+  ) => {
+    const generation = ++quickBooksGenerationRef.current;
+    setQuickBooksLoading(true);
+    if (options.clearError !== false) setQuickBooksError(null);
+    try {
+      const response = await api.integrations.quickbooks.invoiceSyncPreview(currentInvoice.id);
+      if (generation !== quickBooksGenerationRef.current) return;
+      setQuickBooksEnabled(response.providerWorkflowsEnabled);
+      setQuickBooksPreview(response.preview);
+    } catch (err) {
+      if (generation !== quickBooksGenerationRef.current) return;
+      setQuickBooksPreview(null);
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.loadError" }));
+    } finally {
+      if (generation === quickBooksGenerationRef.current) setQuickBooksLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => {
     setDueDate(defaultDueDate(timeZone));
     setInvoice(null);
     setError(null);
     setNotice(null);
     setConfirmOpen(false);
+    setQuickBooksConfirmOpen(false);
     setSaving(false);
+    setQuickBooksPreview(null);
+    setQuickBooksError(null);
+    setQuickBooksSaving(false);
     commandRef.current = null;
+    quickBooksCommandRef.current = null;
+    quickBooksGenerationRef.current += 1;
+    quickBooksOperationGenerationRef.current += 1;
     void loadInvoice();
     return () => {
       operationGenerationRef.current += 1;
     };
   }, [loadInvoice, sourceKey, timeZone]);
+
+  useEffect(() => {
+    if (!invoice || !canCreate) return;
+    void loadQuickBooksPreview(invoice);
+    return () => {
+      quickBooksGenerationRef.current += 1;
+    };
+  }, [canCreate, invoice, loadQuickBooksPreview]);
 
   const dueAtUtc = useMemo(
     () => dueDate ? tenantWallTimeToIso(`${dueDate}T12:00`, timeZone) : null,
@@ -174,7 +237,10 @@ export function InvoicePanel({
       const response = await api.invoices.create(payload, commandRef.current.key);
       if (!operationIsCurrent(operationSource, generation)) return;
       setInvoice(response.invoice);
-      setNotice(response.duplicate ? t("invoices.existingNotice") : t("invoices.createdNotice"));
+      setNotice({
+        message: response.duplicate ? t("invoices.existingNotice") : t("invoices.createdNotice"),
+        tone: "success",
+      });
       setConfirmOpen(false);
     } catch (err) {
       if (!operationIsCurrent(operationSource, generation)) return;
@@ -182,6 +248,79 @@ export function InvoicePanel({
       setConfirmOpen(false);
     } finally {
       if (operationIsCurrent(operationSource, generation)) setSaving(false);
+    }
+  };
+
+  const handleQuickBooksPublish = async () => {
+    if (
+      !invoice
+      || !quickBooksPreview?.ready
+      || !quickBooksPreview.reviewBinding
+      || !quickBooksEnabled
+      || quickBooksSaving
+    ) return;
+    const reviewedPreview = quickBooksPreview;
+    const reviewBinding = reviewedPreview.reviewBinding;
+    if (!reviewBinding) return;
+    const fingerprint = `${reviewedPreview.invoice.id}:${reviewedPreview.invoice.version}:${reviewBinding}`;
+    if (!quickBooksCommandRef.current || quickBooksCommandRef.current.fingerprint !== fingerprint) {
+      quickBooksCommandRef.current = {
+        fingerprint,
+        key: `qf-quickbooks-invoice-${crypto.randomUUID()}`,
+      };
+    }
+    const operationSource = sourceKey;
+    const generation = ++quickBooksOperationGenerationRef.current;
+    setQuickBooksSaving(true);
+    setQuickBooksError(null);
+    setNotice(null);
+    try {
+      const response = await api.integrations.quickbooks.publishQuoteFlyInvoice(
+        reviewedPreview.invoice.id,
+        {
+          invoiceVersion: reviewedPreview.invoice.version,
+          reviewBinding,
+        },
+        quickBooksCommandRef.current.key,
+      );
+      if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
+      setQuickBooksPreview((current) => current ? { ...current, operation: response.operation } : current);
+      setQuickBooksConfirmOpen(false);
+    } catch (err) {
+      if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
+      const message = localizedApiError(err, t, {
+        fallbackKey: "invoices.quickBooks.publishError",
+        codeKeys: {
+          INVOICE_VERSION_CONFLICT: "invoices.quickBooks.versionConflict",
+          QUICKBOOKS_REVIEW_STALE: "invoices.quickBooks.reviewStale",
+        },
+      });
+      setQuickBooksConfirmOpen(false);
+      await loadQuickBooksPreview(invoice, { clearError: false });
+      if (quickBooksOperationIsCurrent(operationSource, generation)) setQuickBooksError(message);
+    } finally {
+      if (quickBooksOperationIsCurrent(operationSource, generation)) setQuickBooksSaving(false);
+    }
+  };
+
+  const handleQuickBooksReconcile = async () => {
+    if (!invoice || quickBooksSaving) return;
+    const operationSource = sourceKey;
+    const generation = ++quickBooksOperationGenerationRef.current;
+    setQuickBooksSaving(true);
+    setQuickBooksError(null);
+    setNotice(null);
+    try {
+      const response = await api.integrations.quickbooks.reconcileQuoteFlyInvoice(invoice.id);
+      if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
+      setQuickBooksPreview((current) => current ? { ...current, operation: response.operation } : current);
+    } catch (err) {
+      if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
+      const message = localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.reconcileError" });
+      await loadQuickBooksPreview(invoice, { clearError: false });
+      if (quickBooksOperationIsCurrent(operationSource, generation)) setQuickBooksError(message);
+    } finally {
+      if (quickBooksOperationIsCurrent(operationSource, generation)) setQuickBooksSaving(false);
     }
   };
 
@@ -214,7 +353,11 @@ export function InvoicePanel({
         ) : null}
       </div>
 
-      {notice ? <div className="mt-4"><Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert></div> : null}
+      {notice ? (
+        <div className="mt-4">
+          <Alert tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.message}</Alert>
+        </div>
+      ) : null}
       {error ? (
         <div className="mt-4">
           <Alert tone="error" onDismiss={() => setError(null)}>
@@ -233,7 +376,7 @@ export function InvoicePanel({
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl bg-[var(--qf-panel-muted)] p-3">
               <p className="text-xs text-[var(--qf-text-muted)]">{t("invoices.customer")}</p>
-              <p className="mt-1 truncate text-sm font-semibold text-[var(--qf-text)]">{invoice.customer.fullName}</p>
+              <p className="mt-1 break-words text-sm font-semibold text-[var(--qf-text)] [overflow-wrap:anywhere]">{invoice.customer.fullName}</p>
             </div>
             <div className="rounded-xl bg-[var(--qf-panel-muted)] p-3">
               <p className="text-xs text-[var(--qf-text-muted)]">{t("invoices.total")}</p>
@@ -267,6 +410,92 @@ export function InvoicePanel({
               ) : null}
             </div>
           </div>
+          {canCreate ? (
+            <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4" data-testid="quickbooks-invoice-panel">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-semibold text-[var(--qf-text)]">
+                    <FileCheck2 size={17} aria-hidden="true" />
+                    {t("invoices.quickBooks.title")}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">
+                    {t("invoices.quickBooks.description")}
+                  </p>
+                </div>
+                {quickBooksPreview?.operation ? (
+                  <Badge tone={quickBooksStatusTone(quickBooksPreview.operation.status)}>
+                    {t(`invoices.quickBooks.status.${quickBooksPreview.operation.status}`)}
+                  </Badge>
+                ) : null}
+              </div>
+
+              {quickBooksError ? (
+                <div className="mt-3">
+                  <Alert tone="error" onDismiss={() => setQuickBooksError(null)}>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <span>{quickBooksError}</span>
+                      <Button type="button" variant="outline" className="min-h-11" onClick={() => invoice && void loadQuickBooksPreview(invoice)}>
+                        {t("invoices.retry")}
+                      </Button>
+                    </div>
+                  </Alert>
+                </div>
+              ) : null}
+
+              {quickBooksLoading ? (
+                <div className="mt-3"><LoadingState variant="compact" title={t("invoices.quickBooks.loading")} /></div>
+              ) : quickBooksPreview ? (
+                <div className="mt-3 space-y-3">
+                  {!quickBooksEnabled ? <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert> : null}
+                  {quickBooksPreview.operation?.status === "SUCCEEDED" ? (
+                    <Alert tone="success">{t("invoices.quickBooks.success", { number: quickBooksPreview.providerDocNumber })}</Alert>
+                  ) : quickBooksPreview.operation?.status === "RECONCILIATION_REQUIRED" ? (
+                    <Alert tone="warning">{t("invoices.quickBooks.reconciliationRequired")}</Alert>
+                  ) : quickBooksPreview.operation?.status === "FAILED" ? (
+                    <Alert tone="error">{t("invoices.quickBooks.failed")}</Alert>
+                  ) : quickBooksPreview.operation ? (
+                    <Alert tone="info">{t("invoices.quickBooks.inProgress")}</Alert>
+                  ) : quickBooksPreview.blockers.length ? (
+                    <div>
+                      <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.setupNeeded")}</p>
+                      <ul className="mt-2 space-y-1 text-xs text-[var(--qf-text-muted)]">
+                        {quickBooksPreview.blockers.map((blocker) => (
+                          <li key={blocker}>• {t(`invoices.quickBooks.blockers.${blocker}`)}</li>
+                        ))}
+                      </ul>
+                      <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => navigate("/app/settings")}>
+                        {t("invoices.quickBooks.openSettings")}
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--qf-text-muted)]">
+                      {t("invoices.quickBooks.ready", {
+                        company: quickBooksPreview.connection?.companyName || t("invoices.quickBooks.connectedCompany"),
+                        number: quickBooksPreview.providerDocNumber,
+                      })}
+                    </p>
+                  )}
+
+                  {quickBooksEnabled && quickBooksPreview.operation?.reconciliationAvailable ? (
+                    <Button type="button" variant="outline" className="min-h-11" loading={quickBooksSaving} onClick={() => void handleQuickBooksReconcile()}>
+                      <RefreshCw size={16} aria-hidden="true" />
+                      {t("invoices.quickBooks.reconcile")}
+                    </Button>
+                  ) : quickBooksEnabled && quickBooksPreview.ready && !quickBooksPreview.operation ? (
+                    <Button type="button" variant="outline" className="min-h-11" onClick={() => setQuickBooksConfirmOpen(true)}>
+                      <FileCheck2 size={16} aria-hidden="true" />
+                      {t("invoices.quickBooks.review")}
+                    </Button>
+                  ) : quickBooksPreview.operation?.status === "PROCESSING" || quickBooksPreview.operation?.status === "RECONCILING" ? (
+                    <Button type="button" variant="outline" className="min-h-11" onClick={() => void loadQuickBooksPreview(invoice)}>
+                      <RefreshCw size={16} aria-hidden="true" />
+                      {t("invoices.quickBooks.refreshStatus")}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-[var(--qf-border-strong)] bg-[var(--qf-panel-muted)] p-4">
@@ -320,6 +549,77 @@ export function InvoicePanel({
             </span>
           </div>
         </div>
+      </ConfirmModal>
+
+      <ConfirmModal
+        open={quickBooksConfirmOpen}
+        onClose={() => setQuickBooksConfirmOpen(false)}
+        onConfirm={() => void handleQuickBooksPublish()}
+        title={t("invoices.quickBooks.confirmTitle")}
+        description={t("invoices.quickBooks.confirmDescription")}
+        confirmLabel={t("invoices.quickBooks.publish")}
+        confirmVariant="primary"
+        loading={quickBooksSaving}
+        size="md"
+      >
+        {quickBooksPreview ? (
+          <div className="space-y-3 rounded-xl bg-[var(--qf-panel-muted)] p-3 text-sm">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.quickBooks.destination")}</span>
+              <span className="break-words text-right font-semibold text-[var(--qf-text)] [overflow-wrap:anywhere]">
+                {quickBooksPreview.connection?.companyName || t("invoices.quickBooks.connectedCompany")}
+              </span>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.customer")}</span>
+              <span className="min-w-0 break-words text-right font-semibold text-[var(--qf-text)] [overflow-wrap:anywhere]">
+                {quickBooksPreview.invoice.customerName}
+                {quickBooksPreview.quickBooksCustomerName ? (
+                  <small className="mt-1 block font-normal text-[var(--qf-text-muted)]">
+                    {t("invoices.quickBooks.mapsTo", { target: quickBooksPreview.quickBooksCustomerName })}
+                  </small>
+                ) : null}
+              </span>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.quickBooks.documentNumber")}</span>
+              <span className="font-semibold text-[var(--qf-text)]">{quickBooksPreview.providerDocNumber}</span>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.due")}</span>
+              <span className="font-semibold text-[var(--qf-text)]">
+                {quickBooksPreview.invoice.dueAtUtc
+                  ? formatInvoiceDate(quickBooksPreview.invoice.dueAtUtc, locale, timeZone)
+                  : t("invoices.noDueDate")}
+              </span>
+            </div>
+            <div className="space-y-2 border-t border-[var(--qf-border)] pt-3">
+              {quickBooksPreview.lineItems.map((line, index) => (
+                <div key={`${line.description}:${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+                  <span className="min-w-0 break-words text-[var(--qf-text-soft)] [overflow-wrap:anywhere]">
+                    {line.description}
+                    {line.quickBooksItemName ? (
+                      <small className="mt-1 block text-[var(--qf-text-muted)]">
+                        {t("invoices.quickBooks.mapsTo", { target: line.quickBooksItemName })}
+                      </small>
+                    ) : null}
+                    <small className="mt-1 block text-[var(--qf-text-muted)]">
+                      {t("invoices.quickBooks.lineMath", {
+                        quantity: line.quantity,
+                        unitPrice: money(line.unitPrice, locale),
+                      })}
+                    </small>
+                  </span>
+                  <span className="shrink-0 font-medium text-[var(--qf-text)]">{money(line.amount, locale)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--qf-border)] pt-3">
+              <span className="font-semibold text-[var(--qf-text)]">{t("invoices.total")}</span>
+              <span className="font-semibold text-[var(--qf-text)]">{money(quickBooksPreview.invoice.totalAmount, locale)}</span>
+            </div>
+          </div>
+        ) : null}
       </ConfirmModal>
     </section>
   );
