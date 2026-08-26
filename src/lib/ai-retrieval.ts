@@ -1772,10 +1772,19 @@ export async function refreshQuoteAiRetrievalIndex(
     }
   }
 
-  const quotes = params.quoteId ? await prisma.quote.findMany({
-    where: { id: params.quoteId, ...tenantActiveQuoteScope(tenantId), ...memberQuoteScope },
+  const quoteRefreshScope = params.quoteId
+    ? { id: params.quoteId }
+    : params.customerId
+      ? { customerId: params.customerId, serviceType: params.serviceType }
+      : null;
+  const quotes = quoteRefreshScope ? await prisma.quote.findMany({
+    where: { ...quoteRefreshScope, ...tenantActiveQuoteScope(tenantId), ...memberQuoteScope },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    take: 1,
+    // A draft with a resolved customer may safely ground itself in a small,
+    // current set of that customer's prior customer-visible quotes. This also
+    // makes provider-free inline refresh useful before a background indexer
+    // has visited those records.
+    take: params.quoteId ? 1 : 4,
     select: {
       id: true,
       title: true,

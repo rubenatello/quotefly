@@ -1111,6 +1111,105 @@ export type AiPriceProvenance =
   | "CURRENT_QUOTE"
   | "UNRESOLVED";
 
+export type QuotePreparationStatus = "READY" | "NEEDS_CLARIFICATION" | "CUSTOMER_AMBIGUOUS";
+
+export type QuotePreparationDraft = {
+  quoteId: string | null;
+  serviceType: ServiceType;
+  title: string;
+  scopeText: string;
+  squareFeetEstimate: number | null;
+  squareFeetEstimateLow: number | null;
+  squareFeetEstimateHigh: number | null;
+  estimatedDurationHoursLow: number | null;
+  estimatedDurationHoursHigh: number | null;
+  customerPriceSubtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  internalCostSubtotal?: number;
+  lineItems: Array<{
+    description: string;
+    quantity: number;
+    sectionType: "INCLUDED" | "ALTERNATE";
+    sectionLabel: string | null;
+    sourcePresetId: string | null;
+    catalogKey: string | null;
+    unitType: "FLAT" | "SQ_FT" | "HOUR" | "EACH" | null;
+    unitPrice: number;
+    unitCost?: number;
+    priceProvenance: Exclude<AiPriceProvenance, "CURRENT_QUOTE">;
+  }>;
+  workspaceContext: Array<{
+    citationKey: string;
+    label: string;
+    sourceType: string;
+    fact: string;
+  }>;
+  requiresPricingReview: boolean;
+};
+
+export type QuotePreparationClarification = {
+  code: "CUSTOMER_REQUIRED" | "CUSTOMER_NAME_REQUIRED" | "CUSTOMER_PHONE_REQUIRED" | "CUSTOMER_SELECTION_REQUIRED" | "WORK_REQUIRED";
+  message: string;
+};
+
+type QuotePreparationBase = {
+  preparationId: string;
+  auditEventId?: string;
+  customerResolution: "MATCHED" | "NEW_CUSTOMER_DRAFT" | "AMBIGUOUS" | "NONE";
+  customer: {
+    id: string;
+    fullName: string;
+    email: string | null;
+    phone: string | null;
+  } | null;
+  customerDraft: {
+    fullName: string | null;
+    email: string | null;
+    phone: string | null;
+  };
+  customerCandidates: Array<{
+    id: string;
+    fullName: string;
+    email: string | null;
+    phone: string | null;
+  }>;
+  draft: QuotePreparationDraft;
+  sources: Array<{
+    key: string;
+    label: string;
+    sourceType: string;
+    classification: DataClassification;
+  }>;
+  retrievedSourceCount: number;
+  retrievedSourceLabels: string[];
+  retrievalAuditEventId: string | null;
+  retrievalDegraded: boolean;
+  model: string;
+};
+
+export type QuotePreparationReady = QuotePreparationBase & {
+  status: "READY";
+  clarification: null;
+};
+
+export type QuotePreparationNeedsClarification = QuotePreparationBase & {
+  status: "NEEDS_CLARIFICATION";
+  clarification: QuotePreparationClarification;
+};
+
+export type QuotePreparationCustomerAmbiguous = QuotePreparationBase & {
+  status: "CUSTOMER_AMBIGUOUS";
+  customerResolution: "AMBIGUOUS";
+  customer: null;
+  clarification: QuotePreparationClarification;
+};
+
+export type QuotePreparationResult =
+  | QuotePreparationReady
+  | QuotePreparationNeedsClarification
+  | QuotePreparationCustomerAmbiguous;
+
 export type AiQuoteSuggestion = {
   serviceType: ServiceType;
   title: string;
@@ -1175,14 +1274,21 @@ export type AiQuoteInsight = {
   };
 };
 
-export type AiQuoteSuggestionResult = {
-  customer?: {
+type AiQuoteSuggestionResultBase = {
+  customer: {
     id: string;
     fullName: string;
     phone: string;
     email?: string | null;
   } | null;
   parsed: ChatToQuoteParsed;
+  aiRunId: string;
+  usage: AiUsageSummary;
+};
+
+export type AiQuoteSuggestionReadyResult = AiQuoteSuggestionResultBase & {
+  status: "READY";
+  preparation: QuotePreparationReady;
   suggestion: AiQuoteSuggestion;
   patch: {
     lineChanges: AiQuoteLinePatch[];
@@ -1191,9 +1297,97 @@ export type AiQuoteSuggestionResult = {
     removed: number;
   };
   insight: AiQuoteInsight;
-  aiRunId: string;
-  usage: AiUsageSummary;
 };
+
+export type AiQuoteSuggestionNeedsClarificationResult = AiQuoteSuggestionResultBase & {
+  status: "NEEDS_CLARIFICATION";
+  preparation: QuotePreparationNeedsClarification;
+  suggestion?: never;
+  patch?: never;
+  insight?: never;
+};
+
+export type AiQuoteSuggestionCustomerAmbiguousResult = AiQuoteSuggestionResultBase & {
+  status: "CUSTOMER_AMBIGUOUS";
+  preparation: QuotePreparationCustomerAmbiguous;
+  suggestion?: never;
+  patch?: never;
+  insight?: never;
+};
+
+export type AiQuoteSuggestionResult =
+  | AiQuoteSuggestionReadyResult
+  | AiQuoteSuggestionNeedsClarificationResult
+  | AiQuoteSuggestionCustomerAmbiguousResult;
+
+function isRuntimeRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizePreparationWorkspaceContext(value: unknown): QuotePreparationDraft["workspaceContext"] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap((candidate) => {
+    if (!isRuntimeRecord(candidate)) return [];
+    const citationKey = typeof candidate.citationKey === "string" ? candidate.citationKey.trim() : "";
+    const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+    const sourceType = typeof candidate.sourceType === "string" ? candidate.sourceType.trim() : "";
+    const fact = typeof candidate.fact === "string" ? candidate.fact.trim() : "";
+    if (!citationKey || citationKey.length > 200 || !label || label.length > 500 || !sourceType || sourceType.length > 200 || !fact || fact.length > 2_000) {
+      return [];
+    }
+    return [{ citationKey, label, sourceType, fact }];
+  });
+}
+
+export function normalizeAiQuoteSuggestionResult(value: unknown): AiQuoteSuggestionResult {
+  if (!isRuntimeRecord(value) || !isRuntimeRecord(value.preparation) || !isRuntimeRecord(value.preparation.draft)) {
+    throw new ApiError("AI response contract was invalid.", 502);
+  }
+  const status = value.preparation.status;
+  if (status !== "READY" && status !== "NEEDS_CLARIFICATION" && status !== "CUSTOMER_AMBIGUOUS") {
+    throw new ApiError("AI response contract was invalid.", 502);
+  }
+  if (!isRuntimeRecord(value.parsed) || !isRuntimeRecord(value.usage) || typeof value.aiRunId !== "string") {
+    throw new ApiError("AI response contract was invalid.", 502);
+  }
+  const preparation = {
+    ...value.preparation,
+    draft: {
+      ...value.preparation.draft,
+      workspaceContext: normalizePreparationWorkspaceContext(value.preparation.draft.workspaceContext),
+    },
+  } as QuotePreparationResult;
+  const common = {
+    customer: isRuntimeRecord(value.customer) ? value.customer : null,
+    parsed: value.parsed,
+    aiRunId: value.aiRunId,
+    usage: value.usage,
+  } as AiQuoteSuggestionResultBase;
+
+  if (status === "READY") {
+    if (!isRuntimeRecord(value.suggestion) || !isRuntimeRecord(value.patch) || !isRuntimeRecord(value.insight) || preparation.status !== "READY") {
+      throw new ApiError("AI response contract was invalid.", 502);
+    }
+    return {
+      ...common,
+      status,
+      preparation,
+      suggestion: value.suggestion as AiQuoteSuggestion,
+      patch: value.patch as AiQuoteSuggestionReadyResult["patch"],
+      insight: value.insight as AiQuoteInsight,
+    };
+  }
+
+  if (!isRuntimeRecord(preparation.clarification)) {
+    throw new ApiError("AI response contract was invalid.", 502);
+  }
+  if (status === "CUSTOMER_AMBIGUOUS") {
+    if (preparation.status !== "CUSTOMER_AMBIGUOUS") throw new ApiError("AI response contract was invalid.", 502);
+    return { ...common, status, preparation };
+  }
+  if (preparation.status !== "NEEDS_CLARIFICATION") throw new ApiError("AI response contract was invalid.", 502);
+  return { ...common, status, preparation };
+}
 
 export type AiQuoteRun = {
   id: string;
@@ -1257,7 +1451,7 @@ export type AiProgressEvent = {
 
 type AiSuggestionStreamEvent =
   | AiProgressEvent
-  | { type: "complete"; result: AiQuoteSuggestionResult }
+  | { type: "complete"; result: unknown }
   | { type: "error"; error: string; code?: string };
 
 export type WorkPresetCategory = "LABOR" | "MATERIAL" | "FEE" | "SERVICE";
@@ -2954,7 +3148,7 @@ export const api = {
           }
 
           if (event.type === "complete") {
-            finalResult = event.result;
+            finalResult = normalizeAiQuoteSuggestionResult(event.result);
           }
         };
 

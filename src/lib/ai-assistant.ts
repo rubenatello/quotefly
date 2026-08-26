@@ -59,9 +59,10 @@ import {
   prepareAssistantDispatch,
 } from "../services/ai-schedule-tools";
 import { prepareCatalogQuoteLines } from "../services/ai-quote-catalog";
-import { createAiQuoteProviderBudget } from "../services/ai-quote";
+import { createAiQuoteProviderBudget, createAiTelemetryAccumulator } from "../services/ai-quote";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { AiUsageLedgerError } from "../services/ai-usage-ledger";
+import { prepareQuoteReview, type QuotePreparationResult } from "../services/quote-preparation";
 import { visibleJobWhere } from "../services/jobs";
 import type { SupportedLocale } from "./supported-locale";
 
@@ -4210,7 +4211,8 @@ function spanishTradeName(serviceType: ServiceCategory) {
   return "construcción";
 }
 
-async function runDraftQuotePreview(
+/** @deprecated QF-001 compatibility reference; no route calls this implementation. */
+async function runLegacyDraftQuotePreview(
   prisma: PrismaClient,
   params: AiAssistantInput,
   generatedAtUtc: Date,
@@ -4701,6 +4703,356 @@ async function runDraftQuotePreview(
       maxClassification,
       answer: composition.answer,
       results,
+      citations,
+      actions: provenanceLinkedActions,
+      auditEventId: event.id,
+      fieldsExcluded,
+      diagnostics: composedDiagnostics(baseDiagnostics, composition),
+    },
+  };
+}
+
+function quotePreparationForClient(
+  preparation: QuotePreparationResult,
+  options: { includeWorkspaceContext?: boolean } = {},
+) {
+  const { telemetry: _telemetry, ...clientPreparation } = preparation;
+  if (options.includeWorkspaceContext === false) {
+    return {
+      ...clientPreparation,
+      draft: {
+        ...clientPreparation.draft,
+        // Ambiguous-customer choices expose only identity labels until the
+        // operator confirms a customer. The candidate preparation still has a
+        // distinct authorized retrieval audit, but its excerpts stay server-side.
+        workspaceContext: [],
+      },
+    };
+  }
+  return clientPreparation;
+}
+
+function quotePreparationActionPayload(
+  prompt: string,
+  preparation: QuotePreparationResult,
+  options: { includeWorkspaceContext?: boolean } = {},
+) {
+  const customer = preparation.customer;
+  const clientPreparation = quotePreparationForClient(preparation, options);
+  return {
+    preparation: clientPreparation,
+    preparationId: preparation.preparationId,
+    prompt,
+    customerId: customer?.id ?? null,
+    customerName: customer?.fullName ?? preparation.customerDraft.fullName,
+    customerEmail: customer?.email ?? preparation.customerDraft.email,
+    customerPhone: customer?.phone ?? preparation.customerDraft.phone,
+    quoteId: preparation.draft.quoteId,
+    serviceType: preparation.draft.serviceType,
+    title: preparation.draft.title,
+    scopeText: preparation.draft.scopeText,
+    squareFeetEstimate: preparation.draft.squareFeetEstimate,
+    squareFeetEstimateLow: preparation.draft.squareFeetEstimateLow,
+    squareFeetEstimateHigh: preparation.draft.squareFeetEstimateHigh,
+    estimatedTotalAmount: preparation.draft.customerPriceSubtotal,
+    estimatedTaxAmount: preparation.draft.taxAmount,
+    ...(typeof preparation.draft.internalCostSubtotal === "number"
+      ? { estimatedInternalCostAmount: preparation.draft.internalCostSubtotal }
+      : {}),
+    estimatedDurationHoursLow: preparation.draft.estimatedDurationHoursLow,
+    estimatedDurationHoursHigh: preparation.draft.estimatedDurationHoursHigh,
+    lineItems: preparation.draft.lineItems,
+    requiresPricingReview: preparation.draft.requiresPricingReview,
+    useWorkspaceContext: preparation.retrievedSourceCount > 0,
+    retrievedSourceCount: preparation.retrievedSourceCount,
+    retrievedSourceLabels: preparation.retrievedSourceLabels,
+  };
+}
+
+async function runDraftQuotePreview(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "useAiQuoteDrafting")) {
+    const answer = localeText(params, "AI quote drafting is not enabled for this role.", "La preparación de cotizaciones con IA no está habilitada para este rol.");
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: "C2_CUSTOMER_CONFIDENTIAL",
+      sourceTypes: ["Quote"],
+      sourceLabels: ["Quote drafting denied"],
+      creditsConsumed: 0,
+      riskNote: "Denied before quote preparation because the actor lacks useAiQuoteDrafting.",
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+        answer,
+        results: [],
+        citations: [],
+        actions: [{ type: "REQUEST_ADMIN_ACCESS", label: localeText(params, "Ask an admin for AI quote drafting", "Solicitar acceso para preparar cotizaciones con IA"), requiresConfirmation: true, payload: { capability: "useAiQuoteDrafting" } }],
+        auditEventId: event.id,
+        fieldsExcluded: defaultExcludedFields(false),
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "DRAFT_QUOTE",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "Quote drafting denied because the role lacks AI quote drafting access.",
+          archivePolicy: "No quote preparation data was retrieved.",
+          filters: { includeArchivedEffective: false },
+        }),
+      },
+    };
+  }
+
+  const parserPrompt = quotePromptForConversation(params);
+  const includeInternalCost = hasCapability(params.access, "viewInternalCosts");
+  const providerBudget = createAiQuoteProviderBudget();
+  const preparationTelemetry = createAiTelemetryAccumulator();
+  const preparation = await prepareQuoteReview(prisma, {
+    access: params.access,
+    prompt: parserPrompt,
+    customerId: params.context?.customerId,
+    quoteId: params.context?.quoteId,
+    serviceTypeHint: params.context?.serviceType,
+    priorUserQueries: params.conversation
+      ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
+      .map((turn) => turn.message),
+    providerMode: "BOUNDED_ENHANCEMENT",
+    providerBudget,
+    telemetry: preparationTelemetry,
+    includeInternalCost,
+  });
+  const fieldsExcluded = [
+    ...defaultExcludedFields(includeInternalCost),
+    ...(includeInternalCost ? [] : ["user-supplied internal cost estimate"]),
+  ];
+  const sourceClassification = preparation.sources.reduce<DataClassification>(
+    (current, source) => highestClassification(current, source.classification),
+    includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL",
+  );
+  const citations: AiAssistantCitation[] = [
+    {
+      key: "A1",
+      label: localeText(params, "Parsed quote request", "Solicitud de cotización analizada"),
+      sourceType: "Quote",
+      classification: includeInternalCost ? "C3_FINANCIAL_CONFIDENTIAL" : "C2_CUSTOMER_CONFIDENTIAL",
+    },
+    ...preparation.sources,
+  ];
+  const resultSummary = {
+    preparationId: preparation.preparationId,
+    status: preparation.status,
+    serviceType: preparation.draft.serviceType,
+    title: preparation.draft.title,
+    customerName: preparation.customer?.fullName ?? preparation.customerDraft.fullName,
+    customerResolution: preparation.customerResolution,
+    totalAmount: preparation.draft.totalAmount,
+    estimatedTotalAmount: preparation.draft.customerPriceSubtotal,
+    estimatedTaxAmount: preparation.draft.taxAmount,
+    estimatedInternalCostAmount: preparation.draft.internalCostSubtotal ?? null,
+    estimatedDurationHoursLow: preparation.draft.estimatedDurationHoursLow,
+    estimatedDurationHoursHigh: preparation.draft.estimatedDurationHoursHigh,
+    squareFeetEstimate: preparation.draft.squareFeetEstimate,
+    lineItemCount: preparation.draft.lineItems.length,
+    catalogMatchedCount: preparation.draft.lineItems.filter((line) =>
+      line.priceProvenance !== "UNRESOLVED" && Boolean(line.sourcePresetId || line.catalogKey),
+    ).length,
+    requiresPricingReview: preparation.draft.requiresPricingReview,
+    retrievedSourceCount: preparation.retrievedSourceCount,
+  };
+  const baseDiagnostics = diagnostics({
+    input: params,
+    resolvedTool: "DRAFT_QUOTE",
+    resultCount: preparation.status === "NEEDS_CLARIFICATION" ? 0 : 1,
+    citationCount: citations.length,
+    emptyReason: preparation.clarification?.message ?? null,
+    archivePolicy: "Customer, quote, catalog, and retrieval context is tenant-scoped, assignment-scoped, active-only, and review-only.",
+    filters: {
+      currentPage: params.context?.currentPage,
+      scopedCustomer: Boolean(params.context?.customerId),
+      selectedCustomerFound: Boolean(preparation.customer),
+      scopedQuote: Boolean(params.context?.quoteId),
+      selectedQuoteFound: Boolean(preparation.draft.quoteId),
+      includeArchivedRequested: Boolean(params.context?.includeArchived),
+      includeArchivedEffective: false,
+      retrievedSourceCount: preparation.retrievedSourceCount,
+      pricingReviewRequired: preparation.draft.requiresPricingReview,
+      retrievalDegraded: preparation.retrievalDegraded,
+    },
+  });
+
+  if (preparation.status === "NEEDS_CLARIFICATION") {
+    const answer = preparation.clarification?.message ?? "I need one more detail before preparing this quote.";
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: sourceClassification,
+      sourceTypes: Array.from(new Set(["Quote", ...preparation.sources.map((source) => source.sourceType)])),
+      sourceLabels: ["Quote preparation clarification", ...preparation.retrievedSourceLabels],
+      customerId: preparation.customer?.id ?? null,
+      quoteId: preparation.draft.quoteId,
+      serviceType: preparation.draft.serviceType,
+      creditsConsumed: 0,
+      retrievalAuditEventId: preparation.retrievalAuditEventId,
+      riskNote: "Requested a missing quote input before opening a review draft.",
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: sourceClassification,
+        answer,
+        results: [],
+        citations,
+        actions: [],
+        auditEventId: event.id,
+        fieldsExcluded,
+        diagnostics: baseDiagnostics,
+      },
+    };
+  }
+
+  const priceReviewText = preparation.draft.requiresPricingReview
+    ? localeText(
+        params,
+        "Some line-item prices could not be grounded, so they are set to $0 and must be priced before the quote can be saved or sent.",
+        "Algunos precios no pudieron fundamentarse, así que se fijaron en $0 y deben completarse antes de guardar o enviar la cotización.",
+      )
+    : localeText(
+        params,
+        "Pricing is grounded in the explicit request or catalog and must still be reviewed before saving or sending.",
+        "Los precios se basan en la solicitud explícita o el catálogo y aun deben revisarse antes de guardar o enviar.",
+      );
+  const deterministicAnswer = preparation.status === "CUSTOMER_AMBIGUOUS"
+    ? localeText(
+        params,
+        `${preparation.clarification?.message ?? "Choose the correct customer to continue"} I kept the quote scope and line items ready for review.`,
+        `Encontré varios clientes que coinciden. Elige el cliente correcto; conservé el alcance y las partidas para revisión.`,
+      )
+    : localeText(
+        params,
+        `Prepared a ${preparation.draft.serviceType.toLowerCase()} quote review for ${preparation.customer?.fullName ?? preparation.customerDraft.fullName ?? "the new customer"}. ${priceReviewText}`,
+        `Preparé un borrador con precios de ${spanishTradeName(preparation.draft.serviceType)} para ${preparation.customer?.fullName ?? preparation.customerDraft.fullName ?? "el cliente nuevo"}. ${priceReviewText}`,
+      );
+  const selectedCustomerPreparations = preparation.status === "CUSTOMER_AMBIGUOUS"
+    ? await Promise.all(preparation.customerCandidates.map((candidate) => prepareQuoteReview(prisma, {
+        access: params.access,
+        prompt: parserPrompt,
+        customerId: candidate.id,
+        quoteId: params.context?.quoteId,
+        serviceTypeHint: params.context?.serviceType ?? preparation.draft.serviceType,
+        priorUserQueries: params.conversation
+          ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
+          .map((turn) => turn.message),
+        // Candidate selection must be authorized and re-prepared server-side.
+        // It does not spend another provider call or locally flip ambiguity.
+        providerMode: "DETERMINISTIC",
+        includeInternalCost,
+      })))
+    : [];
+  const actions: AiAssistantAction[] = preparation.status === "CUSTOMER_AMBIGUOUS"
+    ? selectedCustomerPreparations
+      .filter((selected) => selected.status === "READY" && selected.customerResolution === "MATCHED" && selected.customer)
+      .map((selected) => ({
+        type: "OPEN_QUOTE_DRAFT" as const,
+        label: `Review draft for ${selected.customer!.fullName} · ${selected.customer!.email || selected.customer!.phone || "customer record"}`,
+        requiresConfirmation: true,
+        payload: quotePreparationActionPayload(parserPrompt, selected, { includeWorkspaceContext: false }),
+      }))
+    : [{
+        type: "OPEN_QUOTE_DRAFT",
+        label: localeText(params, "Review quote draft", "Revisar borrador de la cotización"),
+        requiresConfirmation: true,
+        payload: quotePreparationActionPayload(parserPrompt, preparation),
+      }];
+  const composition = await composeAssistantAnswer({
+    diagnosticContext: { requestId: params.access.requestId },
+    userMessage: parserPrompt,
+    tool: "DRAFT_QUOTE",
+    deterministicAnswer,
+    maxClassification: sourceClassification,
+    results: [resultSummary],
+    citations,
+    actions,
+    fieldsExcluded,
+    diagnostics: baseDiagnostics,
+    sensitiveValues: [
+      params.actor.actorEmail,
+      params.actor.actorName,
+      preparation.customerDraft.fullName,
+      preparation.customerDraft.email,
+      preparation.customerDraft.phone,
+      ...preparation.customerCandidates.flatMap((customer) => [customer.fullName, customer.email, customer.phone]),
+    ],
+    conversation: params.conversation,
+    preferredLocale: assistantLocale(params),
+    providerBudget,
+  });
+  const combinedTelemetry = mergeAiUsageTelemetry(preparation.telemetry, composition.telemetry);
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer: composition.answer,
+    classification: sourceClassification,
+    sourceTypes: Array.from(new Set([
+      "Quote",
+      ...(preparation.customer ? ["Customer"] : []),
+      ...preparation.sources.map((source) => source.sourceType),
+    ])),
+    sourceLabels: [
+      preparation.draft.quoteId ? "Selected active quote" : "Prepared quote review",
+      ...preparation.retrievedSourceLabels,
+    ],
+    quoteId: preparation.draft.quoteId,
+    customerId: preparation.customer?.id ?? null,
+    serviceType: preparation.draft.serviceType,
+    model: composition.model,
+    telemetry: combinedTelemetry,
+    retrievalAuditEventId: preparation.retrievalAuditEventId,
+    eventType: preparation.draft.quoteId ? "REVISE" : "DRAFT",
+    purpose: preparation.draft.quoteId ? "QUOTE_REVISION" : "QUOTE_DRAFT",
+    confidenceLevel: composition.confidenceLevel,
+    confidenceLabel: composition.confidenceLabel,
+    insightReasons: composition.insightReasons,
+    riskNote: `${composition.riskNote} Quote preparation remained review-only; customer authorization and price provenance were resolved deterministically.`,
+  });
+  const provenanceLinkedActions = actions.map((action) => ({
+    ...action,
+    payload: {
+      ...action.payload,
+      auditEventId: event.id,
+      preparation: {
+        ...(action.payload.preparation as Record<string, unknown>),
+        auditEventId: event.id,
+      },
+    },
+  }));
+  return {
+    consumedCredits: 1,
+    consumedSpendUsd: combinedTelemetry?.estimatedCostUsd ?? 0,
+    assistant: {
+      tool: "DRAFT_QUOTE",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: sourceClassification,
+      answer: composition.answer,
+      results: [resultSummary],
       citations,
       actions: provenanceLinkedActions,
       auditEventId: event.id,

@@ -146,6 +146,8 @@ function sanitizeQuoteLines(value: unknown) {
     if (sectionLabel && sectionLabel.length <= 120) line.sectionLabel = sectionLabel;
     const sourcePresetId = getString(candidate.sourcePresetId);
     if (sourcePresetId && sourcePresetId.length <= 200) line.sourcePresetId = sourcePresetId;
+    const catalogKey = getString(candidate.catalogKey);
+    if (catalogKey && catalogKey.length <= 200) line.catalogKey = catalogKey;
     if (candidate.unitType === "FLAT" || candidate.unitType === "SQ_FT" || candidate.unitType === "HOUR" || candidate.unitType === "EACH") {
       line.unitType = candidate.unitType;
     }
@@ -153,6 +155,15 @@ function sanitizeQuoteLines(value: unknown) {
     if (unitPrice !== null && unitPrice >= 0) line.unitPrice = unitPrice;
     const unitCost = getFiniteNumber(candidate.unitCost);
     if (unitCost !== null && unitCost >= 0) line.unitCost = unitCost;
+    if (
+      candidate.priceProvenance === "EXPLICIT_PROMPT" ||
+      candidate.priceProvenance === "TENANT_PRESET" ||
+      candidate.priceProvenance === "STANDARD_CATALOG" ||
+      candidate.priceProvenance === "CURRENT_QUOTE" ||
+      candidate.priceProvenance === "UNRESOLVED"
+    ) {
+      line.priceProvenance = candidate.priceProvenance;
+    }
     if (candidate.catalogMatched === true) line.catalogMatched = true;
     return [line];
   });
@@ -164,6 +175,110 @@ function sanitizeStringList(value: unknown, limit: number, maxLength: number) {
     const stringValue = getString(candidate);
     return stringValue && stringValue.length <= maxLength ? [stringValue] : [];
   });
+}
+
+function sanitizeWorkspaceContext(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap((candidate) => {
+    if (!isRecord(candidate)) return [];
+    const citationKey = getString(candidate.citationKey);
+    const label = getString(candidate.label);
+    const sourceType = getString(candidate.sourceType);
+    const fact = getString(candidate.fact);
+    if (
+      !citationKey || citationKey.length > 200 ||
+      !label || label.length > 500 ||
+      !sourceType || sourceType.length > 200 ||
+      !fact || fact.length > 2_000
+    ) return [];
+    return [{ citationKey, label, sourceType, fact }];
+  });
+}
+
+function sanitizeQuotePreparation(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value) || !isRecord(value.draft) || !isRecord(value.customerDraft)) return null;
+  if (value.status !== "READY" && value.status !== "NEEDS_CLARIFICATION" && value.status !== "CUSTOMER_AMBIGUOUS") return null;
+  if (
+    value.customerResolution !== "MATCHED" &&
+    value.customerResolution !== "NEW_CUSTOMER_DRAFT" &&
+    value.customerResolution !== "AMBIGUOUS" &&
+    value.customerResolution !== "NONE"
+  ) return null;
+
+  const preparation: Record<string, unknown> = {
+    status: value.status,
+    customerResolution: value.customerResolution,
+    customerCandidates: [],
+    sources: [],
+    retrievedSourceLabels: sanitizeStringList(value.retrievedSourceLabels, 8, 160),
+    retrievalDegraded: value.retrievalDegraded === true,
+  };
+  copyString(preparation, value, "preparationId", 200);
+  copyString(preparation, value, "auditEventId", 200);
+  copyString(preparation, value, "retrievalAuditEventId", 200);
+  copyString(preparation, value, "model", 160);
+  copyNumber(preparation, value, "retrievedSourceCount");
+
+  const sanitizeCustomer = (candidate: unknown) => {
+    if (!isRecord(candidate)) return null;
+    const id = getString(candidate.id);
+    const fullName = getString(candidate.fullName);
+    if (!id || id.length > 200 || !fullName || fullName.length > 500) return null;
+    return {
+      id,
+      fullName,
+      email: getString(candidate.email)?.slice(0, 500) ?? null,
+      phone: getString(candidate.phone)?.slice(0, 100) ?? null,
+    };
+  };
+  preparation.customer = sanitizeCustomer(value.customer);
+  preparation.customerCandidates = Array.isArray(value.customerCandidates)
+    ? value.customerCandidates.slice(0, 4).flatMap((candidate) => {
+        const customer = sanitizeCustomer(candidate);
+        return customer ? [customer] : [];
+      })
+    : [];
+  preparation.customerDraft = {
+    fullName: getString(value.customerDraft.fullName)?.slice(0, 500) ?? null,
+    email: getString(value.customerDraft.email)?.slice(0, 500) ?? null,
+    phone: getString(value.customerDraft.phone)?.slice(0, 100) ?? null,
+  };
+
+  if (isRecord(value.clarification)) {
+    const code = getString(value.clarification.code);
+    const message = getString(value.clarification.message);
+    if (code && message && message.length <= 1_000) {
+      preparation.clarification = { code, message };
+    }
+  } else {
+    preparation.clarification = null;
+  }
+
+  const draft: Record<string, unknown> = {
+    lineItems: sanitizeQuoteLines(value.draft.lineItems),
+    workspaceContext: sanitizeWorkspaceContext(value.draft.workspaceContext),
+    requiresPricingReview: value.draft.requiresPricingReview === true,
+  };
+  for (const [key, maxLength] of [
+    ["quoteId", 200], ["serviceType", 32], ["title", 500], ["scopeText", 4_000],
+  ] as const) copyString(draft, value.draft, key, maxLength);
+  for (const key of [
+    "squareFeetEstimate", "squareFeetEstimateLow", "squareFeetEstimateHigh",
+    "estimatedDurationHoursLow", "estimatedDurationHoursHigh", "customerPriceSubtotal",
+    "taxAmount", "totalAmount", "internalCostSubtotal",
+  ] as const) copyNumber(draft, value.draft, key);
+  preparation.draft = draft;
+  preparation.sources = Array.isArray(value.sources)
+    ? value.sources.slice(0, 16).flatMap((candidate) => {
+        if (!isRecord(candidate)) return [];
+        const key = getString(candidate.key);
+        const label = getString(candidate.label);
+        const sourceType = getString(candidate.sourceType);
+        if (!key || !label || !sourceType || !isDataClassification(candidate.classification)) return [];
+        return [{ key, label, sourceType, classification: candidate.classification }];
+      })
+    : [];
+  return preparation;
 }
 
 function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown): Record<string, unknown> {
@@ -191,8 +306,11 @@ function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown)
       copyNumber(payload, value, key);
     }
     copyBoolean(payload, value, "useWorkspaceContext");
+    copyBoolean(payload, value, "requiresPricingReview");
     payload.lineItems = sanitizeQuoteLines(value.lineItems);
     payload.retrievedSourceLabels = sanitizeStringList(value.retrievedSourceLabels, 6, 160);
+    const preparation = sanitizeQuotePreparation(value.preparation);
+    if (preparation) payload.preparation = preparation;
   } else if (type === "OPEN_QUOTE_SEND") {
     for (const [key, maxLength] of [["quoteId", 200], ["quoteTitle", 500], ["quoteStatus", 40], ["customerName", 500], ["channel", 20], ["destination", 500]] as const) {
       copyString(payload, value, key, maxLength);

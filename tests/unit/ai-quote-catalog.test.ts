@@ -121,3 +121,28 @@ test("omits internal cost when the caller cannot view it", async () => {
   assert.equal(prepared.lines[0]?.unitPrice, 75);
   assert.equal(prepared.lines[0]?.unitCost, null);
 });
+
+test("uses the standard trade catalog with explicit provenance when no tenant preset exists", async () => {
+  const prepared = await prepareCatalogQuoteLines(fakePrisma([]), {
+    tenantId: "tenant-1",
+    serviceType: "PLUMBING",
+    prompt: "Replace the kitchen faucet.",
+    parsedLines: [{
+      description: "Fixture Install Package",
+      quantity: 1,
+      sectionType: "INCLUDED",
+      sectionLabel: null,
+      catalogKey: "fixture_install_package",
+      unitType: "EACH",
+    }],
+    estimatedDurationHoursHigh: null,
+    includeInternalCost: false,
+  });
+
+  assert.equal(prepared.lines.length, 1);
+  assert.equal(prepared.lines[0]?.sourcePresetId, null);
+  assert.equal(prepared.lines[0]?.catalogKey, "fixture_install_package");
+  assert.equal(prepared.lines[0]?.priceProvenance, "STANDARD_CATALOG");
+  assert.equal((prepared.lines[0]?.unitPrice ?? 0) > 0, true);
+  assert.equal(prepared.lines[0]?.unitCost, null);
+});

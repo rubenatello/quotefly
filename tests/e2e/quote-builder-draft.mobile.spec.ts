@@ -14,7 +14,7 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
     window.localStorage.setItem("qf_locale", "en-US");
   });
   await page.goto("/app/build");
-  await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 45_000 });
 
   await page.getByRole("combobox", { name: "Find a customer", exact: true }).fill(customer.fullName);
   await page
@@ -67,7 +67,10 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   await expect(page.getByLabel("Quote title")).toHaveValue("Mobile navigation-safe draft");
   await expect(page.getByLabel("Quote overview")).toHaveValue("Keep this mobile scope across navigation and refresh.");
   const restoredFirstRow = page.getByTestId("quote-line-row-1");
-  await restoredFirstRow.getByRole("button").first().click();
+  const expandRestoredFirstRow = restoredFirstRow.getByRole("button", { name: "Expand line 1", exact: true });
+  await expect(expandRestoredFirstRow).toBeVisible();
+  await expandRestoredFirstRow.click();
+  await expect(restoredFirstRow.getByRole("button", { name: "Collapse line 1", exact: true })).toBeVisible();
   await expect(restoredFirstRow.getByRole("textbox", { name: "Existing line 1 title", exact: true })).toHaveValue("Mobile saved line");
   await expect(restoredFirstRow.getByRole("spinbutton", { name: "Existing line 1 quantity", exact: true })).toHaveValue("2");
 

@@ -55,7 +55,7 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { api, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { api, ApiError, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
 import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
@@ -88,6 +88,15 @@ import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
 import { localizedApiError } from "../lib/localized-api-error";
+import {
+  applyQuotePreparationPricingGuard,
+  formatQuotePricingReviewLineDescriptions,
+  hasUnsupportedStructuralQuotePatch,
+  isQuotePricingReviewBlocking,
+  parseQuotePricingReviewState,
+  resolveQuotePreparationRetryIdentity,
+  type QuotePricingReviewState,
+} from "../lib/quote-preparation";
 
 function buildBusinessHint(branding: TenantBranding | null): string | undefined {
   if (!branding) return undefined;
@@ -172,6 +181,7 @@ type StoredDeskDraft = {
   lines: EditableQuoteLine[];
   newLine: EditableQuoteLine;
   mobilePane: DeskPane;
+  aiPricingReview: QuotePricingReviewState | null;
 };
 type PendingLifecycleStatus = Quote["status"] | null;
 
@@ -267,6 +277,10 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
   const lines = value.lines.map(parseStoredDeskLine);
   const newLine = parseStoredDeskLine(value.newLine);
   if (lines.some((line) => line === null) || !newLine) return null;
+  const aiPricingReview = value.aiPricingReview == null
+    ? null
+    : parseQuotePricingReviewState(value.aiPricingReview, value.quoteId);
+  if (value.aiPricingReview != null && !aiPricingReview) return null;
 
   return {
     version: 1,
@@ -285,6 +299,7 @@ function parseStoredDeskDraft(raw: string): StoredDeskDraft | null {
     lines: lines as EditableQuoteLine[],
     newLine,
     mobilePane: value.mobilePane,
+    aiPricingReview,
   };
 }
 
@@ -360,6 +375,14 @@ export function QuoteDeskView() {
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
+  const [aiPricingReview, setAiPricingReview] = useState<QuotePricingReviewState | null>(null);
+  const aiRequestRef = useRef<{
+    id: string;
+    controller: AbortController;
+    fingerprint: string;
+    idempotencyKey: string;
+  } | null>(null);
+  const aiRetryIdentityRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const [aiRuns, setAiRuns] = useState<AiQuoteRun[]>([]);
   const [aiRunsLoading, setAiRunsLoading] = useState(false);
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
@@ -375,6 +398,9 @@ export function QuoteDeskView() {
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<OrganizationUser[]>([]);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
+  useEffect(() => () => {
+    aiRequestRef.current?.controller.abort();
+  }, []);
   const canSharePdfFromDevice = useMemo(() => canNativePdfShareOnDevice(), []);
   const {
     session,
@@ -523,6 +549,7 @@ export function QuoteDeskView() {
       setEditableLines([]);
       setNewLine(makeEditableQuoteLine());
       setAiInsight(null);
+      setAiPricingReview(null);
       setAiRuns([]);
       return;
     }
@@ -537,6 +564,7 @@ export function QuoteDeskView() {
       setNewLine(makeEditableQuoteLine());
       setMobilePane("editor");
       setAiInsight(null);
+      setAiPricingReview(null);
       setAiRuns([]);
       return;
     }
@@ -776,7 +804,8 @@ export function QuoteDeskView() {
       ),
     [newLine],
   );
-  const hasUnsavedQuoteSheetChanges = metadataDirty || dirtyLineIds.length > 0 || hasDraftNewLine;
+  const activeAiPricingReview = aiPricingReview?.quoteId === selectedQuote?.id ? aiPricingReview : null;
+  const hasUnsavedQuoteSheetChanges = metadataDirty || dirtyLineIds.length > 0 || hasDraftNewLine || Boolean(activeAiPricingReview);
 
   useEffect(() => {
     const handoff = parseKodyQuoteSendHandoff(location.state);
@@ -819,8 +848,9 @@ export function QuoteDeskView() {
       lines: editableLines,
       newLine,
       mobilePane,
+      aiPricingReview: activeAiPricingReview,
     } : null,
-    [editableLines, mobilePane, newLine, quoteEditForm, selectedQuote],
+    [activeAiPricingReview, editableLines, mobilePane, newLine, quoteEditForm, selectedQuote],
   );
   latestDeskDraftRef.current = currentDeskDraft ? { draft: currentDeskDraft, hasChanges: hasUnsavedQuoteSheetChanges } : null;
 
@@ -828,6 +858,7 @@ export function QuoteDeskView() {
     setQuoteEditForm({ ...stored.quote });
     setEditableLines(stored.lines);
     setNewLine(stored.newLine);
+    setAiPricingReview(stored.aiPricingReview);
     setMobilePane(stored.mobilePane);
     setActiveTab("quote");
     setDeskDraftSavedAtUtc(stored.savedAtUtc);
@@ -981,6 +1012,7 @@ export function QuoteDeskView() {
     setHydratedDeskDraftKey(deskDraftStorageKey);
     setDeskDraftRestored(false);
     setDeskDraftSavedAtUtc(null);
+    setAiPricingReview(null);
     setNotice(t("quoteDesk.notices.latestSaved"));
   }
 
@@ -993,6 +1025,10 @@ export function QuoteDeskView() {
   async function saveLine(lineId: string): Promise<boolean> {
     if (isQuoteLocked) {
       setUnlockConfirmOpen(true);
+      return false;
+    }
+    if (isQuotePricingReviewBlocking(activeAiPricingReview, selectedQuote?.id)) {
+      setError(t("quoteBuilder.aiPricingReview.description"));
       return false;
     }
     const line = editableLines.find((entry) => entry.id === lineId);
@@ -1071,6 +1107,10 @@ export function QuoteDeskView() {
       setError(headingError);
       return null;
     }
+    if (isQuotePricingReviewBlocking(activeAiPricingReview, selectedQuote?.id)) {
+      setError(t("quoteBuilder.aiPricingReview.description"));
+      return null;
+    }
     const changedLines = editableLines.filter((line) => dirtyLineIds.includes(line.id));
     const linesToValidate = hasDraftNewLine ? [...changedLines, newLine] : changedLines;
     if (linesToValidate.length > QUOTE_LINE_CHANGE_LIMIT) {
@@ -1111,6 +1151,7 @@ export function QuoteDeskView() {
     });
     if (!savedQuote) return null;
     clearStoredDeskDraft();
+    setAiPricingReview(null);
 
     if (lineToMaybeSave) {
       setNewLine(makeEditableQuoteLine());
@@ -1132,6 +1173,12 @@ export function QuoteDeskView() {
     quoteOverride = selectedQuote,
     origin?: "kody",
   ) {
+    if (isQuotePricingReviewBlocking(activeAiPricingReview, quoteOverride?.id)) {
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setError(t("quoteBuilder.aiPricingReview.description"));
+      return;
+    }
     if (action === "pdf-preview") {
       await downloadQuotePdf({ inline: true, quoteOverride: quoteOverride ?? undefined });
       return;
@@ -1146,6 +1193,12 @@ export function QuoteDeskView() {
   }
 
   function requestOutboundAction(action: PendingOutboundAction) {
+    if (isQuotePricingReviewBlocking(activeAiPricingReview, selectedQuote?.id)) {
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setError(t("quoteBuilder.aiPricingReview.description"));
+      return;
+    }
     if (hasUnsavedQuoteSheetChanges) {
       setActiveTab("quote");
       setMobilePane("editor");
@@ -1176,6 +1229,12 @@ export function QuoteDeskView() {
 
   async function requestLifecycleUpdate(status: Quote["status"]) {
     if (!selectedQuote) return;
+    if (isQuotePricingReviewBlocking(activeAiPricingReview, selectedQuote.id)) {
+      setActiveTab("quote");
+      setMobilePane("editor");
+      setError(t("quoteBuilder.aiPricingReview.description"));
+      return;
+    }
     if (hasUnsavedQuoteSheetChanges) {
       setPendingLifecycleStatus(status);
       setActiveTab("quote");
@@ -1334,46 +1393,88 @@ export function QuoteDeskView() {
       return;
     }
 
+    const requestBody = {
+      prompt,
+      quoteId: selectedQuote.id,
+      customerId: selectedQuote.customerId,
+      serviceType: quoteEditForm.serviceType,
+      currentTitle: quoteEditForm.title || undefined,
+      currentScopeText: quoteEditForm.scopeText || undefined,
+      currentLineItems: editableLines.map((line) => ({
+        id: line.id,
+        description: joinQuoteLineDescription(line.title, line.details),
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel || null,
+        quantity: Number(line.quantity) || 1,
+        unitCost: Number(line.unitCost) || 0,
+        unitPrice: Number(line.unitPrice) || 0,
+      })),
+    };
+    const fingerprint = JSON.stringify(requestBody);
+    const retryIdentity = resolveQuotePreparationRetryIdentity(
+      aiRetryIdentityRef.current,
+      fingerprint,
+      () => `qf-ai-${crypto.randomUUID()}`,
+    );
+    const idempotencyKey = retryIdentity.idempotencyKey;
+    const requestId = crypto.randomUUID();
+    const controller = new AbortController();
+    aiRequestRef.current?.controller.abort();
+    aiRequestRef.current = { id: requestId, controller, ...retryIdentity };
+
     track("quote_desk_ai_modal_submit");
     try {
       setAiSubmitting(true);
       setAiProgressEvent(null);
       setAiErrorMessage(null);
-      const { customer, parsed, suggestion, patch, insight, usage } = await api.quotes.suggestWithAi({
-        prompt,
-        quoteId: selectedQuote.id,
-        customerId: selectedQuote.customerId,
-        serviceType: quoteEditForm.serviceType,
-        currentTitle: quoteEditForm.title || undefined,
-        currentScopeText: quoteEditForm.scopeText || undefined,
-        currentLineItems: editableLines.map((line) => ({
-          id: line.id,
-          description: joinQuoteLineDescription(line.title, line.details),
-          sectionType: line.sectionType,
-          sectionLabel: line.sectionLabel || null,
-          quantity: Number(line.quantity) || 1,
-          unitCost: Number(line.unitCost) || 0,
-          unitPrice: Number(line.unitPrice) || 0,
-        })),
-      }, {
-        onProgress: setAiProgressEvent,
-        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
+      const result = await api.quotes.suggestWithAi(requestBody, {
+        onProgress: (progress) => {
+          if (aiRequestRef.current?.id === requestId && !controller.signal.aborted) {
+            setAiProgressEvent(progress);
+          }
+        },
+        idempotencyKey,
+        signal: controller.signal,
       });
+      if (aiRequestRef.current?.id !== requestId || controller.signal.aborted) return;
+      if (result.status !== "READY") {
+        throw new ApiError(
+          result.preparation.clarification.message ?? t("quoteDesk.errors.aiApply"),
+          422,
+          result.preparation,
+        );
+      }
+      const { customer, parsed, suggestion, patch, preparation, insight, usage } = result;
+      const guarded = applyQuotePreparationPricingGuard({ preparation, suggestion, patch });
+      const reviewedSuggestion = guarded.suggestion;
+      const reviewedPatch = guarded.patch;
+
+      if (aiAssistTarget.kind === "quote" && hasUnsupportedStructuralQuotePatch(reviewedPatch)) {
+        const message = t("quoteDesk.errors.aiStructuralPatch", {
+          defaultValue: "Kody can update existing quote lines here, but adding or removing lines needs manual review. Ask Kody for updates only, then add or remove lines in the quote sheet.",
+        });
+        aiRetryIdentityRef.current = { fingerprint, idempotencyKey };
+        setAiErrorMessage(message);
+        setError(message);
+        publishAiUsageUpdate(usage);
+        return;
+      }
+      aiRetryIdentityRef.current = null;
 
       setChatParsed(parsed);
       setChatPrompt("");
 
       if (aiAssistTarget.kind !== "quote") {
         if (aiAssistTarget.kind === "title") {
-          const nextTitle = suggestion.title.trim();
+          const nextTitle = reviewedSuggestion.title.trim();
           if (nextTitle) {
             setQuoteEditForm((prev) => ({ ...prev, title: nextTitle }));
           }
           setNotice(t("quoteDesk.notices.aiTitleApplied"));
         } else if (aiAssistTarget.kind === "overview") {
           const nextOverview =
-            suggestion.scopeText.trim() ||
-            suggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
+            reviewedSuggestion.scopeText.trim() ||
+            reviewedSuggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
           if (nextOverview) {
             setQuoteEditForm((prev) => ({ ...prev, scopeText: nextOverview }));
           }
@@ -1381,12 +1482,12 @@ export function QuoteDeskView() {
         } else {
           const targetLineId = aiAssistTarget.kind === "lineDescription" ? aiAssistTarget.lineId : null;
           const targetedPatch = targetLineId
-            ? patch.lineChanges.find((change) => change.action !== "REMOVE" && change.targetLineId === targetLineId)
+            ? reviewedPatch.lineChanges.find((change) => change.action !== "REMOVE" && change.targetLineId === targetLineId)
             : null;
           const nextDescription =
             targetedPatch?.description.trim() ||
-            suggestion.lineItems[0]?.description?.trim() ||
-            suggestion.scopeText.trim();
+            reviewedSuggestion.lineItems[0]?.description?.trim() ||
+            reviewedSuggestion.scopeText.trim();
           if (nextDescription) {
             const { title, details } = splitQuoteLineDescription(nextDescription);
             if (aiAssistTarget.kind === "newLineDescription") {
@@ -1422,12 +1523,19 @@ export function QuoteDeskView() {
 
       setQuoteEditForm((prev) => ({
         ...prev,
-        serviceType: suggestion.serviceType,
-        title: suggestion.title,
-        scopeText: suggestion.scopeText,
-        taxAmount: String(suggestion.taxAmount),
+        serviceType: reviewedSuggestion.serviceType,
+        title: reviewedSuggestion.title,
+        scopeText: reviewedSuggestion.scopeText,
+        taxAmount: String(reviewedSuggestion.taxAmount),
       }));
-      setEditableLines((current) => applyAiQuoteLinePatch(current, patch));
+      setEditableLines((current) => applyAiQuoteLinePatch(current, reviewedPatch));
+      setAiPricingReview(reviewedSuggestion.requiresPricingReview || guarded.pricingReviewLines.length
+        ? {
+            quoteId: selectedQuote.id,
+            lineDescriptions: guarded.pricingReviewLines.map((line) => splitQuoteLineDescription(line.description).title || line.description),
+            acknowledged: false,
+          }
+        : null);
       setNewLine(makeEditableQuoteLine());
       setAiInsight(insight);
       void loadAiRuns(selectedQuote.id);
@@ -1436,9 +1544,9 @@ export function QuoteDeskView() {
       publishAiUsageUpdate(usage);
       const usageSummary = formatAiUsageNotice(usage, locale);
       const patchSummary = [
-        patch.updated ? t("quoteBuilder.aiPatch.updated", { count: patch.updated }) : null,
-        patch.added ? t("quoteBuilder.aiPatch.added", { count: patch.added }) : null,
-        patch.removed ? t("quoteBuilder.aiPatch.removed", { count: patch.removed }) : null,
+        reviewedPatch.updated ? t("quoteBuilder.aiPatch.updated", { count: reviewedPatch.updated }) : null,
+        reviewedPatch.added ? t("quoteBuilder.aiPatch.added", { count: reviewedPatch.added }) : null,
+        reviewedPatch.removed ? t("quoteBuilder.aiPatch.removed", { count: reviewedPatch.removed }) : null,
       ]
         .filter(Boolean)
         .join(", ");
@@ -1450,15 +1558,36 @@ export function QuoteDeskView() {
         }),
       );
     } catch (err) {
+      if (aiRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        return;
+      }
+      aiRetryIdentityRef.current = { fingerprint, idempotencyKey };
       const usageUpdate = aiUsageUpdateFromApiError(err);
       if (usageUpdate) publishAiUsageUpdate(usageUpdate);
       const message = localizedApiError(err, t, { fallbackKey: "quoteDesk.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
     } finally {
-      setAiSubmitting(false);
-      setAiProgressEvent(null);
+      if (aiRequestRef.current?.id === requestId) {
+        aiRequestRef.current = null;
+        setAiSubmitting(false);
+        setAiProgressEvent(null);
+      }
     }
+  }
+
+  function cancelAiRequest() {
+    const activeRequest = aiRequestRef.current;
+    activeRequest?.controller.abort();
+    if (activeRequest) {
+      aiRetryIdentityRef.current = {
+        fingerprint: activeRequest.fingerprint,
+        idempotencyKey: activeRequest.idempotencyKey,
+      };
+    }
+    aiRequestRef.current = null;
+    setAiSubmitting(false);
+    setAiProgressEvent(null);
   }
 
   function handleUnlockEditing() {
@@ -1505,6 +1634,7 @@ export function QuoteDeskView() {
     });
     setEditableLines((selectedQuote.lineItems ?? []).map(toEditableQuoteLine));
     setNewLine(makeEditableQuoteLine());
+    setAiPricingReview(null);
     setPresetPromptLine(null);
   }
 
@@ -1794,6 +1924,26 @@ export function QuoteDeskView() {
               : t("quoteDesk.recovery.stored", { updated: deskDraftSavedAtUtc ? t("quoteDesk.recovery.updated", { time: formatLocalDateTime(deskDraftSavedAtUtc) }) : "" })}
           </p>
         </div>
+      ) : null}
+      {activeAiPricingReview ? (
+        <Alert tone="warning">
+          <p className="text-sm font-semibold">{t("quoteBuilder.aiPricingReview.title")}</p>
+          <p className="mt-1 text-sm">{t("quoteBuilder.aiPricingReview.description")}</p>
+          {activeAiPricingReview.lineDescriptions.length ? (
+            <p className="mt-2 text-xs">{formatQuotePricingReviewLineDescriptions(activeAiPricingReview.lineDescriptions)}</p>
+          ) : null}
+          <label className="mt-3 flex min-h-[44px] cursor-pointer items-center gap-3 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={activeAiPricingReview.acknowledged}
+              onChange={(event) => setAiPricingReview((current) => current
+                ? { ...current, acknowledged: event.target.checked }
+                : current)}
+              className="h-5 w-5 rounded border-[var(--qf-border-strong)]"
+            />
+            <span>{t("quoteBuilder.aiPricingReview.acknowledge")}</span>
+          </label>
+        </Alert>
       ) : null}
       {aiInsight ? (
         <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-4 py-3 text-sm text-[var(--qf-text-soft)]">
@@ -2821,6 +2971,7 @@ export function QuoteDeskView() {
       <QuoteAiPromptModal
         open={aiModalOpen}
         onClose={() => {
+          cancelAiRequest();
           setAiModalOpen(false);
           setAiErrorMessage(null);
         }}
@@ -2844,6 +2995,7 @@ export function QuoteDeskView() {
         errorMessage={aiErrorMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
+        onCancelRequest={cancelAiRequest}
         disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
         onSubmit={(event) => void handleAiSuggestSubmit(event)}
         title={
@@ -2973,7 +3125,17 @@ export function QuoteDeskView() {
             >
               {sendComposer.handoffComplete ? t("quoteDesk.composer.shareAgain") : t("common.cancel")}
             </Button>
-            <Button onClick={() => { track("send_composer_confirm"); void confirmSendComposer(); }} loading={saving}>
+            <Button onClick={() => {
+              if (isQuotePricingReviewBlocking(activeAiPricingReview, sendComposer.quoteId)) {
+                setSendComposer(null);
+                setActiveTab("quote");
+                setMobilePane("editor");
+                setError(t("quoteBuilder.aiPricingReview.description"));
+                return;
+              }
+              track("send_composer_confirm");
+              void confirmSendComposer();
+            }} loading={saving}>
               {sendComposer.handoffComplete
                 ? t("quoteDesk.composer.markSent")
                 : sendComposer.channel === "copy"

@@ -179,6 +179,81 @@ test("preserves bounded catalog pricing and provenance in a quote draft handoff"
   });
 });
 
+test("preserves the bounded authoritative quote-preparation handoff and strips unknown nested fields", () => {
+  const response = normalizeKodyAssistantResponse({
+    tool: "DRAFT_QUOTE",
+    answer: "Prepared a review draft.",
+    actions: [{
+      type: "OPEN_QUOTE_DRAFT",
+      label: "Review quote",
+      requiresConfirmation: true,
+      payload: {
+        prompt: "Prepare a plumbing quote.",
+        preparation: {
+          preparationId: "prep-1",
+          auditEventId: "audit-1",
+          status: "READY",
+          customerResolution: "MATCHED",
+          customer: { id: "customer-1", fullName: "Maria Lopez", phone: "5554443333", tenantId: "strip-me" },
+          customerDraft: { fullName: "Maria Lopez", phone: "5554443333", email: null },
+          customerCandidates: [],
+          clarification: null,
+          draft: {
+            quoteId: null,
+            serviceType: "PLUMBING",
+            title: "Fixture replacement",
+            scopeText: "Replace the faucet.",
+            customerPriceSubtotal: 0,
+            taxAmount: 0,
+            totalAmount: 0,
+            requiresPricingReview: true,
+            workspaceContext: [{
+              citationKey: "R1",
+              label: "Prior quote scope",
+              sourceType: "Quote",
+              fact: "Customer previously approved copper supply lines.",
+              secret: "strip-me",
+            }],
+            lineItems: [{
+              description: "Unknown inspection-dependent work",
+              quantity: 1,
+              sectionType: "INCLUDED",
+              unitPrice: 0,
+              priceProvenance: "UNRESOLVED",
+              secret: "strip-me",
+            }],
+          },
+          sources: [{ key: "P1", label: "Saved labor", sourceType: "WorkPreset", classification: "C1_BUSINESS_INTERNAL", secret: "strip-me" }],
+          retrievedSourceCount: 1,
+          retrievedSourceLabels: ["Saved labor"],
+          retrievalAuditEventId: "retrieval-1",
+          retrievalDegraded: false,
+          model: "regex-fallback",
+          secret: "strip-me",
+        },
+      },
+    }],
+  });
+
+  const preparation = response.actions[0]?.payload.preparation as Record<string, unknown>;
+  assert.equal(preparation.status, "READY");
+  assert.equal("secret" in preparation, false);
+  const draft = preparation.draft as Record<string, unknown>;
+  assert.deepEqual(draft.lineItems, [{
+    description: "Unknown inspection-dependent work",
+    quantity: 1,
+    sectionType: "INCLUDED",
+    unitPrice: 0,
+    priceProvenance: "UNRESOLVED",
+  }]);
+  assert.deepEqual(draft.workspaceContext, [{
+    citationKey: "R1",
+    label: "Prior quote scope",
+    sourceType: "Quote",
+    fact: "Customer previously approved copper supply lines.",
+  }]);
+});
+
 test("preserves safe job and invoice numbers for specific workspace action labels", () => {
   const response = normalizeKodyAssistantResponse({
     tool: "LIST_INVOICES",

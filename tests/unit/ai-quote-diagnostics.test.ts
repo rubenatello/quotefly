@@ -38,3 +38,58 @@ test("quote AI fallback logs request-aware fixed diagnostics without prompt or p
   assert.match(warnings[0], /"failureCode":"PROVIDER_OR_VALIDATION_FAILED"/);
   assert.doesNotMatch(warnings[0], /SENTINEL_PROVIDER|secret@example\.com|Secret Customer|Authorization/i);
 });
+
+test("quote revision provider input removes customer identity while preserving work facts", async () => {
+  const {
+    aiBuildQuoteRevisionPlan,
+    setAiQuoteChatCompletionForTest,
+  } = await import("../../src/services/ai-quote");
+  let capturedRequest: { store?: boolean | null; messages: unknown[] } | null = null;
+  setAiQuoteChatCompletionForTest(async (request) => {
+    capturedRequest = request;
+    return {
+      id: "chatcmpl-revision-minimized",
+      object: "chat.completion",
+      created: 1,
+      model: "test-revision-minimized",
+      choices: [{
+        index: 0,
+        finish_reason: "stop",
+        logprobs: null,
+        message: {
+          role: "assistant",
+          refusal: null,
+          content: JSON.stringify({
+            serviceType: "PLUMBING",
+            title: null,
+            scopeText: "Replace the failed pipe section.",
+            summary: "Prepared the pipe repair revision.",
+            reasons: ["Matched the requested repair."],
+            sourceHints: [],
+            lineOperations: [],
+          }),
+        },
+      }],
+      usage: { prompt_tokens: 40, completion_tokens: 20, total_tokens: 60 },
+    };
+  });
+
+  try {
+    const plan = await aiBuildQuoteRevisionPlan(
+      "Revise Acme, email acme.private@example.com, phone 555-808-9090, for a failed pipe repair.",
+      {
+        context: "Customer context:\n- Name: Acme\nCurrent scope: Failed pipe repair for acme.private@example.com.",
+        sensitiveValues: ["Acme", "acme.private@example.com", "555-808-9090"],
+      },
+    );
+    assert.equal(plan.serviceType, "PLUMBING");
+  } finally {
+    setAiQuoteChatCompletionForTest(null);
+  }
+
+  assert.ok(capturedRequest);
+  assert.equal(capturedRequest.store, false);
+  const serialized = JSON.stringify(capturedRequest.messages);
+  assert.match(serialized, /failed pipe repair/i);
+  assert.doesNotMatch(serialized, /Acme|acme\.private@example\.com|555[- ]?808[- ]?9090/i);
+});

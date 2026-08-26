@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { buildServer } from "../../src/app";
 import { setAssistantCompositionProviderForTest } from "../../src/lib/ai-assistant-composer";
 import { prisma } from "../../src/lib/prisma";
+import { setAiQuoteChatCompletionForTest } from "../../src/services/ai-quote";
 
 type Session = {
   cookie: string;
@@ -186,6 +187,7 @@ describe("AI assistant", () => {
 
   beforeEach(async () => {
     setAssistantCompositionProviderForTest(null);
+    setAiQuoteChatCompletionForTest(null);
     await prisma.quickBooksWebhookEvent.deleteMany();
     await prisma.billingWebhookEvent.deleteMany();
     await prisma.tenant.deleteMany();
@@ -194,6 +196,7 @@ describe("AI assistant", () => {
 
   afterAll(async () => {
     setAssistantCompositionProviderForTest(null);
+    setAiQuoteChatCompletionForTest(null);
     await app.close();
     await prisma.$disconnect();
   });
@@ -322,6 +325,14 @@ describe("AI assistant", () => {
       .find((event) => event.type === "complete");
     const result = completeEvent?.result as {
       aiRunId: string;
+      preparation: {
+        status: string;
+        customer: { id: string } | null;
+        draft: {
+          requiresPricingReview: boolean;
+          lineItems: Array<{ description: string; unitPrice: number; priceProvenance: string }>;
+        };
+      };
       suggestion: {
         serviceType: "HVAC";
         title: string;
@@ -350,6 +361,18 @@ describe("AI assistant", () => {
      */
 
     expect(suggestion).toBeDefined();
+    expect(result.preparation).toMatchObject({
+      status: "READY",
+      customer: { id: customer.id },
+      draft: { requiresPricingReview: true },
+    });
+    expect(result.preparation.draft.lineItems).toEqual(expect.arrayContaining(
+      suggestion.lineItems.map((line) => expect.objectContaining({
+        description: line.description,
+        unitPrice: line.unitPrice,
+        priceProvenance: line.priceProvenance,
+      })),
+    ));
     expect(suggestion.requiresPricingReview).toBe(true);
     expect(suggestion.customerPriceSubtotal).toBe(0);
     expect(suggestion.totalAmount).toBe(0);
@@ -411,6 +434,425 @@ describe("AI assistant", () => {
     });
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toMatchObject({ duplicate: true });
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(1);
+  });
+
+  test("settles non-ready quote suggestions at zero credits without provider or downstream suggestion work", async () => {
+    const owner = await signUp("ai-suggest-zero-credit-clarification");
+    const providerCalls = vi.fn(async () => {
+      throw new Error("Non-ready quote preparation must not call the quote provider.");
+    });
+    setAiQuoteChatCompletionForTest(providerCalls);
+
+    const missingCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-suggest-zero-credit-missing-customer-0001",
+      },
+      payload: {
+        serviceType: "PLUMBING",
+        prompt: "Prepare a plumbing quote for faucet replacement and inspection for review.",
+      },
+    });
+    expect(missingCustomer.statusCode).toBe(200);
+    const missingComplete = missingCustomer.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete")?.result as {
+        aiRunId: string;
+        preparation: { status: string; clarification: { code: string } };
+        suggestion?: unknown;
+        usage: { consumedCredits: number; consumedSpendUsd: number };
+      };
+    expect(missingComplete.preparation).toMatchObject({
+      status: "NEEDS_CLARIFICATION",
+      clarification: { code: "CUSTOMER_REQUIRED" },
+    });
+    expect(missingComplete.suggestion).toBeUndefined();
+    expect(missingComplete.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(providerCalls).not.toHaveBeenCalled();
+
+    const [first, second] = await Promise.all([
+      createCustomer({ session: owner, name: "Maria Zero Credit", phoneDigits: "5551111212" }),
+      createCustomer({ session: owner, name: "Maria Zero Credit", phoneDigits: "5552222323" }),
+    ]);
+    const ambiguous = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-suggest-zero-credit-ambiguous-0001",
+      },
+      payload: {
+        serviceType: "PLUMBING",
+        prompt: "Kody I need a plumbing quote for faucet replacement for Maria Zero Credit. Please prepare it for review.",
+      },
+    });
+    expect(ambiguous.statusCode).toBe(200);
+    const ambiguousComplete = ambiguous.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete")?.result as {
+        aiRunId: string;
+        preparation: { status: string; customerCandidates: Array<{ id: string }> };
+        suggestion?: unknown;
+        usage: { consumedCredits: number; consumedSpendUsd: number };
+      };
+    expect(ambiguousComplete.preparation.status).toBe("CUSTOMER_AMBIGUOUS");
+    expect(ambiguousComplete.preparation.customerCandidates.map((customer) => customer.id)).toEqual(
+      expect.arrayContaining([first.id, second.id]),
+    );
+    expect(ambiguousComplete.suggestion).toBeUndefined();
+    expect(ambiguousComplete.usage).toMatchObject({ consumedCredits: 0, consumedSpendUsd: 0 });
+    expect(providerCalls).not.toHaveBeenCalled();
+
+    const audits = await prisma.aiUsageEvent.findMany({
+      where: { id: { in: [missingComplete.aiRunId, ambiguousComplete.aiRunId] } },
+      select: { creditsConsumed: true, requestCount: true },
+    });
+    expect(audits).toHaveLength(2);
+    expect(audits).toEqual(expect.arrayContaining([
+      { creditsConsumed: 0, requestCount: 0 },
+      { creditsConsumed: 0, requestCount: 0 },
+    ]));
+    const roots = await prisma.aiUsageReservation.findMany({
+      where: {
+        tenantId: owner.tenant.id,
+        kind: "OPERATION",
+        operation: "QUOTE_SUGGESTION",
+      },
+      select: { state: true, actualCredits: true },
+    });
+    expect(roots).toHaveLength(2);
+    expect(roots.every((root) => root.state === "SETTLED" && root.actualCredits === 0)).toBe(true);
+  });
+
+  test("direct quote AI minimizes selected quote identifiers and excludes other-customer same-trade context", async () => {
+    const owner = await signUp("ai-suggest-provider-boundary-owner");
+    const customerA = await createCustomer({
+      session: owner,
+      name: "Alice Boundary",
+      phoneDigits: "5556161717",
+    });
+    const customerB = await createCustomer({
+      session: owner,
+      name: "Bob Private",
+      phoneDigits: "5558181919",
+    });
+    await prisma.customer.update({
+      where: { id: customerA.id },
+      data: { email: "alice.boundary@example.com" },
+    });
+    await prisma.customer.update({
+      where: { id: customerB.id },
+      data: { email: "bob.private@example.com" },
+    });
+    const quoteA = await createQuote({
+      session: owner,
+      customerId: customerA.id,
+      title: "A_WORK_FACT faucet repair for Alice Boundary alice.boundary@example.com 555-616-1717",
+      serviceType: "PLUMBING",
+      status: "READY_FOR_REVIEW",
+      price: 425,
+      cost: 180,
+      createdAt: new Date("2026-08-23T12:00:00.000Z"),
+      lineDescription: "A_LINE_WORK_FACT replace faucet for Alice Boundary at 555-616-1717",
+    });
+    await createQuote({
+      session: owner,
+      customerId: customerB.id,
+      title: "B_PRIVATE_SENTINEL faucet repair for Bob Private",
+      serviceType: "PLUMBING",
+      status: "ACCEPTED",
+      price: 430,
+      cost: 175,
+      createdAt: new Date("2026-08-24T12:00:00.000Z"),
+      lineDescription: "B_PRIVATE_LINE_SENTINEL replace faucet for bob.private@example.com",
+    });
+
+    const providerRequests: Array<{ store?: boolean | null; serialized: string }> = [];
+    setAiQuoteChatCompletionForTest(async (request) => {
+      const serialized = JSON.stringify(request.messages);
+      providerRequests.push({ store: request.store, serialized });
+      const isRevision = serialized.includes("revising an existing quote line by line");
+      return {
+        id: `chatcmpl-provider-boundary-${providerRequests.length}`,
+        object: "chat.completion",
+        created: providerRequests.length,
+        model: "test-provider-boundary",
+        choices: [{
+          index: 0,
+          finish_reason: "stop",
+          logprobs: null,
+          message: {
+            role: "assistant",
+            refusal: null,
+            content: JSON.stringify(isRevision
+              ? {
+                  serviceType: "PLUMBING",
+                  title: null,
+                  scopeText: "Complete the A_WORK_FACT faucet repair.",
+                  summary: "Updated the selected faucet repair.",
+                  reasons: ["Matched the selected quote."],
+                  sourceHints: ["Selected quote"],
+                  lineOperations: [{
+                    action: "UPDATE",
+                    targetLineNumber: 1,
+                    description: "A_LINE_WORK_FACT replace and test faucet",
+                    sectionType: "INCLUDED",
+                    sectionLabel: null,
+                    quantity: 1,
+                    unitCost: 180,
+                    unitPrice: 425,
+                    reason: "Apply the requested selected-quote revision.",
+                  }],
+                }
+              : {
+                  customerName: null,
+                  customerPhone: null,
+                  customerEmail: null,
+                  serviceType: "PLUMBING",
+                  title: "A_WORK_FACT faucet repair",
+                  scopeText: "Complete the A_WORK_FACT faucet repair.",
+                  squareFeetEstimate: null,
+                  estimatedTotalAmount: null,
+                  estimatedTaxAmount: null,
+                  estimatedInternalCostAmount: null,
+                  lineItems: [{
+                    description: "A_LINE_WORK_FACT replace and test faucet",
+                    quantity: 1,
+                    sectionType: "INCLUDED",
+                    sectionLabel: null,
+                  }],
+                }),
+          },
+        }],
+        usage: { prompt_tokens: 80, completion_tokens: 40, total_tokens: 120 },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-suggest-provider-boundary-0001",
+      },
+      payload: {
+        quoteId: quoteA.id,
+        customerId: customerA.id,
+        serviceType: "PLUMBING",
+        prompt: "Revise Alice Boundary's faucet quote for alice.boundary@example.com at 555-616-1717.",
+        currentTitle: "B_CURRENT_PAYLOAD_SENTINEL",
+        currentScopeText: "B_CURRENT_SCOPE_SENTINEL must never reach the provider.",
+        currentLineItems: [{
+          description: "B_CURRENT_LINE_SENTINEL",
+          quantity: 1,
+          unitCost: 1,
+          unitPrice: 2,
+        }],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(providerRequests).toHaveLength(2);
+    expect(providerRequests.map((request) => request.store)).toEqual([false, false]);
+    for (const { serialized } of providerRequests) {
+      expect(serialized).toContain("A_WORK_FACT");
+      expect(serialized).toContain("A_LINE_WORK_FACT");
+      expect(serialized).not.toContain("Alice Boundary");
+      expect(serialized).not.toContain("alice.boundary@example.com");
+      expect(serialized).not.toMatch(/555[- ]?616[- ]?1717/);
+      expect(serialized).not.toContain("B_PRIVATE_SENTINEL");
+      expect(serialized).not.toContain("B_PRIVATE_LINE_SENTINEL");
+      expect(serialized).not.toContain("Bob Private");
+      expect(serialized).not.toContain("bob.private@example.com");
+      expect(serialized).not.toContain("B_CURRENT_PAYLOAD_SENTINEL");
+      expect(serialized).not.toContain("B_CURRENT_SCOPE_SENTINEL");
+      expect(serialized).not.toContain("B_CURRENT_LINE_SENTINEL");
+    }
+    expect(response.body).not.toContain("B_PRIVATE_SENTINEL");
+    expect(response.body).not.toContain("B_CURRENT_PAYLOAD_SENTINEL");
+  });
+
+  test("direct quote AI revises unsaved Builder lines by local id without duplicating or leaking context", async () => {
+    const owner = await signUp("ai-suggest-builder-local-revision-owner");
+    const selectedCustomer = await createCustomer({
+      session: owner,
+      name: "Alice Local Revision",
+      phoneDigits: "5557071111",
+    });
+    const otherCustomer = await createCustomer({
+      session: owner,
+      name: "Bob Other Context",
+      phoneDigits: "5557072222",
+    });
+    await prisma.customer.update({
+      where: { id: selectedCustomer.id },
+      data: { email: "alice.local.revision@example.com" },
+    });
+    await createQuote({
+      session: owner,
+      customerId: otherCustomer.id,
+      title: "OTHER_CUSTOMER_QUOTE_SENTINEL",
+      serviceType: "PLUMBING",
+      status: "ACCEPTED",
+      price: 910,
+      cost: 410,
+      createdAt: new Date("2026-08-24T13:00:00.000Z"),
+      lineDescription: "OTHER_CUSTOMER_LINE_SENTINEL",
+    });
+
+    const providerRequests: Array<{ store?: boolean | null; serialized: string }> = [];
+    setAiQuoteChatCompletionForTest(async (request) => {
+      const serialized = JSON.stringify(request.messages);
+      providerRequests.push({ store: request.store, serialized });
+      const isRevision = serialized.includes("revising an existing quote line by line");
+      return {
+        id: `chatcmpl-builder-local-revision-${providerRequests.length}`,
+        object: "chat.completion",
+        created: providerRequests.length,
+        model: "test-builder-local-revision",
+        choices: [{
+          index: 0,
+          finish_reason: "stop",
+          logprobs: null,
+          message: {
+            role: "assistant",
+            refusal: null,
+            content: JSON.stringify(isRevision
+              ? {
+                  serviceType: "PLUMBING",
+                  title: null,
+                  scopeText: null,
+                  summary: "Updated the inspection and removed the stale allowance.",
+                  reasons: ["Applied the requested local-sheet changes."],
+                  sourceHints: ["Current quote sheet"],
+                  lineOperations: [
+                    {
+                      action: "UPDATE",
+                      targetLineNumber: 1,
+                      description: "LOCAL_UPDATE_WORK_FACT inspect and repair faucet",
+                      sectionType: "INCLUDED",
+                      sectionLabel: null,
+                      quantity: 2,
+                      unitCost: null,
+                      unitPrice: null,
+                      reason: "Increase the inspection quantity.",
+                    },
+                    {
+                      action: "REMOVE",
+                      targetLineNumber: 2,
+                      description: null,
+                      sectionType: null,
+                      sectionLabel: null,
+                      quantity: null,
+                      unitCost: null,
+                      unitPrice: null,
+                      reason: "Remove the stale allowance.",
+                    },
+                  ],
+                }
+              : {
+                  customerName: null,
+                  customerPhone: null,
+                  customerEmail: null,
+                  serviceType: "PLUMBING",
+                  title: "Faucet inspection and repair",
+                  scopeText: "Inspect the faucet and complete the approved repair.",
+                  squareFeetEstimate: null,
+                  estimatedTotalAmount: null,
+                  estimatedTaxAmount: null,
+                  estimatedInternalCostAmount: null,
+                  lineItems: [{
+                    description: "Inspect and repair faucet",
+                    quantity: 1,
+                    sectionType: "INCLUDED",
+                    sectionLabel: null,
+                  }],
+                }),
+          },
+        }],
+        usage: { prompt_tokens: 90, completion_tokens: 45, total_tokens: 135 },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-suggest-builder-local-revision-0001",
+      },
+      payload: {
+        customerId: selectedCustomer.id,
+        serviceType: "PLUMBING",
+        prompt:
+          "For Alice Local Revision, update the first faucet line and remove the second allowance for review.",
+        currentTitle: "LOCAL_TITLE_WORK_FACT faucet visit",
+        currentScopeText: "LOCAL_SCOPE_WORK_FACT inspect first, then repair if approved.",
+        currentLineItems: [
+          {
+            id: "builder-local-update",
+            description: "LOCAL_UPDATE_WORK_FACT inspect faucet",
+            sectionType: "INCLUDED",
+            sectionLabel: null,
+            quantity: 1,
+            unitCost: 40,
+            unitPrice: 95,
+          },
+          {
+            id: "builder-local-remove",
+            description: "LOCAL_REMOVE_WORK_FACT stale damage allowance",
+            sectionType: "ALTERNATE",
+            sectionLabel: "Allowance",
+            quantity: 1,
+            unitCost: 25,
+            unitPrice: 60,
+          },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(providerRequests).toHaveLength(2);
+    expect(providerRequests.map((request) => request.store)).toEqual([false, false]);
+    expect(providerRequests.some(({ serialized }) => serialized.includes("LOCAL_UPDATE_WORK_FACT"))).toBe(true);
+    expect(providerRequests.some(({ serialized }) => serialized.includes("LOCAL_REMOVE_WORK_FACT"))).toBe(true);
+    for (const { serialized } of providerRequests) {
+      expect(serialized).not.toContain("Alice Local Revision");
+      expect(serialized).not.toContain("alice.local.revision@example.com");
+      expect(serialized).not.toMatch(/555[- ]?707[- ]?1111/);
+      expect(serialized).not.toContain("OTHER_CUSTOMER_QUOTE_SENTINEL");
+      expect(serialized).not.toContain("OTHER_CUSTOMER_LINE_SENTINEL");
+      expect(serialized).not.toContain("Bob Other Context");
+    }
+
+    const complete = response.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete")?.result as {
+        patch: {
+          added: number;
+          updated: number;
+          removed: number;
+          lineChanges: Array<{ action: string; targetLineId: string | null }>;
+        };
+        suggestion: { lineItems: Array<{ description: string }> };
+      };
+    expect(complete.patch).toMatchObject({ added: 0, updated: 1, removed: 1 });
+    expect(complete.patch.lineChanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "UPDATE", targetLineId: "builder-local-update" }),
+      expect.objectContaining({ action: "REMOVE", targetLineId: "builder-local-remove" }),
+    ]));
+    expect(complete.patch.lineChanges).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "ADD" }),
+    ]));
+    expect(complete.suggestion.lineItems).toHaveLength(1);
+    expect(complete.suggestion.lineItems[0].description).toContain("LOCAL_UPDATE_WORK_FACT");
     await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(1);
   });
 
@@ -1636,7 +2078,10 @@ describe("AI assistant", () => {
         retrievedSourceCount: expect.any(Number),
       }),
     });
-    expect(body.assistant.citations.some((citation) => citation.key.startsWith("S"))).toBe(true);
+    expect(body.assistant.citations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "A1", sourceType: "Quote" }),
+    ]));
+    expect(body.assistant.citations.some((citation) => citation.key.startsWith("S"))).toBe(false);
 
     const afterCount = await prisma.quote.count({
       where: { tenantId: owner.tenant.id },
@@ -1652,7 +2097,9 @@ describe("AI assistant", () => {
     expect(audit.promptText).toBeNull();
     expect(audit.retrievalAuditEvent?.tenantId).toBe(owner.tenant.id);
     expect(audit.retrievalAuditEvent?.purpose).toBe("QUOTE_DRAFT");
-    expect(audit.retrievalAuditEvent?.resultCount).toBeGreaterThan(0);
+    // A resolved customer with no same-service quote history must not fall back
+    // to unrelated tenant data just to manufacture retrieval evidence.
+    expect(audit.retrievalAuditEvent?.resultCount).toBe(0);
   });
 
   test("links same-run Kody provenance and rejects cross-actor or wrong-purpose events", async () => {
@@ -1952,9 +2399,15 @@ describe("AI assistant", () => {
         customerId: customer.id,
         useWorkspaceContext: true,
         lineItems: [
-          expect.objectContaining({ sourcePresetId: fixture.id, quantity: 1, unitPrice: 225, unitCost: 80 }),
-          expect.objectContaining({ sourcePresetId: labor.id, quantity: 4, unitPrice: 95, unitCost: 42 }),
+          expect.objectContaining({ sourcePresetId: fixture.id, quantity: 1, unitPrice: 225, unitCost: 80, priceProvenance: "TENANT_PRESET" }),
+          expect.objectContaining({ sourcePresetId: labor.id, quantity: 4, unitPrice: 95, unitCost: 42, priceProvenance: "TENANT_PRESET" }),
         ],
+        preparation: expect.objectContaining({
+          status: "READY",
+          customerResolution: "MATCHED",
+          customer: expect.objectContaining({ id: customer.id }),
+          draft: expect.objectContaining({ requiresPricingReview: false }),
+        }),
       }),
     });
     await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
@@ -2028,6 +2481,204 @@ describe("AI assistant", () => {
         })],
       },
     });
+  });
+
+  test("Kody consumes only customer-bound governed retrieval under the shared two-call provider budget", async () => {
+    const owner = await signUp("assistant-governed-preparation-owner");
+    const otherOwner = await signUp("assistant-governed-preparation-other");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Governed Context Customer",
+      phoneDigits: "5557078080",
+      notes: "AUTHORIZED_BLUE_VALVE_FACT: use the blue isolation valve for faucet work.",
+    });
+    await createQuote({
+      session: owner,
+      customerId: customer.id,
+      title: "QUOTE_SAFE_ESCUTCHEON_FACT faucet replacement",
+      serviceType: "PLUMBING",
+      status: "ACCEPTED",
+      price: 425,
+      cost: 180,
+      createdAt: new Date("2026-08-20T12:00:00.000Z"),
+      lineDescription: "Install the customer-visible manufacturer-approved escutcheon.",
+    });
+    await createCustomer({
+      session: owner,
+      name: "Other Workspace Customer",
+      phoneDigits: "5557078081",
+      notes: "OTHER_CUSTOMER_PRIVATE_FACT: use the purple isolation valve.",
+    });
+    await createCustomer({
+      session: otherOwner,
+      name: "Cross Tenant Customer",
+      phoneDigits: "5557078082",
+      notes: "CROSS_TENANT_PRIVATE_FACT: use the black isolation valve.",
+    });
+
+    const parserRequests: string[] = [];
+    const parserStores: unknown[] = [];
+    const compositionInputs: string[] = [];
+    let parserCalls = 0;
+    let compositionCalls = 0;
+    setAiQuoteChatCompletionForTest(async (request) => {
+      parserCalls += 1;
+      const parserContext = JSON.stringify(request.messages);
+      parserRequests.push(parserContext);
+      parserStores.push(request.store);
+      const receivedPrivateNote = parserContext.includes("AUTHORIZED_BLUE_VALVE_FACT");
+      const receivedQuoteSafeFact = parserContext.includes("QUOTE_SAFE_ESCUTCHEON_FACT");
+      return {
+        id: "chatcmpl-governed-preparation",
+        object: "chat.completion",
+        created: 1,
+        model: "test-quote-parser",
+        choices: [{
+          index: 0,
+          finish_reason: "stop",
+          logprobs: null,
+          message: {
+            role: "assistant",
+            refusal: null,
+            content: JSON.stringify({
+              // A provider output can never re-authorize the draft against a
+              // different customer than the selected/deterministic match.
+              customerName: "Other Workspace Customer",
+              customerPhone: null,
+              customerEmail: null,
+              serviceType: "PLUMBING",
+              title: "Blue Valve Faucet Repair",
+              scopeText: receivedPrivateNote
+                ? "Replace the faucet using AUTHORIZED_BLUE_VALVE_FACT from a private operator note."
+                : receivedQuoteSafeFact
+                  ? "Replace the faucet using QUOTE_SAFE_ESCUTCHEON_FACT from a customer-visible quote."
+                  : "Replace the customer faucet and verify normal operation.",
+              squareFeetEstimate: null,
+              estimatedTotalAmount: null,
+              estimatedTaxAmount: null,
+              estimatedInternalCostAmount: null,
+              lineItems: [{
+                description: receivedPrivateNote
+                  ? "Faucet replacement using AUTHORIZED_BLUE_VALVE_FACT"
+                  : "Faucet replacement and functional test",
+                quantity: 1,
+                sectionType: "INCLUDED",
+                sectionLabel: null,
+              }],
+            }),
+          },
+        }],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      };
+    });
+    setAssistantCompositionProviderForTest(async (request) => {
+      compositionCalls += 1;
+      compositionInputs.push(request.inputJson);
+      return {
+        outputText: JSON.stringify({
+          answer: "Prepared the quote review using authorized workspace context [S1].",
+          sourceKeys: ["S1"],
+          safetyNotes: [],
+        }),
+        model: "test-kody-composer",
+        telemetry: {
+          requestCount: 1,
+          promptTokens: 20,
+          completionTokens: 10,
+          totalTokens: 30,
+          estimatedCostUsd: 0.001,
+        },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "assistant-governed-preparation-0001",
+      },
+      payload: {
+        message: "Prepare a plumbing quote for faucet replacement using the customer notes.",
+        tool: "DRAFT_QUOTE",
+        context: { customerId: customer.id },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(parserCalls).toBe(1);
+    expect(compositionCalls).toBe(1);
+    expect(parserCalls + compositionCalls).toBe(2);
+    expect(parserRequests[0]).toContain("faucet replacement");
+    expect(parserRequests[0]).toContain("QUOTE_SAFE_ESCUTCHEON_FACT");
+    expect(parserRequests[0]).not.toContain("Governed Context Customer");
+    expect(parserRequests[0]).not.toContain("5557078080");
+    expect(parserRequests[0]).not.toContain("AUTHORIZED_BLUE_VALVE_FACT");
+    expect(parserRequests[0]).not.toContain("OTHER_CUSTOMER_PRIVATE_FACT");
+    expect(parserRequests[0]).not.toContain("CROSS_TENANT_PRIVATE_FACT");
+    expect(parserStores).toEqual([false]);
+    expect(compositionInputs[0]).not.toContain("Governed Context Customer");
+    expect(compositionInputs[0]).not.toContain("5557078080");
+    const action = (response.json() as {
+      assistant: { actions: Array<{ payload: Record<string, unknown> }> };
+    }).assistant.actions[0];
+    expect(action?.payload.scopeText).toContain("QUOTE_SAFE_ESCUTCHEON_FACT");
+    expect(action?.payload.scopeText).not.toContain("AUTHORIZED_BLUE_VALVE_FACT");
+    const preparation = action?.payload.preparation as {
+      customer: { id: string } | null;
+      draft: { workspaceContext: Array<{ fact: string }> };
+    };
+    expect(preparation.customer?.id).toBe(customer.id);
+    expect(preparation.draft.workspaceContext.map((entry) => entry.fact).join(" ")).toContain(
+      "QUOTE_SAFE_ESCUTCHEON_FACT",
+    );
+    expect(preparation.draft.workspaceContext.map((entry) => entry.fact).join(" ")).not.toContain(
+      "AUTHORIZED_BLUE_VALVE_FACT",
+    );
+    expect(response.body).not.toContain("AUTHORIZED_BLUE_VALVE_FACT");
+    expect(response.body).not.toContain("OTHER_CUSTOMER_PRIVATE_FACT");
+    expect(response.body).not.toContain("CROSS_TENANT_PRIVATE_FACT");
+
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { email: "governed.customer@example.com" },
+    });
+    for (const [index, message] of [
+      "Prepare a plumbing quote for faucet replacement for Governed Context Customer, email governed.customer@example.com.",
+      "Prepare a plumbing quote for faucet replacement for Governed Context Customer, phone 555-707-8080.",
+      "Prepare a plumbing quote for faucet replacement for Brand New Private Customer, phone 555-808-9090.",
+      "Prepare a plumbing quote for Acme, phone 555-818-9191, job: faucet replacement.",
+    ].entries()) {
+      const minimized = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: {
+          cookie: owner.cookie,
+          "idempotency-key": `assistant-provider-minimization-000${index + 1}`,
+        },
+        payload: { message, tool: "DRAFT_QUOTE" },
+      });
+      expect(minimized.statusCode).toBe(200);
+    }
+    expect(parserRequests).toHaveLength(5);
+    for (const [index, request] of parserRequests.slice(1).entries()) {
+      expect(request, `minimized provider request ${index + 1}`).toContain("faucet replacement");
+    }
+    expect(parserRequests.join(" ")).not.toContain("governed.customer@example.com");
+    expect(parserRequests.join(" ")).not.toContain("555-707-8080");
+    expect(parserRequests.join(" ")).not.toContain("5557078080");
+    expect(parserRequests.join(" ")).not.toContain("Brand New Private Customer");
+    expect(parserRequests.join(" ")).not.toContain("555-808-9090");
+    expect(parserRequests.join(" ")).not.toContain("Acme");
+    expect(parserRequests.join(" ")).not.toContain("555-818-9191");
+    expect(parserRequests[3]).not.toContain("QUOTE_SAFE_ESCUTCHEON_FACT");
+    expect(parserRequests[4]).not.toContain("QUOTE_SAFE_ESCUTCHEON_FACT");
+    expect(parserStores).toEqual([false, false, false, false, false]);
+    expect(compositionInputs).toHaveLength(5);
+    expect(compositionInputs.join(" ")).not.toContain("Governed Context Customer");
+    expect(compositionInputs.join(" ")).not.toContain("governed.customer@example.com");
+    expect(compositionInputs.join(" ")).not.toContain("5557078080");
+    expect(compositionInputs.join(" ")).not.toContain("Brand New Private Customer");
+    expect(compositionInputs.join(" ")).not.toContain("Acme");
   });
 
   test("Kody retains quote work across name and phone clarification turns for a new customer", async () => {
@@ -2127,15 +2778,36 @@ describe("AI assistant", () => {
 
   test("quote customer matching identifies duplicate names and lets exact contact data win", async () => {
     const owner = await signUp("assistant-quote-customer-precedence-owner");
+    const compositionInputs: string[] = [];
+    setAssistantCompositionProviderForTest(async (request) => {
+      compositionInputs.push(request.inputJson);
+      return {
+        outputText: JSON.stringify({
+          answer: "I found matching customer records. Choose one to continue [A1].",
+          sourceKeys: ["A1"],
+          safetyNotes: [],
+        }),
+        model: "test-ambiguity-composer",
+        telemetry: {
+          requestCount: 1,
+          promptTokens: 12,
+          completionTokens: 8,
+          totalTokens: 20,
+          estimatedCostUsd: 0.0001,
+        },
+      };
+    });
     const first = await createCustomer({
       session: owner,
       name: "Maria Lopez",
       phoneDigits: "5551012020",
+      notes: "FIRST_AUTHORIZED_FAUCET_CONTEXT uses a blue isolation valve.",
     });
     const second = await createCustomer({
       session: owner,
       name: "Maria Lopez",
       phoneDigits: "5553034040",
+      notes: "SECOND_AUTHORIZED_FAUCET_CONTEXT uses a red isolation valve.",
     });
     const businessCustomer = await createCustomer({
       session: owner,
@@ -2163,6 +2835,38 @@ describe("AI assistant", () => {
     expect(ambiguousActions.map((action) => action.payload.customerId)).toEqual(expect.arrayContaining([first.id, second.id]));
     expect(ambiguousActions.map((action) => action.label).join(" ")).toContain("maria.one@example.com");
     expect(ambiguousActions.map((action) => action.label).join(" ")).toContain("maria.two@example.com");
+    expect(compositionInputs).toHaveLength(1);
+    expect(compositionInputs[0]).not.toContain("Maria Lopez");
+    expect(compositionInputs[0]).not.toContain("maria.one@example.com");
+    expect(compositionInputs[0]).not.toContain("maria.two@example.com");
+    expect(compositionInputs[0]).not.toContain("5551012020");
+    expect(compositionInputs[0]).not.toContain("5553034040");
+    expect(ambiguousActions.every((action) => {
+      const preparation = action.payload.preparation as {
+        status?: string;
+        customerResolution?: string;
+        preparationId?: string;
+        retrievalAuditEventId?: string;
+        customer?: { id?: string };
+        customerCandidates?: unknown[];
+        clarification?: unknown;
+        draft?: { workspaceContext?: Array<{ fact?: string }> };
+      } | undefined;
+      const customerId = action.payload.customerId;
+      return preparation?.status === "READY"
+        && preparation.customerResolution === "MATCHED"
+        && preparation.customer?.id === customerId
+        && preparation.customerCandidates?.length === 0
+        && preparation.clarification === null
+        && Boolean(preparation.preparationId)
+        && Boolean(preparation.retrievalAuditEventId)
+        && preparation.draft?.workspaceContext?.length === 0;
+    })).toBe(true);
+    expect(ambiguous.body).not.toContain("FIRST_AUTHORIZED_FAUCET_CONTEXT");
+    expect(ambiguous.body).not.toContain("SECOND_AUTHORIZED_FAUCET_CONTEXT");
+    expect(new Set(ambiguousActions.map((action) => (
+      action.payload.preparation as { preparationId: string }
+    ).preparationId)).size).toBe(2);
 
     const exactEmail = await app.inject({
       method: "POST",
@@ -2277,6 +2981,78 @@ describe("AI assistant", () => {
     });
     expect(response.body).not.toContain(unassignedExact.id);
     expect(response.body).not.toContain(crossTenantExact.id);
+  });
+
+  test("ambiguous Kody candidate preparations stay tenant and assignment scoped", async () => {
+    const owner = await signUp("assistant-quote-assigned-ambiguity-owner");
+    const otherOwner = await signUp("assistant-quote-assigned-ambiguity-other");
+    const member = await addWorkspaceUser(owner, "member");
+    const membership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const assignedFirst = await createCustomer({
+      session: owner,
+      name: "Assigned Maria",
+      phoneDigits: "5551414101",
+      notes: "ASSIGNED_FIRST_FAUCET_CONTEXT",
+      assignedTenantUserId: membership.id,
+    });
+    const assignedSecond = await createCustomer({
+      session: owner,
+      name: "Assigned Maria",
+      phoneDigits: "5551414102",
+      notes: "ASSIGNED_SECOND_FAUCET_CONTEXT",
+      assignedTenantUserId: membership.id,
+    });
+    const ownerOnly = await createCustomer({
+      session: owner,
+      name: "Assigned Maria",
+      phoneDigits: "5551414198",
+      notes: "OWNER_ONLY_PRIVATE_FAUCET_CONTEXT",
+    });
+    const crossTenant = await createCustomer({
+      session: otherOwner,
+      name: "Assigned Maria",
+      phoneDigits: "5551414199",
+      notes: "CROSS_TENANT_PRIVATE_FAUCET_CONTEXT",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Draft a plumbing quote for faucet replacement for Assigned Maria.",
+        tool: "DRAFT_QUOTE",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const actions = (response.json() as {
+      assistant: { actions: Array<{ payload: Record<string, unknown> }> };
+    }).assistant.actions;
+    expect(actions).toHaveLength(2);
+    expect(actions.map((action) => action.payload.customerId)).toEqual(
+      expect.arrayContaining([assignedFirst.id, assignedSecond.id]),
+    );
+    expect(response.body).not.toContain(ownerOnly.id);
+    expect(response.body).not.toContain(crossTenant.id);
+    expect(response.body).not.toContain("OWNER_ONLY_PRIVATE_FAUCET_CONTEXT");
+    expect(response.body).not.toContain("CROSS_TENANT_PRIVATE_FAUCET_CONTEXT");
+    for (const action of actions) {
+      const preparation = action.payload.preparation as {
+        status: string;
+        customer: { id: string } | null;
+        customerCandidates: unknown[];
+        retrievalAuditEventId: string | null;
+      };
+      expect(preparation).toMatchObject({
+        status: "READY",
+        customer: { id: action.payload.customerId },
+        customerCandidates: [],
+      });
+      expect(preparation.retrievalAuditEventId).toEqual(expect.any(String));
+    }
   });
 
   test("unknown and stale customer contexts clarify or fall back to authorized prompt matching", async () => {

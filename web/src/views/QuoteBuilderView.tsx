@@ -79,6 +79,7 @@ import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
 import { localizedApiError } from "../lib/localized-api-error";
+import { applyQuotePreparationPricingGuard } from "../lib/quote-preparation";
 
 function buildStructuredAiPromptStarter(
   t: TFunction,
@@ -190,6 +191,7 @@ type KodyQuoteDraftHandoff = {
     sourcePresetId: string | null;
     unitPrice: number | null;
     unitCost: number | null;
+    priceProvenance: "EXPLICIT_PROMPT" | "TENANT_PRESET" | "STANDARD_CATALOG" | "CURRENT_QUOTE" | "UNRESOLVED" | null;
   }>;
   editableLines: EditableQuoteLine[];
   hasStructuredDraft: boolean;
@@ -260,6 +262,14 @@ function readKodyDraftLineItems(value: unknown): KodyQuoteDraftHandoff["lineItem
       sourcePresetId: cleanKodyDraftText(candidate.sourcePresetId, 200),
       unitPrice: readKodyDraftNumber(candidate.unitPrice),
       unitCost: readKodyDraftNumber(candidate.unitCost),
+      priceProvenance:
+        candidate.priceProvenance === "EXPLICIT_PROMPT" ||
+        candidate.priceProvenance === "TENANT_PRESET" ||
+        candidate.priceProvenance === "STANDARD_CATALOG" ||
+        candidate.priceProvenance === "CURRENT_QUOTE" ||
+        candidate.priceProvenance === "UNRESOLVED"
+          ? candidate.priceProvenance
+          : null,
     }];
   });
 }
@@ -295,7 +305,9 @@ function buildEditableKodyDraftLines(
       sectionLabel: lineItem.sectionType === "ALTERNATE" ? t("quoteComponents.line.alternate") : "",
       quantity: String(quantity),
       unitCost: (lineItem.unitCost ?? 0).toFixed(2),
-      unitPrice: lineItem.unitPrice !== null
+      unitPrice: lineItem.priceProvenance === "UNRESOLVED"
+        ? "0.00"
+        : lineItem.unitPrice !== null
         ? lineItem.unitPrice.toFixed(2)
         : shouldSeedEstimate
           ? (estimatedSubtotal / quantity).toFixed(2)
@@ -308,7 +320,35 @@ function buildEditableKodyDraftLines(
 
 function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHandoff | null {
   if (!isRecord(value) || !isRecord(value.kodyQuoteDraft)) return null;
-  const draft = value.kodyQuoteDraft;
+  const payload = value.kodyQuoteDraft;
+  const preparation = isRecord(payload.preparation) ? payload.preparation : null;
+  const preparedDraft = preparation && isRecord(preparation.draft) ? preparation.draft : null;
+  const preparedCustomer = preparation && isRecord(preparation.customer) ? preparation.customer : null;
+  const preparedCustomerDraft = preparation && isRecord(preparation.customerDraft) ? preparation.customerDraft : null;
+  if (preparation && preparation.status !== "READY") return null;
+  const draft: Record<string, unknown> = preparedDraft
+    ? {
+        ...payload,
+        customerId: preparedCustomer?.id ?? payload.customerId,
+        customerName: preparedCustomer?.fullName ?? preparedCustomerDraft?.fullName ?? payload.customerName,
+        customerEmail: preparedCustomer?.email ?? preparedCustomerDraft?.email ?? payload.customerEmail,
+        customerPhone: preparedCustomer?.phone ?? preparedCustomerDraft?.phone ?? payload.customerPhone,
+        quoteId: preparedDraft.quoteId ?? payload.quoteId,
+        serviceType: preparedDraft.serviceType ?? payload.serviceType,
+        title: preparedDraft.title ?? payload.title,
+        scopeText: preparedDraft.scopeText ?? payload.scopeText,
+        estimatedDurationHoursLow: preparedDraft.estimatedDurationHoursLow ?? payload.estimatedDurationHoursLow,
+        estimatedDurationHoursHigh: preparedDraft.estimatedDurationHoursHigh ?? payload.estimatedDurationHoursHigh,
+        estimatedTotalAmount: preparedDraft.customerPriceSubtotal ?? payload.estimatedTotalAmount,
+        estimatedTaxAmount: preparedDraft.taxAmount ?? payload.estimatedTaxAmount,
+        estimatedInternalCostAmount: preparedDraft.internalCostSubtotal ?? payload.estimatedInternalCostAmount,
+        lineItems: preparedDraft.lineItems ?? payload.lineItems,
+        requiresPricingReview: preparedDraft.requiresPricingReview ?? payload.requiresPricingReview,
+        retrievedSourceCount: preparation?.retrievedSourceCount ?? payload.retrievedSourceCount,
+        retrievedSourceLabels: preparation?.retrievedSourceLabels ?? payload.retrievedSourceLabels,
+        auditEventId: preparation?.auditEventId ?? payload.auditEventId,
+      }
+    : payload;
   const prompt = cleanKodyDraftLongText(draft.prompt, 2_000);
   const title = cleanKodyDraftText(draft.title, 500);
   const scopeText = cleanKodyDraftLongText(draft.scopeText, 4_000);
@@ -390,7 +430,10 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
     hasStructuredDraft,
     hasQuickCustomerDraft,
     needsDraftChoice: false,
-    pricingNeedsReview: editableLines.some((line) => Number(line.unitPrice) <= 0),
+    pricingNeedsReview:
+      draft.requiresPricingReview === true ||
+      lineItems.some((line) => line.priceProvenance === "UNRESOLVED") ||
+      editableLines.some((line) => Number(line.unitPrice) <= 0),
     useWorkspaceContext,
     retrievedSourceCount,
     retrievedSourceLabels,
@@ -1258,7 +1301,7 @@ export function QuoteBuilderView() {
       setAiProgressEvent(null);
       setAiErrorMessage(null);
       setAiStatusMessage(null);
-      const { customer, parsed, suggestion, patch, insight, aiRunId, usage } = await api.quotes.suggestWithAi(requestBody, {
+      const result = await api.quotes.suggestWithAi(requestBody, {
         onProgress: (event) => {
           if (aiRequestRef.current?.id === requestId && !controller.signal.aborted) {
             setAiProgressEvent(event);
@@ -1268,35 +1311,20 @@ export function QuoteBuilderView() {
         signal: controller.signal,
       });
       if (aiRequestRef.current?.id !== requestId || controller.signal.aborted) return;
+      if (result.status !== "READY") {
+        throw new ApiError(
+          result.preparation.clarification.message ?? t("quoteBuilder.errors.aiApply"),
+          422,
+          result.preparation,
+        );
+      }
+      const { customer, parsed, suggestion, patch, preparation, insight, aiRunId, usage } = result;
       aiRetryIdentityRef.current = null;
-      const pricingReviewLines = suggestion.lineItems.filter((line) =>
-        line.sectionType !== "ALTERNATE"
-        && (line.priceProvenance === "UNRESOLVED" || line.unitPrice <= 0),
-      );
-      const unresolvedDescriptions = new Set(
-        pricingReviewLines
-          .filter((line) => line.priceProvenance === "UNRESOLVED")
-          .map((line) => line.description.trim().toLocaleLowerCase()),
-      );
-      const reviewedSuggestion = {
-        ...suggestion,
-        lineItems: suggestion.lineItems.map((line) =>
-          line.priceProvenance === "UNRESOLVED" && line.unitPrice !== 0
-            ? { ...line, unitPrice: 0 }
-            : line),
-      };
-      const reviewedPatch = {
-        ...patch,
-        lineChanges: patch.lineChanges.map((change) =>
-          change.action !== "REMOVE"
-          && change.unitPrice !== 0
-          && (
-            change.priceProvenance === "UNRESOLVED"
-            || unresolvedDescriptions.has(change.description.trim().toLocaleLowerCase())
-          )
-            ? { ...change, unitPrice: 0 }
-            : change),
-      };
+      const {
+        suggestion: reviewedSuggestion,
+        patch: reviewedPatch,
+        pricingReviewLines,
+      } = applyQuotePreparationPricingGuard({ preparation, suggestion, patch });
 
       setChatParsed(parsed);
       setChatPrompt("");

@@ -6,15 +6,12 @@ import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import type { AccessContext } from "../lib/access-policy";
 import {
-  accumulateAiUsageTelemetry,
   assertAiUsageAvailable,
   buildAiUsageResponse,
   createAiUsageEvent,
 } from "../lib/ai-usage";
 import {
-  buildGovernedQuoteAiContext,
   markQuoteAiRetrievalSourcesDeleted,
-  type AiRetrievalResult,
 } from "../lib/ai-retrieval";
 import { enqueueAiIndexJob, enqueueQuoteAiIndexJobs } from "../lib/ai-index-jobs";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
@@ -48,11 +45,11 @@ import {
 import { parseChatToQuotePrompt, type ParsedChatToQuoteDraft } from "../services/chat-to-quote";
 import {
   aiBuildQuoteRevisionPlan,
-  aiParseChatToQuotePrompt,
   createAiQuoteProviderBudget,
   createAiTelemetryAccumulator,
   getAiQuoteRuntimeInfo,
 } from "../services/ai-quote";
+import { prepareQuoteReview, type QuotePreparationResult } from "../services/quote-preparation";
 import {
   generateQuotePdfBuffer,
   type QuoteComponentColors,
@@ -1359,6 +1356,7 @@ function normalizeNullablePhone(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+/** @deprecated QF-001 uses prepareQuoteReview for every active AI route. */
 async function findActivePromptCustomer(
   prisma: PrismaClient,
   access: AccessContext,
@@ -1845,7 +1843,7 @@ function buildAiSuggestionInsight(params: {
   presetCount: number;
   standardPresetCount?: number;
   similarQuotes: SimilarQuoteContext[];
-  retrievalCitations?: AiRetrievalResult["citations"];
+  retrievalCitations?: readonly Readonly<{ key: string; label: string }>[];
   targetAmount?: number | null;
   requiresPricingReview?: boolean;
   patch: AiQuotePatchResult;
@@ -2247,6 +2245,32 @@ type AiSuggestedQuoteDraft = {
   model: string;
 };
 
+function quotePreparationSuggestion(
+  preparation: QuotePreparationResult,
+): AiSuggestedQuoteDraft {
+  return {
+    serviceType: preparation.draft.serviceType,
+    title: preparation.draft.title,
+    scopeText: preparation.draft.scopeText,
+    internalCostSubtotal: preparation.draft.internalCostSubtotal ?? 0,
+    customerPriceSubtotal: preparation.draft.customerPriceSubtotal,
+    taxAmount: preparation.draft.taxAmount,
+    totalAmount: preparation.draft.totalAmount,
+    lineItems: preparation.draft.lineItems.map((line) => ({
+      description: line.description,
+      sectionType: line.sectionType,
+      sectionLabel: line.sectionLabel,
+      quantity: line.quantity,
+      unitCost: line.unitCost ?? 0,
+      unitPrice: line.unitPrice,
+      priceProvenance: line.priceProvenance,
+      ...(line.sourcePresetId ? { sourcePresetId: line.sourcePresetId } : {}),
+    })),
+    requiresPricingReview: preparation.draft.requiresPricingReview,
+    model: preparation.model,
+  };
+}
+
 type AiCurrentLineItem = {
   id?: string | null;
   description: string;
@@ -2454,9 +2478,10 @@ type AiSuggestionStreamEvent =
           squareFeetEstimateHigh: number | null;
           estimatedTotalAmount: number | null;
         };
-        suggestion: AiSuggestedQuoteDraft;
-        patch: AiQuotePatchResult;
-        insight: AiSuggestionInsight;
+        preparation: Omit<QuotePreparationResult, "telemetry"> & { auditEventId: string };
+        suggestion?: AiSuggestedQuoteDraft;
+        patch?: AiQuotePatchResult;
+        insight?: AiSuggestionInsight;
         aiRunId: string;
         usage: ReturnType<typeof buildAiUsageResponse>;
       };
@@ -2967,6 +2992,7 @@ function scoreSimilarQuote(
   return score;
 }
 
+/** @deprecated QF-001 removed cross-customer similarity from active provider paths. */
 async function loadSimilarQuoteContext(
   prisma: Prisma.TransactionClient | PrismaClient,
   access: AccessContext,
@@ -3195,6 +3221,7 @@ function buildExplicitAiLineItems(params: {
   }));
 }
 
+/** @deprecated QF-001 uses quotePreparationSuggestion for every active AI route. */
 async function buildAiSuggestedQuoteDraft(
   prisma: Prisma.TransactionClient | PrismaClient,
   tenantId: string,
@@ -4241,6 +4268,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         idempotencyKey: idempotency.idempotencyKey,
         requestHash: hashAiUsageRequest(payload),
         credits: 1,
+        resolveSettledCredits: (result) => result.chargedCredits,
       }, async () => {
       const aiTelemetry = createAiTelemetryAccumulator();
       const providerBudget = createAiQuoteProviderBudget();
@@ -4286,8 +4314,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         throw new AiSuggestionInputError("Quote not found for tenant.");
       }
 
-      const hadExplicitCustomerContext = Boolean(payload.customerId || existingQuote?.customerId);
-
       stream.progress(
         "loading_customer_context",
         existingQuote?.customer
@@ -4298,43 +4324,81 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       );
 
       const preflightDraft = parseChatToQuotePrompt(payload.prompt);
-      let selectedCustomer = payload.customerId
-        ? await app.prisma.customer.findFirst({
-            where: {
-              id: payload.customerId,
-              ...tenantActiveCustomerScope(claims.tenantId),
-              ...assignedRecordScope(access),
-            },
-            select: {
-              id: true,
-              fullName: true,
-              phone: true,
-              email: true,
-            },
-          })
-        : existingQuote?.customer ?? null;
-
-    if (!selectedCustomer && !payload.customerId && !existingQuote?.customerId) {
-      selectedCustomer = await findActivePromptCustomer(app.prisma, access, {
-        fullName: preflightDraft.customerName,
-        phone: normalizeNullablePhone(preflightDraft.customerPhone),
-        email: normalizeNullableEmail(preflightDraft.customerEmail),
+      const preparation = await prepareQuoteReview(app.prisma, {
+        access,
+        prompt: payload.prompt,
+        customerId: payload.customerId,
+        quoteId: payload.quoteId,
+        serviceTypeHint: payload.serviceType,
+        providerMode: "BOUNDED_ENHANCEMENT",
+        providerBudget,
+        telemetry: aiTelemetry,
+        includeInternalCost: includeFinancialContext,
       });
-    }
-
-    const preliminaryServiceType =
-      existingQuote?.serviceType ?? payload.serviceType ?? preflightDraft.serviceType;
-    const currentQuoteEstimatedTotal = payload.currentLineItems?.length
-      ? roundCurrency(
-          payload.currentLineItems.reduce(
-            (sum, lineItem) => sum + lineItem.quantity * lineItem.unitPrice,
-            0,
-          ),
-        )
-      : existingQuote
-        ? Number(existingQuote.totalAmount)
-        : null;
-
+      const selectedCustomer = preparation.customer;
+      const preliminaryServiceType = preparation.draft.serviceType;
+      if (preparation.status !== "READY") {
+        const clarificationEvent = await createAiUsageEvent(app.prisma, {
+          tenantId: claims.tenantId,
+          quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+          customerId: selectedCustomer?.id ?? null,
+          actor,
+          eventType: existingQuote ? "REVISE" : "DRAFT",
+          promptText: payload.prompt,
+          requestId: request.id,
+          serviceType: preliminaryServiceType,
+          sensitiveValues: [
+            selectedCustomer?.fullName,
+            selectedCustomer?.email,
+            selectedCustomer?.phone,
+            ...preparation.customerCandidates.flatMap((candidate) => [
+              candidate.fullName,
+              candidate.email,
+              candidate.phone,
+            ]),
+          ],
+          creditsConsumed: 0,
+          telemetry: aiTelemetry,
+          trace: {
+            insightSummary: preparation.clarification?.message ?? "Quote preparation needs clarification.",
+            insightReasons: [
+              preparation.status === "CUSTOMER_AMBIGUOUS"
+                ? "customer selection is required before customer-bound retrieval or suggestion work"
+                : "required quote input is missing",
+            ],
+            sourceTypes: ["QuotePreparationClarification"],
+            riskNote: "No provider, downstream suggestion, or revision-plan work ran for this non-ready preparation.",
+          },
+        });
+        const { telemetry: _telemetry, ...clientPreparation } = preparation;
+        return {
+          chargedCredits: 0,
+          result: {
+            customer: selectedCustomer
+              ? {
+                  id: selectedCustomer.id,
+                  fullName: selectedCustomer.fullName,
+                  phone: selectedCustomer.phone ?? "",
+                  email: selectedCustomer.email,
+                }
+              : null,
+            parsed: {
+              customerName: preflightDraft.customerName,
+              customerPhone: preflightDraft.customerPhone,
+              customerEmail: preflightDraft.customerEmail,
+              serviceType: preliminaryServiceType,
+              squareFeetEstimate: preflightDraft.squareFeetEstimate,
+              squareFeetVariancePercent: preflightDraft.squareFeetVariancePercent,
+              squareFeetEstimateLow: preflightDraft.squareFeetEstimateLow,
+              squareFeetEstimateHigh: preflightDraft.squareFeetEstimateHigh,
+              estimatedTotalAmount: preflightDraft.estimatedTotalAmount,
+            },
+            preparation: { ...clientPreparation, auditEventId: clarificationEvent.id },
+            aiRunId: clarificationEvent.id,
+          },
+          telemetry: aiTelemetry,
+        };
+      }
     const contextPresets = await app.prisma.workPreset.findMany({
       where: {
         tenantId: claims.tenantId,
@@ -4358,24 +4422,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     const customerActivityContext: [] = [];
 
-    const similarQuotes = await loadSimilarQuoteContext(app.prisma, access, {
-      serviceType: preliminaryServiceType,
-      prompt: payload.prompt,
-      title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
-      scopeText: existingQuote?.scopeText ?? payload.currentScopeText ?? preflightDraft.scopeText,
-      targetAmount: preflightDraft.estimatedTotalAmount ?? currentQuoteEstimatedTotal,
-      excludeQuoteId: existingQuote?.id ?? payload.quoteId ?? null,
-    });
+    // QF-001: legacy same-trade similarity searched across customers. The
+    // authoritative preparation retrieval is now the only historical context
+    // source and is customer/service filtered with an audit event.
+    const similarQuotes: SimilarQuoteContext[] = [];
 
     const standardCatalogMatches = buildStandardCatalogMatchesForAiContext({
       serviceType: preliminaryServiceType,
       prompt: payload.prompt,
-      title: existingQuote?.title ?? payload.currentTitle ?? preflightDraft.title,
-      scopeText: existingQuote?.scopeText ?? payload.currentScopeText ?? preflightDraft.scopeText,
+      title: existingQuote?.title ?? preparation.draft.title,
+      scopeText: existingQuote?.scopeText ?? preparation.draft.scopeText,
       lineItemDescriptions:
-        payload.currentLineItems?.map((lineItem) => lineItem.description) ??
-        existingQuote?.lineItems.map((lineItem) => lineItem.description) ??
-        [],
+        existingQuote?.lineItems.map((lineItem) => lineItem.description)
+        ?? preparation.draft.lineItems.map((lineItem) => lineItem.description),
       tenantPresets: contextPresets.map((preset) => ({
         catalogKey: preset.catalogKey ?? null,
         name: preset.name,
@@ -4390,7 +4449,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     stream.progress(
       "retrieving_workspace_context",
-      `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"}, ${standardCatalogMatches.length} catalog match${standardCatalogMatches.length === 1 ? "" : "es"}, and ${similarQuotes.length} similar quote${similarQuotes.length === 1 ? "" : "s"} for ${preliminaryServiceType.toLowerCase()}.`,
+      `Loaded ${contextPresets.length} saved job${contextPresets.length === 1 ? "" : "s"} and ${standardCatalogMatches.length} catalog match${standardCatalogMatches.length === 1 ? "" : "es"} for ${preliminaryServiceType.toLowerCase()}.`,
       {
         sourceHints: buildAiContextSourceHints({
           customer: selectedCustomer
@@ -4404,69 +4463,43 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     );
 
-    const currentQuoteContext =
-      payload.currentTitle || payload.currentScopeText || payload.currentLineItems?.length
-        ? {
-            serviceType: existingQuote?.serviceType ?? preliminaryServiceType,
-            title: payload.currentTitle ?? existingQuote?.title,
-            scopeText: payload.currentScopeText ?? existingQuote?.scopeText,
-            lineItems: payload.currentLineItems?.length
-              ? payload.currentLineItems.map((lineItem) => ({
-                  id: lineItem.id ?? null,
-                  description: lineItem.description,
-                  sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
-                  sectionLabel: lineItem.sectionLabel ?? null,
-                  quantity: lineItem.quantity,
-                  unitCost: lineItem.unitCost,
-                  unitPrice: lineItem.unitPrice,
-                  sourcePresetId: lineItem.sourcePresetId,
-                }))
-              : (existingQuote?.lineItems ?? []).map((lineItem) => ({
-                  id: lineItem.id,
-                  description: lineItem.description,
-                  sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
-                  sectionLabel: lineItem.sectionLabel,
-                  quantity: Number(lineItem.quantity),
-                  unitCost: Number(lineItem.unitCost),
-                  unitPrice: Number(lineItem.unitPrice),
-                })),
-          }
-        : existingQuote
-          ? {
-              serviceType: existingQuote.serviceType,
-              title: existingQuote.title,
-              scopeText: existingQuote.scopeText,
-              lineItems: existingQuote.lineItems.map((lineItem) => ({
-                id: lineItem.id,
-                description: lineItem.description,
-                sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
-                sectionLabel: lineItem.sectionLabel,
-                quantity: Number(lineItem.quantity),
-                unitCost: Number(lineItem.unitCost),
-                unitPrice: Number(lineItem.unitPrice),
-              })),
-            }
+    const submittedQuoteContext: Exclude<AiCurrentQuoteContextForDiff, null> = {
+      serviceType: payload.serviceType ?? preliminaryServiceType,
+      title: payload.currentTitle,
+      scopeText: payload.currentScopeText,
+      lineItems: payload.currentLineItems?.map((lineItem) => ({
+        id: lineItem.id ?? null,
+        description: lineItem.description,
+        sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+        sectionLabel: lineItem.sectionLabel ?? null,
+        quantity: lineItem.quantity,
+        unitCost: lineItem.unitCost,
+        unitPrice: lineItem.unitPrice,
+        priceProvenance: "CURRENT_QUOTE",
+        ...(lineItem.sourcePresetId ? { sourcePresetId: lineItem.sourcePresetId } : {}),
+      })) ?? [],
+    };
+    const hasSubmittedSheetContext = hasMeaningfulCurrentQuoteContext(submittedQuoteContext);
+    const currentQuoteContext: AiCurrentQuoteContextForDiff = existingQuote
+      ? {
+          serviceType: existingQuote.serviceType,
+          title: existingQuote.title,
+          scopeText: existingQuote.scopeText,
+          lineItems: existingQuote.lineItems.map((lineItem) => ({
+            id: lineItem.id,
+            description: lineItem.description,
+            sectionType: normalizeQuoteLineSectionType(lineItem.sectionType),
+            sectionLabel: lineItem.sectionLabel,
+            quantity: Number(lineItem.quantity),
+            unitCost: Number(lineItem.unitCost),
+            unitPrice: Number(lineItem.unitPrice),
+          })),
+        }
+      : hasSubmittedSheetContext
+        ? submittedQuoteContext
         : null;
 
-    let governedRetrieval: AiRetrievalResult | null = null;
-    try {
-      governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
-        access,
-        query: payload.prompt,
-        purpose: currentQuoteContext || existingQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
-        serviceType: preliminaryServiceType,
-        requestId: request.id,
-        customerId: selectedCustomer?.id ?? null,
-        quoteId: existingQuote?.id ?? payload.quoteId ?? null,
-        allowProviderCalls: false,
-      });
-      accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
-    } catch (retrievalErr) {
-      if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
-      request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] governed retrieval context unavailable");
-    }
-
-    let contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
+    const contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
       customer: selectedCustomer
           ? {
               fullName: selectedCustomer.fullName,
@@ -4502,7 +4535,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           }
           : null,
       similarQuotes,
-      retrievalContext: governedRetrieval?.context,
+      retrievalContext: preparation.draft.workspaceContext.length
+        ? preparation.draft.workspaceContext.map((entry) => (
+            `[${entry.citationKey}] ${entry.label}\n${entry.fact}`
+          )).join("\n\n")
+        : undefined,
       includeFinancialContext,
     }), payload.prompt);
 
@@ -4522,107 +4559,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     );
 
-    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
-      context: contextPrompt,
-      telemetry: aiTelemetry,
-      providerBudget,
-      diagnosticContext: { requestId: request.id },
-    });
-
-    const customerPhone = normalizeNullablePhone(parsedDraft.customerPhone);
-    const customerEmail = normalizeNullableEmail(parsedDraft.customerEmail);
-
-    if (!selectedCustomer) {
-      selectedCustomer = await findActivePromptCustomer(app.prisma, access, {
-        fullName: parsedDraft.customerName,
-        phone: customerPhone,
-        email: customerEmail,
-      });
-
-      if (selectedCustomer) {
-        stream.progress(
-          "loading_customer_context",
-          `Matched the prompt to ${selectedCustomer.fullName} and attached the draft to that customer.`,
-        );
-      }
-    }
-
-    if (selectedCustomer && !hadExplicitCustomerContext && currentQuoteContext) {
-      try {
-        governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
-          access,
-          query: payload.prompt,
-          purpose: currentQuoteContext || existingQuote ? "QUOTE_REVISION" : "QUOTE_DRAFT",
-          serviceType: preliminaryServiceType,
-          requestId: request.id,
-          customerId: selectedCustomer.id,
-          quoteId: existingQuote?.id ?? payload.quoteId ?? null,
-          allowProviderCalls: false,
-        });
-        accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
-      } catch (retrievalErr) {
-        if (retrievalErr instanceof AiUsageLedgerError) throw retrievalErr;
-        request.log.warn({ err: retrievalErr }, "[quotes/ai-suggest] customer-specific retrieval context unavailable");
-      }
-
-      contextPrompt = appendAiPromptStructureHints(buildAiQuoteContext({
-        customer: {
-          fullName: selectedCustomer.fullName,
-        },
-        currentQuote: currentQuoteContext
-          ? {
-              serviceType: currentQuoteContext.serviceType,
-              title: currentQuoteContext.title,
-              scopeText: currentQuoteContext.scopeText,
-              lineItems: currentQuoteContext.lineItems.map((lineItem) => ({
-                description: lineItem.description,
-                sectionType: lineItem.sectionType,
-                sectionLabel: lineItem.sectionLabel,
-                quantity: lineItem.quantity,
-                unitCost: lineItem.unitCost,
-                unitPrice: lineItem.unitPrice,
-              })),
-            }
-          : null,
-        presets: contextPresets.map((preset) => ({
-          name: preset.name,
-          description: preset.description,
-          unitType: preset.unitType,
-          unitCost: Number(preset.unitCost),
-          unitPrice: Number(preset.unitPrice),
-        })),
-        standardCatalogMatches,
-        pricingProfile: contextPricingProfile
-          ? {
-              laborRate: Number(contextPricingProfile.laborRate),
-              materialMarkup: Number(contextPricingProfile.materialMarkup),
-            }
-          : null,
-        similarQuotes,
-        retrievalContext: governedRetrieval?.context,
-        includeFinancialContext,
-      }), payload.prompt);
-
-      stream.progress(
-        "drafting_quote_patch",
-        `Matched authorized customer context from the prompt: ${selectedCustomer.fullName}. Refining the review draft without contact details or customer notes.`,
-        {
-          sourceHints: buildAiContextSourceHints({
-            customer: {},
-            customerActivityCount: customerActivityContext.length,
-            presetCount: contextPresets.length,
-            standardPresetCount: standardCatalogMatches.length,
-            similarQuotes,
-          }),
-        },
-      );
-    }
-
-    const baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
-      prompt: payload.prompt,
-      parsedDraft,
-      serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
-    });
+    const parsedDraft = preflightDraft;
+    const baselineSuggestion = quotePreparationSuggestion(preparation);
 
     const hasCurrentSheetContext = currentQuoteContext
       ? hasMeaningfulCurrentQuoteContext(currentQuoteContext)
@@ -4634,6 +4572,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           context: buildAiRevisionContextPrompt(contextPrompt, currentQuoteContext, baselineSuggestion, {
             includeFinancialContext,
           }),
+          sensitiveValues: [
+            selectedCustomer?.fullName,
+            selectedCustomer?.email,
+            selectedCustomer?.phone,
+            preflightDraft.customerName,
+          ],
           telemetry: aiTelemetry,
           providerBudget,
           diagnosticContext: { requestId: request.id },
@@ -4677,7 +4621,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
         customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
         actor,
-        eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
+        eventType: hasSubmittedSheetContext || existingQuote ? "REVISE" : "DRAFT",
         promptText: payload.prompt,
         requestId: request.id,
         serviceType: preliminaryServiceType,
@@ -4692,9 +4636,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           sourceTypes: ["QuoteAiGuardrail"],
           riskNote: "Provider usage was accounted and audited; generated output was withheld.",
         },
-        retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
+        retrievalAuditEventId: preparation.retrievalAuditEventId,
       });
       return {
+        chargedCredits: 1,
         noResultError:
           "AI could not produce a concrete quote update from that prompt. Add explicit scope, quantities, or requested line edits and try again.",
       };
@@ -4713,7 +4658,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       presetCount: contextPresets.length,
       standardPresetCount: standardCatalogMatches.length,
       similarQuotes,
-      retrievalCitations: governedRetrieval?.citations,
+      retrievalCitations: preparation.sources,
       targetAmount: suggestion.totalAmount,
       requiresPricingReview: suggestion.requiresPricingReview,
       patch,
@@ -4750,7 +4695,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
         customerId: selectedCustomer?.id ?? existingQuote?.customerId ?? null,
         actor,
-        eventType: hasCurrentSheetContext || existingQuote ? "REVISE" : "DRAFT",
+        eventType: hasSubmittedSheetContext || existingQuote ? "REVISE" : "DRAFT",
         promptText: payload.prompt,
         requestId: request.id,
         serviceType: suggestion.serviceType,
@@ -4763,16 +4708,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           serviceType: suggestion.serviceType,
           retryApplied: guardrailRetryApplied,
         }),
-        retrievalAuditEventId: governedRetrieval?.auditEventId ?? null,
+        retrievalAuditEventId: preparation.retrievalAuditEventId,
       });
 
       return {
+        chargedCredits: 1,
         result: {
           customer: selectedCustomer
             ? {
                 id: selectedCustomer.id,
                 fullName: selectedCustomer.fullName,
-                phone: selectedCustomer.phone,
+                phone: selectedCustomer.phone ?? "",
                 email: selectedCustomer.email,
               }
             : null,
@@ -4790,6 +4736,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           suggestion,
           patch,
           insight,
+          preparation: (() => {
+            const { telemetry: _telemetry, ...clientPreparation } = preparation;
+            return { ...clientPreparation, auditEventId: aiUsageEvent.id };
+          })(),
           aiRunId: aiUsageEvent.id,
         },
         telemetry: aiTelemetry,
@@ -4819,7 +4769,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         result: {
           ...projectedResult,
           usage: buildAiUsageResponse(finalSnapshot, {
-            consumedCredits: 1,
+            consumedCredits: operationResult.chargedCredits,
             consumedSpendUsd: operationResult.telemetry.estimatedCostUsd,
           }, { viewInternalCosts: includeFinancialContext }),
         },

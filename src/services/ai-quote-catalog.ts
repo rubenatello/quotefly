@@ -5,6 +5,7 @@ import type {
   ServiceCategory,
 } from "@prisma/client";
 import type { ChatQuoteLineItemSuggestion } from "./chat-to-quote";
+import { getStandardWorkPresetDefinition } from "./work-preset-catalog";
 
 type TenantQuotePreset = {
   id: string;
@@ -24,9 +25,11 @@ export type PreparedCatalogQuoteLine = {
   sectionType: "INCLUDED" | "ALTERNATE";
   sectionLabel: string | null;
   sourcePresetId: string | null;
+  catalogKey: string | null;
   unitType: PresetUnitType | null;
   unitPrice: number | null;
   unitCost: number | null;
+  priceProvenance: "TENANT_PRESET" | "STANDARD_CATALOG" | "UNRESOLVED";
   catalogMatched: boolean;
 };
 
@@ -104,9 +107,36 @@ function lineFromPreset(
     sectionType: parsedLine.sectionType ?? "INCLUDED",
     sectionLabel: parsedLine.sectionLabel ?? null,
     sourcePresetId: preset.id,
+    catalogKey: preset.catalogKey,
     unitType: preset.unitType,
     unitPrice: money(preset.unitPrice),
     unitCost: includeInternalCost ? money(preset.unitCost) : null,
+    priceProvenance: "TENANT_PRESET",
+    catalogMatched: true,
+  };
+}
+
+function lineFromStandardPreset(
+  serviceType: ServiceCategory,
+  parsedLine: ChatQuoteLineItemSuggestion,
+  quantityOverride: number | null,
+  includeInternalCost: boolean,
+): PreparedCatalogQuoteLine | null {
+  if (!parsedLine.catalogKey) return null;
+  const preset = getStandardWorkPresetDefinition(serviceType, parsedLine.catalogKey);
+  if (!preset) return null;
+  const details = preset.description?.trim();
+  return {
+    description: details ? `${preset.name}\n${details}` : preset.name,
+    quantity: quantityOverride ?? positiveQuantity(parsedLine.quantity, positiveQuantity(preset.defaultQuantity)),
+    sectionType: parsedLine.sectionType ?? "INCLUDED",
+    sectionLabel: parsedLine.sectionLabel ?? null,
+    sourcePresetId: null,
+    catalogKey: preset.catalogKey,
+    unitType: preset.unitType,
+    unitPrice: money(preset.unitPrice),
+    unitCost: includeInternalCost ? money(preset.unitCost) : null,
+    priceProvenance: "STANDARD_CATALOG",
     catalogMatched: true,
   };
 }
@@ -118,9 +148,11 @@ function fallbackLine(parsedLine: ChatQuoteLineItemSuggestion): PreparedCatalogQ
     sectionType: parsedLine.sectionType ?? "INCLUDED",
     sectionLabel: parsedLine.sectionLabel ?? null,
     sourcePresetId: null,
+    catalogKey: parsedLine.catalogKey ?? null,
     unitType: parsedLine.unitType ?? null,
     unitPrice: null,
     unitCost: null,
+    priceProvenance: "UNRESOLVED",
     catalogMatched: false,
   };
 }
@@ -188,7 +220,16 @@ export async function prepareCatalogQuoteLines(
         input.includeInternalCost,
       ));
     } else {
-      lines.push(fallbackLine(parsedLine));
+      lines.push(
+        lineFromStandardPreset(
+          input.serviceType,
+          parsedLine,
+          parsedLine.unitType === "HOUR" && input.estimatedDurationHoursHigh
+            ? input.estimatedDurationHoursHigh
+            : null,
+          input.includeInternalCost,
+        ) ?? fallbackLine(parsedLine),
+      );
     }
   }
 

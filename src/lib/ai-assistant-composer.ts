@@ -319,22 +319,33 @@ function safeValue(value: string | number | boolean | null): string | number | b
     .slice(0, MAX_FIELD_TEXT_LENGTH);
 }
 
-function safeResultRows(rows: AssistantPayloadSource["results"]) {
+function safeResultRows(
+  rows: AssistantPayloadSource["results"],
+  knownSensitiveValues?: readonly string[],
+) {
   return rows.slice(0, MAX_RESULT_ROWS).map((row) => {
     const safeEntries: Array<[string, string | number | boolean | null]> = [];
     for (const [key, value] of Object.entries(row)) {
       if (safeEntries.length >= MAX_ROW_FIELDS) break;
       if (OMIT_FIELD_PATTERN.test(normalizeKey(key))) continue;
-      safeEntries.push([key, safeValue(value)]);
+      safeEntries.push([
+        key,
+        safeValue(typeof value === "string"
+          ? redactAiPrompt(value, { knownSensitiveValues })
+          : value),
+      ]);
     }
     return Object.fromEntries(safeEntries);
   });
 }
 
-function safeActions(actions: readonly AiAssistantCompositionInput["actions"][number][]) {
+function safeActions(
+  actions: readonly AiAssistantCompositionInput["actions"][number][],
+  knownSensitiveValues?: readonly string[],
+) {
   return actions.slice(0, 4).map((action) => ({
     type: action.type,
-    label: safeValue(action.label) as string,
+    label: safeValue(redactAiPrompt(action.label, { knownSensitiveValues })) as string,
     requiresConfirmation: action.requiresConfirmation,
   }));
 }
@@ -402,8 +413,8 @@ function buildPayload(params: {
     diagnostics: safeDiagnostics(params.assistant.diagnostics),
     fieldsExcluded: params.assistant.fieldsExcluded.map((field) => safeValue(field) as string).slice(0, 20),
     citations: safeCitations(params.assistant.citations, knownSensitiveValues),
-    results: safeResultRows(params.assistant.results),
-    actions: safeActions(params.assistant.actions),
+    results: safeResultRows(params.assistant.results, knownSensitiveValues),
+    actions: safeActions(params.assistant.actions, knownSensitiveValues),
     retrievalExcerpts: (params.retrievalExcerpts ?? []).slice(0, 6).map((excerpt) => ({
       key: safeValue(excerpt.key) as string,
       label: safeValue(redactAiPrompt(excerpt.label, { knownSensitiveValues })) as string,
