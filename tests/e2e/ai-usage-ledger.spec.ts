@@ -210,8 +210,8 @@ test("a canonical AI usage-limit 402 gates paid work without a reload", async ({
   await expect(kody).toBeHidden();
   await page.goto("/app/build");
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
-  const draftTitle = page.getByRole("button", { name: "Draft title" });
-  await expect(draftTitle).toBeDisabled();
+  const prepareWithKody = page.getByRole("button", { name: "Prepare with Kody" });
+  await expect(prepareWithKody).toBeDisabled();
   await expect(page.locator('[data-testid="quote-ai-pause-reason"]:visible')).toContainText(
     /Drafting and analysis are paused/i,
   );
@@ -221,12 +221,12 @@ test("a canonical AI usage-limit 402 gates paid work without a reload", async ({
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("qf:ai-usage-updated", {
     detail: { monthlyUsageEffectivePercent: 70, limitReached: false, renewsAtUtc: "2026-09-01T00:00:00.000Z" },
   })));
-  await expect(draftTitle).toBeEnabled();
-  await draftTitle.click();
-  const modal = page.getByRole("dialog", { name: /Kody help for quote title/i });
-  await modal.getByTestId("quote-ai-prompt").fill("Write a concise replacement title");
-  await expect(modal.getByRole("button", { name: "Apply to field" })).toBeEnabled();
-  await expect(modal.getByTestId("quote-ai-prompt")).toHaveValue("Write a concise replacement title");
+  await expect(prepareWithKody).toBeEnabled();
+  await prepareWithKody.click();
+  const modal = page.getByRole("dialog", { name: "Prepare quote with Kody" });
+  await modal.getByTestId("quote-kody-prompt").fill("Write a concise replacement quote for the selected customer");
+  await expect(modal.getByRole("button", { name: "Prepare draft" })).toBeEnabled();
+  await expect(modal.getByTestId("quote-kody-prompt")).toHaveValue("Write a concise replacement quote for the selected customer");
   expect(quoteAiRequests).toBe(0);
 });
 
@@ -298,9 +298,7 @@ test("a mid-session accounting 503 immediately pauses paid AI without hiding det
   await page.getByRole("button", { name: "New quote", exact: true }).first().click();
   await expect(page).toHaveURL(/\/app\/build$/);
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "Draft title", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Draft overview", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Draft quote with Kody", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Prepare with Kody", exact: true })).toBeDisabled();
   expect(quoteAiRequests).toBe(0);
 });
 

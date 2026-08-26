@@ -150,7 +150,9 @@ test("paid reconciliation gating is wired through Kody and both quote AI surface
   assert.match(kody, /errorCode === "AI_USAGE_ACCOUNTING_UNAVAILABLE"/);
   assert.match(kody, /err instanceof ApiError && err\.status === 503\s*\? t\("kody\.errors\.temporaryFailure"\)/);
   assert.match(builder, /disabled=\{!canUseChatToQuote \|\| aiUsage\.paidActionsUnavailable\}/);
-  assert.match(builder, /assistDisabled=\{!canUseChatToQuote \|\| aiUsage\.paidActionsUnavailable\}/);
+  assert.match(builder, /<QuoteKodyPrepareModal/);
+  assert.match(builder, /usageLimitMessage=\{aiUsage\.paidActionsUnavailable \? aiUsageLimitMessage : null\}/);
+  assert.doesNotMatch(builder, /assistDisabled=\{!canUseChatToQuote \|\| aiUsage\.paidActionsUnavailable\}/);
   assert.match(desk, /disabled=\{!canUseChatToQuote \|\| isQuoteLocked \|\| aiUsage\.paidActionsUnavailable\}/);
   assert.match(desk, /assistDisabled=\{!canUseChatToQuote \|\| isQuoteLocked \|\| aiUsage\.paidActionsUnavailable\}/);
   assert.match(builder, /disabled=\{!canUseChatToQuote \|\| aiUsage\.paidActionsUnavailable\}/);

@@ -695,9 +695,23 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await page.getByLabel("Quote title").fill("Existing mobile draft should stay");
   await expect(page.locator(".qf-mobile-action-dock")).toBeVisible();
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
-  const contextualDraftAction = page.getByRole("button", { name: "Draft quote with Kody" });
+  const contextualDraftAction = page.getByRole("button", { name: "Prepare with Kody" });
   await expect(contextualDraftAction).toBeVisible();
   await contextualDraftAction.click();
+  const prepareDialog = page.getByRole("dialog", { name: "Prepare quote with Kody" });
+  await expect(prepareDialog).toBeVisible();
+  await expect(prepareDialog.getByTestId("quote-kody-prompt")).toBeVisible();
+  await expect(prepareDialog.getByText("Kody prepares a draft only. You decide what is applied.")).toBeHidden();
+  await prepareDialog.getByRole("button", { name: "Cancel" }).click();
+  await page.evaluate((customerId) => {
+    window.dispatchEvent(new CustomEvent("quotefly:kody-open", {
+      detail: {
+        prompt: "Draft a roofing quote for the selected customer.",
+        tool: "DRAFT_QUOTE",
+        context: { currentPage: "quotes", customerId },
+      },
+    }));
+  }, customer.id);
   const draftDialog = page.getByTestId("kody-chat-panel");
   await expect(draftDialog).toBeVisible();
   await expect(page.locator(".qf-mobile-action-dock")).toBeHidden();
@@ -888,9 +902,21 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
 
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
-  const contextualDraftAction = page.getByRole("button", { name: "Draft quote with Kody" });
+  const contextualDraftAction = page.getByRole("button", { name: "Prepare with Kody" });
   await expect(contextualDraftAction).toBeVisible();
   await contextualDraftAction.click();
+  const prepareDialog = page.getByRole("dialog", { name: "Prepare quote with Kody" });
+  await expect(prepareDialog).toBeVisible();
+  await prepareDialog.getByRole("button", { name: "Cancel" }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("quotefly:kody-open", {
+      detail: {
+        prompt: "Draft a roofing quote and resolve the customer from the request.",
+        tool: "DRAFT_QUOTE",
+        context: { currentPage: "quotes" },
+      },
+    }));
+  });
   const kodyDialog = page.getByTestId("kody-chat-panel");
   await expect(kodyDialog).toBeVisible();
   await revealKodyQuickPrompts(kodyDialog);

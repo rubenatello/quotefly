@@ -406,7 +406,10 @@ export interface DashboardContextValue {
   loadAll: () => Promise<void>;
   loadQuotes: () => Promise<void>;
   loadCustomers: () => Promise<void>;
-  ensureCustomerLoaded: (customerId: string) => Promise<Customer | null>;
+  ensureCustomerLoaded: (
+    customerId: string,
+    options?: { forceRefresh?: boolean },
+  ) => Promise<Customer | null>;
   loadQuoteHistory: () => Promise<void>;
   refreshSelectedQuote: () => Promise<void>;
   retrySelectedQuote: () => Promise<void>;
@@ -666,12 +669,15 @@ export function DashboardProvider({
     }
   }, [defaultCustomerLocale, t]);
 
-  const ensureCustomerLoaded = useCallback(async (customerId: string) => {
+  const ensureCustomerLoaded = useCallback(async (
+    customerId: string,
+    options?: { forceRefresh?: boolean },
+  ) => {
     const existing = customers.find((customer) => customer.id === customerId) ?? null;
-    if (existing && !existing.archivedAtUtc && !existing.deletedAtUtc) return existing;
+    if (!options?.forceRefresh && existing && !existing.archivedAtUtc && !existing.deletedAtUtc) return existing;
 
     const { customer } = await api.customers.get(customerId);
-    if (customer.archivedAtUtc || customer.deletedAtUtc) return null;
+    if (customer.id !== customerId || customer.archivedAtUtc || customer.deletedAtUtc) return null;
     setCustomers((current) => {
       const withoutCustomer = current.filter((candidate) => candidate.id !== customer.id);
       return [...withoutCustomer, customer];

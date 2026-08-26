@@ -4,15 +4,19 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
-import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
-import { openKody, publishKodyOutcome } from "../components/ai/kody-events";
+import { AiPaidPauseNotice } from "../components/ai/KodyFieldAssistButton";
+import { KodySparkIcon } from "../components/ai/KodySparkIcon";
+import { publishKodyOutcome } from "../components/ai/kody-events";
 import {
   QuickCustomerModal,
   type QuickCustomerForm,
   type QuoteDraftDuplicateErrorCode,
 } from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
-import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
+import {
+  QuoteKodyPrepareModal,
+  type QuoteKodyPreparedReview,
+} from "../components/quotes/QuoteKodyPrepareModal";
 import { QuoteLineSectionField } from "../components/quotes/QuoteLineSectionField";
 import { QuoteSheetEditor } from "../components/quotes/QuoteSheetEditor";
 import { InlineCustomerLookup } from "../components/quotes/InlineCustomerLookup";
@@ -41,13 +45,17 @@ import {
   ApiError,
   type AiProgressEvent,
   type AiQuoteInsight,
+  type AiQuoteSuggestionCustomerAmbiguousResult,
+  type AiQuoteSuggestionNeedsClarificationResult,
+  type AiQuoteSuggestionReadyResult,
   type CustomerDuplicateMatch,
   type QuoteCustomerDraft,
+  type ServiceType,
   type SupportedLocale,
   type TenantBranding,
   type WorkPreset,
 } from "../lib/api";
-import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
+import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import {
   applyKodyQuoteAiProvenance,
   clearQuoteAiProvenanceForAudit,
@@ -79,35 +87,7 @@ import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
 import { localizedApiError } from "../lib/localized-api-error";
-import { applyQuotePreparationPricingGuard } from "../lib/quote-preparation";
-
-function buildStructuredAiPromptStarter(
-  t: TFunction,
-  serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
-  customerLead: string,
-) {
-  return t("quoteBuilder.aiStarters.structured", {
-    customer: customerLead,
-    trade: t(`domain.trade.${serviceType}`),
-  });
-}
-
-function buildAiPromptStarters(
-  t: TFunction,
-  serviceType: "HVAC" | "PLUMBING" | "FLOORING" | "ROOFING" | "GARDENING" | "CONSTRUCTION",
-  customer?: { fullName: string; phone: string } | null,
-) {
-  const customerLead = customer
-    ? `${customer.fullName} ${customer.phone}`
-    : t("quoteBuilder.aiStarters.fallbackCustomer");
-  const tradeKey = serviceType.toLowerCase();
-
-  return [
-    t(`quoteBuilder.aiStarters.${tradeKey}.one`, { customer: customerLead }),
-    t(`quoteBuilder.aiStarters.${tradeKey}.two`, { customer: customerLead }),
-    buildStructuredAiPromptStarter(t, serviceType, customerLead),
-  ];
-}
+import { applyQuotePreparationPricingGuard, type AppliedQuotePreparation } from "../lib/quote-preparation";
 
 function localizedQuoteHeadingError(
   t: TFunction,
@@ -595,11 +575,17 @@ const QUOTE_BUILDER_LINE_GRID_COLUMNS =
   "xl:grid-cols-[32px_minmax(10rem,0.95fr)_minmax(15rem,1.35fr)_72px_92px_92px_108px_84px] 2xl:grid-cols-[36px_minmax(11rem,1.05fr)_minmax(16rem,1.3fr)_72px_96px_96px_108px_88px]";
 const QUOTE_BUILDER_LINE_GRID_MIN_WIDTH = "xl:min-w-[860px] 2xl:min-w-[920px]";
 
-type QuoteBuilderAiAssistTarget =
-  | { kind: "quote" }
-  | { kind: "title" }
-  | { kind: "overview" }
-  | { kind: "lineDescription"; lineId: string };
+type BuilderKodyReview = QuoteKodyPreparedReview & {
+  result: AiQuoteSuggestionReadyResult;
+  patch: AppliedQuotePreparation["patch"];
+  requestFingerprint: string;
+  requestCustomerId: string | null;
+  baseBuilderStateFingerprint: string;
+};
+
+type BuilderKodyClarification =
+  | AiQuoteSuggestionNeedsClarificationResult
+  | AiQuoteSuggestionCustomerAmbiguousResult;
 
 type AiPricingReview = {
   lineDescriptions: string[];
@@ -648,7 +634,10 @@ export function QuoteBuilderView() {
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
-  const [aiAssistTarget, setAiAssistTarget] = useState<QuoteBuilderAiAssistTarget>({ kind: "quote" });
+  const [aiTradeHint, setAiTradeHint] = useState<ServiceType | null>(null);
+  const [aiUseSelectedCustomer, setAiUseSelectedCustomer] = useState(true);
+  const [aiDraftReview, setAiDraftReview] = useState<BuilderKodyReview | null>(null);
+  const [aiClarification, setAiClarification] = useState<BuilderKodyClarification | null>(null);
 
   async function waitForPendingDraftAutosaves() {
     while (pendingDraftAutosavesRef.current.size > 0) {
@@ -722,16 +711,6 @@ export function QuoteBuilderView() {
   const aiUsageLimitMessage = useMemo(
     () => formatAiPaidUsagePause(session?.usage ?? {}, locale),
     [locale, session?.usage],
-  );
-  const aiUsageHint = useMemo(
-    () =>
-      formatAiUsageAvailability({
-        usage: session?.usage,
-      }, locale),
-    [
-      session?.usage,
-      locale,
-    ],
   );
   const preparedDateLabel = useMemo(
     () => formatQuoteDocumentDate(new Date(), quoteForm.documentLocale, session?.timezone),
@@ -1158,10 +1137,6 @@ export function QuoteBuilderView() {
       })),
     [filteredDraftLines],
   );
-  const aiPromptStarters = useMemo(
-    () => buildAiPromptStarters(t, quoteForm.serviceType, quoteCustomer),
-    [t, quoteForm.serviceType, quoteCustomer],
-  );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
   const quoteFooterText = useMemo(
@@ -1179,61 +1154,95 @@ export function QuoteBuilderView() {
     [branding?.hideQuoteFlyAttribution, session?.effectivePlanCode],
   );
 
-  function buildBuilderAiAssistPrompt(target: QuoteBuilderAiAssistTarget) {
-    const customerName = quoteCustomer?.fullName ?? t("quoteBuilder.customerGeneric");
-    const trade = t(`domain.trade.${quoteForm.serviceType}`);
-    const title = quoteForm.title.trim();
-    const overview = quoteForm.scopeText.trim();
-    const targetLine =
-      target.kind === "lineDescription"
-        ? draftLines.find((line) => line.id === target.lineId) ?? null
+  function buildBuilderKodyRequest(customerOverrideId?: string | null) {
+    const requestCustomerId = customerOverrideId !== undefined
+      ? customerOverrideId
+      : aiUseSelectedCustomer
+        ? activeCustomer?.id ?? null
         : null;
-    const lineDescription = targetLine ? joinQuoteLineDescription(targetLine.title, targetLine.details).trim() : "";
+    const stagedCustomerContext =
+      customerOverrideId === undefined &&
+      aiUseSelectedCustomer &&
+      !activeCustomer
+        ? quickCustomerDraft
+        : null;
+    const requestPrompt = stagedCustomerContext
+      ? [
+          `Customer: ${stagedCustomerContext.fullName}`,
+          `Phone: ${stagedCustomerContext.phone}`,
+          stagedCustomerContext.email ? `Email: ${stagedCustomerContext.email}` : null,
+          chatPrompt.trim(),
+        ].filter(Boolean).join("\n")
+      : chatPrompt.trim();
+    const requestBody = {
+      prompt: requestPrompt,
+      ...(requestCustomerId ? { customerId: requestCustomerId } : {}),
+      ...(aiTradeHint ? { serviceType: aiTradeHint } : {}),
+      ...(quoteForm.title ? { currentTitle: quoteForm.title } : {}),
+      ...(quoteForm.scopeText ? { currentScopeText: quoteForm.scopeText } : {}),
+      currentLineItems: filteredDraftLines.map((line) => ({
+        id: line.id,
+        description: joinQuoteLineDescription(line.title, line.details),
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel || null,
+        quantity: Number(line.quantity) || 1,
+        unitCost: Number(line.unitCost) || 0,
+        unitPrice: Number(line.unitPrice) || 0,
+        sourcePresetId: line.sourcePresetId ?? undefined,
+      })),
+    };
 
-    if (target.kind === "title") {
-      return t("quoteBuilder.assistPrompts.title", {
-        customer: customerName,
-        trade,
-        title: title || t("quoteBuilder.assistPrompts.blank"),
-        overview: overview || t("quoteBuilder.assistPrompts.blank"),
-      });
-    }
-
-    if (target.kind === "overview") {
-      return t("quoteBuilder.assistPrompts.overview", {
-        customer: customerName,
-        trade,
-        title: title || t("quoteBuilder.assistPrompts.blank"),
-        overview: overview || t("quoteBuilder.assistPrompts.blank"),
-      });
-    }
-
-    if (target.kind === "lineDescription") {
-      return t("quoteBuilder.assistPrompts.lineDescription", {
-        customer: customerName,
-        trade,
-        title: title || t("quoteBuilder.assistPrompts.blank"),
-        line: lineDescription || t("quoteBuilder.assistPrompts.blank"),
-      });
-    }
-
-    return [
-      quoteCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: quoteCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
-      t("quoteBuilder.kodyPrompt.trade", { trade }),
-      title ? t("quoteBuilder.kodyPrompt.title", { title }) : "",
-      overview ? t("quoteBuilder.kodyPrompt.scope", { scope: overview }) : t("quoteBuilder.kodyPrompt.askMissing"),
-    ].filter(Boolean).join("\n");
+    return { requestBody, requestCustomerId };
   }
 
-  function openBuilderAiAssist(target: QuoteBuilderAiAssistTarget) {
-    if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
-      setError(t("quoteBuilder.errors.aiUnavailable"));
-      return;
-    }
-    setAiAssistTarget(target);
-    setAiErrorMessage(null);
-    setChatPrompt(buildBuilderAiAssistPrompt(target));
-    setAiModalOpen(true);
+  function buildBuilderKodyApplyStateFingerprint() {
+    return JSON.stringify({
+      quote: {
+        customerId: quoteForm.customerId,
+        serviceType: quoteForm.serviceType,
+        title: quoteForm.title,
+        scopeText: quoteForm.scopeText,
+        internalCostSubtotal: quoteForm.internalCostSubtotal,
+        customerPriceSubtotal: quoteForm.customerPriceSubtotal,
+        taxAmount: quoteForm.taxAmount,
+        documentLocale: quoteForm.documentLocale,
+      },
+      customerDraft: quickCustomerDraft
+        ? {
+            fullName: quickCustomerDraft.fullName,
+            phone: quickCustomerDraft.phone,
+            email: quickCustomerDraft.email ?? null,
+            notes: quickCustomerDraft.notes ?? null,
+            preferredLocale: quickCustomerDraft.preferredLocale ?? null,
+            duplicateAction: quickCustomerDraft.duplicateAction ?? null,
+            duplicateCustomerId: quickCustomerDraft.duplicateCustomerId ?? null,
+          }
+        : null,
+      customerForm: {
+        fullName: quickCustomerForm.fullName,
+        phone: quickCustomerForm.phone,
+        email: quickCustomerForm.email,
+        notes: quickCustomerForm.notes,
+      },
+      lines: draftLines.map((line) => ({
+        id: line.id,
+        title: line.title.trim(),
+        details: line.details.replace(/\r\n/g, "\n").trim(),
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel.trim(),
+        quantity: Number.isFinite(Number(line.quantity)) ? Number(line.quantity) : line.quantity.trim(),
+        unitCost: Number.isFinite(Number(line.unitCost)) ? Number(line.unitCost) : line.unitCost.trim(),
+        unitPrice: Number.isFinite(Number(line.unitPrice)) ? Number(line.unitPrice) : line.unitPrice.trim(),
+        sourcePresetId: line.sourcePresetId ?? null,
+        presetPromptHandled: Boolean(line.presetPromptHandled),
+      })),
+      prompt: chatPrompt,
+      kodyDraftHandoff,
+      mobilePane,
+      priorPricingReview: aiPricingReview,
+      priorInsight: aiInsight,
+      priorProvenance: lastAppliedAiProvenance,
+    });
   }
 
   function openBuilderKodyDraft() {
@@ -1241,19 +1250,22 @@ export function QuoteBuilderView() {
       setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
     }
-    openKody({
-      prompt: buildBuilderAiAssistPrompt({ kind: "quote" }),
-      tool: "DRAFT_QUOTE",
-      context: {
-        currentPage: "quotes",
-        customerId: quoteForm.customerId || undefined,
-      },
-    });
+    if (!chatPrompt.trim() && !aiDraftReview && !aiClarification) {
+      setAiUseSelectedCustomer(Boolean(quoteCustomer));
+      setAiTradeHint(null);
+      setAiClarification(null);
+    }
+    setAiErrorMessage(null);
+    setAiStatusMessage(null);
+    setAiModalOpen(true);
   }
 
   async function handleAiDraftSubmit(event: React.FormEvent) {
     event.preventDefault();
+    await prepareBuilderKodyDraft();
+  }
 
+  async function prepareBuilderKodyDraft(customerOverrideId?: string | null) {
     if (!canUseChatToQuote || aiUsage.paidActionsUnavailable) {
       setError(t("quoteBuilder.errors.aiUnavailable"));
       return;
@@ -1270,23 +1282,7 @@ export function QuoteBuilderView() {
       return;
     }
 
-    const requestBody = {
-      prompt,
-      customerId: activeCustomer?.id ?? undefined,
-      serviceType: quoteForm.serviceType,
-      currentTitle: quoteForm.title || undefined,
-      currentScopeText: quoteForm.scopeText || undefined,
-      currentLineItems: filteredDraftLines.map((line) => ({
-        id: line.id,
-        description: joinQuoteLineDescription(line.title, line.details),
-        sectionType: line.sectionType,
-        sectionLabel: line.sectionLabel || null,
-        quantity: Number(line.quantity) || 1,
-        unitCost: Number(line.unitCost) || 0,
-        unitPrice: Number(line.unitPrice) || 0,
-        sourcePresetId: line.sourcePresetId ?? undefined,
-      })),
-    };
+    const { requestBody, requestCustomerId } = buildBuilderKodyRequest(customerOverrideId);
     const fingerprint = JSON.stringify(requestBody);
     const idempotencyKey = aiRetryIdentityRef.current?.fingerprint === fingerprint
       ? aiRetryIdentityRef.current.idempotencyKey
@@ -1298,6 +1294,7 @@ export function QuoteBuilderView() {
     track("builder_ai_modal_submit");
     try {
       setAiSubmitting(true);
+      setError(null);
       setAiProgressEvent(null);
       setAiErrorMessage(null);
       setAiStatusMessage(null);
@@ -1312,13 +1309,14 @@ export function QuoteBuilderView() {
       });
       if (aiRequestRef.current?.id !== requestId || controller.signal.aborted) return;
       if (result.status !== "READY") {
-        throw new ApiError(
-          result.preparation.clarification.message ?? t("quoteBuilder.errors.aiApply"),
-          422,
-          result.preparation,
-        );
+        aiRetryIdentityRef.current = null;
+        setChatParsed(result.parsed);
+        setAiClarification(result);
+        setAiDraftReview(null);
+        publishAiUsageUpdate(result.usage);
+        return;
       }
-      const { customer, parsed, suggestion, patch, preparation, insight, aiRunId, usage } = result;
+      const { parsed, suggestion, patch, preparation, usage } = result;
       aiRetryIdentityRef.current = null;
       const {
         suggestion: reviewedSuggestion,
@@ -1327,113 +1325,20 @@ export function QuoteBuilderView() {
       } = applyQuotePreparationPricingGuard({ preparation, suggestion, patch });
 
       setChatParsed(parsed);
-      setChatPrompt("");
-      if (customer) {
-        selectQuoteCustomer(customer.id);
-      }
-
-      if (aiAssistTarget.kind !== "quote") {
-        if (aiAssistTarget.kind === "title") {
-          const nextTitle = reviewedSuggestion.title.trim();
-          if (nextTitle) {
-            setQuoteForm((prev) => ({
-              ...prev,
-              customerId: customer?.id ?? prev.customerId,
-              title: nextTitle,
-            }));
-          }
-          setNotice(t("quoteBuilder.notices.aiTitleApplied"));
-        } else if (aiAssistTarget.kind === "overview") {
-          const nextOverview =
-            reviewedSuggestion.scopeText.trim() ||
-            reviewedSuggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
-          if (nextOverview) {
-            setQuoteForm((prev) => ({
-              ...prev,
-              customerId: customer?.id ?? prev.customerId,
-              scopeText: nextOverview,
-            }));
-          }
-          setNotice(t("quoteBuilder.notices.aiOverviewApplied"));
-        } else {
-          const targetedPatch = reviewedPatch.lineChanges.find(
-            (change) => change.action !== "REMOVE" && change.targetLineId === aiAssistTarget.lineId,
-          );
-          const nextDescription =
-            targetedPatch?.description.trim() ||
-            reviewedSuggestion.lineItems[0]?.description?.trim() ||
-            reviewedSuggestion.scopeText.trim();
-          if (nextDescription) {
-            const { title, details } = splitQuoteLineDescription(nextDescription);
-            setDraftLines((current) =>
-              current.map((line) =>
-                line.id === aiAssistTarget.lineId
-                  ? {
-                      ...line,
-                      title: title.trim() || line.title,
-                      details: details.trim() || title.trim() || line.details,
-                    }
-                  : line,
-              ),
-            );
-          }
-          setNotice(t("quoteBuilder.notices.aiLineApplied"));
-        }
-
-        setAiInsight(insight);
-        setLastAppliedAiProvenance({
-          auditEventId: aiRunId,
-          customerId: (customer?.id ?? quoteForm.customerId) || null,
-        });
-        setKodyDraftHandoff(null);
-        void loadCustomers();
-        setAiModalOpen(false);
-        setMobilePane("editor");
-        publishAiUsageUpdate(usage);
-        return;
-      }
-
-      setQuoteForm((prev) => ({
-        ...prev,
-        customerId: customer?.id ?? prev.customerId,
-        serviceType: reviewedSuggestion.serviceType,
-        title: reviewedSuggestion.title,
-        scopeText: reviewedSuggestion.scopeText,
-        internalCostSubtotal: String(reviewedSuggestion.internalCostSubtotal ?? 0),
-        customerPriceSubtotal: String(reviewedSuggestion.customerPriceSubtotal),
-        taxAmount: String(reviewedSuggestion.taxAmount),
-      }));
-      setDraftLines((current) => applyAiQuoteLinePatch(current, reviewedPatch));
-      const requiresPricingReview = reviewedSuggestion.requiresPricingReview === true || pricingReviewLines.length > 0;
-      setAiPricingReview(requiresPricingReview ? {
-        lineDescriptions: pricingReviewLines.map((line) => splitQuoteLineDescription(line.description).title || line.description),
-        acknowledged: false,
-      } : null);
-      setAiInsight(insight);
-      setLastAppliedAiProvenance({
-        auditEventId: aiRunId,
-        customerId: (customer?.id ?? quoteForm.customerId) || null,
+      setAiClarification(null);
+      setAiDraftReview({
+        result,
+        preparation,
+        suggestion: reviewedSuggestion,
+        patch: reviewedPatch,
+        pricingReviewDescriptions: pricingReviewLines.map(
+          (line) => splitQuoteLineDescription(line.description).title || line.description,
+        ),
+        requestFingerprint: fingerprint,
+        requestCustomerId,
+        baseBuilderStateFingerprint: buildBuilderKodyApplyStateFingerprint(),
       });
-      setKodyDraftHandoff(null);
-      void loadCustomers();
-      setAiModalOpen(false);
-      setMobilePane("editor");
       publishAiUsageUpdate(usage);
-      const usageSummary = formatAiUsageNotice(usage, locale);
-      const patchSummary = [
-        reviewedPatch.updated ? t("quoteBuilder.aiPatch.updated", { count: reviewedPatch.updated }) : null,
-        reviewedPatch.added ? t("quoteBuilder.aiPatch.added", { count: reviewedPatch.added }) : null,
-        reviewedPatch.removed ? t("quoteBuilder.aiPatch.removed", { count: reviewedPatch.removed }) : null,
-      ]
-        .filter(Boolean)
-        .join(", ");
-      setNotice(
-        t("quoteBuilder.notices.aiApplied", {
-          customer: customer?.fullName ?? parsed.customerName ?? t("quoteBuilder.customerGeneric"),
-          changes: patchSummary ? `${patchSummary}. ` : "",
-          usage: usageSummary ? `${usageSummary} ` : "",
-        }),
-      );
     } catch (err) {
       if (aiRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
         return;
@@ -1452,6 +1357,121 @@ export function QuoteBuilderView() {
         setAiProgressEvent(null);
       }
     }
+  }
+
+  async function applyBuilderKodyReview() {
+    if (!aiDraftReview) return;
+
+    const { requestBody } = buildBuilderKodyRequest(aiDraftReview.requestCustomerId);
+    if (
+      JSON.stringify(requestBody) !== aiDraftReview.requestFingerprint ||
+      buildBuilderKodyApplyStateFingerprint() !== aiDraftReview.baseBuilderStateFingerprint
+    ) {
+      setAiErrorMessage(t("quoteBuilder.kodyPrepare.stale"));
+      return;
+    }
+
+    const { result, preparation, suggestion, patch, pricingReviewDescriptions } = aiDraftReview;
+    const matchedCustomer = result.customer;
+    let loadedMatchedCustomer = null;
+    if (matchedCustomer) {
+      try {
+        setAiSubmitting(true);
+        setAiErrorMessage(null);
+        loadedMatchedCustomer = await ensureCustomerLoaded(matchedCustomer.id, { forceRefresh: true });
+        if (!loadedMatchedCustomer) {
+          setAiErrorMessage(t("quoteBuilder.kodyPrepare.customerLoadError"));
+          return;
+        }
+      } catch {
+        setAiErrorMessage(t("quoteBuilder.kodyPrepare.customerLoadError"));
+        return;
+      } finally {
+        setAiSubmitting(false);
+      }
+    }
+    const stagedCustomerDraft =
+      !matchedCustomer &&
+      preparation.customerResolution === "NEW_CUSTOMER_DRAFT" &&
+      preparation.customerDraft.fullName?.trim() &&
+      preparation.customerDraft.phone?.trim()
+        ? {
+            fullName: preparation.customerDraft.fullName.trim(),
+            phone: preparation.customerDraft.phone.trim(),
+            email: preparation.customerDraft.email?.trim() || null,
+            preferredLocale: quoteForm.documentLocale,
+          }
+        : null;
+
+    if (matchedCustomer) {
+      setQuickCustomerDraft(null);
+      setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
+    } else if (stagedCustomerDraft) {
+      setQuickCustomerForm({
+        fullName: stagedCustomerDraft.fullName,
+        phone: stagedCustomerDraft.phone,
+        email: stagedCustomerDraft.email ?? "",
+        notes: "",
+      });
+      setQuickCustomerDraft(stagedCustomerDraft);
+    }
+
+    setQuoteForm((current) => ({
+      ...current,
+      customerId: matchedCustomer?.id ?? (stagedCustomerDraft ? "" : current.customerId),
+      documentLocale: loadedMatchedCustomer?.preferredLocale ?? (matchedCustomer ? defaultCustomerLocale : current.documentLocale),
+      serviceType: suggestion.serviceType,
+      title: suggestion.title,
+      scopeText: suggestion.scopeText,
+      internalCostSubtotal: String(suggestion.internalCostSubtotal ?? 0),
+      customerPriceSubtotal: String(suggestion.customerPriceSubtotal),
+      taxAmount: String(suggestion.taxAmount),
+    }));
+    setDraftLines((current) => {
+      const appliedLines = applyAiQuoteLinePatch(current, patch);
+      const meaningfulLines = appliedLines.filter((line) => line.title.trim() || line.details.trim());
+      return meaningfulLines.length ? meaningfulLines : [makeEditableQuoteLine()];
+    });
+    const requiresPricingReview = suggestion.requiresPricingReview === true || pricingReviewDescriptions.length > 0;
+    setAiPricingReview(requiresPricingReview ? {
+      lineDescriptions: pricingReviewDescriptions,
+      acknowledged: false,
+    } : null);
+    setAiInsight(result.insight);
+    setLastAppliedAiProvenance({
+      auditEventId: result.aiRunId,
+      customerId: matchedCustomer?.id ?? null,
+    });
+    setKodyDraftHandoff(null);
+    void loadCustomers();
+    setChatPrompt("");
+    setAiDraftReview(null);
+    setAiClarification(null);
+    setAiErrorMessage(null);
+    setAiStatusMessage(null);
+    setError(null);
+    setAiModalOpen(false);
+    setMobilePane("editor");
+
+    const usageSummary = formatAiUsageNotice(result.usage, locale);
+    const patchSummary = [
+      patch.updated ? t("quoteBuilder.aiPatch.updated", { count: patch.updated }) : null,
+      patch.added ? t("quoteBuilder.aiPatch.added", { count: patch.added }) : null,
+      patch.removed ? t("quoteBuilder.aiPatch.removed", { count: patch.removed }) : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    setNotice(
+      t("quoteBuilder.notices.aiApplied", {
+        customer:
+          matchedCustomer?.fullName ??
+          stagedCustomerDraft?.fullName ??
+          result.parsed.customerName ??
+          t("quoteBuilder.customerGeneric"),
+        changes: patchSummary ? `${patchSummary}. ` : "",
+        usage: usageSummary ? `${usageSummary} ` : "",
+      }),
+    );
   }
 
   function cancelAiDraftRequest() {
@@ -2352,13 +2372,6 @@ export function QuoteBuilderView() {
             title={quoteForm.title}
             onTitleChange={(value) => setQuoteForm((prev) => ({ ...prev, title: value }))}
             titlePlaceholder={t("quoteBuilder.titlePlaceholder")}
-            titleTools={
-              <KodyFieldAssistButton
-                label={quoteForm.title.trim() ? t("quoteBuilder.kodyAssist.improveTitle") : t("quoteBuilder.kodyAssist.draftTitle")}
-                onClick={() => openBuilderAiAssist({ kind: "title" })}
-                disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
-              />
-            }
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
             customerName={quoteCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
@@ -2395,13 +2408,6 @@ export function QuoteBuilderView() {
             overview={quoteForm.scopeText}
             onOverviewChange={(value) => setQuoteForm((prev) => ({ ...prev, scopeText: value }))}
             overviewPlaceholder={t("quoteComponents.sheet.overviewPlaceholder")}
-            overviewTools={
-              <KodyFieldAssistButton
-                label={quoteForm.scopeText.trim() ? t("quoteBuilder.kodyAssist.improveOverview") : t("quoteBuilder.kodyAssist.draftOverview")}
-                onClick={() => openBuilderAiAssist({ kind: "overview" })}
-                disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
-              />
-            }
             logoUrl={branding?.logoUrl ?? null}
             logoPosition={branding?.logoPosition ?? "left"}
             templateId={branding?.templateId ?? "modern"}
@@ -2412,13 +2418,17 @@ export function QuoteBuilderView() {
             documentLocale={quoteForm.documentLocale}
             actions={
               <div className="flex flex-wrap items-center gap-2">
-                <KodyFieldAssistButton
-                  label={t("quoteBuilder.kodyAssist.fullQuote")}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<KodySparkIcon size={18} />}
                   className="hidden xl:inline-flex"
                   onClick={openBuilderKodyDraft}
                   disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
-                  ariaDescribedBy={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-desktop" : undefined}
-                />
+                  aria-describedby={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-desktop" : undefined}
+                >
+                  {t("quoteBuilder.kodyPrepare.open")}
+                </Button>
                 <Button className="hidden xl:inline-flex" variant="outline" size="sm" icon={<Eye size={14} />} onClick={() => setPreviewOpen(true)}>
                   {t("quoteBuilder.preview")}
                 </Button>
@@ -2431,13 +2441,16 @@ export function QuoteBuilderView() {
             {!customerReady ? (
               <div className="space-y-3 rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
                 <p>{t("quoteBuilder.selectToStart")}</p>
-                <KodyFieldAssistButton
-                  label={t("quoteBuilder.kodyAssist.fullQuote")}
+                <Button
+                  variant="secondary"
+                  icon={<KodySparkIcon size={18} />}
                   onClick={openBuilderKodyDraft}
                   disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
-                  ariaDescribedBy={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-mobile-empty" : undefined}
+                  aria-describedby={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-mobile-empty" : undefined}
                   className="w-full justify-center"
-                />
+                >
+                  {t("quoteBuilder.kodyPrepare.open")}
+                </Button>
                 {aiUsage.paidActionsUnavailable ? <AiPaidPauseNotice id="quote-builder-ai-pause-mobile-empty" message={aiUsageLimitMessage} /> : null}
               </div>
             ) : null}
@@ -2467,12 +2480,12 @@ export function QuoteBuilderView() {
               </Button>
               <Button
                 variant="outline"
-                icon={<Sparkles size={15} />}
+                icon={<KodySparkIcon size={17} />}
                 onClick={openBuilderKodyDraft}
                 disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
                 aria-describedby={aiUsage.paidActionsUnavailable ? "quote-builder-ai-pause-mobile" : undefined}
-                aria-label={t("quoteBuilder.kodyAssist.fullQuote")}
-                title={t("quoteBuilder.kodyAssist.fullQuote")}
+                aria-label={t("quoteBuilder.kodyPrepare.open")}
+                title={t("quoteBuilder.kodyPrepare.open")}
               >
                 Kody
               </Button>
@@ -2571,8 +2584,6 @@ export function QuoteBuilderView() {
                     onChange={updateDraftLine}
                     onInsertBelow={addBlankLine}
                     onRemove={removeDraftLine}
-                    onAssistDescription={(lineId) => openBuilderAiAssist({ kind: "lineDescription", lineId })}
-                    assistDisabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
                   />
                 ))}
                 <div className="px-3 py-3 xl:hidden">
@@ -2712,7 +2723,7 @@ export function QuoteBuilderView() {
         canViewInternalCosts={canViewInternalCosts}
       />
 
-      <QuoteAiPromptModal
+      <QuoteKodyPrepareModal
         open={aiModalOpen}
         onClose={() => {
           if (aiSubmitting) {
@@ -2723,60 +2734,42 @@ export function QuoteBuilderView() {
           setAiErrorMessage(null);
           setAiStatusMessage(null);
         }}
-        serviceType={quoteForm.serviceType}
-        onServiceTypeChange={(value) =>
-          setQuoteForm((prev) => ({
-            ...prev,
-            serviceType: value,
-          }))
-        }
         prompt={chatPrompt}
-        onPromptChange={setChatPrompt}
-        starterPrompts={aiPromptStarters}
-        onUseStarterPrompt={setChatPrompt}
-        customerContextName={quoteCustomer?.fullName ?? null}
-        customerContextDetails={
-          quoteCustomer
-            ? [quoteCustomer.phone, quoteCustomer.email].filter(Boolean).join(" • ")
-            : null
-        }
-        customerContextText={
-          quoteCustomer
-            ? `${quoteCustomer.fullName}${quoteCustomer.phone ? ` • ${quoteCustomer.phone}` : ""}${quoteCustomer.email ? ` • ${quoteCustomer.email}` : ""}`
-            : t("quoteBuilder.noCustomerAi")
-        }
-        customerContextBadge={quoteCustomer ? t("quoteBuilder.usingCustomer") : null}
-        usageHint={aiUsageHint}
+        onPromptChange={(value) => {
+          setChatPrompt(value);
+          setAiClarification(null);
+          setAiErrorMessage(null);
+          setAiStatusMessage(null);
+        }}
+        selectedCustomer={quoteCustomer}
+        useSelectedCustomer={aiUseSelectedCustomer}
+        onUseSelectedCustomerChange={(value) => {
+          setAiUseSelectedCustomer(value);
+          setAiClarification(null);
+          setAiErrorMessage(null);
+        }}
+        tradeHint={aiTradeHint}
+        onTradeHintChange={(value) => {
+          setAiTradeHint(value);
+          setAiClarification(null);
+          setAiErrorMessage(null);
+        }}
+        clarification={aiClarification?.preparation ?? null}
+        review={aiDraftReview}
         usageLimitMessage={aiUsage.paidActionsUnavailable ? aiUsageLimitMessage : null}
         errorMessage={aiErrorMessage}
         statusMessage={aiStatusMessage}
-        progressEvent={aiProgressEvent}
         loading={aiSubmitting}
-        onCancelRequest={cancelAiDraftRequest}
+        loadingLabel={aiProgressEvent?.label ?? null}
         disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
-        title={
-          aiAssistTarget.kind === "quote"
-            ? t("quoteComponents.aiModal.title")
-            : t("quoteBuilder.kodyAssist.modalTitle", {
-                target:
-                  aiAssistTarget.kind === "title"
-                    ? t("quoteBuilder.kodyAssist.targetTitle")
-                    : aiAssistTarget.kind === "overview"
-                      ? t("quoteBuilder.kodyAssist.targetOverview")
-                      : t("quoteBuilder.kodyAssist.targetLine"),
-              })
-        }
-        description={
-          aiAssistTarget.kind === "quote"
-            ? t("quoteComponents.aiModal.description")
-            : t("quoteBuilder.kodyAssist.modalDescription")
-        }
-        submitLabel={
-          aiAssistTarget.kind === "quote"
-            ? t("quoteBuilder.applyAi")
-            : t("quoteBuilder.kodyAssist.applyField")
-        }
+        onSelectCandidate={(customerId) => void prepareBuilderKodyDraft(customerId)}
+        onEditRequest={() => {
+          setAiDraftReview(null);
+          setAiClarification(null);
+          setAiErrorMessage(null);
+        }}
+        onApply={applyBuilderKodyReview}
       />
 
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} size="xl" ariaLabel={t("quoteBuilder.preview")}>
@@ -3052,8 +3045,6 @@ function DraftLineEditorRow({
   onChange,
   onInsertBelow,
   onRemove,
-  onAssistDescription,
-  assistDisabled,
   canViewInternalCosts,
 }: {
   line: EditableQuoteLine;
@@ -3063,8 +3054,6 @@ function DraftLineEditorRow({
   onChange: (lineId: string, field: keyof EditableQuoteLine, value: string) => void;
   onInsertBelow: (lineId?: string) => void;
   onRemove: (lineId: string) => void;
-  onAssistDescription: (lineId: string) => void;
-  assistDisabled?: boolean;
   canViewInternalCosts: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -3183,13 +3172,6 @@ function DraftLineEditorRow({
               </button>
               {advancedOpen ? (
                 <div className="space-y-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3">
-                  <div className="flex justify-end">
-                    <KodyFieldAssistButton
-                      label={line.details.trim() ? t("quoteBuilder.kodyAssist.improveLine") : t("quoteBuilder.kodyAssist.draftLine")}
-                      onClick={() => onAssistDescription(line.id)}
-                      disabled={assistDisabled}
-                    />
-                  </div>
                   <Textarea
                     label={t("quoteDesk.line.description")}
                     aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
@@ -3248,14 +3230,6 @@ function DraftLineEditorRow({
           />
         </div>
         <div className="space-y-1.5">
-          <div className="flex justify-end">
-            <KodyFieldAssistButton
-              label={line.details.trim() ? t("quoteBuilder.kodyAssist.improveLine") : t("quoteBuilder.kodyAssist.draftLine")}
-              onClick={() => onAssistDescription(line.id)}
-              className="px-2.5"
-              disabled={assistDisabled}
-            />
-          </div>
           <Textarea
             aria-label={t("quoteDesk.line.descriptionAria", { number: index + 1 })}
             rows={2}
