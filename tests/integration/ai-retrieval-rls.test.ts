@@ -2,11 +2,20 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { setTenantRlsContext, withTenantRlsContext } from "../../src/lib/tenant-rls";
 import { prisma } from "../../src/lib/prisma";
+import { capabilitiesForRole } from "../../src/lib/access-policy";
+import { runAiAssistant } from "../../src/lib/ai-assistant";
 
 let runtimePrisma: PrismaClient;
 let runtimeRolePassword = "";
 let alphaTenantId = "";
 let betaTenantId = "";
+let alphaUserId = "";
+let betaUserId = "";
+let alphaTenantUserId = "";
+let alphaJobId = "";
+let betaJobId = "";
+let alphaInvoiceId = "";
+let betaInvoiceId = "";
 
 function runtimeDatabaseUrl() {
   const base = new URL(process.env.DATABASE_URL!);
@@ -27,6 +36,131 @@ describe("AI retrieval PostgreSQL RLS", () => {
     ]);
     alphaTenantId = alpha.id;
     betaTenantId = beta.id;
+
+    const fixtureStamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const [alphaUser, betaUser] = await Promise.all([
+      prisma.user.create({
+        data: {
+          email: `rls-alpha-${fixtureStamp}@example.test`,
+          fullName: "RLS Alpha Owner",
+          passwordHash: "runtime-role-test-password-hash",
+        },
+      }),
+      prisma.user.create({
+        data: {
+          email: `rls-beta-${fixtureStamp}@example.test`,
+          fullName: "RLS Beta Owner",
+          passwordHash: "runtime-role-test-password-hash",
+        },
+      }),
+    ]);
+    alphaUserId = alphaUser.id;
+    betaUserId = betaUser.id;
+
+    const [alphaMembership, betaMembership] = await Promise.all([
+      prisma.tenantUser.create({ data: { tenantId: alpha.id, userId: alphaUser.id, role: "owner" } }),
+      prisma.tenantUser.create({ data: { tenantId: beta.id, userId: betaUser.id, role: "owner" } }),
+    ]);
+    alphaTenantUserId = alphaMembership.id;
+
+    const [alphaCustomer, betaCustomer] = await Promise.all([
+      prisma.customer.create({ data: { tenantId: alpha.id, fullName: "Alpha Runtime Customer", phone: "+16195550101", phoneDigits: "6195550101", assignedTenantUserId: alphaMembership.id } }),
+      prisma.customer.create({ data: { tenantId: beta.id, fullName: "Beta Runtime Customer", phone: "+16195550102", phoneDigits: "6195550102", assignedTenantUserId: betaMembership.id } }),
+    ]);
+    const [alphaQuote, betaQuote] = await Promise.all([
+      prisma.quote.create({
+        data: {
+          tenantId: alpha.id,
+          customerId: alphaCustomer.id,
+          assignedTenantUserId: alphaMembership.id,
+          serviceType: "PLUMBING",
+          title: "Alpha Runtime Repair",
+          scopeText: "Alpha-only runtime fixture",
+          internalCostSubtotal: 10,
+          customerPriceSubtotal: 20,
+          taxAmount: 0,
+          totalAmount: 20,
+        },
+      }),
+      prisma.quote.create({
+        data: {
+          tenantId: beta.id,
+          customerId: betaCustomer.id,
+          assignedTenantUserId: betaMembership.id,
+          serviceType: "HVAC",
+          title: "Beta Runtime Repair",
+          scopeText: "Beta-only runtime fixture",
+          internalCostSubtotal: 15,
+          customerPriceSubtotal: 30,
+          taxAmount: 0,
+          totalAmount: 30,
+        },
+      }),
+    ]);
+    const acceptedAtUtc = new Date();
+    const [alphaJob, betaJob] = await Promise.all([
+      prisma.job.create({
+        data: {
+          tenantId: alpha.id,
+          customerId: alphaCustomer.id,
+          sourceQuoteId: alphaQuote.id,
+          assignedTenantUserId: alphaMembership.id,
+          jobNumber: 1,
+          title: "Alpha Runtime Job",
+          scopeSnapshot: alphaQuote.scopeText,
+          serviceType: alphaQuote.serviceType,
+          acceptedAtUtc,
+        },
+      }),
+      prisma.job.create({
+        data: {
+          tenantId: beta.id,
+          customerId: betaCustomer.id,
+          sourceQuoteId: betaQuote.id,
+          assignedTenantUserId: betaMembership.id,
+          jobNumber: 1,
+          title: "Beta Runtime Job",
+          scopeSnapshot: betaQuote.scopeText,
+          serviceType: betaQuote.serviceType,
+          acceptedAtUtc,
+        },
+      }),
+    ]);
+    alphaJobId = alphaJob.id;
+    betaJobId = betaJob.id;
+
+    const [alphaInvoice, betaInvoice] = await Promise.all([
+      prisma.invoice.create({
+        data: {
+          tenantId: alpha.id,
+          customerId: alphaCustomer.id,
+          jobId: alphaJob.id,
+          sourceQuoteId: alphaQuote.id,
+          invoiceNumber: 1,
+          titleSnapshot: "Alpha Runtime Invoice",
+          subtotalAmount: 20,
+          taxAmount: 0,
+          totalAmount: 20,
+          balanceDue: 20,
+        },
+      }),
+      prisma.invoice.create({
+        data: {
+          tenantId: beta.id,
+          customerId: betaCustomer.id,
+          jobId: betaJob.id,
+          sourceQuoteId: betaQuote.id,
+          invoiceNumber: 1,
+          titleSnapshot: "Beta Runtime Invoice",
+          subtotalAmount: 30,
+          taxAmount: 0,
+          totalAmount: 30,
+          balanceDue: 30,
+        },
+      }),
+    ]);
+    alphaInvoiceId = alphaInvoice.id;
+    betaInvoiceId = betaInvoice.id;
 
     await prisma.aiRetrievalDocument.createMany({
       data: [alpha, beta].map((tenant, index) => ({
@@ -59,6 +193,9 @@ describe("AI retrieval PostgreSQL RLS", () => {
     if (runtimeRolePassword) await prisma.$executeRaw`ALTER ROLE quotefly_runtime NOLOGIN`;
     if (alphaTenantId || betaTenantId) {
       await prisma.tenant.deleteMany({ where: { id: { in: [alphaTenantId, betaTenantId].filter(Boolean) } } });
+    }
+    if (alphaUserId || betaUserId) {
+      await prisma.user.deleteMany({ where: { id: { in: [alphaUserId, betaUserId].filter(Boolean) } } });
     }
     await prisma.$disconnect();
   });
@@ -128,6 +265,44 @@ describe("AI retrieval PostgreSQL RLS", () => {
     const betaCount = await withTenantRlsContext(runtimePrisma, betaTenantId, (tx) => tx.aiRetrievalDocument.count());
     expect(betaCount).toBe(1);
     await expect(runtimePrisma.aiRetrievalDocument.count()).resolves.toBe(0);
+  });
+
+  test("Kody job and invoice tools see same-tenant rows through the least-privileged runtime role only", async () => {
+    const access = {
+      tenantId: alphaTenantId,
+      tenantUserId: alphaTenantUserId,
+      userId: alphaUserId,
+      role: "owner" as const,
+      capabilities: capabilitiesForRole("owner"),
+      requestId: `runtime-kody-${Date.now()}`,
+    };
+    const actor = {
+      actorUserId: alphaUserId,
+      actorEmail: "rls-alpha-owner@example.test",
+      actorName: "RLS Alpha Owner",
+    };
+
+    const jobs = await runAiAssistant(runtimePrisma, {
+      access,
+      actor,
+      message: "Show jobs",
+      tool: "SEARCH_JOBS",
+      context: { currentPage: "jobs", limit: 8 },
+    });
+    expect(jobs.assistant.results.map((result) => result.jobId)).toEqual([alphaJobId]);
+    expect(jobs.assistant.results.map((result) => result.jobId)).not.toContain(betaJobId);
+    expect(jobs.consumedCredits).toBe(0);
+
+    const invoices = await runAiAssistant(runtimePrisma, {
+      access: { ...access, requestId: `runtime-kody-invoices-${Date.now()}` },
+      actor,
+      message: "List invoices",
+      tool: "LIST_INVOICES",
+      context: { currentPage: "jobs", limit: 8 },
+    });
+    expect(invoices.assistant.results.map((result) => result.invoiceId)).toEqual([alphaInvoiceId]);
+    expect(invoices.assistant.results.map((result) => result.invoiceId)).not.toContain(betaInvoiceId);
+    expect(invoices.consumedCredits).toBe(0);
   });
 
   test("runtime role has no owner, superuser, or BYPASSRLS privilege", async () => {

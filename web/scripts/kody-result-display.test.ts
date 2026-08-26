@@ -36,3 +36,31 @@ test("Kody hides opaque identifiers without hiding ordinary words ending in id",
     status: "SENT_TO_CUSTOMER",
   }), [["paid", true], ["status", "SENT_TO_CUSTOMER"]]);
 });
+
+test("Kody invoice cards retain the authorized monetary facts before secondary context", () => {
+  const entries = visibleKodyResultEntries({
+    invoiceId: "hidden-invoice-id",
+    invoiceNumber: 42,
+    status: "OPEN",
+    paymentStatus: "PENDING",
+    title: "Roof repair",
+    customerName: "Example Customer",
+    jobId: "hidden-job-id",
+    jobNumber: 7,
+    totalAmount: 1_250,
+    amountPaid: 250,
+    balanceDue: 1_000,
+  });
+
+  assert.deepEqual(entries.map(([key]) => key), [
+    "invoiceNumber",
+    "status",
+    "paymentStatus",
+    "totalAmount",
+    "amountPaid",
+    "balanceDue",
+    "customerName",
+    "jobNumber",
+  ]);
+  assert.equal(entries.some(([key]) => key === "invoiceId" || key === "jobId" || key === "title"), false);
+});

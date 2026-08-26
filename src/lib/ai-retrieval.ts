@@ -1302,6 +1302,7 @@ export type AiRetrievalQueryParams = Readonly<{
   limit?: number;
   model?: string | null;
   embedText?: AiEmbeddingProvider;
+  semanticEmbedding?: boolean;
   preferredSources?: readonly { sourceType: string; sourceId: string }[];
   priorUserQueries?: readonly string[];
   filters?: AiRetrievalFilters;
@@ -1323,7 +1324,8 @@ async function retrieveAiContextFromIndexImpl(
   if (!resolvedQuery.originalQuery) throw new Error("AI retrieval query is required.");
   const allowedClassifications = allowedClassificationsForAccess(params.access);
   const embeddingStartedAtMs = Date.now();
-  const queryEmbedding = preparedQuery.embeddingQuery
+  const semanticEmbeddingEnabled = params.semanticEmbedding !== false;
+  const queryEmbedding = semanticEmbeddingEnabled && preparedQuery.embeddingQuery
     ? await (params.embedText ?? createAiRetrievalEmbedding)(preparedQuery.embeddingQuery)
     : null;
   const embeddingDurationMs = Date.now() - embeddingStartedAtMs;
@@ -1547,11 +1549,15 @@ async function retrieveAiContextFromIndexImpl(
     rewriteMode: resolvedQuery.mode,
     rewriteContextTurnCount: resolvedQuery.contextTurnCount,
     effectiveQueryHash,
-    embeddingQueryHash: preparedQuery.embeddingQuery
+    embeddingQueryHash: semanticEmbeddingEnabled && preparedQuery.embeddingQuery
       ? sha256Text(`${params.access.tenantId}:${preparedQuery.embeddingQuery}`)
       : null,
     embeddingQueryRedactionCount: preparedQuery.redactionCount,
-    embeddingQueryMode: preparedQuery.embeddingQuery ? "redacted_minimized_v1" : "lexical_only_sensitive_query_v1",
+    embeddingQueryMode: semanticEmbeddingEnabled
+      ? preparedQuery.embeddingQuery
+        ? "redacted_minimized_v1"
+        : "lexical_only_sensitive_query_v1"
+      : "lexical_only_provider_budget_v1",
     top: ranked.map((entry) => ({
       refHash: sha256Text(`${params.access.tenantId}:${entry.candidate.id}`),
       fusedScore: Number(entry.fusedScore.toFixed(8)),
@@ -1929,6 +1935,7 @@ export async function buildGovernedQuoteAiContext(
     filters?: AiRetrievalFilters;
     priorUserQueries?: readonly string[];
     refreshIndex?: boolean;
+    allowProviderCalls?: boolean;
   },
 ) {
   if (!isAiRagEnabledForTenant(env, params.access.tenantId)) return null;
@@ -1942,7 +1949,12 @@ export async function buildGovernedQuoteAiContext(
           serviceType: params.serviceType,
           customerId: params.customerId,
           quoteId: params.quoteId,
-          embedText: params.embedText,
+          // Provider-free assistant routes still need current tenant data in the
+          // lexical index. The local hash embedding keeps refresh deterministic
+          // and within the route's zero-provider-call budget.
+          embedText: params.allowProviderCalls === false
+            ? async (text) => deterministicEmbedding(text)
+            : params.embedText,
         })
       : { sourceCount: 0, indexedSourceCount: 0, quarantinedSourceCount: 0, chunkCount: 0, telemetry: null };
   } catch (error) {
@@ -1965,6 +1977,7 @@ export async function buildGovernedQuoteAiContext(
     requestId: params.requestId,
     model: params.model,
     embedText: params.embedText,
+    semanticEmbedding: params.allowProviderCalls !== false,
     filters: params.filters,
     priorUserQueries: params.priorUserQueries,
     preferredSources: [

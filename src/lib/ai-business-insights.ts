@@ -548,6 +548,7 @@ export async function generateAiBusinessInsight(
     ? ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED", "REJECTED"]
     : ["ACCEPTED"];
   const composition = await composeAssistantAnswer({
+    diagnosticContext: { requestId: params.access.requestId },
     userMessage: params.prompt,
     tool: params.tool,
     deterministicAnswer: answer,

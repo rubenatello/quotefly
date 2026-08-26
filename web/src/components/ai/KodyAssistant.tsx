@@ -290,6 +290,8 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
   if (elapsedMs < 2_700) {
     if (tool === "SEARCH_CUSTOMERS") return t("kody.loading.customers");
     if (tool === "SEARCH_PRODUCTS") return t("kody.loading.products");
+    if (tool === "SEARCH_JOBS" || tool === "GET_JOB_STATUS") return t("kody.loadingExtensions.jobs");
+    if (tool === "LIST_INVOICES" || tool === "GET_INVOICE_STATUS") return t("kody.loadingExtensions.invoices");
     if (tool === "NAVIGATE_WORKSPACE") return t("kody.loading.navigation");
     if (tool === "FOLLOW_UP_QUEUE") return t("kody.loading.followUps");
     if (tool === "LIST_SCHEDULE") return t("kody.loading.schedule");
@@ -334,6 +336,8 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
     NAVIGATE_WORKSPACE: t("kody.tools.navigate"), DRAFT_CUSTOMER: t("kody.tools.draftCustomer"),
     SEARCH_CUSTOMERS: t("kody.tools.searchCustomers"), CUSTOMERS_WITHOUT_QUOTES: t("kody.tools.customersWithoutQuotes"),
     DRAFT_PRODUCT: t("kody.tools.draftProduct"), SEARCH_PRODUCTS: t("kody.tools.searchProducts"),
+    SEARCH_JOBS: t("kody.toolExtensions.searchJobs"), GET_JOB_STATUS: t("kody.toolExtensions.jobStatus"),
+    LIST_INVOICES: t("kody.toolExtensions.listInvoices"), GET_INVOICE_STATUS: t("kody.toolExtensions.invoiceStatus"),
     LIST_SCHEDULE: t("kody.tools.listSchedule"), PREPARE_BOOKING: t("kody.tools.prepareBooking"),
     PREPARE_DISPATCH: t("kody.tools.prepareDispatch"),
     LIST_MY_ACTIVITIES: t("kody.tools.listActivities"), PRIORITIZE_MY_DAY: t("kody.tools.prioritizeDay"),
@@ -350,6 +354,12 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
   if (action.type === "OPEN_QUOTE_DRAFT" && action.label.trim()) {
     return action.label;
   }
+  if (action.type === "OPEN_WORKSPACE_PAGE") {
+    const invoiceNumber = getFiniteNumber(action.payload.invoiceNumber);
+    if (invoiceNumber !== null) return t("kody.actions.openInvoice", { number: invoiceNumber });
+    const jobNumber = getFiniteNumber(action.payload.jobNumber);
+    if (jobNumber !== null) return t("kody.actions.openJob", { number: jobNumber });
+  }
   const labels: Record<AiAssistantAction["type"], string> = {
     OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
     OPEN_PRODUCT_DRAFT: t("kody.actions.reviewProduct"), OPEN_QUOTE_DRAFT: t("kody.actions.reviewQuote"),
@@ -362,12 +372,12 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
   return labels[action.type];
 }
 
-function localizedResultField(key: string, t: TFunction) {
+function localizedResultField(key: string, t: TFunction, isInvoiceResult = false) {
   const labels: Record<string, string> = {
     fullName: t("kody.resultFields.fullName"), name: t("kody.resultFields.name"), title: t("kody.resultFields.title"),
     customerName: t("kody.resultFields.customerName"), quoteTitle: t("kody.resultFields.quoteTitle"),
     quoteNumber: t("kody.resultFields.quoteNumber"), phone: t("kody.resultFields.phone"), email: t("kody.resultFields.email"),
-    status: t("kody.resultFields.status"), serviceType: t("kody.resultFields.trade"), category: t("kody.resultFields.category"),
+    status: isInvoiceResult ? t("kody.resultFieldExtensions.invoiceStatus") : t("kody.resultFields.status"), serviceType: t("kody.resultFields.trade"), category: t("kody.resultFields.category"),
     unitType: t("kody.resultFields.unit"), defaultQuantity: t("kody.resultFields.quantity"),
     unitPrice: t("kody.resultFields.customerPrice"), unitCost: t("kody.resultFields.internalCost"),
     quoteAmount: t("kody.resultFields.quoteAmount"), amount: t("kody.resultFields.amount"), revenue: t("kody.resultFields.revenue"),
@@ -377,6 +387,10 @@ function localizedResultField(key: string, t: TFunction) {
     priority: t("kody.resultFields.priority"), dueBucket: t("kody.resultFields.dueBucket"),
     dueAtUtc: t("kody.resultFields.dueAt"),
     jobNumber: t("kody.resultFields.jobNumber"), jobTitle: t("kody.resultFields.jobTitle"),
+    invoiceNumber: t("kody.resultFieldExtensions.invoiceNumber"), invoiceStatus: t("kody.resultFieldExtensions.invoiceStatus"),
+    paymentStatus: t("kody.resultFieldExtensions.paymentStatus"), totalAmount: t("kody.resultFieldExtensions.totalAmount"),
+    amountPaid: t("kody.resultFieldExtensions.amountPaid"), balanceDue: t("kody.resultFieldExtensions.balance"),
+    balanceAmount: t("kody.resultFieldExtensions.balance"),
     startsAtUtc: t("kody.resultFields.startsAt"), endsAtUtc: t("kody.resultFields.endsAt"),
     assigneeName: t("kody.resultFields.assignee"),
     assignedTo: t("kody.resultFields.assignedTo"), description: t("kody.resultFields.description"), notes: t("kody.resultFields.notes"),
@@ -427,7 +441,7 @@ function formatKodyDate(value: string, locale: string, displayTimeZone?: string 
   catch { delete options.timeZone; return new Intl.DateTimeFormat(locale, options).format(date); }
 }
 
-function formatResultValue(key: string, value: string | number | boolean | null, locale: string, t: TFunction, displayTimeZone?: string | null) {
+function formatResultValue(key: string, value: string | number | boolean | null, locale: string, t: TFunction, displayTimeZone?: string | null, isInvoiceResult = false) {
   if (value === null) return "—";
   if (typeof value === "boolean") return value ? t("kody.values.yes") : t("kody.values.no");
   if (typeof value === "number") {
@@ -440,6 +454,22 @@ function formatResultValue(key: string, value: string | number | boolean | null,
       ? formatKodyDate(value, locale, displayTimeZone, true)
       : formatKodyDate(value, locale, displayTimeZone);
     if (formattedDate) return formattedDate;
+  }
+  if (key === "paymentStatus") {
+    const paymentStatuses: Record<string, string> = {
+      PENDING: t("domain.invoicePaymentStatus.PENDING"), SUCCEEDED: t("domain.invoicePaymentStatus.SUCCEEDED"),
+      FAILED: t("domain.invoicePaymentStatus.FAILED"), REFUNDED: t("domain.invoicePaymentStatus.REFUNDED"),
+      PARTIALLY_REFUNDED: t("domain.invoicePaymentStatus.PARTIALLY_REFUNDED"), CANCELED: t("domain.invoicePaymentStatus.CANCELED"),
+    };
+    return paymentStatuses[value] ?? value;
+  }
+  if (key === "status" && isInvoiceResult) {
+    const invoiceStatuses: Record<string, string> = {
+      DRAFT: t("domain.invoiceStatus.DRAFT"), OPEN: t("domain.invoiceStatus.OPEN"),
+      PAID: t("domain.invoiceStatus.PAID"), VOID: t("domain.invoiceStatus.VOID"),
+      UNCOLLECTIBLE: t("domain.invoiceStatus.UNCOLLECTIBLE"),
+    };
+    return invoiceStatuses[value] ?? value;
   }
   return localizedKnownValue(value, t);
 }
@@ -468,6 +498,7 @@ function compactSourceList(citations: AiAssistantResponse["assistant"]["citation
     Quote: t("kody.sources.quotes"), Quotes: t("kody.sources.quotes"), Product: t("kody.sources.products"),
     Products: t("kody.sources.products"), Analytics: t("kody.sources.analytics"), Job: t("kody.sources.jobs"), Jobs: t("kody.sources.jobs"),
     ActivityTask: t("kody.sources.activities"), "ActivityTask + Customer + Quote": t("kody.sources.activities"),
+    Invoice: t("kody.sourceExtensions.invoices"), Invoices: t("kody.sourceExtensions.invoices"),
   };
   return sources.slice(0, 3).map((source) => knownSources[source] ?? formatBackendLabel(source)).join(" + ");
 }
@@ -676,6 +707,7 @@ function KodyResultCard({
   const { t } = useTranslation();
   const { locale } = useLocale();
   const isScheduleResult = "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result);
+  const isInvoiceResult = "invoiceId" in result || "invoiceNumber" in result;
   const protectedScheduleFields = /(?:address|instruction|phone|email|contact|cost|margin)/i;
   const entries = visibleKodyResultEntries(result)
     .filter(([key]) => !isScheduleResult || !protectedScheduleFields.test(key));
@@ -739,8 +771,8 @@ function KodyResultCard({
         <dl className="mt-2 grid gap-1.5 text-xs text-[var(--qf-text-soft)]">
           {entries.map(([key, value]) => (
             <div key={key} className="flex items-start justify-between gap-3">
-              <dt className="shrink-0 text-[var(--qf-text-muted)]">{localizedResultField(key, t)}</dt>
-              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value, locale, t, displayTimeZone)}</dd>
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{localizedResultField(key, t, isInvoiceResult)}</dt>
+              <dd className="min-w-0 text-right font-medium text-[var(--qf-text)]">{formatResultValue(key, value, locale, t, displayTimeZone, isInvoiceResult)}</dd>
             </div>
           ))}
         </dl>
@@ -769,11 +801,15 @@ function KodyResponse({
   const [feedbackNote, setFeedbackNote] = useState("");
   const [showFeedbackNote, setShowFeedbackNote] = useState(false);
   const [lastFeedbackSave, setLastFeedbackSave] = useState<"rating" | "note" | null>(null);
+  const [visibleActionCount, setVisibleActionCount] = useState(3);
+  const [visibleResultCount, setVisibleResultCount] = useState(4);
   const isScheduleResponse = response.diagnostics.resolvedTool === "LIST_SCHEDULE"
     || response.diagnostics.resolvedTool === "PREPARE_BOOKING"
     || response.diagnostics.resolvedTool === "PREPARE_DISPATCH"
     || response.results.some((result) => "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result));
-  const shownResultCount = Math.min(response.results.length, 4);
+  const shownResultCount = Math.min(response.results.length, visibleResultCount);
+  const shownActionCount = Math.min(response.actions.length, visibleActionCount);
+  const resultsTruncated = response.diagnostics.filters.resultsTruncated === true;
 
   async function submitFeedback(rating: AiAssistantFeedbackRating, nextNote?: string | null) {
     if (feedbackStatus === "saving" || response.auditEventId === "audit-unavailable") return;
@@ -827,8 +863,8 @@ function KodyResponse({
         </p>
 
         {response.actions.length ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {response.actions.slice(0, 3).map((action, index) => (
+          <div id={`kody-actions-${response.auditEventId}`} className="mt-3 flex flex-wrap gap-2">
+            {response.actions.slice(0, shownActionCount).map((action, index) => (
               <Button
                 key={`${action.type}-${index}`}
                 type="button"
@@ -840,6 +876,18 @@ function KodyResponse({
                 {localizedActionLabel(action, t)}
               </Button>
             ))}
+            {response.actions.length > shownActionCount ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setVisibleActionCount((count) => Math.min(count + 3, response.actions.length))}
+                className="w-full sm:w-auto"
+                aria-controls={`kody-actions-${response.auditEventId}`}
+              >
+                {t("kody.actionDisclosure.showMore", { count: response.actions.length - shownActionCount })}
+              </Button>
+            ) : null}
           </div>
         ) : null}
 
@@ -959,8 +1007,8 @@ function KodyResponse({
               aria-hidden="true"
             />
           </summary>
-          <div className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
-            {response.results.slice(0, 4).map((result, index) => (
+          <div id={`kody-results-${response.auditEventId}`} className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
+            {response.results.slice(0, shownResultCount).map((result, index) => (
               <KodyResultCard
                 key={`${response.auditEventId}-${index}`}
                 result={result}
@@ -968,11 +1016,25 @@ function KodyResponse({
                 displayTimeZone={displayTimeZone}
               />
             ))}
-            {isScheduleResponse && response.results.length > shownResultCount ? (
-              <p className="text-xs font-medium text-[var(--qf-text-muted)]" data-testid="kody-results-count">
-                {t("kody.results.showing", { shown: shownResultCount, total: response.results.length })}
-              </p>
+            {response.results.length > shownResultCount ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setVisibleResultCount((count) => Math.min(count + 4, response.results.length))}
+                className="w-full"
+                aria-controls={`kody-results-${response.auditEventId}`}
+                data-testid="kody-results-show-more"
+              >
+                {t("kody.results.showMore", { count: response.results.length - shownResultCount })}
+              </Button>
             ) : null}
+            <p className="text-xs font-medium text-[var(--qf-text-muted)]" data-testid="kody-results-count" aria-live="polite">
+              {resultsTruncated
+                ? t("kody.results.showingTruncated", { shown: shownResultCount })
+                : t("kody.results.showing", { shown: shownResultCount, total: response.results.length })}
+              {isScheduleResponse ? ` ${t("kody.results.scheduleScope")}` : ""}
+            </p>
           </div>
         </details>
       ) : null}
@@ -1040,6 +1102,7 @@ export function KodyAssistant({
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingTool, setLoadingTool] = useState<AiAssistantTool | "AUTO">("AUTO");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<AiAssistantAction | null>(null);
   const [isModalViewport, setIsModalViewport] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches,
@@ -1052,6 +1115,24 @@ export function KodyAssistant({
   const quickPromptsRef = useRef<HTMLDetailsElement>(null);
   const pendingMessageIdRef = useRef<string | null>(null);
   const submitInFlightRef = useRef(false);
+  const activeRequestRef = useRef<{
+    id: string;
+    controller: AbortController;
+    prompt: string;
+    matchFingerprint: string;
+    requestFingerprint: string;
+    idempotencyKey: string;
+    conversation: AiAssistantConversationTurn[];
+    userMessageId: string;
+  } | null>(null);
+  const retryIdentityRef = useRef<{
+    matchFingerprint: string;
+    requestFingerprint: string;
+    idempotencyKey: string;
+    conversation: AiAssistantConversationTurn[];
+    userMessageId: string;
+    responseMessageId: string | null;
+  } | null>(null);
   const workspacePage = currentPage ?? workspacePageFromPath(location.pathname);
   const currentContextPage = assistantContextFromPage(workspacePage);
   const aiUsageRenewalLabel = formatAiRenewalDate(aiUsageRenewsAtUtc, locale);
@@ -1274,29 +1355,56 @@ export function KodyAssistant({
       ...(contextOverride?.jobId ? {} : routeJobId ? { jobId: routeJobId } : {}),
       limit: contextOverride?.limit ?? 8,
     };
-    const conversation = recentConversation(messages);
+    const matchFingerprint = JSON.stringify({ message: messageText, tool, context });
+    const retryIdentity = retryIdentityRef.current?.matchFingerprint === matchFingerprint
+      ? retryIdentityRef.current
+      : null;
+    const conversation = retryIdentity?.conversation ?? recentConversation(messages);
+    const requestFingerprint = JSON.stringify({ message: messageText, tool, context, conversation });
+    const idempotencyKey = retryIdentity?.requestFingerprint === requestFingerprint
+      ? retryIdentity.idempotencyKey
+      : `qf-ai-${crypto.randomUUID()}`;
+    const requestId = crypto.randomUUID();
+    const controller = new AbortController();
+    const userMessageId = retryIdentity?.userMessageId ?? makeMessageId();
+    const pendingMessageId = retryIdentity?.responseMessageId ?? makeMessageId();
+    activeRequestRef.current = {
+      id: requestId,
+      controller,
+      prompt: messageText,
+      matchFingerprint,
+      requestFingerprint,
+      idempotencyKey,
+      conversation,
+      userMessageId,
+    };
 
     if (quickPromptsRef.current) quickPromptsRef.current.open = false;
 
     const startedAt = performance.now();
-    const userMessageId = makeMessageId();
-    const pendingMessageId = makeMessageId();
     pendingMessageIdRef.current = pendingMessageId;
     setError(null);
+    setNotice(null);
     setLoading(true);
     setLoadingTool(tool);
     setLoadingStartedAt(startedAt);
-    setPrompt("");
-    setMessages((current) => [
-      ...current,
-      { id: userMessageId, role: "user", text: messageText },
-      {
+    // Keep the exact in-flight request visible and recoverable. The composer is
+    // disabled while loading, then cleared only after an accepted response.
+    setPrompt(messageText);
+    setMessages((current) => {
+      const withUserMessage = current.some((message) => message.id === userMessageId)
+        ? current
+        : [...current, { id: userMessageId, role: "user" as const, text: messageText }];
+      const pendingMessage: KodyMessage = {
         id: pendingMessageId,
         role: "kody",
         text: kodyLoadingText(0, tool, t),
         pending: true,
-      },
-    ]);
+      };
+      return withUserMessage.some((message) => message.id === pendingMessageId)
+        ? withUserMessage.map((message) => (message.id === pendingMessageId ? pendingMessage : message))
+        : [...withUserMessage, pendingMessage];
+    });
     track("kody_submit", { tool, page: currentContextPage });
 
     try {
@@ -1306,8 +1414,12 @@ export function KodyAssistant({
         context,
         conversation,
       }, {
-        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
+        idempotencyKey,
+        signal: controller.signal,
       });
+      if (activeRequestRef.current?.id !== requestId || controller.signal.aborted) return;
+      retryIdentityRef.current = null;
+      setPrompt("");
       const assistantResponse = normalizeKodyAssistantResponse(response.assistant);
       track("kody_response", {
         tool,
@@ -1335,6 +1447,9 @@ export function KodyAssistant({
       setSelectedTool("AUTO");
       setContextOverride(null);
     } catch (err) {
+      if (activeRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        return;
+      }
       const errorCode =
         err instanceof ApiError && err.details && typeof err.details === "object"
           ? (err.details as { code?: unknown }).code
@@ -1352,6 +1467,17 @@ export function KodyAssistant({
             : err instanceof ApiError && err.status === 503
               ? t("kody.errors.temporaryFailure")
             : localizedApiError(err, t, { fallbackKey: "kody.errors.requestFailed" });
+      const ambiguousFailure = !(err instanceof ApiError) || err.status === 409 || err.status === 503;
+      retryIdentityRef.current = ambiguousFailure
+        ? {
+          matchFingerprint,
+          requestFingerprint,
+          idempotencyKey,
+          conversation,
+          userMessageId,
+          responseMessageId: pendingMessageId,
+        }
+        : null;
       setPrompt(messageText);
       setError(message);
       track("kody_response", {
@@ -1373,20 +1499,55 @@ export function KodyAssistant({
           : [...current, replacement];
       });
     } finally {
-      submitInFlightRef.current = false;
+      if (activeRequestRef.current?.id === requestId) {
+        activeRequestRef.current = null;
+        submitInFlightRef.current = false;
+      }
       if (pendingMessageIdRef.current === pendingMessageId) {
         pendingMessageIdRef.current = null;
       }
-      setLoadingStartedAt(null);
-      setLoadingTool("AUTO");
-      setLoading(false);
+      if (!activeRequestRef.current) {
+        setLoadingStartedAt(null);
+        setLoadingTool("AUTO");
+        setLoading(false);
+      }
     }
+  }
+
+  function cancelPrompt() {
+    const activeRequest = activeRequestRef.current;
+    if (!activeRequest) return;
+    activeRequest.controller.abort();
+    activeRequestRef.current = null;
+    submitInFlightRef.current = false;
+    retryIdentityRef.current = {
+      matchFingerprint: activeRequest.matchFingerprint,
+      requestFingerprint: activeRequest.requestFingerprint,
+      idempotencyKey: activeRequest.idempotencyKey,
+      conversation: activeRequest.conversation,
+      userMessageId: activeRequest.userMessageId,
+      responseMessageId: null,
+    };
+    setPrompt(activeRequest.prompt);
+    setLoading(false);
+    setLoadingStartedAt(null);
+    setLoadingTool("AUTO");
+    setError(null);
+    setNotice(t("kody.composer.cancelled"));
+    const pendingMessageId = pendingMessageIdRef.current;
+    pendingMessageIdRef.current = null;
+    if (pendingMessageId) {
+      setMessages((current) => current.filter((message) => message.id !== pendingMessageId));
+    }
+    track("kody_cancel", { page: currentContextPage });
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function handleQuickPrompt(quickPrompt: QuickPrompt) {
     if (quickPromptsRef.current) quickPromptsRef.current.open = false;
     setSelectedTool(quickPrompt.tool);
     setError(null);
+    setNotice(null);
     if (quickPrompt.submitImmediately) {
       void submitPrompt({ prompt: quickPrompt.prompt, tool: quickPrompt.tool });
       return;
@@ -1402,6 +1563,7 @@ export function KodyAssistant({
     setSelectedTool("AUTO");
     setContextOverride(null);
     setError(null);
+    retryIdentityRef.current = null;
     if (quickPromptsRef.current) quickPromptsRef.current.open = false;
     track("kody_conversation_reset", { page: currentContextPage });
     window.setTimeout(() => inputRef.current?.focus(), 0);
@@ -1551,6 +1713,8 @@ export function KodyAssistant({
 
     if (action.type === "OPEN_WORKSPACE_PAGE") {
       const page = getString(action.payload.page);
+      const jobId = getString(action.payload.jobId);
+      const invoiceId = getString(action.payload.invoiceId);
       const routes: Record<string, string> = {
         customers: "/app/customers",
         quotes: "/app/quotes",
@@ -1562,6 +1726,15 @@ export function KodyAssistant({
       };
       const path = page ? routes[page] : null;
       if (!path) return;
+      if (page === "jobs") {
+        navigate(jobId ? `/app/jobs/${encodeURIComponent(jobId)}` : path, {
+          state: {
+            ...(jobId ? { kodyJobId: jobId } : {}),
+            ...(invoiceId ? { kodyInvoiceId: invoiceId } : {}),
+          },
+        });
+        return;
+      }
       navigate(path);
       return;
     }
@@ -1807,6 +1980,7 @@ export function KodyAssistant({
           </div>
           <div className="qf-kody-composer-footer -mx-3 -mb-3 mt-auto shrink-0 border-t border-[var(--qf-border)] p-3 sm:-mx-4 sm:-mb-4 sm:p-4">
             {error ? <div className="mb-2"><Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert></div> : null}
+            {notice ? <div className="mb-2"><Alert tone="info" onDismiss={() => setNotice(null)}>{notice}</Alert></div> : null}
             <form
               className="qf-kody-composer flex items-end gap-2 rounded-2xl border border-[var(--qf-border-strong)] p-2 focus-within:border-[var(--qf-focus)] focus-within:ring-4 focus-within:ring-[var(--qf-focus-ring)]"
               onSubmit={(event) => {
@@ -1835,15 +2009,27 @@ export function KodyAssistant({
                 className="max-h-32 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base leading-6 text-[var(--qf-text)] outline-none placeholder:text-[var(--qf-text-muted)] sm:text-sm"
                 disabled={loading}
               />
-              <IconButton
-                type="submit"
-                variant="kody"
-                icon={<Send size={17} />}
-                label={t("kody.composer.send")}
-                loading={loading}
-                disabled={!prompt.trim()}
-                className="rounded-xl"
-              />
+              {loading ? (
+                <IconButton
+                  type="button"
+                  variant="outline"
+                  icon={<X size={17} />}
+                  label={t("kody.composer.stop")}
+                  onPointerDown={() => cancelPrompt()}
+                  onClick={cancelPrompt}
+                  className="rounded-xl"
+                  data-testid="kody-cancel-request"
+                />
+              ) : (
+                <IconButton
+                  type="submit"
+                  variant="kody"
+                  icon={<Send size={17} />}
+                  label={t("kody.composer.send")}
+                  disabled={!prompt.trim()}
+                  className="rounded-xl"
+                />
+              )}
             </form>
             <span id="kody-prompt-instructions" className="sr-only">
               {t("kody.composer.instructions")}

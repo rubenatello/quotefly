@@ -51,15 +51,15 @@ test("normalizes invalid Kody response to a safe non-crashing fallback", () => {
   assert.equal(response.conversation.mode, "NEW");
 });
 
-test("accepts only a typed workspace navigation action", () => {
+test("accepts only a typed workspace navigation action and preserves bounded job/invoice identifiers", () => {
   const response = normalizeKodyAssistantResponse({
     tool: "NAVIGATE_WORKSPACE",
-    answer: "I can take you to Products.",
+    answer: "I can take you to the matching Job.",
     actions: [{
       type: "OPEN_WORKSPACE_PAGE",
-      label: "Open Products",
+      label: "Open Job",
       requiresConfirmation: false,
-      payload: { page: "products" },
+      payload: { page: "jobs", jobId: "job-123", invoiceId: "invoice-456", url: "https://example.com" },
     }, {
       type: "OPEN_ARBITRARY_URL",
       label: "Unsafe action",
@@ -72,7 +72,19 @@ test("accepts only a typed workspace navigation action", () => {
   assert.equal(response.tool, "NAVIGATE_WORKSPACE");
   assert.equal(response.actions.length, 1);
   assert.equal(response.actions[0].type, "OPEN_WORKSPACE_PAGE");
-  assert.deepEqual(response.actions[0].payload, { page: "products" });
+  assert.deepEqual(response.actions[0].payload, { page: "jobs", jobId: "job-123", invoiceId: "invoice-456" });
+});
+
+test("recognizes deterministic job and invoice tools", () => {
+  for (const tool of ["SEARCH_JOBS", "GET_JOB_STATUS", "LIST_INVOICES", "GET_INVOICE_STATUS"] as const) {
+    const response = normalizeKodyAssistantResponse({
+      tool,
+      answer: "Workspace result",
+      diagnostics: { requestedTool: tool, resolvedTool: tool },
+    });
+    assert.equal(response.tool, tool);
+    assert.equal(response.diagnostics.resolvedTool, tool);
+  }
 });
 
 test("preserves only the typed rolling schedule handoff range", () => {
@@ -164,6 +176,29 @@ test("preserves bounded catalog pricing and provenance in a quote draft handoff"
       catalogMatched: true,
     }],
     retrievedSourceLabels: [],
+  });
+});
+
+test("preserves safe job and invoice numbers for specific workspace action labels", () => {
+  const response = normalizeKodyAssistantResponse({
+    tool: "LIST_INVOICES",
+    answer: "Found two invoices.",
+    actions: [
+      {
+        type: "OPEN_WORKSPACE_PAGE",
+        label: "Open invoice #41",
+        requiresConfirmation: false,
+        payload: { page: "jobs", jobId: "job-41", jobNumber: 14, invoiceId: "invoice-41", invoiceNumber: 41 },
+      },
+    ],
+  });
+
+  assert.deepEqual(response.actions[0]?.payload, {
+    page: "jobs",
+    jobId: "job-41",
+    jobNumber: 14,
+    invoiceId: "invoice-41",
+    invoiceNumber: 41,
   });
 });
 

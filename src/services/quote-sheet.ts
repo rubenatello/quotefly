@@ -7,6 +7,12 @@ export type QuoteSheetLineInput = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  priceProvenance?: "MANUAL" | "TENANT_PRESET" | "AI_REVIEWED" | "REVISION_RESTORE";
+  sourcePresetIdSnapshot?: string | null;
+  sourcePresetNameSnapshot?: string | null;
+  sourcePresetCatalogKeySnapshot?: string | null;
+  sourcePresetCatalogVersionSnapshot?: number | null;
+  sourcePresetUpdatedAtUtcSnapshot?: Date | null;
 };
 
 export type QuoteSheetLineUpdateInput = QuoteSheetLineInput & {
@@ -79,6 +85,12 @@ export async function applyQuoteSheetLineMutations(
         quantity: line.quantity,
         unitCost: line.unitCost,
         unitPrice: line.unitPrice,
+        priceProvenance: line.priceProvenance ?? "MANUAL",
+        sourcePresetIdSnapshot: line.sourcePresetIdSnapshot ?? null,
+        sourcePresetNameSnapshot: line.sourcePresetNameSnapshot ?? null,
+        sourcePresetCatalogKeySnapshot: line.sourcePresetCatalogKeySnapshot ?? null,
+        sourcePresetCatalogVersionSnapshot: line.sourcePresetCatalogVersionSnapshot ?? null,
+        sourcePresetUpdatedAtUtcSnapshot: line.sourcePresetUpdatedAtUtcSnapshot ?? null,
       })),
     });
   }

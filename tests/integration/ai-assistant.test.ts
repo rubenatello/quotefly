@@ -292,6 +292,224 @@ describe("AI assistant", () => {
     })).toBe(3);
   });
 
+  test("keeps unmatched inspection-dependent quote work unpriced and enforces server-side acknowledgement", async () => {
+    const owner = await signUp("ai-unresolved-pricing");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Unresolved Pricing Customer",
+      phoneDigits: "5559190100",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-unresolved-pricing-request-0001",
+      },
+      payload: {
+        customerId: customer.id,
+        serviceType: "HVAC",
+        prompt:
+          "Prepare a quote for qzvplx calibration. It should take 3-4 hours depending on damage or inspection. Prepare it for review.",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const completeEvent = response.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete");
+    const result = completeEvent?.result as {
+      aiRunId: string;
+      suggestion: {
+        serviceType: "HVAC";
+        title: string;
+        scopeText: string;
+        internalCostSubtotal: number;
+        customerPriceSubtotal: number;
+        taxAmount: number;
+        totalAmount: number;
+        requiresPricingReview: boolean;
+        lineItems: Array<{
+          description: string;
+          sectionType: "INCLUDED" | "ALTERNATE";
+          sectionLabel?: string | null;
+          quantity: number;
+          unitCost: number;
+          unitPrice: number;
+          priceProvenance: string;
+          sourcePresetId?: string;
+        }>;
+      };
+    };
+    const suggestion = result.suggestion;
+    /*
+     * The browser checkbox is not the security boundary. The create route must
+     * reject missing/false acknowledgement and accept only an explicit true.
+     */
+
+    expect(suggestion).toBeDefined();
+    expect(suggestion.requiresPricingReview).toBe(true);
+    expect(suggestion.customerPriceSubtotal).toBe(0);
+    expect(suggestion.totalAmount).toBe(0);
+    expect(
+      suggestion.lineItems
+        .filter((line) => line.sectionType === "INCLUDED")
+        .every((line) => line.unitPrice === 0 && line.priceProvenance === "UNRESOLVED"),
+    ).toBe(true);
+    const createPayload = {
+      customerId: customer.id,
+      serviceType: suggestion.serviceType,
+      title: suggestion.title,
+      scopeText: suggestion.scopeText,
+      internalCostSubtotal: suggestion.internalCostSubtotal,
+      customerPriceSubtotal: suggestion.customerPriceSubtotal,
+      taxAmount: suggestion.taxAmount,
+      aiUsageEventId: result.aiRunId,
+      lineItems: suggestion.lineItems.map((line) => ({
+        description: line.description,
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel,
+        quantity: line.quantity,
+        unitCost: line.unitCost,
+        unitPrice: line.unitPrice,
+        sourcePresetId: line.sourcePresetId,
+      })),
+    };
+    const missingAcknowledgement = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "ai-unresolved-pricing-create-missing-0001" },
+      payload: createPayload,
+    });
+    expect(missingAcknowledgement.statusCode).toBe(422);
+    expect(missingAcknowledgement.json()).toMatchObject({ code: "AI_PRICING_REVIEW_REQUIRED" });
+
+    const falseAcknowledgement = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "ai-unresolved-pricing-create-false-0001" },
+      payload: { ...createPayload, aiPricingReviewAcknowledged: false },
+    });
+    expect(falseAcknowledgement.statusCode).toBe(422);
+    expect(falseAcknowledgement.json()).toMatchObject({ code: "AI_PRICING_REVIEW_REQUIRED" });
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(0);
+
+    const reviewed = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "ai-unresolved-pricing-create-reviewed-0001" },
+      payload: { ...createPayload, aiPricingReviewAcknowledged: true },
+    });
+    expect(reviewed.statusCode).toBe(201);
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "ai-unresolved-pricing-create-reviewed-0001" },
+      payload: { ...createPayload, aiPricingReviewAcknowledged: true },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ duplicate: true });
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(1);
+  });
+
+  test("persists tenant-preset provenance from AI suggestion through reviewed quote creation", async () => {
+    const owner = await signUp("ai-preset-provenance");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Preset Provenance Customer",
+      phoneDigits: "5559190101",
+    });
+    const preset = await prisma.workPreset.findFirstOrThrow({
+      where: {
+        tenantId: owner.tenant.id,
+        serviceType: "ROOFING",
+        catalogKey: { not: null },
+        deletedAtUtc: null,
+      },
+      orderBy: [{ catalogKey: "asc" }, { id: "asc" }],
+    });
+
+    const suggestionResponse = await app.inject({
+      method: "POST",
+      url: "/v1/quotes/ai-suggest",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": "ai-preset-provenance-suggest-0001",
+      },
+      payload: {
+        customerId: customer.id,
+        serviceType: "ROOFING",
+        prompt: `Prepare a roofing quote for ${preset.name}. Please prepare it for review.`,
+      },
+    });
+    expect(suggestionResponse.statusCode).toBe(200);
+    const completeEvent = suggestionResponse.body
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; result?: Record<string, unknown> })
+      .find((event) => event.type === "complete");
+    const result = completeEvent?.result as {
+      aiRunId: string;
+      suggestion: {
+        serviceType: "ROOFING";
+        title: string;
+        scopeText: string;
+        internalCostSubtotal: number;
+        customerPriceSubtotal: number;
+        taxAmount: number;
+        lineItems: Array<{
+          description: string;
+          sectionType: "INCLUDED" | "ALTERNATE";
+          sectionLabel?: string | null;
+          quantity: number;
+          unitCost: number;
+          unitPrice: number;
+          priceProvenance: string;
+          sourcePresetId?: string;
+        }>;
+      };
+    };
+    const presetLine = result.suggestion.lineItems.find((line) => line.sourcePresetId === preset.id);
+    expect(presetLine).toMatchObject({ priceProvenance: "TENANT_PRESET", sourcePresetId: preset.id });
+    expect(
+      result.suggestion.lineItems
+        .filter((line) => line.priceProvenance === "STANDARD_CATALOG")
+        .every((line) => line.sourcePresetId === undefined),
+    ).toBe(true);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "ai-preset-provenance-create-0001" },
+      payload: {
+        customerId: customer.id,
+        serviceType: result.suggestion.serviceType,
+        title: result.suggestion.title,
+        scopeText: result.suggestion.scopeText,
+        internalCostSubtotal: result.suggestion.internalCostSubtotal,
+        customerPriceSubtotal: result.suggestion.customerPriceSubtotal,
+        taxAmount: result.suggestion.taxAmount,
+        aiUsageEventId: result.aiRunId,
+        lineItems: result.suggestion.lineItems,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const quoteId = (created.json() as { quote: { id: string } }).quote.id;
+    const storedPresetLine = await prisma.quoteLineItem.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, quoteId, sourcePresetIdSnapshot: preset.id },
+    });
+    expect(storedPresetLine).toMatchObject({
+      priceProvenance: "TENANT_PRESET",
+      sourcePresetIdSnapshot: preset.id,
+      sourcePresetNameSnapshot: preset.name,
+      sourcePresetCatalogKeySnapshot: preset.catalogKey,
+      sourcePresetCatalogVersionSnapshot: preset.catalogVersion,
+    });
+    expect(storedPresetLine.sourcePresetUpdatedAtUtcSnapshot?.toISOString()).toBe(preset.updatedAt.toISOString());
+  });
+
   test("rejects off-topic prompts without model usage and records tenant-user-scoped feedback", async () => {
     const owner = await signUp("assistant-scope-owner");
     const otherTenant = await signUp("assistant-scope-other");
@@ -1502,6 +1720,15 @@ describe("AI assistant", () => {
       eventType: "DRAFT",
       purpose: "QUOTE_DRAFT",
     });
+    await expect(
+      prisma.quoteLineItem.findFirstOrThrow({
+        where: { tenantId: owner.tenant.id, quoteId: createdBody.quote.id, deletedAtUtc: null },
+      }),
+    ).resolves.toMatchObject({
+      priceProvenance: "AI_REVIEWED",
+      sourcePresetIdSnapshot: null,
+      sourcePresetNameSnapshot: null,
+    });
 
     const crossActorEvent = await prisma.aiUsageEvent.create({
       data: {
@@ -1634,6 +1861,11 @@ describe("AI assistant", () => {
     await expect(
       prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: result.aiRunId } }),
     ).resolves.toMatchObject({ quoteId: createdQuoteId, customerId: customer.id });
+    const storedAiLines = await prisma.quoteLineItem.findMany({
+      where: { tenantId: owner.tenant.id, quoteId: createdQuoteId, deletedAtUtc: null },
+    });
+    expect(storedAiLines.length).toBeGreaterThan(0);
+    expect(storedAiLines.every((line) => line.priceProvenance === "AI_REVIEWED")).toBe(true);
 
     const linkedEventReuse = await app.inject({
       method: "POST",
@@ -2997,6 +3229,64 @@ describe("AI assistant", () => {
       customerName: "Foreign Schedule Customer",
       startsAtUtc: new Date(Date.now() + 4 * 60 * 60 * 1_000),
     });
+    const createInvoiceForJob = (params: {
+      session: Session;
+      job: Awaited<ReturnType<typeof createScheduledJob>>;
+      invoiceNumber: number;
+      balanceDue: number;
+    }) => prisma.invoice.create({
+      data: {
+        tenantId: params.session.tenant.id,
+        customerId: params.job.customer.id,
+        jobId: params.job.job.id,
+        sourceQuoteId: params.job.quote.id,
+        invoiceNumber: params.invoiceNumber,
+        status: "OPEN",
+        paymentStatus: "PENDING",
+        titleSnapshot: `${params.job.job.title} invoice`,
+        subtotalAmount: params.balanceDue,
+        taxAmount: 0,
+        totalAmount: params.balanceDue,
+        amountPaid: 0,
+        balanceDue: params.balanceDue,
+        issuedAtUtc: new Date("2026-08-10T16:00:00.000Z"),
+        dueAtUtc: new Date("2026-09-10T16:00:00.000Z"),
+      },
+    });
+    const memberInvoice = await createInvoiceForJob({
+      session: owner,
+      job: memberJob,
+      invoiceNumber: 5101,
+      balanceDue: 1_500,
+    });
+    const ownerInvoice = await createInvoiceForJob({
+      session: owner,
+      job: ownerJob,
+      invoiceNumber: 5102,
+      balanceDue: 1_750,
+    });
+    const foreignInvoice = await createInvoiceForJob({
+      session: otherTenant,
+      job: foreignJob,
+      invoiceNumber: 5103,
+      balanceDue: 9_999,
+    });
+    for (let index = 0; index < 7; index += 1) {
+      const overflowJob = await createScheduledJob({
+        session: owner,
+        assignedTenantUserId: ownerMembership.id,
+        createdByTenantUserId: ownerMembership.id,
+        jobNumber: 4200 + index,
+        customerName: `Overflow Owner Customer ${index + 1}`,
+        startsAtUtc: new Date(Date.now() + (8 + index) * 60 * 60 * 1_000),
+      });
+      await createInvoiceForJob({
+        session: owner,
+        job: overflowJob,
+        invoiceNumber: 5200 + index,
+        balanceDue: 500 + index,
+      });
+    }
 
     setAssistantCompositionProviderForTest(async () => {
       throw new Error("Deterministic schedule tools must never call the composition provider.");
@@ -3007,6 +3297,195 @@ describe("AI assistant", () => {
       events: await prisma.jobEvent.count({ where: { tenantId: owner.tenant.id } }),
       notifications: await prisma.notificationOutbox.count({ where: { tenantId: owner.tenant.id } }),
     };
+
+    const memberJobStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: `What is the status of job #${memberJob.job.jobNumber}?`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(memberJobStatus.statusCode).toBe(200);
+    const memberJobStatusBody = memberJobStatus.json() as {
+      assistant: { tool: string; results: Array<Record<string, unknown>>; actions: Array<{ payload: Record<string, unknown> }> };
+      usage: { consumedCredits: number };
+    };
+    expect(memberJobStatusBody).toMatchObject({
+      assistant: {
+        tool: "GET_JOB_STATUS",
+        results: [expect.objectContaining({ jobId: memberJob.job.id, customerId: memberJob.customer.id })],
+        actions: [expect.objectContaining({
+          payload: expect.objectContaining({
+            page: "jobs",
+            jobId: memberJob.job.id,
+            jobNumber: memberJob.job.jobNumber,
+          }),
+        })],
+      },
+      usage: { consumedCredits: 0 },
+    });
+    expect(JSON.stringify(memberJobStatusBody.assistant.results)).not.toContain("Private");
+
+    const inaccessibleJobStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: `What is the status of job #${ownerJob.job.jobNumber}?`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(inaccessibleJobStatus.statusCode).toBe(200);
+    expect(inaccessibleJobStatus.json()).toMatchObject({
+      assistant: { tool: "GET_JOB_STATUS", results: [], actions: [] },
+      usage: { consumedCredits: 0 },
+    });
+
+    const ownerJobSearch = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "Show jobs", tool: "AUTO", context: { currentPage: "jobs", limit: 8 } },
+    });
+    expect(ownerJobSearch.statusCode).toBe(200);
+    const ownerJobBody = ownerJobSearch.json() as {
+      assistant: {
+        answer: string;
+        results: Array<{ jobId: string }>;
+        diagnostics: { filters: { resultsTruncated: boolean } };
+      };
+    };
+    const ownerJobResults = ownerJobBody.assistant.results;
+    expect(ownerJobResults).toHaveLength(8);
+    expect(ownerJobResults.map((item) => item.jobId)).not.toContain(foreignJob.job.id);
+    expect(ownerJobBody.assistant.diagnostics.filters.resultsTruncated).toBe(true);
+    expect(ownerJobBody.assistant.answer).toMatch(/first 8 active jobs.*more matches exist/i);
+
+    const memberInvoices = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "List my invoices", tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(memberInvoices.statusCode).toBe(200);
+    const memberInvoiceBody = memberInvoices.json() as {
+      assistant: { tool: string; results: Array<Record<string, unknown>>; fieldsExcluded: string[] };
+      usage: { consumedCredits: number };
+    };
+    expect(memberInvoiceBody.assistant.tool).toBe("LIST_INVOICES");
+    expect(memberInvoiceBody.usage.consumedCredits).toBe(0);
+    expect(memberInvoiceBody.assistant.results).toContainEqual(expect.objectContaining({ invoiceId: memberInvoice.id }));
+    expect(JSON.stringify(memberInvoiceBody.assistant.results)).not.toContain(ownerInvoice.id);
+    expect(JSON.stringify(memberInvoiceBody.assistant.results)).not.toContain(foreignInvoice.id);
+    expect(memberInvoiceBody.assistant.results[0]).not.toHaveProperty("totalAmount");
+    expect(memberInvoiceBody.assistant.results[0]).not.toHaveProperty("balanceDue");
+    expect(memberInvoiceBody.assistant.fieldsExcluded).toEqual(expect.arrayContaining(["invoice totals", "balance due"]));
+
+    const ownerInvoices = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "List invoices", tool: "LIST_INVOICES", context: { currentPage: "jobs", limit: 8 } },
+    });
+    expect(ownerInvoices.statusCode).toBe(200);
+    const ownerInvoiceListBody = ownerInvoices.json() as {
+      assistant: {
+        answer: string;
+        results: Array<{ invoiceId: string }>;
+        diagnostics: { filters: { resultsTruncated: boolean } };
+      };
+    };
+    expect(ownerInvoiceListBody.assistant.results).toHaveLength(8);
+    expect(ownerInvoiceListBody.assistant.results.map((item) => item.invoiceId)).not.toContain(foreignInvoice.id);
+    expect(ownerInvoiceListBody.assistant.diagnostics.filters.resultsTruncated).toBe(true);
+    expect(ownerInvoiceListBody.assistant.answer).toMatch(/first 8 active invoices.*more matches exist/i);
+
+    const ownerInvoiceStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: `Is invoice #${ownerInvoice.invoiceNumber} paid?`, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(ownerInvoiceStatus.statusCode).toBe(200);
+    expect(ownerInvoiceStatus.json()).toMatchObject({
+      assistant: {
+        tool: "GET_INVOICE_STATUS",
+        maxClassification: "C3_FINANCIAL_CONFIDENTIAL",
+        results: [expect.objectContaining({
+          invoiceId: ownerInvoice.id,
+          totalAmount: 1_750,
+          amountPaid: 0,
+          balanceDue: 1_750,
+        })],
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const spanishPreference = await app.inject({
+      method: "PATCH",
+      url: "/v1/auth/me/preferences",
+      headers: { cookie: owner.cookie },
+      payload: { preferredLocale: "es-US" },
+    });
+    expect(spanishPreference.statusCode).toBe(200);
+    const spanishJobStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `¿Cuál es el estado del trabajo #${ownerJob.job.jobNumber}?`,
+        tool: "GET_JOB_STATUS",
+        context: { currentPage: "jobs", jobId: ownerJob.job.id },
+      },
+    });
+    expect(spanishJobStatus.statusCode).toBe(200);
+    expect(spanishJobStatus.json()).toMatchObject({
+      assistant: {
+        answer: `El trabajo #${ownerJob.job.jobNumber} está programado.`,
+        actions: [expect.objectContaining({
+          label: `Abrir trabajo #${ownerJob.job.jobNumber}`,
+          payload: { page: "jobs", jobId: ownerJob.job.id, jobNumber: ownerJob.job.jobNumber },
+        })],
+      },
+    });
+    const spanishInvoiceStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `¿Cuál es el estado de la factura #${ownerInvoice.invoiceNumber}?`,
+        tool: "GET_INVOICE_STATUS",
+        context: { currentPage: "jobs", invoiceId: ownerInvoice.id },
+      },
+    });
+    expect(spanishInvoiceStatus.statusCode).toBe(200);
+    expect(spanishInvoiceStatus.json()).toMatchObject({
+      assistant: {
+        answer: `La factura #${ownerInvoice.invoiceNumber} está abierta con pago pendiente.`,
+        actions: [expect.objectContaining({
+          label: `Abrir factura #${ownerInvoice.invoiceNumber}`,
+          payload: {
+            page: "jobs",
+            jobId: ownerJob.job.id,
+            jobNumber: ownerJob.job.jobNumber,
+            invoiceId: ownerInvoice.id,
+            invoiceNumber: ownerInvoice.invoiceNumber,
+          },
+        })],
+      },
+    });
+
+    const inaccessibleInvoiceStatus = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: {
+        message: "Show invoice status",
+        tool: "GET_INVOICE_STATUS",
+        context: { currentPage: "jobs", invoiceId: ownerInvoice.id },
+      },
+    });
+    expect(inaccessibleInvoiceStatus.statusCode).toBe(200);
+    expect(inaccessibleInvoiceStatus.json()).toMatchObject({
+      assistant: { tool: "GET_INVOICE_STATUS", results: [], actions: [] },
+      usage: { consumedCredits: 0 },
+    });
 
     const memberList = await app.inject({
       method: "POST",
@@ -3140,7 +3619,7 @@ describe("AI assistant", () => {
     expect(booking.statusCode).toBe(200);
     const bookingBody = booking.json() as { assistant: { tool: string; answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }> }; usage: { consumedCredits: number } };
     expect(bookingBody.assistant.tool).toBe("PREPARE_BOOKING");
-    expect(bookingBody.assistant.answer).toContain("nothing changed yet");
+    expect(bookingBody.assistant.answer).toMatch(/todav.*no cambi.*nada/i);
     expect(bookingBody.assistant.actions).toHaveLength(1);
     expect(bookingBody.assistant.actions[0]).toMatchObject({
       type: "OPEN_BOOKING_REVIEW",
@@ -3181,7 +3660,7 @@ describe("AI assistant", () => {
     });
     expect(fold.statusCode).toBe(200);
     const foldBody = fold.json() as { assistant: { answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: { startsAtUtc: string } }> } };
-    expect(foldBody.assistant.answer).toContain("occurs twice");
+    expect(foldBody.assistant.answer).toMatch(/ocurre dos veces/i);
     expect(foldBody.assistant.actions).toHaveLength(2);
     expect(new Set(foldBody.assistant.actions.map((action) => action.payload.startsAtUtc)).size).toBe(2);
     expect(foldBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);

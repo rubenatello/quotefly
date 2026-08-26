@@ -67,7 +67,10 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
 
   await expect(page).toHaveURL("/services");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/services"].heading })).toBeVisible();
-  await expect(page.getByRole("img", { name: /customer management, estimate building/i })).toBeVisible();
+  const serviceProductImage = page.getByRole("img", { name: /Kody preparing a structured QuoteFly quote draft/i });
+  await expect(serviceProductImage).toBeVisible();
+  await expect.poll(() => serviceProductImage.evaluate((image: HTMLImageElement) => image.currentSrc)).toContain("-mobile-v2.webp");
+  await expect(page.getByRole("list", { name: "Customer to internal invoice workflow" }).getByRole("listitem")).toHaveCount(6);
 
   await page.goto("/solutions");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/solutions"].heading })).toBeVisible();

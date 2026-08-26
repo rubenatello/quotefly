@@ -298,7 +298,11 @@ test.describe("quote builder secure server draft recovery", () => {
     await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
 
     expect(identityPutCount).toBeGreaterThanOrEqual(2);
-    expect(draftEvents.indexOf("identity-autosave-completed")).toBeLessThan(draftEvents.indexOf("cleanup-delete"));
+    const identityAutosaveCompletedIndex = draftEvents.indexOf("identity-autosave-completed");
+    const finalCleanupDeleteIndex = draftEvents.lastIndexOf("cleanup-delete");
+    expect(identityAutosaveCompletedIndex).toBeGreaterThanOrEqual(0);
+    expect(finalCleanupDeleteIndex).toBeGreaterThan(identityAutosaveCompletedIndex);
+    expect(draftEvents.at(-1)).toBe("cleanup-delete");
     await page.waitForTimeout(1_400);
     expect(await getServerDraft(request, account)).toBeNull();
   });

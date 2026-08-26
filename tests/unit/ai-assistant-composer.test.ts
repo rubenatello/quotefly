@@ -727,3 +727,99 @@ test("assistant composer permits explicit authorized counts, percentages, and da
     setAssistantCompositionProviderForTest(null);
   }
 });
+
+test("assistant composer emits request-aware fallback diagnostics without prompt or provider-error content", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...values: unknown[]) => warnings.push(values.map(String).join(" "));
+  setAssistantCompositionProviderForTest(async () => {
+    throw new Error("private customer ruben@example.com prompt contents");
+  });
+  try {
+    const result = await composeAssistantAnswer({
+      diagnosticContext: { requestId: "request-safe-123" },
+      userMessage: "Find private customer ruben@example.com",
+      tool: "SEARCH_CUSTOMERS",
+      deterministicAnswer: "No active customers matched.",
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      results: [],
+      citations: [],
+      actions: [],
+      fieldsExcluded: ["customer PII"],
+      diagnostics: {
+        requestedTool: "SEARCH_CUSTOMERS",
+        resolvedTool: "SEARCH_CUSTOMERS",
+        resultCount: 0,
+        citationCount: 0,
+        emptyReason: "No active rows matched.",
+        archivePolicy: "Active customers only.",
+        filters: {},
+      },
+    });
+
+    assert.equal(result.answerMode, "DETERMINISTIC");
+    assert.equal(warnings.length, 1);
+    const diagnostic = JSON.parse(warnings[0]!) as Record<string, unknown>;
+    assert.deepEqual(diagnostic, {
+      event: "ai_assistant_provider_fallback",
+      requestId: "request-safe-123",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      failureCode: "PROVIDER_CALL_FAILED",
+    });
+    assert.doesNotMatch(warnings[0]!, /ruben@example\.com|private customer|prompt contents/i);
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+    console.warn = originalWarn;
+  }
+});
+
+test("assistant composer honors an exhausted shared quote provider budget before calling a provider", async () => {
+  const { setAssistantCompositionProviderForTest, composeAssistantAnswer } = await loadComposer();
+  const { claimAiQuoteProviderTimeout, createAiQuoteProviderBudget } = await import(
+    "../../src/services/ai-quote-provider-budget"
+  );
+  const budget = createAiQuoteProviderBudget({
+    perCallTimeoutMs: 5_000,
+    operationTimeoutMs: 20_000,
+    maxCalls: 1,
+  });
+  claimAiQuoteProviderTimeout(budget);
+  let providerCalled = false;
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  setAssistantCompositionProviderForTest(async () => {
+    providerCalled = true;
+    throw new Error("provider should not be called");
+  });
+  try {
+    const result = await composeAssistantAnswer({
+      diagnosticContext: { requestId: "request-budget-123" },
+      userMessage: "Prepare the quote.",
+      tool: "DRAFT_QUOTE",
+      deterministicAnswer: "I prepared a quote draft for review.",
+      maxClassification: "C1_BUSINESS_INTERNAL",
+      results: [],
+      citations: [],
+      actions: [],
+      fieldsExcluded: [],
+      diagnostics: {
+        requestedTool: "DRAFT_QUOTE",
+        resolvedTool: "DRAFT_QUOTE",
+        resultCount: 0,
+        citationCount: 0,
+        emptyReason: null,
+        archivePolicy: "No workspace rows were read.",
+        filters: {},
+      },
+      providerBudget: budget,
+    });
+    assert.equal(result.answerMode, "DETERMINISTIC");
+    assert.equal(providerCalled, false);
+    assert.equal(budget.callsUsed, 1);
+  } finally {
+    setAssistantCompositionProviderForTest(null);
+    console.warn = originalWarn;
+  }
+});

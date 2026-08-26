@@ -650,6 +650,10 @@ export type AiAssistantRequestedTool =
   | "PIPELINE_SCENARIO"
   | "SEARCH_CUSTOMERS"
   | "SEARCH_PRODUCTS"
+  | "SEARCH_JOBS"
+  | "GET_JOB_STATUS"
+  | "LIST_INVOICES"
+  | "GET_INVOICE_STATUS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
   | "DRAFT_CUSTOMER"
@@ -681,6 +685,7 @@ export type AiAssistantContext = {
   customerId?: string;
   quoteId?: string;
   jobId?: string;
+  invoiceId?: string;
   appointmentId?: string;
   search?: string;
   serviceType?: ServiceType;
@@ -1089,6 +1094,13 @@ export type AiUsageSummary = {
   renewsAtUtc?: string | null;
 };
 
+export type AiPriceProvenance =
+  | "EXPLICIT_PROMPT"
+  | "TENANT_PRESET"
+  | "STANDARD_CATALOG"
+  | "CURRENT_QUOTE"
+  | "UNRESOLVED";
+
 export type AiQuoteSuggestion = {
   serviceType: ServiceType;
   title: string;
@@ -1097,6 +1109,7 @@ export type AiQuoteSuggestion = {
   customerPriceSubtotal: number;
   taxAmount: number;
   totalAmount: number;
+  requiresPricingReview?: boolean;
   model: string;
   lineItems: Array<{
     description: string;
@@ -1105,6 +1118,8 @@ export type AiQuoteSuggestion = {
     quantity: number;
     unitCost?: number;
     unitPrice: number;
+    priceProvenance?: AiPriceProvenance;
+    sourcePresetId?: string;
   }>;
 };
 
@@ -1118,6 +1133,8 @@ export type AiQuoteLinePatch = {
   quantity: number;
   unitCost?: number;
   unitPrice: number;
+  priceProvenance?: AiPriceProvenance;
+  sourcePresetId?: string;
   reason: string;
 };
 
@@ -1961,10 +1978,11 @@ export const api = {
       tool?: AiAssistantRequestedTool;
       context?: AiAssistantContext;
       conversation?: AiAssistantConversationTurn[];
-    }, options?: { idempotencyKey?: string }) => request<AiAssistantResponse>("/v1/ai/assistant", {
+    }, options?: { idempotencyKey?: string; signal?: AbortSignal }) => request<AiAssistantResponse>("/v1/ai/assistant", {
       method: "POST",
       headers: activityCommandHeaders(options?.idempotencyKey),
       body: JSON.stringify(body),
+      signal: options?.signal,
     }),
 
     submitAssistantFeedback: (
@@ -2825,6 +2843,7 @@ export const api = {
       customerPriceSubtotal: number;
       taxAmount: number;
       aiUsageEventId?: string;
+      aiPricingReviewAcknowledged?: boolean;
       assignedTenantUserId?: string | null;
       documentLocale?: SupportedLocale;
       lineItems?: Array<{
@@ -2858,10 +2877,12 @@ export const api = {
         quantity: number;
         unitCost: number;
         unitPrice: number;
+        sourcePresetId?: string;
       }>;
     }, options?: {
       onProgress?: (event: AiProgressEvent) => void;
       idempotencyKey?: string;
+      signal?: AbortSignal;
     }): Promise<AiQuoteSuggestionResult> =>
       (async () => {
         const headers: Record<string, string> = {
@@ -2878,6 +2899,7 @@ export const api = {
             credentials: "include",
             headers,
             body: JSON.stringify(body),
+            signal: options?.signal,
           });
         } catch (error) {
           trackApiRequest(buildFailedRequestTelemetry("/v1/quotes/ai-suggest", streamRequestOptions, streamStartedAt));

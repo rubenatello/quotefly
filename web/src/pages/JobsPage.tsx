@@ -93,7 +93,9 @@ function isRouteStateRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function kodyReviewState(value: unknown, jobId: string | undefined) {
-  if (!jobId || !isRouteStateRecord(value)) return { booking: null, dispatch: null, focusReturnId: null };
+  if (!jobId || !isRouteStateRecord(value)) {
+    return { booking: null, dispatch: null, focusReturnId: null, invoiceId: null };
+  }
   const booking = isRouteStateRecord(value.kodyBookingReview)
     && value.kodyBookingReview.jobId === jobId
     && (value.kodyBookingReview.mode === "CREATE" || value.kodyBookingReview.mode === "RESCHEDULE")
@@ -113,7 +115,12 @@ function kodyReviewState(value: unknown, jobId: string | undefined) {
   const focusReturnId: "kody-launcher" | null = booking?.mode === "RESCHEDULE" && value.kodyFocusReturnId === "kody-launcher"
     ? "kody-launcher"
     : null;
-  return { booking, dispatch, focusReturnId };
+  const invoiceId = typeof value.kodyInvoiceId === "string"
+    && value.kodyInvoiceId.trim().length > 0
+    && value.kodyInvoiceId.length <= 200
+      ? value.kodyInvoiceId
+      : null;
+  return { booking, dispatch, focusReturnId, invoiceId };
 }
 
 function defaultAppointmentInputs(timeZone: string) {
@@ -1319,6 +1326,7 @@ function JobDetail({
   kodyBookingReview,
   kodyDispatchReview,
   kodyFocusReturnId,
+  kodyInvoiceId,
   onKodyReviewConsumed,
 }: {
   job: Job;
@@ -1333,6 +1341,7 @@ function JobDetail({
   kodyBookingReview: KodyBookingReviewDetail | null;
   kodyDispatchReview: KodyDispatchReviewDetail | null;
   kodyFocusReturnId: "kody-launcher" | null;
+  kodyInvoiceId: string | null;
   onKodyReviewConsumed: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -1438,6 +1447,8 @@ function JobDetail({
           sourceAmount={job.sourceQuote.totalAmount}
           canCreate={canManageJobs}
           createBlockedReason={job.status === "COMPLETED" ? null : t("invoices.completeJobFirst")}
+          kodyInvoiceId={kodyInvoiceId}
+          onKodyInvoiceConsumed={onKodyReviewConsumed}
         />
       </div>
 
@@ -1738,6 +1749,7 @@ export function JobsPage() {
         kodyBookingReview={kodyReview.booking}
         kodyDispatchReview={kodyReview.dispatch}
         kodyFocusReturnId={kodyReview.focusReturnId}
+        kodyInvoiceId={kodyReview.invoiceId}
         onKodyReviewConsumed={consumeKodyReview}
       />
     );

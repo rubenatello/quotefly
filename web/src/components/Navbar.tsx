@@ -42,19 +42,19 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
       <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between px-4 py-2 sm:px-6 lg:px-8">
         <Link
           to="/"
-          className="flex min-h-11 items-center gap-2 transition-opacity hover:opacity-80"
+          className="flex min-h-11 items-center gap-2 rounded-xl transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
           aria-label="Go to QuoteFly home"
         >
           <img src="/logo.png" alt="QuoteFly" className="h-9 w-auto sm:h-10" />
         </Link>
 
-        <div className="hidden items-center gap-8 md:flex">
+        <div className="hidden items-center gap-3 md:flex lg:gap-6 xl:gap-8">
           {navLinks.map((link) => (
             <Link
               key={link.path}
               to={link.path}
               aria-current={isCurrentLink(link.path) ? "page" : undefined}
-              className={`text-sm font-medium transition-colors ${
+              className={`rounded-lg px-2 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 ${
                 isCurrentLink(link.path)
                   ? "text-quotefly-primary"
                   : "text-slate-600 hover:text-slate-900"
@@ -65,19 +65,19 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
           ))}
         </div>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-1 md:flex lg:gap-3">
           {isLoggedIn ? (
             <div className="flex items-center gap-3">
               <Link
                 to="/app"
-                className="inline-flex min-h-11 items-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                className="inline-flex min-h-11 items-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
               >
                 Dashboard
               </Link>
               <button
                 type="button"
                 onClick={onLogout}
-                className="min-h-11 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+                className="min-h-11 rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
               >
                 Sign Out
               </button>
@@ -87,14 +87,14 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
               <button
                 type="button"
                 onClick={onOpenSignIn ?? onOpenAuth}
-                className="min-h-11 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"
+                className="min-h-11 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
               >
                 Sign In
               </button>
               <button
                 type="button"
                 onClick={onOpenAuth}
-                className="min-h-11 rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                className="min-h-11 rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
               >
                 Start Free Trial
               </button>
@@ -105,7 +105,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
         <button
           type="button"
           onClick={() => setMobileMenuOpen((current) => !current)}
-          className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 md:hidden"
+          className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 md:hidden"
           aria-label={mobileMenuOpen ? "Close navigation" : "Open navigation"}
           aria-expanded={mobileMenuOpen}
           aria-controls="mobile-primary-navigation"
@@ -123,7 +123,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
                 to={link.path}
                 aria-current={isCurrentLink(link.path) ? "page" : undefined}
                 onClick={() => setMobileMenuOpen(false)}
-                className={`flex min-h-11 items-center rounded-lg px-3 text-left text-sm font-medium transition-colors ${
+                className={`flex min-h-11 items-center rounded-lg px-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 ${
                   isCurrentLink(link.path)
                     ? "text-quotefly-primary"
                     : "text-slate-600 hover:text-slate-900"
@@ -138,7 +138,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
                   <Link
                     to="/app"
                     onClick={() => setMobileMenuOpen(false)}
-                    className="flex min-h-11 w-full items-center justify-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                    className="flex min-h-11 w-full items-center justify-center rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
                   >
                     Dashboard
                   </Link>
@@ -148,7 +148,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
                       onLogout?.();
                       setMobileMenuOpen(false);
                     }}
-                    className="min-h-11 w-full px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900"
+                    className="min-h-11 w-full rounded-lg px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
                   >
                     Sign Out
                   </button>
@@ -161,7 +161,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
                       (onOpenSignIn ?? onOpenAuth)?.();
                       setMobileMenuOpen(false);
                     }}
-                    className="min-h-11 w-full px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary"
+                    className="min-h-11 w-full rounded-lg px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-quotefly-primary focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
                   >
                     Sign In
                   </button>
@@ -171,7 +171,7 @@ export function Navbar({ currentPage, isLoggedIn, onOpenAuth, onOpenSignIn, onLo
                       onOpenAuth?.();
                       setMobileMenuOpen(false);
                     }}
-                    className="min-h-11 w-full rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                    className="min-h-11 w-full rounded-lg bg-quotefly-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
                   >
                     Start Free Trial
                   </button>

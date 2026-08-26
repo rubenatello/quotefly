@@ -405,8 +405,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 47,
-      fieldCount: 723,
+      modelCount: 48,
+      fieldCount: 741,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

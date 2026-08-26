@@ -126,6 +126,89 @@ function nextSevenScheduleResponse() {
   return response;
 }
 
+function jobSearchResponse() {
+  const response = scheduleResponse();
+  return {
+    ...response,
+    assistant: {
+      ...response.assistant,
+      tool: "SEARCH_JOBS",
+      answer: "I found 5 active Jobs matching Smith.",
+      results: Array.from({ length: 5 }, (_, index) => ({
+        jobId: `job-search-${index + 1}`,
+        jobNumber: 5100 + index,
+        jobTitle: `Smith service Job ${index + 1}`,
+        customerName: `Smith Customer ${index + 1}`,
+        status: "SCHEDULED",
+      })),
+      actions: Array.from({ length: 4 }, (_, index) => ({
+        type: "OPEN_WORKSPACE_PAGE",
+        label: "Open Job",
+        requiresConfirmation: false,
+        payload: { page: "jobs", jobId: `job-search-${index + 1}`, jobNumber: 5100 + index },
+      })),
+      diagnostics: {
+        ...response.assistant.diagnostics,
+        requestedTool: "AUTO",
+        resolvedTool: "SEARCH_JOBS",
+        resultCount: 5,
+        filters: { resultsTruncated: true },
+      },
+      conversation: { mode: "NEW", acknowledgement: null, previousTool: null, currentTool: "SEARCH_JOBS" },
+    },
+  };
+}
+
+function invoiceSearchResponse(params: {
+  invoiceId: string;
+  invoiceNumber: number;
+  jobId: string;
+  jobNumber: number;
+}) {
+  const response = scheduleResponse();
+  return {
+    ...response,
+    assistant: {
+      ...response.assistant,
+      tool: "LIST_INVOICES",
+      answer: "Encontré 1 factura activa.",
+      results: [{
+        invoiceId: params.invoiceId,
+        invoiceNumber: params.invoiceNumber,
+        status: "OPEN",
+        paymentStatus: "PENDING",
+        title: "Reparación del techo",
+        customerName: "Cliente Ejemplo",
+        jobId: params.jobId,
+        jobNumber: params.jobNumber,
+        totalAmount: 1250,
+        amountPaid: 250,
+        balanceDue: 1000,
+      }],
+      actions: [{
+        type: "OPEN_WORKSPACE_PAGE",
+        label: "Open invoice",
+        requiresConfirmation: false,
+        payload: {
+          page: "jobs",
+          jobId: params.jobId,
+          jobNumber: params.jobNumber,
+          invoiceId: params.invoiceId,
+          invoiceNumber: params.invoiceNumber,
+        },
+      }],
+      diagnostics: {
+        ...response.assistant.diagnostics,
+        requestedTool: "LIST_INVOICES",
+        resolvedTool: "LIST_INVOICES",
+        resultCount: 1,
+        filters: { resultsTruncated: false },
+      },
+      conversation: { mode: "NEW", acknowledgement: null, previousTool: null, currentTool: "LIST_INVOICES" },
+    },
+  };
+}
+
 type PreparedJob = {
   owner: E2eAccount;
   member: Awaited<ReturnType<typeof addWorkspaceMemberViaApi>>;
@@ -135,6 +218,7 @@ type PreparedJob = {
     jobNumber: number;
     title: string;
     customerId: string;
+    sourceQuoteId: string;
     assignedTenantUserId: string;
   };
   timeZone: string;
@@ -365,7 +449,12 @@ test("Kody prioritizes Jobs prompts and renders a compact tenant-time schedule w
   const results = panel.getByTestId("kody-results");
   await results.locator(":scope > summary").click();
   await expect(results.getByTestId("kody-schedule-card")).toHaveCount(4);
-  await expect(results.getByTestId("kody-results-count")).toHaveText("Showing 4 of 5");
+  await expect(results.getByTestId("kody-results-count")).toContainText("Showing 4 of 5");
+  const showMoreResults = results.getByTestId("kody-results-show-more");
+  await expect(showMoreResults).toHaveAccessibleName("Show 1 more results");
+  await showMoreResults.click();
+  await expect(results.getByTestId("kody-schedule-card")).toHaveCount(5);
+  await expect(results.getByTestId("kody-results-count")).toContainText("Showing 5 of 5");
   const firstCard = results.getByTestId("kody-schedule-card").first();
   await expect(firstCard).toContainText("Schedule Customer 1");
   await expect(firstCard).toContainText("#4100 · HVAC tune-up 1");
@@ -424,6 +513,188 @@ test("Kody opens the exact rolling next-seven-day schedule window, including its
   // intact after the Kody handoff.
   await expect(page.getByRole("button", { name: "Sat 29 0 bookings", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Sun 30 0 bookings", exact: true })).toBeVisible();
+});
+
+test("Kody discloses and expands non-schedule results and actions", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "kody-job-result-disclosure");
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(jobSearchResponse()) });
+  });
+  await addSessionCookie(context, account);
+  await page.goto("/app/jobs");
+  await page.getByTestId("kody-launcher").click();
+  const panel = page.getByTestId("kody-chat-panel");
+  await panel.getByTestId("kody-prompt").fill("Find active Smith jobs");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(panel.getByText("I found 5 active Jobs matching Smith.")).toBeVisible();
+
+  const results = panel.getByTestId("kody-results");
+  await results.locator(":scope > summary").click();
+  await expect(results.getByTestId("kody-results-count")).toHaveText("Showing the first 4 results. More matches exist; narrow your search.");
+  await results.getByTestId("kody-results-show-more").click();
+  await expect(results.getByText("Smith service Job 5")).toBeVisible();
+  await expect(results.getByTestId("kody-results-count")).toHaveText("Showing the first 5 results. More matches exist; narrow your search.");
+
+  await expect(panel.getByRole("button", { name: "Open job #5100", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Open job #5101", exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Open job #5102", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Show 1 more actions" }).click();
+  await expect(panel.getByRole("button", { name: "Open job #5103", exact: true })).toBeVisible();
+});
+
+test("Kody renders localized invoice facts and focuses the authorized invoice after handoff", async ({ context, page, request }) => {
+  test.setTimeout(120_000);
+  const fixture = await prepareAssignedJob(request, "Kody Invoice Focus");
+  const createdResponse = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: fixture.owner.cookieHeader,
+      "Idempotency-Key": `kody-invoice-focus-${Date.now()}`,
+    },
+    data: {
+      sourceQuoteId: fixture.job.sourceQuoteId,
+      dueAtUtc: "2026-09-30T19:00:00.000Z",
+    },
+  });
+  expect(createdResponse.status()).toBe(201);
+  const invoice = (await createdResponse.json()) as { invoice: { id: string; invoiceNumber: number } };
+  const localeResponse = await request.patch(`${apiBaseUrl}/v1/auth/me/preferences`, {
+    headers: { Cookie: fixture.owner.cookieHeader },
+    data: { preferredLocale: "es-US" },
+  });
+  expect(localeResponse.status()).toBe(200);
+
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(invoiceSearchResponse({
+      invoiceId: invoice.invoice.id,
+      invoiceNumber: invoice.invoice.invoiceNumber,
+      jobId: fixture.job.id,
+      jobNumber: fixture.job.jobNumber,
+    })),
+  }));
+  await addSessionCookie(context, fixture.owner);
+  await page.addInitScript(() => window.localStorage.setItem("qf_locale", "es-US"));
+  await page.goto("/app/jobs");
+  await page.getByTestId("kody-launcher").click();
+  const panel = page.getByTestId("kody-chat-panel");
+  await panel.getByTestId("kody-prompt").fill("Muéstrame mis facturas");
+  await panel.getByTestId("kody-prompt").press("Enter");
+  const results = panel.getByTestId("kody-results");
+  await results.locator(":scope > summary").click();
+  await expect(results).toContainText("Estado de factura");
+  await expect(results).toContainText("Abierta");
+  await expect(results).toContainText("Estado del pago");
+  await expect(results).toContainText("Pago pendiente");
+  await expect(results).toContainText("Total de la factura");
+  await expect(results).toContainText("Monto pagado");
+  await expect(results).toContainText("Saldo pendiente");
+  await expect(results).not.toContainText("paymentStatus");
+
+  const action = panel.getByRole("button", { name: `Abrir factura #${invoice.invoice.invoiceNumber}`, exact: true });
+  await expect(action).toBeVisible();
+  await action.click();
+  await expect(page).toHaveURL(new RegExp(`/app/jobs/${fixture.job.id}$`));
+  const invoiceHeading = page.getByTestId("invoice-panel-heading");
+  await expect(invoiceHeading).toHaveText(`Factura #${invoice.invoice.invoiceNumber}`);
+  await expect(invoiceHeading).toBeFocused();
+  await expectNoSeriousAccessibilityViolations(page, "localized Kody invoice handoff");
+});
+
+test("stopping Kody preserves the prompt and ignores a late response", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "kody-cancel-late-result");
+  const attempts: Array<{ key: string; body: unknown }> = [];
+  let releaseAssistantResponse!: () => void;
+  let markResponseAttempted!: () => void;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseAssistantResponse = resolve;
+  });
+  const responseAttempted = new Promise<void>((resolve) => {
+    markResponseAttempted = resolve;
+  });
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    attempts.push({
+      key: route.request().headers()["idempotency-key"] ?? "",
+      body: route.request().postDataJSON(),
+    });
+    const attempt = attempts.length;
+    if (attempt === 1) await responseGate;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(scheduleResponse()) }).catch(() => undefined);
+    if (attempt === 1) markResponseAttempted();
+  });
+  await addSessionCookie(context, account);
+  await page.goto("/app/jobs");
+  await page.getByTestId("kody-launcher").click();
+  const panel = page.getByTestId("kody-chat-panel");
+  const prompt = "Find the Smith job without losing this request";
+  await panel.getByTestId("kody-prompt").fill(prompt);
+  const assistantRequestStarted = page.waitForRequest((browserRequest) =>
+    browserRequest.method() === "POST" && browserRequest.url() === `${apiBaseUrl}/v1/ai/assistant`,
+  );
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await assistantRequestStarted;
+  await expect(panel.getByTestId("kody-cancel-request")).toBeVisible();
+  await panel.getByTestId("kody-cancel-request").click();
+  await expect(panel.getByTestId("kody-prompt")).toHaveValue(prompt);
+  await expect(panel.getByText(/Kody stopped.*request is still here/i)).toBeVisible();
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(panel.getByText(/I found 5 active bookings/)).toBeVisible();
+  await expect(panel.getByText(prompt, { exact: true })).toHaveCount(1);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1].key).toBe(attempts[0].key);
+  expect(attempts[1].body).toEqual(attempts[0].body);
+  releaseAssistantResponse();
+  await responseAttempted;
+  await expect(panel.getByText(/I found 5 active bookings/)).toHaveCount(1);
+
+  await panel.getByTestId("kody-prompt").fill("Find a different Johnson job");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => attempts.length).toBe(3);
+  expect(attempts[2].key).not.toBe(attempts[1].key);
+  expect(attempts[2].body).not.toEqual(attempts[1].body);
+});
+
+test("Kody reuses the exact request identity after ambiguous 503 and 409 responses", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "kody-ambiguous-retry");
+  const attempts: Array<{ key: string; body: unknown }> = [];
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    attempts.push({
+      key: route.request().headers()["idempotency-key"] ?? "",
+      body: route.request().postDataJSON(),
+    });
+    const attempt = attempts.length;
+    if (attempt === 1) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Temporary failure" }) });
+      return;
+    }
+    if (attempt === 3) {
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Still processing" }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(scheduleResponse()) });
+  });
+  await addSessionCookie(context, account);
+  await page.goto("/app/jobs");
+  await page.getByTestId("kody-launcher").click();
+  const panel = page.getByTestId("kody-chat-panel");
+
+  await panel.getByTestId("kody-prompt").fill("Retry this exact 503 request");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(panel.getByLabel("Kody conversation", { exact: true }).getByText(/temporarily unavailable/i)).toBeVisible();
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => attempts.length).toBe(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  await expect(panel.getByText("Retry this exact 503 request", { exact: true })).toHaveCount(1);
+
+  await panel.getByTestId("kody-prompt").fill("Retry this exact 409 request");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(panel.getByLabel("Kody conversation", { exact: true }).getByText(/already in progress/i)).toBeVisible();
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => attempts.length).toBe(4);
+  expect(attempts[3]).toEqual(attempts[2]);
+  await expect(panel.getByText("Retry this exact 409 request", { exact: true })).toHaveCount(1);
+  expect(attempts[2].key).not.toBe(attempts[1].key);
+  expect(attempts[2].body).not.toEqual(attempts[1].body);
 });
 
 test("Kody booking review is a zero-write mobile handoff, then the normal form creates exactly one booking", async ({ context, page, request }) => {

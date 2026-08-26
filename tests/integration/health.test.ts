@@ -19,6 +19,7 @@ const FORCED_RLS_ROWS = [
   { tableName: "JobNote", enabled: true, forced: true },
   { tableName: "NotificationOutbox", enabled: true, forced: true },
   { tableName: "Invoice", enabled: true, forced: true },
+  { tableName: "InvoiceLineItem", enabled: true, forced: true },
   { tableName: "InvoiceEvent", enabled: true, forced: true },
   { tableName: "InvoicePayment", enabled: true, forced: true },
   { tableName: "QuickBooksInvoiceOperation", enabled: true, forced: true },

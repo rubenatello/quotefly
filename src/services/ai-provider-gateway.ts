@@ -142,6 +142,21 @@ async function chargeAmbiguous(
   await finalizeAiProviderCall(reservation, { outcome: "AMBIGUOUS", incidentCode });
 }
 
+async function runTestHookWithTimeout<T>(operation: Promise<T>, timeoutMs?: number): Promise<T> {
+  if (!timeoutMs) return operation;
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("AI provider call timed out.")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export async function createOpenAiChatCompletion(
   request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
   options: { timeoutMs?: number } = {},
@@ -171,7 +186,7 @@ export async function createOpenAiChatCompletion(
   let completion: OpenAI.Chat.Completions.ChatCompletion;
   try {
     completion = testHooks?.chatCompletion
-      ? await testHooks.chatCompletion(request)
+      ? await runTestHookWithTimeout(testHooks.chatCompletion(request), options.timeoutMs)
       : await getOpenAI().chat.completions.create(request, {
           maxRetries: 0,
           ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
@@ -217,7 +232,7 @@ export async function createOpenAiEmbeddings(
   let response: OpenAI.Embeddings.CreateEmbeddingResponse;
   try {
     response = testHooks?.embeddings
-      ? await testHooks.embeddings(request)
+      ? await runTestHookWithTimeout(testHooks.embeddings(request), options.timeoutMs)
       : await getOpenAI().embeddings.create(request, {
           maxRetries: 0,
           ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),

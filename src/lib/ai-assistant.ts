@@ -59,8 +59,10 @@ import {
   prepareAssistantDispatch,
 } from "../services/ai-schedule-tools";
 import { prepareCatalogQuoteLines } from "../services/ai-quote-catalog";
+import { createAiQuoteProviderBudget } from "../services/ai-quote";
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { AiUsageLedgerError } from "../services/ai-usage-ledger";
+import { visibleJobWhere } from "../services/jobs";
 import type { SupportedLocale } from "./supported-locale";
 
 export { AI_ASSISTANT_TOOLS } from "./ai-assistant-contract";
@@ -71,6 +73,7 @@ export type AiAssistantContext = Readonly<{
   customerId?: string;
   quoteId?: string;
   jobId?: string;
+  invoiceId?: string;
   appointmentId?: string;
   search?: string;
   serviceType?: ServiceCategory;
@@ -155,6 +158,8 @@ const DEFAULT_CUSTOMER_LIMIT = 5;
 const MAX_CUSTOMER_LIMIT = 8;
 const DEFAULT_PRODUCT_LIMIT = 5;
 const MAX_PRODUCT_LIMIT = 8;
+const DEFAULT_OPERATIONAL_RECORD_LIMIT = 5;
+const MAX_OPERATIONAL_RECORD_LIMIT = 8;
 const DEFAULT_ACTIVITY_LIMIT = 5;
 const MAX_ACTIVITY_LIMIT = 8;
 const DEFAULT_SCHEDULE_LIMIT = 8;
@@ -198,6 +203,10 @@ const STOP_CUSTOMER_SEARCH_PREFIX =
 const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin|ganancia|ganancias|rentabilidad|rentable|margen|margenes|costo|costos|clasificar|clasifica|ordenar|ordena)\b/i;
 const PIPELINE_INTENT_PATTERN = /\b(pipeline|sales|revenue|win\s*rate|accepted|sent|open\s+quotes?|follow[-\s]*up|forecast|projection|projected|ventas|ingresos|tasa\s+de\s+cierre|aceptad[ao]s?|enviad[ao]s?|cotizaci(?:on|ones)\s+abiertas?|seguimiento|pronostico|proyecci(?:on|ones)|proyectad[ao]s?)\b/i;
 const CUSTOMER_INTENT_PATTERN = /\b(customer|client|contact|phone|email|find|search|look\s+up|cliente|clientes|contacto|contactos|telefono|correo|buscar|busca|encontrar|encuentra)\b/i;
+const JOB_STATUS_INTENT_PATTERN = /\b(?:status|state|progress|where\s+(?:is|are)|what(?:'s|\s+is)\s+happening\s+with|estado|progreso|donde\s+esta|como\s+va)\b.{0,72}\b(?:job|work\s+order|trabajo|obra)\b|\b(?:job|work\s+order|trabajo|obra)\b.{0,72}\b(?:status|state|progress|estado|progreso|como\s+va)\b/i;
+const JOB_SEARCH_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|abrir|abre|cual|cuales|que)\b.{0,72}\b(?:jobs?|work\s+orders?|trabajos?|obras?)\b|\b(?:jobs?|work\s+orders?|trabajos?|obras?)\b.{0,72}\b(?:find|search|look\s*up|show|list|open|buscar|busca|mostrar|muestra|muestrame|listar|lista|abrir|abre)\b/i;
+const INVOICE_STATUS_INTENT_PATTERN = /\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b.{0,72}\b(?:invoice|bill|factura|cobro)\b|\b(?:invoice|bill|factura|cobro)\b.{0,72}\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b/i;
+const INVOICE_LIST_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|abrir|abre|cual|cuales|que)\b.{0,72}\b(?:invoices?|bills?|facturas?|cobros?)\b|\b(?:invoices?|bills?|facturas?|cobros?)\b.{0,72}\b(?:find|search|look\s*up|show|list|open|buscar|busca|mostrar|muestra|muestrame|listar|lista|abrir|abre)\b/i;
 const QUOTE_DRAFT_INTENT_PATTERN = /\b(quote|estimate|draft|bid|proposal|new\s+job|sq\s*ft|sqft|roof|roofing|floor|flooring|hvac|plumb|plumbing|landscap|construction|cotizacion|presupuesto|estimado|propuesta|borrador|nuevo\s+trabajo|pies?\s+cuadrados?|techo|techado|piso|pisos|plomeria|jardineria|paisajismo|construccion)\b/i;
 const ACTIVITY_TASK_INTENT_PATTERN =
   /\b(?:my\s+(?:day|tasks?|to[-\s]*dos?|work|activities|follow[-\s]*ups?)|(?:active|open|due)\s+tasks?|tasks?\s+(?:assigned|due|open|active)|tasks?.{0,24}assigned\s+to\s+me|to[-\s]*dos?|activity|activities|work\s+assigned|assigned\s+(?:work|tasks?)|mis\s+(?:tareas|seguimientos|actividades)|mi\s+dia|trabajo\s+asignado|tareas?\s+(?:activas?|asignadas?|pendientes?|para\s+hoy)|tareas?.{0,24}asignadas?|que\s+tengo\s+que\s+hacer|seguimientos?\s+asignados?)\b/i;
@@ -278,6 +287,8 @@ function assistantTopic(tool: AiAssistantTool): AssistantTopic {
   if (tool === "ASSISTANT_HELP" || tool === "OUT_OF_SCOPE") return "HELP";
   if ([
     "SEARCH_CUSTOMERS",
+    "SEARCH_JOBS",
+    "GET_JOB_STATUS",
     "FOLLOW_UP_QUEUE",
     "CUSTOMERS_WITHOUT_QUOTES",
     "DRAFT_CUSTOMER",
@@ -913,6 +924,11 @@ export function resolveAssistantTool(
   if (PREPARE_DISPATCH_INTENT_PATTERN.test(routingMessage)) return "PREPARE_DISPATCH";
   if (PREPARE_BOOKING_INTENT_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
+  const autoSelectOperationalLookup = !requestedTool || requestedTool === "AUTO";
+  if (autoSelectOperationalLookup && INVOICE_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_INVOICE_STATUS";
+  if (autoSelectOperationalLookup && INVOICE_LIST_INTENT_PATTERN.test(routingMessage)) return "LIST_INVOICES";
+  if (autoSelectOperationalLookup && JOB_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_JOB_STATUS";
+  if (autoSelectOperationalLookup && JOB_SEARCH_INTENT_PATTERN.test(routingMessage)) return "SEARCH_JOBS";
   if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage)) return "PRIORITIZE_MY_DAY";
   if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
   if (
@@ -941,6 +957,10 @@ export function resolveAssistantTool(
       || PREPARE_DISPATCH_INTENT_PATTERN.test(lower)
       || PREPARE_BOOKING_INTENT_PATTERN.test(lower)
       || LIST_SCHEDULE_INTENT_PATTERN.test(lower)
+      || INVOICE_STATUS_INTENT_PATTERN.test(lower)
+      || INVOICE_LIST_INTENT_PATTERN.test(lower)
+      || JOB_STATUS_INTENT_PATTERN.test(lower)
+      || JOB_SEARCH_INTENT_PATTERN.test(lower)
       || PRIORITIZE_MY_DAY_PATTERN.test(lower)
       || ACTIVITY_TASK_INTENT_PATTERN.test(lower)
       || CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)
@@ -962,6 +982,10 @@ export function resolveAssistantTool(
   if (PREPARE_DISPATCH_INTENT_PATTERN.test(lower)) return "PREPARE_DISPATCH";
   if (PREPARE_BOOKING_INTENT_PATTERN.test(lower)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(lower)) return "LIST_SCHEDULE";
+  if (INVOICE_STATUS_INTENT_PATTERN.test(lower)) return "GET_INVOICE_STATUS";
+  if (INVOICE_LIST_INTENT_PATTERN.test(lower)) return "LIST_INVOICES";
+  if (JOB_STATUS_INTENT_PATTERN.test(lower)) return "GET_JOB_STATUS";
+  if (JOB_SEARCH_INTENT_PATTERN.test(lower)) return "SEARCH_JOBS";
   if (PRIORITIZE_MY_DAY_PATTERN.test(lower)) return "PRIORITIZE_MY_DAY";
   if (ACTIVITY_TASK_INTENT_PATTERN.test(lower)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
@@ -991,7 +1015,11 @@ export function resolveAssistantTool(
     if (context?.currentPage === "customers") return "SEARCH_CUSTOMERS";
     if (context?.currentPage === "quotes") return "DRAFT_QUOTE";
     if (context?.currentPage === "analytics") return "SUMMARIZE_PIPELINE";
-    if (context?.currentPage === "jobs") return "LIST_SCHEDULE";
+    if (context?.currentPage === "jobs") {
+      if (context.invoiceId) return "GET_INVOICE_STATUS";
+      if (context.jobId) return "GET_JOB_STATUS";
+      return "SEARCH_JOBS";
+    }
   }
 
   return "OUT_OF_SCOPE";
@@ -1023,6 +1051,10 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "DRAFT_PRODUCT",
     "PREPARE_ACTIVITY",
     "LIST_SCHEDULE",
+    "SEARCH_JOBS",
+    "GET_JOB_STATUS",
+    "LIST_INVOICES",
+    "GET_INVOICE_STATUS",
     "PREPARE_BOOKING",
     "PREPARE_DISPATCH",
     "SEARCH_PRODUCTS",
@@ -1067,6 +1099,40 @@ function money(value: number, locale: SupportedLocale = "en-US") {
 
 function roundCurrency(value: number) {
   return Number(value.toFixed(2));
+}
+
+function localizedJobStatus(params: AiAssistantInput, status: string) {
+  const english: Record<string, string> = {
+    UNSCHEDULED: "unscheduled", SCHEDULED: "scheduled", DISPATCHED: "dispatched",
+    IN_PROGRESS: "in progress", COMPLETED: "completed", CANCELED: "canceled",
+  };
+  const spanish: Record<string, string> = {
+    UNSCHEDULED: "sin programar", SCHEDULED: "programado", DISPATCHED: "despachado",
+    IN_PROGRESS: "en proceso", COMPLETED: "completado", CANCELED: "cancelado",
+  };
+  return (isSpanishAssistant(params) ? spanish : english)[status] ?? status.toLowerCase().replaceAll("_", " ");
+}
+
+function localizedInvoiceStatus(params: AiAssistantInput, status: string) {
+  const english: Record<string, string> = {
+    DRAFT: "draft", OPEN: "open", PAID: "paid", VOID: "void", UNCOLLECTIBLE: "uncollectible",
+  };
+  const spanish: Record<string, string> = {
+    DRAFT: "en borrador", OPEN: "abierta", PAID: "pagada", VOID: "anulada", UNCOLLECTIBLE: "incobrable",
+  };
+  return (isSpanishAssistant(params) ? spanish : english)[status] ?? status.toLowerCase().replaceAll("_", " ");
+}
+
+function localizedInvoicePaymentStatus(params: AiAssistantInput, status: string) {
+  const english: Record<string, string> = {
+    PENDING: "pending", SUCCEEDED: "paid", FAILED: "failed", REFUNDED: "refunded",
+    PARTIALLY_REFUNDED: "partially refunded", CANCELED: "canceled",
+  };
+  const spanish: Record<string, string> = {
+    PENDING: "pendiente", SUCCEEDED: "pagado", FAILED: "fallido", REFUNDED: "reembolsado",
+    PARTIALLY_REFUNDED: "parcialmente reembolsado", CANCELED: "cancelado",
+  };
+  return (isSpanishAssistant(params) ? spanish : english)[status] ?? status.toLowerCase().replaceAll("_", " ");
 }
 
 function requestedTool(params: AiAssistantInput): AiAssistantRequestedTool {
@@ -1411,6 +1477,7 @@ async function runCustomerSearch(
     },
   });
   const composition = await composeAssistantAnswer({
+    diagnosticContext: { requestId: params.access.requestId },
     userMessage: params.message,
     tool: "SEARCH_CUSTOMERS",
     deterministicAnswer: answer,
@@ -1608,6 +1675,383 @@ async function runProductSearch(
           limit,
           internalCostVisible: canViewInternalCosts,
           catalogManaged,
+        },
+      }),
+    },
+  };
+}
+
+const OPERATIONAL_SEARCH_STOP_WORDS = new Set([
+  "job", "jobs", "work", "order", "orders", "trabajo", "trabajos", "obra", "obras",
+  "invoice", "invoices", "bill", "bills", "factura", "facturas", "cobro", "cobros",
+  "status", "state", "progress", "payment", "paid", "balance", "due", "overdue",
+  "estado", "progreso", "pago", "pagada", "saldo", "vence", "vencida",
+  "find", "search", "lookup", "show", "list", "open", "buscar", "busca", "mostrar", "muestra", "listar", "lista",
+  "my", "me", "mine", "the", "a", "an", "mi", "mis", "mio", "mia", "mios", "mias", "el", "la", "los", "las",
+]);
+
+function operationalSearchTokens(message: string, contextSearch?: string) {
+  return searchableTokens(contextSearch?.trim() || message)
+    .filter((token) => !OPERATIONAL_SEARCH_STOP_WORDS.has(token))
+    .slice(0, 4);
+}
+
+function extractOperationalNumber(message: string, kind: "job" | "invoice") {
+  const pattern = kind === "job"
+    ? /\b(?:job|work\s+order|trabajo|obra)\s*(?:number|no\.?|#|numero)?\s*[#-]?\s*(\d{1,9})\b/i
+    : /\b(?:invoice|bill|factura|cobro)\s*(?:number|no\.?|#|numero)?\s*[#-]?\s*(\d{1,9})\b/i;
+  const matched = message.match(pattern)?.[1];
+  const parsed = matched ? Number.parseInt(matched, 10) : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function runJobLookup(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+  tool: "SEARCH_JOBS" | "GET_JOB_STATUS",
+): Promise<AiAssistantRunResult> {
+  const limit = tool === "GET_JOB_STATUS"
+    ? 1
+    : clampLimit(params.context?.limit, MAX_OPERATIONAL_RECORD_LIMIT, DEFAULT_OPERATIONAL_RECORD_LIMIT);
+  const jobId = params.context?.jobId?.trim();
+  const jobNumber = extractOperationalNumber(params.message, "job");
+  const tokens = operationalSearchTokens(params.message, params.context?.search);
+  const searchFilters: Prisma.JobWhereInput[] = [];
+  for (const token of tokens) {
+    searchFilters.push(
+      { title: { contains: token, mode: "insensitive" } },
+      { customer: { fullName: { contains: token, mode: "insensitive" } } },
+      { sourceQuote: { title: { contains: token, mode: "insensitive" } } },
+    );
+  }
+
+  const jobRows = await withTenantRlsContext(prisma, params.access.tenantId, (transaction) => transaction.job.findMany({
+    where: {
+      ...visibleJobWhere(params.access),
+      ...(jobId
+        ? { id: jobId }
+        : jobNumber
+          ? { jobNumber }
+          : searchFilters.length
+            ? { OR: searchFilters }
+            : {}),
+    },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    select: {
+      id: true,
+      jobNumber: true,
+      status: true,
+      title: true,
+      serviceType: true,
+      updatedAt: true,
+      customer: { select: { id: true, fullName: true } },
+      assignedTenantUser: {
+        select: { id: true, user: { select: { fullName: true } } },
+      },
+      appointments: {
+        where: { deletedAtUtc: null },
+        orderBy: [{ startsAtUtc: "desc" }, { id: "desc" }],
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          startsAtUtc: true,
+          endsAtUtc: true,
+          timeZone: true,
+        },
+      },
+    },
+  }));
+
+  const jobsTruncated = jobRows.length > limit;
+  const jobs = jobRows.slice(0, limit);
+  const results = jobs.map((job) => {
+    const appointment = job.appointments[0] ?? null;
+    return {
+      jobId: job.id,
+      jobNumber: job.jobNumber,
+      status: job.status,
+      title: job.title,
+      serviceType: job.serviceType,
+      customerId: job.customer.id,
+      customerName: job.customer.fullName,
+      assignedTenantUserId: job.assignedTenantUser?.id ?? null,
+      assignedTo: job.assignedTenantUser?.user.fullName ?? null,
+      appointmentId: appointment?.id ?? null,
+      appointmentStatus: appointment?.status ?? null,
+      startsAtUtc: appointment?.startsAtUtc.toISOString() ?? null,
+      endsAtUtc: appointment?.endsAtUtc.toISOString() ?? null,
+      appointmentTimeZone: appointment?.timeZone ?? null,
+      updatedAtUtc: job.updatedAt.toISOString(),
+    };
+  });
+  const answer = jobs.length
+    ? localeText(
+        params,
+        tool === "GET_JOB_STATUS"
+          ? `Job #${jobs[0]!.jobNumber} is ${localizedJobStatus(params, jobs[0]!.status)}.`
+          : jobsTruncated
+            ? `Showing the first ${jobs.length} active jobs you can access. More matches exist; narrow the customer, job number, or title to find a specific job.`
+            : `Found ${jobs.length} active job${jobs.length === 1 ? "" : "s"} you can access.`,
+        tool === "GET_JOB_STATUS"
+          ? `El trabajo #${jobs[0]!.jobNumber} está ${localizedJobStatus(params, jobs[0]!.status)}.`
+          : jobsTruncated
+            ? `Muestro los primeros ${jobs.length} trabajos activos a los que tienes acceso. Hay más coincidencias; limita la búsqueda por cliente, número o título.`
+            : `Encontré ${jobs.length} trabajo${jobs.length === 1 ? " activo" : "s activos"} a los que tienes acceso.`,
+      )
+    : localeText(
+        params,
+        "I did not find an active job you can access matching that request.",
+        "No encontré un trabajo activo al que tengas acceso que coincida con esa solicitud.",
+      );
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: localeText(params, "Authorized tenant job records", "Registros de trabajo autorizados del espacio de trabajo"),
+    sourceType: "Job",
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+  }];
+  const actions: AiAssistantAction[] = jobs.map((job) => ({
+    type: "OPEN_WORKSPACE_PAGE",
+    label: localeText(params, `Open job #${job.jobNumber}`, `Abrir trabajo #${job.jobNumber}`),
+    requiresConfirmation: false,
+    payload: { page: "jobs", jobId: job.id, jobNumber: job.jobNumber },
+  }));
+  const fieldsExcluded = [
+    ...defaultExcludedFields(false),
+    "job scope and access instructions",
+    "job notes",
+    "archived jobs",
+    "deleted jobs",
+    ...(params.context?.includeArchived ? ["includeArchived ignored for job lookup"] : []),
+  ];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["Job", "JobAppointment", "Customer"],
+    sourceLabels: ["Authorized tenant job lookup"],
+    customerId: jobs[0]?.customer.id ?? null,
+    serviceType: jobs[0]?.serviceType ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic authorized job lookup",
+    riskNote: "Job rows are tenant, live-assignment, and lifecycle scoped. Job notes, scope, addresses, and access instructions are not returned.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool,
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded,
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: tool,
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: results.length ? null : "No active job matched the authorized tenant and assignment scope.",
+        archivePolicy: "Job lookup excludes archived/deleted jobs and inaccessible assignments.",
+        filters: {
+          scopedJob: Boolean(jobId),
+          jobNumber,
+          searchTokenCount: tokens.length,
+          limit,
+          includeArchivedRequested: Boolean(params.context?.includeArchived),
+          includeArchivedEffective: false,
+          resultsTruncated: jobsTruncated,
+        },
+      }),
+    },
+  };
+}
+
+async function runInvoiceLookup(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+  tool: "LIST_INVOICES" | "GET_INVOICE_STATUS",
+): Promise<AiAssistantRunResult> {
+  const canViewBalances = hasCapability(params.access, "viewBilling");
+  const limit = tool === "GET_INVOICE_STATUS"
+    ? 1
+    : clampLimit(params.context?.limit, MAX_OPERATIONAL_RECORD_LIMIT, DEFAULT_OPERATIONAL_RECORD_LIMIT);
+  const invoiceId = params.context?.invoiceId?.trim();
+  const invoiceNumber = extractOperationalNumber(params.message, "invoice");
+  const tokens = operationalSearchTokens(params.message, params.context?.search);
+  const searchFilters: Prisma.InvoiceWhereInput[] = [];
+  for (const token of tokens) {
+    searchFilters.push(
+      { titleSnapshot: { contains: token, mode: "insensitive" } },
+      { customer: { fullName: { contains: token, mode: "insensitive" } } },
+      { job: { title: { contains: token, mode: "insensitive" } } },
+    );
+  }
+
+  const invoiceRows = await withTenantRlsContext(prisma, params.access.tenantId, (transaction) => transaction.invoice.findMany({
+    where: {
+      tenantId: params.access.tenantId,
+      archivedAtUtc: null,
+      deletedAtUtc: null,
+      job: visibleJobWhere(params.access),
+      ...(invoiceId
+        ? { id: invoiceId }
+        : invoiceNumber
+          ? { invoiceNumber }
+          : searchFilters.length
+            ? { OR: searchFilters }
+            : {}),
+    },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    select: {
+      id: true,
+      invoiceNumber: true,
+      status: true,
+      paymentStatus: true,
+      titleSnapshot: true,
+      totalAmount: canViewBalances,
+      amountPaid: canViewBalances,
+      balanceDue: canViewBalances,
+      dueAtUtc: true,
+      updatedAt: true,
+      customer: { select: { id: true, fullName: true } },
+      job: { select: { id: true, jobNumber: true, title: true } },
+    },
+  }));
+
+  const invoicesTruncated = invoiceRows.length > limit;
+  const invoices = invoiceRows.slice(0, limit);
+  const results = invoices.map((invoice) => ({
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    status: invoice.status,
+    paymentStatus: invoice.paymentStatus,
+    title: invoice.titleSnapshot,
+    customerId: invoice.customer.id,
+    customerName: invoice.customer.fullName,
+    jobId: invoice.job.id,
+    jobNumber: invoice.job.jobNumber,
+    jobTitle: invoice.job.title,
+    dueAtUtc: invoice.dueAtUtc?.toISOString() ?? null,
+    updatedAtUtc: invoice.updatedAt.toISOString(),
+    ...(canViewBalances
+      ? {
+        totalAmount: currency(invoice.totalAmount) ?? 0,
+        amountPaid: currency(invoice.amountPaid) ?? 0,
+        balanceDue: currency(invoice.balanceDue) ?? 0,
+      }
+      : {}),
+  }));
+  const answer = invoices.length
+    ? localeText(
+        params,
+        tool === "GET_INVOICE_STATUS"
+          ? `Invoice #${invoices[0]!.invoiceNumber} is ${localizedInvoiceStatus(params, invoices[0]!.status)} with payment ${localizedInvoicePaymentStatus(params, invoices[0]!.paymentStatus)}.`
+          : invoicesTruncated
+            ? `Showing the first ${invoices.length} active invoices you can access. More matches exist; narrow the customer, invoice number, or title to find a specific invoice.`
+            : `Found ${invoices.length} active invoice${invoices.length === 1 ? "" : "s"} you can access.`,
+        tool === "GET_INVOICE_STATUS"
+          ? `La factura #${invoices[0]!.invoiceNumber} está ${localizedInvoiceStatus(params, invoices[0]!.status)} con pago ${localizedInvoicePaymentStatus(params, invoices[0]!.paymentStatus)}.`
+          : invoicesTruncated
+            ? `Muestro las primeras ${invoices.length} facturas activas a las que tienes acceso. Hay más coincidencias; limita la búsqueda por cliente, número o título.`
+            : `Encontré ${invoices.length} factura${invoices.length === 1 ? " activa" : "s activas"} a las que tienes acceso.`,
+      )
+    : localeText(
+        params,
+        "I did not find an active invoice you can access matching that request.",
+        "No encontré una factura activa a la que tengas acceso que coincida con esa solicitud.",
+      );
+  const classification: DataClassification = canViewBalances
+    ? "C3_FINANCIAL_CONFIDENTIAL"
+    : "C2_CUSTOMER_CONFIDENTIAL";
+  const citations: AiAssistantCitation[] = [{
+    key: "A1",
+    label: localeText(params, "Authorized tenant invoice records", "Registros de factura autorizados del espacio de trabajo"),
+    sourceType: "Invoice",
+    classification,
+  }];
+  const actions: AiAssistantAction[] = invoices.map((invoice) => ({
+    type: "OPEN_WORKSPACE_PAGE",
+    label: localeText(params, `Open invoice #${invoice.invoiceNumber}`, `Abrir factura #${invoice.invoiceNumber}`),
+    requiresConfirmation: false,
+    payload: {
+      page: "jobs",
+      jobId: invoice.job.id,
+      jobNumber: invoice.job.jobNumber,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+    },
+  }));
+  const fieldsExcluded = [
+    ...defaultExcludedFields(canViewBalances),
+    "invoice payment provider identifiers",
+    "invoice event history",
+    "archived invoices",
+    "deleted invoices",
+    ...(canViewBalances ? [] : ["invoice totals", "amount paid", "balance due"]),
+    ...(params.context?.includeArchived ? ["includeArchived ignored for invoice lookup"] : []),
+  ];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification,
+    sourceTypes: ["Invoice", "Job", "Customer"],
+    sourceLabels: ["Authorized tenant invoice lookup"],
+    customerId: invoices[0]?.customer.id ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic authorized invoice lookup",
+    riskNote: canViewBalances
+      ? "Invoice rows are tenant, job-assignment, and lifecycle scoped; balances are included because the live role can view billing."
+      : "Invoice rows are tenant, job-assignment, and lifecycle scoped; all monetary balances are omitted for this live role.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool,
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: classification,
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded,
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: tool,
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: results.length ? null : "No active invoice matched the authorized tenant and job-assignment scope.",
+        archivePolicy: "Invoice lookup excludes archived/deleted invoices and invoices linked to inaccessible jobs.",
+        filters: {
+          scopedInvoice: Boolean(invoiceId),
+          invoiceNumber,
+          searchTokenCount: tokens.length,
+          limit,
+          balancesVisible: canViewBalances,
+          includeArchivedRequested: Boolean(params.context?.includeArchived),
+          includeArchivedEffective: false,
+          resultsTruncated: invoicesTruncated,
         },
       }),
     },
@@ -3987,6 +4431,7 @@ async function runDraftQuotePreview(
   }
 
   const mayViewInternalCost = hasCapability(params.access, "viewInternalCosts");
+  const providerBudget = createAiQuoteProviderBudget();
   const preparedCatalog = await prepareCatalogQuoteLines(prisma, {
     tenantId: params.access.tenantId,
     serviceType,
@@ -4012,6 +4457,7 @@ async function runDraftQuotePreview(
         ?.filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
         .map((turn) => turn.message),
       refreshIndex: Boolean(selectedQuote || selectedCustomer),
+      allowProviderCalls: false,
     });
   } catch (error) {
     if (error instanceof AiUsageLedgerError) throw error;
@@ -4157,6 +4603,7 @@ async function runDraftQuotePreview(
     },
   });
   const composition = await composeAssistantAnswer({
+    diagnosticContext: { requestId: params.access.requestId },
     userMessage: parserPrompt,
     tool: "DRAFT_QUOTE",
     deterministicAnswer: answer,
@@ -4191,6 +4638,7 @@ async function runDraftQuotePreview(
       classification: chunk.classification,
       content: chunk.content,
     })),
+    providerBudget,
   });
   const combinedTelemetry = mergeAiUsageTelemetry(governedRetrieval?.telemetry, composition.telemetry);
   const sourceTypes = Array.from(new Set([
@@ -4300,6 +4748,10 @@ export async function runAiAssistant(
     result = await runCustomerSearch(prisma, params, generatedAtUtc);
   } else if (tool === "SEARCH_PRODUCTS") {
     result = await runProductSearch(prisma, params, generatedAtUtc);
+  } else if (tool === "SEARCH_JOBS" || tool === "GET_JOB_STATUS") {
+    result = await runJobLookup(prisma, params, generatedAtUtc, tool);
+  } else if (tool === "LIST_INVOICES" || tool === "GET_INVOICE_STATUS") {
+    result = await runInvoiceLookup(prisma, params, generatedAtUtc, tool);
   } else if (tool === "SUMMARIZE_PIPELINE") {
     result = await runBusinessInsightTool(prisma, params, generatedAtUtc, "SUMMARIZE_PIPELINE");
   } else if (tool === "RANK_PROFITABLE_JOBS") {

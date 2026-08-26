@@ -54,6 +54,21 @@ type ProviderLine = {
   quickBooksItemName: string | null;
 };
 
+function roundProviderMoney(value: number) {
+  return Number(value.toFixed(2));
+}
+
+function providerQuantityAndUnitPrice(line: ProviderLine) {
+  if (roundProviderMoney(line.quantity * line.unitPrice) === line.amount) {
+    return { quantity: line.quantity, unitPrice: line.unitPrice };
+  }
+
+  // QuoteFly's immutable amount is authoritative when aggregate currency
+  // rounding creates a one-cent residual. Normalize only the provider detail
+  // for that line so QuickBooks Qty x UnitPrice remains equal to Amount.
+  return { quantity: 1, unitPrice: line.amount };
+}
+
 type SyncContext = {
   invoice: {
     id: string;
@@ -303,18 +318,19 @@ async function loadSyncContext(
       customerId: true,
       sourceQuoteId: true,
       customer: { select: { fullName: true } },
+      lineItems: {
+        where: { sectionType: "INCLUDED" },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: {
+          description: true,
+          quantity: true,
+          unitPrice: true,
+          lineTotal: true,
+        },
+      },
       sourceQuote: {
         select: {
           status: true,
-          lineItems: {
-            where: { deletedAtUtc: null },
-            orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-            select: {
-              description: true,
-              quantity: true,
-              unitPrice: true,
-            },
-          },
         },
       },
     },
@@ -349,16 +365,18 @@ async function loadSyncContext(
   ]);
 
   const docNumber = providerDocNumber(invoice.invoiceNumber);
-  const rawLines = invoice.sourceQuote.lineItems.length
-    ? invoice.sourceQuote.lineItems.map((line) => ({
+  const rawLines = invoice.lineItems.length
+    ? invoice.lineItems.map((line) => ({
         description: line.description,
         quantity: Number(line.quantity),
         unitPrice: Number(line.unitPrice),
+        amount: Number(line.lineTotal),
       }))
     : [{
         description: invoice.titleSnapshot,
         quantity: 1,
         unitPrice: Number(invoice.subtotalAmount),
+        amount: Number(invoice.subtotalAmount),
       }];
 
   const itemKeys = rawLines.map((line) => normalizeItemKey(line.description));
@@ -399,10 +417,8 @@ async function loadSyncContext(
   const lineItems: ProviderLine[] = rawLines.map((line) => {
     const itemKey = normalizeItemKey(line.description);
     const mapped = itemMapByKey.get(itemKey);
-    const amount = Number((line.quantity * line.unitPrice).toFixed(2));
     return {
       ...line,
-      amount,
       itemKey,
       quickBooksItemId: mapped?.quickBooksItemId ?? null,
       quickBooksItemName: mapped?.quickBooksItemName ?? null,
@@ -435,19 +451,22 @@ async function loadSyncContext(
           value: customerMap.quickBooksCustomerId,
           name: customerMap.quickBooksDisplayName ?? invoice.customer.fullName,
         },
-        Line: lineItems.map((line) => ({
-          Description: line.description,
-          Amount: line.amount,
-          DetailType: "SalesItemLineDetail",
-          SalesItemLineDetail: {
-            Qty: line.quantity,
-            UnitPrice: line.unitPrice,
-            ItemRef: {
-              value: line.quickBooksItemId,
-              name: line.quickBooksItemName,
+        Line: lineItems.map((line) => {
+          const providerPricing = providerQuantityAndUnitPrice(line);
+          return {
+            Description: line.description,
+            Amount: line.amount,
+            DetailType: "SalesItemLineDetail",
+            SalesItemLineDetail: {
+              Qty: providerPricing.quantity,
+              UnitPrice: providerPricing.unitPrice,
+              ItemRef: {
+                value: line.quickBooksItemId,
+                name: line.quickBooksItemName,
+              },
             },
-          },
-        })),
+          };
+        }),
       }
     : null;
 

@@ -1,11 +1,21 @@
 import { env } from "../config/env";
 import { createOpenAiChatCompletion } from "./ai-provider-gateway";
 import { AiUsageLedgerError } from "./ai-usage-ledger";
+import {
+  claimAiQuoteProviderTimeout,
+  createAiQuoteProviderBudget as createProviderBudget,
+  type AiQuoteProviderBudget,
+} from "./ai-quote-provider-budget";
 import type { ParsedChatToQuoteDraft } from "./chat-to-quote";
 import { deriveSquareFeetEstimateRange, parseChatToQuotePrompt } from "./chat-to-quote";
 
 const AI_ENABLED = !!env.OPENAI_API_KEY;
 const AI_MODEL = env.OPENAI_MODEL || "gpt-4o-mini";
+const DEFAULT_AI_QUOTE_PROVIDER_CALL_LIMIT = 2;
+const DEFAULT_AI_QUOTE_OPERATION_TIMEOUT_MS = Math.min(
+  60_000,
+  env.OPENAI_ASSISTANT_TIMEOUT_MS * DEFAULT_AI_QUOTE_PROVIDER_CALL_LIMIT + 5_000,
+);
 const MAX_AI_CONTEXT_CHARS = 10_000;
 const MAX_AI_CONTEXT_LINES = 220;
 const SQUARE_FEET_PATTERN_GLOBAL =
@@ -20,12 +30,54 @@ const AREA_SECONDARY_CUE_PATTERN =
   /\b(allowance|uneven|level|leveling|patch|repair|optional|alternate|option|upgrade|contingency|if needed)\b/i;
 const AREA_OPTION_PATTERN = /\b(option|alternate|alternative|either|vs\.?|versus)\b/i;
 const AREA_CLAUSE_BOUNDARY_PATTERN = /[.;:\n]/;
+type AiQuoteChatCompletionProvider = typeof createOpenAiChatCompletion;
+type AiQuoteDiagnosticContext = Readonly<{ requestId?: string }>;
+let aiQuoteChatCompletionForTest: AiQuoteChatCompletionProvider | null = null;
+
+export function setAiQuoteChatCompletionForTest(provider: AiQuoteChatCompletionProvider | null) {
+  if (env.NODE_ENV !== "test") throw new Error("AI quote provider test hooks are available only in test.");
+  aiQuoteChatCompletionForTest = provider;
+}
+
+function aiQuoteProviderEnabled() {
+  return AI_ENABLED || (env.NODE_ENV === "test" && aiQuoteChatCompletionForTest !== null);
+}
+
+function safeAiQuoteRequestId(context?: AiQuoteDiagnosticContext) {
+  const requestId = context?.requestId?.trim() ?? "";
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(requestId) ? requestId : "unavailable";
+}
+
+function writeAiQuoteDiagnostic(
+  operation: "DRAFT_PARSE" | "REVISION_PLAN",
+  failureCode: "EMPTY_RESPONSE" | "PROVIDER_OR_VALIDATION_FAILED",
+  context?: AiQuoteDiagnosticContext,
+) {
+  console.warn(JSON.stringify({
+    event: "ai_quote_fallback",
+    requestId: safeAiQuoteRequestId(context),
+    operation,
+    failureCode,
+    model: AI_MODEL,
+  }));
+}
 
 export function getAiQuoteRuntimeInfo() {
   return {
-    enabled: AI_ENABLED,
-    model: AI_ENABLED ? AI_MODEL : "regex-fallback",
+    enabled: aiQuoteProviderEnabled(),
+    model: aiQuoteProviderEnabled() ? AI_MODEL : "regex-fallback",
   };
+}
+
+export function createAiQuoteProviderBudget(options?: {
+  maxCalls?: number;
+  operationTimeoutMs?: number;
+}): AiQuoteProviderBudget {
+  return createProviderBudget({
+    perCallTimeoutMs: env.OPENAI_ASSISTANT_TIMEOUT_MS,
+    maxCalls: options?.maxCalls ?? DEFAULT_AI_QUOTE_PROVIDER_CALL_LIMIT,
+    operationTimeoutMs: options?.operationTimeoutMs ?? DEFAULT_AI_QUOTE_OPERATION_TIMEOUT_MS,
+  });
 }
 
 export type AiTelemetryAccumulator = {
@@ -184,10 +236,12 @@ export async function aiParseChatToQuotePrompt(
     context?: string;
     telemetry?: AiTelemetryAccumulator;
     strictAi?: boolean;
+    providerBudget?: AiQuoteProviderBudget;
+    diagnosticContext?: AiQuoteDiagnosticContext;
   },
 ): Promise<ParsedChatToQuoteDraft> {
   // If OpenAI is not configured, fall back to regex parser
-  if (!AI_ENABLED) {
+  if (!aiQuoteProviderEnabled()) {
     if (options?.strictAi) {
       throw new Error("OPENAI_API_KEY is missing; strict AI parsing cannot run.");
     }
@@ -200,7 +254,7 @@ export async function aiParseChatToQuotePrompt(
     const userMessage = compactContext
       ? `Context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
-    const completion = await createOpenAiChatCompletion({
+    const completion = await (aiQuoteChatCompletionForTest ?? createOpenAiChatCompletion)({
       model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 800,
@@ -208,7 +262,9 @@ export async function aiParseChatToQuotePrompt(
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userMessage },
       ],
-    });
+    }, { timeoutMs: options?.providerBudget
+      ? claimAiQuoteProviderTimeout(options.providerBudget)
+      : env.OPENAI_ASSISTANT_TIMEOUT_MS });
     accumulateOpenAiTelemetry(options?.telemetry, completion);
 
     const content = completion.choices[0]?.message?.content?.trim();
@@ -216,7 +272,7 @@ export async function aiParseChatToQuotePrompt(
       if (options?.strictAi) {
         throw new Error("AI returned an empty response for chat-to-quote parsing.");
       }
-      console.warn("[ai-quote] Empty AI response, falling back to regex parser");
+      writeAiQuoteDiagnostic("DRAFT_PARSE", "EMPTY_RESPONSE", options?.diagnosticContext);
       return parseChatToQuotePrompt(rawPrompt);
     }
 
@@ -267,10 +323,10 @@ export async function aiParseChatToQuotePrompt(
     };
   } catch (err) {
     if (err instanceof AiUsageLedgerError) throw err;
+    writeAiQuoteDiagnostic("DRAFT_PARSE", "PROVIDER_OR_VALIDATION_FAILED", options?.diagnosticContext);
     if (options?.strictAi) {
       throw err;
     }
-    console.error("[ai-quote] AI parsing failed, falling back to regex parser:", err);
     return parseChatToQuotePrompt(rawPrompt);
   }
 }
@@ -280,9 +336,11 @@ export async function aiBuildQuoteRevisionPlan(
   options: {
     context?: string;
     telemetry?: AiTelemetryAccumulator;
+    providerBudget?: AiQuoteProviderBudget;
+    diagnosticContext?: AiQuoteDiagnosticContext;
   },
 ): Promise<AiQuoteRevisionPlan> {
-  if (!AI_ENABLED) {
+  if (!aiQuoteProviderEnabled()) {
     return emptyRevisionPlan();
   }
 
@@ -291,7 +349,7 @@ export async function aiBuildQuoteRevisionPlan(
     const userMessage = compactContext
       ? `Revision context:\n${compactContext}\n\nUser request:\n${rawPrompt}`
       : rawPrompt;
-    const completion = await createOpenAiChatCompletion({
+    const completion = await (aiQuoteChatCompletionForTest ?? createOpenAiChatCompletion)({
       model: AI_MODEL,
       temperature: 0.1,
       max_tokens: 1200,
@@ -299,12 +357,14 @@ export async function aiBuildQuoteRevisionPlan(
         { role: "system", content: REVISION_SYSTEM_PROMPT },
         { role: "user", content: userMessage },
       ],
-    });
+    }, { timeoutMs: options.providerBudget
+      ? claimAiQuoteProviderTimeout(options.providerBudget)
+      : env.OPENAI_ASSISTANT_TIMEOUT_MS });
     accumulateOpenAiTelemetry(options?.telemetry, completion);
 
     const content = completion.choices[0]?.message?.content?.trim();
     if (!content) {
-      console.warn("[ai-quote] Empty AI revision response");
+      writeAiQuoteDiagnostic("REVISION_PLAN", "EMPTY_RESPONSE", options.diagnosticContext);
       return emptyRevisionPlan();
     }
 
@@ -325,7 +385,7 @@ export async function aiBuildQuoteRevisionPlan(
     };
   } catch (err) {
     if (err instanceof AiUsageLedgerError) throw err;
-    console.error("[ai-quote] AI revision planning failed:", err);
+    writeAiQuoteDiagnostic("REVISION_PLAN", "PROVIDER_OR_VALIDATION_FAILED", options.diagnosticContext);
     return emptyRevisionPlan();
   }
 }

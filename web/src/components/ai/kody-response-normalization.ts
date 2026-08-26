@@ -31,6 +31,10 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "PIPELINE_SCENARIO",
   "SEARCH_CUSTOMERS",
   "SEARCH_PRODUCTS",
+  "SEARCH_JOBS",
+  "GET_JOB_STATUS",
+  "LIST_INVOICES",
+  "GET_INVOICE_STATUS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
   "DRAFT_CUSTOMER",
@@ -226,6 +230,10 @@ function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown)
     copyNumber(payload, value, "winRatePercent");
   } else if (type === "OPEN_WORKSPACE_PAGE") {
     copyString(payload, value, "page", 40);
+    copyString(payload, value, "jobId", 200);
+    copyString(payload, value, "invoiceId", 200);
+    copyNumber(payload, value, "jobNumber");
+    copyNumber(payload, value, "invoiceNumber");
   } else if (type === "REQUEST_ADMIN_ACCESS") {
     copyString(payload, value, "capability", 80);
     const capabilities = sanitizeStringList(value.capabilities, 8, 80);

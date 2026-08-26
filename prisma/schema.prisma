@@ -225,6 +225,13 @@ enum QuoteLineSectionType {
   ALTERNATE
 }
 
+enum QuoteLinePriceProvenance {
+  MANUAL
+  TENANT_PRESET
+  AI_REVIEWED
+  REVISION_RESTORE
+}
+
 enum PresetCategory {
   LABOR
   MATERIAL
@@ -368,6 +375,7 @@ model Tenant {
   jobEvents                         JobEvent[]
   notifications                     NotificationOutbox[]
   invoices                          Invoice[]
+  invoiceLineItems                  InvoiceLineItem[]
   invoicePayments                   InvoicePayment[]
   invoiceEvents                     InvoiceEvent[]
   quickBooksInvoiceOperations       QuickBooksInvoiceOperation[]
@@ -619,8 +627,8 @@ model Quote {
   aiGeneratedAtUtc                DateTime?               @db.Timestamptz(3)
   aiPromptText                    String?
   aiModel                         String?
-  createIdempotencyKeyHash       String?                 @db.VarChar(64)
-  createRequestHash              String?                 @db.VarChar(64)
+  createIdempotencyKeyHash        String?                 @db.VarChar(64)
+  createRequestHash               String?                 @db.VarChar(64)
   sentAt                          DateTime?               @db.Timestamptz(3)
   closedAtUtc                     DateTime?               @db.Timestamptz(3)
   jobCompletedAtUtc               DateTime?               @db.Timestamptz(3)
@@ -851,6 +859,7 @@ model Invoice {
   job                  Job                          @relation(fields: [jobId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict)
   sourceQuote          Quote                        @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict)
   payments             InvoicePayment[]
+  lineItems            InvoiceLineItem[]
   events               InvoiceEvent[]
   quickBooksOperations QuickBooksInvoiceOperation[]
 
@@ -861,6 +870,27 @@ model Invoice {
   @@index([tenantId, customerId, deletedAtUtc, archivedAtUtc], map: "Invoice_customer_lifecycle_idx")
   @@index([tenantId, status, paymentStatus, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Invoice_status_updated_idx")
   @@index([tenantId, dueAtUtc, status, deletedAtUtc, id], map: "Invoice_due_status_idx")
+}
+
+model InvoiceLineItem {
+  id                            String               @id @default(cuid())
+  tenantId                      String
+  invoiceId                     String
+  sourceQuoteLineItemIdSnapshot String?              @db.VarChar(191)
+  description                   String
+  sectionType                   QuoteLineSectionType @default(INCLUDED)
+  sectionLabel                  String?
+  position                      Int                  @default(0)
+  quantity                      Decimal              @db.Decimal(10, 2)
+  unitPrice                     Decimal              @db.Decimal(10, 2)
+  lineTotal                     Decimal              @db.Decimal(10, 2)
+  createdAt                     DateTime             @default(now()) @db.Timestamptz(3)
+  invoice                       Invoice              @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  tenant                        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([id, tenantId])
+  @@index([invoiceId, tenantId, position])
+  @@index([tenantId, sourceQuoteLineItemIdSnapshot])
 }
 
 model InvoicePayment {
@@ -1282,25 +1312,32 @@ model SuperuserAuditEvent {
 }
 
 model QuoteLineItem {
-  id           String               @id @default(cuid())
-  tenantId     String
-  quoteId      String
-  description  String
-  sectionType  QuoteLineSectionType @default(INCLUDED)
-  sectionLabel String?
-  position     Int                  @default(0)
-  quantity     Decimal              @db.Decimal(10, 2)
-  unitCost     Decimal              @db.Decimal(10, 2)
-  unitPrice    Decimal              @db.Decimal(10, 2)
-  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime             @default(now()) @updatedAt @db.Timestamptz(3)
-  deletedAtUtc DateTime?            @db.Timestamptz(3)
-  quote        Quote                @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                                 String                   @id @default(cuid())
+  tenantId                           String
+  quoteId                            String
+  description                        String
+  sectionType                        QuoteLineSectionType     @default(INCLUDED)
+  sectionLabel                       String?
+  position                           Int                      @default(0)
+  quantity                           Decimal                  @db.Decimal(10, 2)
+  unitCost                           Decimal                  @db.Decimal(10, 2)
+  unitPrice                          Decimal                  @db.Decimal(10, 2)
+  priceProvenance                    QuoteLinePriceProvenance @default(MANUAL)
+  sourcePresetIdSnapshot             String?                  @db.VarChar(191)
+  sourcePresetNameSnapshot           String?                  @db.VarChar(191)
+  sourcePresetCatalogKeySnapshot     String?                  @db.VarChar(191)
+  sourcePresetCatalogVersionSnapshot Int?
+  sourcePresetUpdatedAtUtcSnapshot   DateTime?                @db.Timestamptz(3)
+  createdAt                          DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt                          DateTime                 @default(now()) @updatedAt @db.Timestamptz(3)
+  deletedAtUtc                       DateTime?                @db.Timestamptz(3)
+  quote                              Quote                    @relation(fields: [quoteId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  tenant                             Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([quoteId, tenantId])
   @@index([quoteId, tenantId, position])
   @@index([tenantId, deletedAtUtc])
+  @@index([tenantId, sourcePresetIdSnapshot])
 }
 
 model QuoteRevision {

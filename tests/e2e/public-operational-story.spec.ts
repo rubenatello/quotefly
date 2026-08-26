@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { BASIC_PLAN_PRICING_PATH } from "../../web/src/lib/plans";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
-const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/pricing", "/about"] as const;
+const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/services", "/pricing", "/about"] as const;
 const RESPONSIVE_WIDTHS = [360, 390, 768, 1280, 1440] as const;
 
 async function expectNoSeriousAccessibilityViolations(page: Page, label: string) {
@@ -123,6 +123,12 @@ test("operational marketing pages stay responsive at release widths", async ({ p
     const controlBox = await page.locator("#product-story").getByRole("button", { name: controlName, exact: true }).boundingBox();
     expect(controlBox?.height ?? 0, `${controlName} must remain touchable at 390px`).toBeGreaterThanOrEqual(44);
   }
+
+  await page.goto("/services");
+  await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/services"].heading })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Customer to internal invoice workflow" }).getByRole("listitem")).toHaveCount(6);
+  await expect(page.getByText(/does not send customer invoices or collect payment/i)).toBeVisible();
+  await expect(page.getByRole("img", { name: /Kody preparing a structured QuoteFly quote draft/i })).toBeVisible();
 
   await page.goto("/about");
   const aboutTrialBox = await page.getByRole("button", { name: "Start free trial" }).first().boundingBox();

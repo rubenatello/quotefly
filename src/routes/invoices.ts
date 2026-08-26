@@ -75,6 +75,13 @@ function serializeInvoice(invoice: InvoicePublic) {
     voidedAtUtc: invoice.voidedAtUtc?.toISOString() ?? null,
     createdAt: invoice.createdAt.toISOString(),
     updatedAt: invoice.updatedAt.toISOString(),
+    lineItems: invoice.lineItems.map((lineItem) => ({
+      ...lineItem,
+      quantity: Number(lineItem.quantity),
+      unitPrice: Number(lineItem.unitPrice),
+      lineTotal: Number(lineItem.lineTotal),
+      createdAt: lineItem.createdAt.toISOString(),
+    })),
     sourceQuote: {
       ...invoice.sourceQuote,
       totalAmount: Number(invoice.sourceQuote.totalAmount),

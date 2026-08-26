@@ -27,6 +27,7 @@ export const FORCED_TENANT_RLS_TABLES = [
   "JobEvent",
   "NotificationOutbox",
   "Invoice",
+  "InvoiceLineItem",
   "InvoicePayment",
   "InvoiceEvent",
   "QuickBooksInvoiceOperation",

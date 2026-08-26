@@ -162,6 +162,34 @@ test("retrieval invokes the embedding provider with the sanitized query only", a
   assert.doesNotMatch(providerInput, /jane\.doe|sk-proj|abcdef/i);
 });
 
+test("lexical-only retrieval never starts the configured embedding provider", async () => {
+  process.env.DATABASE_URL ??= "postgresql://127.0.0.1:5432/quotefly_test";
+  process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";
+  const { retrieveAiContextFromIndex } = await import("../../src/lib/ai-retrieval");
+  let providerCalled = false;
+
+  await assert.rejects(retrieveAiContextFromIndex({} as never, {
+    access: {
+      tenantId: "tenant-alpha",
+      tenantUserId: "membership-alpha",
+      userId: "user-alpha",
+      role: "owner",
+      capabilities: capabilitiesForRole("owner"),
+      requestId: "retrieval-lexical-only",
+    },
+    query: "Roof repair quote with labor and materials",
+    purpose: "QUOTE_DRAFT",
+    requestId: "retrieval-lexical-only",
+    semanticEmbedding: false,
+    embedText: async () => {
+      providerCalled = true;
+      throw new Error("embedding-provider-must-not-run");
+    },
+  }));
+
+  assert.equal(providerCalled, false);
+});
+
 test("retrieval never sends credential-bearing service URIs to the embedding provider", async () => {
   process.env.DATABASE_URL ??= "postgresql://127.0.0.1:5432/quotefly_test";
   process.env.JWT_SECRET ??= "unit-test-only-jwt-secret-that-is-long-enough-for-validation-123456789";

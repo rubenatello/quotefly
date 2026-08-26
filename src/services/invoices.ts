@@ -49,6 +49,21 @@ export const InvoicePublicSelect = {
   updatedAt: true,
   archivedAtUtc: true,
   deletedAtUtc: true,
+  lineItems: {
+    orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
+    select: {
+      id: true,
+      sourceQuoteLineItemIdSnapshot: true,
+      description: true,
+      sectionType: true,
+      sectionLabel: true,
+      position: true,
+      quantity: true,
+      unitPrice: true,
+      lineTotal: true,
+      createdAt: true,
+    },
+  },
   customer: {
     select: {
       id: true,
@@ -185,6 +200,110 @@ type LockedInvoiceJobSnapshot = {
   quoteTotalAmount: Prisma.Decimal;
 };
 
+type InvoiceLineSnapshot = Readonly<{
+  sourceQuoteLineItemIdSnapshot: string | null;
+  description: string;
+  sectionType: "INCLUDED";
+  sectionLabel: string | null;
+  position: number;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+}>;
+
+function roundInvoiceMoney(value: number) {
+  return Number(value.toFixed(2));
+}
+
+function reconcileInvoiceLineTotals(
+  lines: readonly InvoiceLineSnapshot[],
+  authoritativeSubtotal: number,
+): InvoiceLineSnapshot[] {
+  const targetCents = Math.round(authoritativeSubtotal * 100);
+  const lineCents = lines.map((line) => Math.round(line.lineTotal * 100));
+  let residualCents = targetCents - lineCents.reduce((sum, cents) => sum + cents, 0);
+
+  // The quote subtotal is calculated from the aggregate before currency
+  // rounding, while an invoice must persist two-decimal line totals. Allocate
+  // the residual deterministically from the final line backwards so the
+  // immutable invoice lines always reconcile to the authoritative subtotal.
+  for (let index = lineCents.length - 1; index >= 0 && residualCents !== 0; index -= 1) {
+    if (residualCents > 0) {
+      lineCents[index] += residualCents;
+      residualCents = 0;
+      break;
+    }
+
+    const removableCents = Math.min(lineCents[index], Math.abs(residualCents));
+    lineCents[index] -= removableCents;
+    residualCents += removableCents;
+  }
+
+  if (residualCents !== 0) {
+    throw new InvoiceServiceError(
+      409,
+      "INVOICE_LINE_TOTAL_RECONCILIATION_FAILED",
+      "Invoice lines could not be reconciled to the accepted quote subtotal.",
+    );
+  }
+
+  return lines.map((line, index) => ({
+    ...line,
+    lineTotal: lineCents[index]! / 100,
+  }));
+}
+
+async function loadInvoiceLineSnapshots(
+  transaction: InvoiceTransaction,
+  snapshot: LockedInvoiceJobSnapshot,
+): Promise<InvoiceLineSnapshot[]> {
+  const sourceLines = await transaction.quoteLineItem.findMany({
+    where: {
+      tenantId: snapshot.tenantId,
+      quoteId: snapshot.sourceQuoteId,
+      sectionType: "INCLUDED",
+      deletedAtUtc: null,
+    },
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      description: true,
+      sectionLabel: true,
+      quantity: true,
+      unitPrice: true,
+    },
+  });
+  if (sourceLines.length > 0) {
+    const lineSnapshots = sourceLines.map((line, position) => {
+      const quantity = Number(line.quantity);
+      const unitPrice = Number(line.unitPrice);
+      return {
+        sourceQuoteLineItemIdSnapshot: line.id,
+        description: line.description,
+        sectionType: "INCLUDED" as const,
+        sectionLabel: line.sectionLabel,
+        position,
+        quantity,
+        unitPrice,
+        lineTotal: roundInvoiceMoney(quantity * unitPrice),
+      };
+    });
+    return reconcileInvoiceLineTotals(lineSnapshots, Number(snapshot.quoteCustomerPriceSubtotal));
+  }
+
+  const subtotal = Number(snapshot.quoteCustomerPriceSubtotal);
+  return [{
+    sourceQuoteLineItemIdSnapshot: null,
+    description: snapshot.quoteTitle.trim() || snapshot.title.trim() || "Quoted work",
+    sectionType: "INCLUDED",
+    sectionLabel: null,
+    position: 0,
+    quantity: 1,
+    unitPrice: subtotal,
+    lineTotal: roundInvoiceMoney(subtotal),
+  }];
+}
+
 async function loadLockedInvoiceJobSnapshot(
   transaction: InvoiceTransaction,
   access: AccessContext,
@@ -222,7 +341,7 @@ async function loadLockedInvoiceJobSnapshot(
       AND quote."archivedAtUtc" IS NULL
       AND customer."deletedAtUtc" IS NULL
       AND customer."archivedAtUtc" IS NULL
-    FOR UPDATE OF job
+    FOR UPDATE OF job, quote
   `);
   const job = rows[0];
   if (!job) {
@@ -390,8 +509,9 @@ export async function createInvoice(
   const invoiceNumber = await nextInvoiceNumber(transaction, access.tenantId);
   const titleSnapshot = snapshot.title.trim() || snapshot.quoteTitle.trim() || `Invoice ${invoiceNumber}`;
   const scopeSnapshot = snapshot.scopeSnapshot?.trim() || snapshot.quoteScopeText.trim() || null;
+  const lineSnapshots = await loadInvoiceLineSnapshots(transaction, snapshot);
 
-  const invoice = await transaction.invoice.create({
+  const createdInvoice = await transaction.invoice.create({
     data: {
       tenantId: access.tenantId,
       customerId: snapshot.customerId,
@@ -414,20 +534,32 @@ export async function createInvoice(
     select: InvoicePublicSelect,
   });
 
+  await transaction.invoiceLineItem.createMany({
+    data: lineSnapshots.map((line) => ({
+      tenantId: access.tenantId,
+      invoiceId: createdInvoice.id,
+      ...line,
+    })),
+  });
+
   await transaction.invoiceEvent.create({
     data: {
       tenantId: access.tenantId,
-      invoiceId: invoice.id,
+      invoiceId: createdInvoice.id,
       actorTenantUserId: params.actorTenantUserId,
       type: "CREATED",
-      toStatus: invoice.status,
-      toPaymentStatus: invoice.paymentStatus,
+      toStatus: createdInvoice.status,
+      toPaymentStatus: createdInvoice.paymentStatus,
       requestId: params.requestId.slice(0, 191),
       commandKeyHash,
       commandPayloadHash,
     },
   });
 
+  const invoice = await transaction.invoice.findFirstOrThrow({
+    where: { id: createdInvoice.id, tenantId: access.tenantId },
+    select: InvoicePublicSelect,
+  });
   return { invoice, duplicate: false };
 }
 

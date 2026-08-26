@@ -6,6 +6,8 @@ Last reviewed: 2026-08-25
 
 Product baseline: `d20e3e8` (`feat: add governed Kody RAG and invoice sync readiness`)
 
+Cross-area follow-up: the current quote/Kody/privacy/invoice/public-site remediation status, evidence, and unresolved owner/provider gates are maintained in the [QuoteFly Critical Improvements Program](../plan/quotefly-critical-improvements-program.md). This design brief remains the public-site source; the program ledger is authoritative for later release evidence.
+
 ## Implementation record
 
 - The homepage and Solutions page now tell the six-stage customer-to-internal-invoice story while preserving quoting as the primary entry point.
@@ -18,7 +20,7 @@ Product baseline: `d20e3e8` (`feat: add governed Kody RAG and invoice sync readi
 - Current public-site evidence includes the web build, lint, i18n `12/12`, 16-route prerender, SEO `10/10`, focused public responsive/Axe/keyboard/reduced-motion coverage `5/5`, and the full local `npm run verify` gate. The opt-in deterministic capture lane passed twice and reproduced identical SHA-256 hashes for all 24 standard/Retina assets generated from the same frozen 2x render. Database-backed launch gates were not rerun because this slice changes only public-site code, deterministic capture fixtures, and checked-in marketing assets.
 - `main` now lets one natural Kody request resolve an active visible customer, preserve an estimated labor-hour range, match saved tenant products/services, and hand the Quote Builder separate priced, source-linked lines for review. Missing customer or work details produce a bounded clarification instead of a guessed or silently created record.
 - GitHub run `32784331528` proved that the provider secret and isolated database were available, then failed the synthetic Kody quality gate at 4/6: one follow-up response did not preserve the requested total count in the evaluator's accepted form, and one safe quote-draft response was forced into deterministic fallback because no citation had been authorized. The current workspace addresses both cases without relaxing mutation, hidden-field, or citation validation.
-- Current-worktree evidence passes `verify:launch` with all 58 migrations, 116 inventoried routes, zero unmatched declarations, 240/240 integration tests, 92 executed browser scenarios plus one intentional opt-in capture skip, parser evaluation 17/17, assistant evaluation 83/83, retrieval evaluation 12/12, and clean dependency audits. Focused migrated-PostgreSQL QuickBooks Invoice coverage passes 18/18, including immutable realm/payload review binding, expired-claim recovery, exact reconciliation, tenant/RLS boundaries, and concurrency. This local evidence does not replace the required exact-SHA live-provider 6/6 rerun after an explicitly authorized BCP.
+- Historical Phase 4B local evidence recorded on 2026-08-25 covered the QuickBooks Invoice slice, but it predates the current `7f75827` program baseline and is not release evidence for the current working tree. Current candidate counts, gate results, residuals, and the independent-review verdict are recorded only in the [QuoteFly Critical Improvements Program](../plan/quotefly-critical-improvements-program.md) after each exact gate finishes.
 
 ## Purpose
 

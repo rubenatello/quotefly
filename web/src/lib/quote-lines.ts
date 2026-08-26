@@ -147,6 +147,7 @@ export function toEditableQuoteLineFromDraft(lineItem: {
   quantity: number;
   unitCost?: number;
   unitPrice: number;
+  sourcePresetId?: string;
 }): EditableQuoteLine {
   const { title, details } = splitQuoteLineDescription(lineItem.description);
 
@@ -158,6 +159,8 @@ export function toEditableQuoteLineFromDraft(lineItem: {
     quantity: String(Number(lineItem.quantity)),
     unitCost: Number(lineItem.unitCost ?? 0).toFixed(2),
     unitPrice: Number(lineItem.unitPrice).toFixed(2),
+    sourcePresetId: lineItem.sourcePresetId,
+    presetPromptHandled: Boolean(lineItem.sourcePresetId),
   });
 }
 
@@ -204,6 +207,7 @@ export function applyAiQuoteLinePatch(
           quantity: change.quantity,
           unitCost: change.unitCost ?? 0,
           unitPrice: change.unitPrice,
+          sourcePresetId: change.sourcePresetId,
         }),
       ];
       continue;
@@ -234,6 +238,8 @@ export function applyAiQuoteLinePatch(
       quantity: String(Number(change.quantity)),
       unitCost: change.unitCost === undefined ? current.unitCost : Number(change.unitCost).toFixed(2),
       unitPrice: Number(change.unitPrice).toFixed(2),
+      sourcePresetId: change.sourcePresetId ?? null,
+      presetPromptHandled: Boolean(change.sourcePresetId),
     };
     nextLines = nextLines.map((line, index) => (index === targetIndex ? updatedLine : line));
   }

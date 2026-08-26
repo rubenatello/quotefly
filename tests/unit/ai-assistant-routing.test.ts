@@ -36,6 +36,10 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("Book job #12 tomorrow from 9 AM to 11 AM"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Reschedule the visit for job #12 tomorrow at 14:00 for 2 hours"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Dispatch next job"), "PREPARE_DISPATCH");
+  assert.equal(resolveAssistantTool("Show jobs for Maria Lopez"), "SEARCH_JOBS");
+  assert.equal(resolveAssistantTool("What is the status of job #12?"), "GET_JOB_STATUS");
+  assert.equal(resolveAssistantTool("List my invoices"), "LIST_INVOICES");
+  assert.equal(resolveAssistantTool("Is invoice #42 paid?"), "GET_INVOICE_STATUS");
   assert.equal(resolveAssistantTool("Which customers do not have a quote?"), "CUSTOMERS_WITHOUT_QUOTES");
   assert.equal(resolveAssistantTool("If we close 30% of open quotes, what is the revenue boost?"), "PIPELINE_SCENARIO");
   assert.equal(resolveAssistantTool("Forecast my open quote revenue this month"), "SUMMARIZE_PIPELINE");
@@ -117,6 +121,10 @@ test("routes neutral Spanish QuoteFly workflows without changing canonical tool 
   assert.equal(resolveAssistantTool("Muestra mi agenda de mañana"), "LIST_SCHEDULE");
   assert.equal(resolveAssistantTool("Programa el trabajo #12 mañana de 9 a. m. a 11 a. m."), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Despacha mi próximo trabajo"), "PREPARE_DISPATCH");
+  assert.equal(resolveAssistantTool("Muéstrame los trabajos de María"), "SEARCH_JOBS");
+  assert.equal(resolveAssistantTool("¿Cuál es el estado del trabajo #12?"), "GET_JOB_STATUS");
+  assert.equal(resolveAssistantTool("Lista mis facturas"), "LIST_INVOICES");
+  assert.equal(resolveAssistantTool("¿La factura #42 está pagada?"), "GET_INVOICE_STATUS");
 
   assert.equal(resolveAssistantTool("Busca al cliente José Ramírez"), "SEARCH_CUSTOMERS");
   assert.equal(resolveAssistantTool("Agrega un cliente nuevo llamado María López"), "DRAFT_CUSTOMER");
@@ -175,6 +183,10 @@ test("deterministic operational tools do not consume the external AI budget", as
     "LIST_SCHEDULE",
     "PREPARE_BOOKING",
     "PREPARE_DISPATCH",
+    "SEARCH_JOBS",
+    "GET_JOB_STATUS",
+    "LIST_INVOICES",
+    "GET_INVOICE_STATUS",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ] as const) {

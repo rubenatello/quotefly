@@ -422,6 +422,7 @@ export interface DashboardContextValue {
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
     aiUsageEventId?: string;
+    aiPricingReviewAcknowledged?: boolean;
     idempotencyKey?: string;
     beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => Promise<Quote | null>;
@@ -914,6 +915,7 @@ export function DashboardProvider({
     successNotice?: string;
     quoteOverride?: Partial<QuoteForm>;
     aiUsageEventId?: string;
+    aiPricingReviewAcknowledged?: boolean;
     idempotencyKey?: string;
     beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => {
@@ -933,6 +935,7 @@ export function DashboardProvider({
         taxAmount: Number(mergedQuoteForm.taxAmount),
         documentLocale: mergedQuoteForm.documentLocale,
         aiUsageEventId: options?.aiUsageEventId,
+        aiPricingReviewAcknowledged: options?.aiPricingReviewAcknowledged,
         lineItems: options?.initialLineItems?.map((lineItem) => ({
           description: lineItem.description,
           sectionType: lineItem.sectionType ?? "INCLUDED",

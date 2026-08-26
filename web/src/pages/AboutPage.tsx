@@ -178,6 +178,8 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
             <div className="qf-about-proof-float absolute -right-7 top-9 w-[54%] min-w-[220px] rotate-1 overflow-hidden rounded-[26px] border border-white/20 bg-white p-2 shadow-[0_30px_80px_rgba(0,0,0,0.44)] sm:right-7 sm:top-12 sm:w-[48%]">
               <img
                 src="/images/product/job-detail-mobile-v1.webp"
+                srcSet="/images/product/job-detail-mobile-v1.webp 390w, /images/product/job-detail-mobile-v2.webp 780w"
+                sizes="(min-width: 640px) 326px, 54vw"
                 alt="QuoteFly mobile Job detail showing customer, schedule, and dispatch information"
                 width="390"
                 height="844"
@@ -251,9 +253,15 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
 
           <figure data-marketing-reveal className="overflow-hidden rounded-[30px] border border-slate-200 bg-slate-950 p-2 shadow-[0_26px_70px_rgba(15,23,42,0.18)] sm:p-3">
             <picture>
-              <source media="(max-width: 639px)" srcSet="/images/product/activity-my-day-mobile-v1.webp" />
+              <source
+                media="(max-width: 639px)"
+                srcSet="/images/product/activity-my-day-mobile-v1.webp 390w, /images/product/activity-my-day-mobile-v2.webp 780w"
+                sizes="calc(100vw - 48px)"
+              />
               <img
                 src="/images/product/activity-my-day-desktop-v1.webp"
+                srcSet="/images/product/activity-my-day-desktop-v1.webp 1440w, /images/product/activity-my-day-desktop-v2.webp 2880w"
+                sizes="(min-width: 1280px) 729px, (min-width: 1024px) 57vw, calc(100vw - 48px)"
                 alt="QuoteFly My Day workspace showing follow-up activity, scheduled work, and quote status"
                 width="1440"
                 height="900"
@@ -293,7 +301,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
                     key={stage.number}
                     data-marketing-reveal
                     style={{ transitionDelay: `${index * 55}ms` }}
-                    className="relative rounded-2xl border border-white/10 bg-white/[0.055] p-5 backdrop-blur-sm"
+                    className="relative rounded-2xl border border-white/10 bg-white/[0.055] p-4 backdrop-blur-sm sm:p-5"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-slate-950 text-orange-200 shadow-lg">
@@ -301,8 +309,8 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
                       </span>
                       <span className="text-xs font-bold tracking-[0.18em] text-blue-200">{stage.number}</span>
                     </div>
-                    <h3 className="mt-5 text-lg font-bold text-white">{stage.title}</h3>
-                    <p className="mt-2 text-sm leading-6 text-slate-300">{stage.description}</p>
+                    <h3 className="mt-3 text-lg font-bold text-white sm:mt-5">{stage.title}</h3>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-300 sm:mt-2">{stage.description}</p>
                   </li>
                 );
               })}
@@ -362,7 +370,7 @@ export function AboutPage({ onOpenAuth }: AboutPageProps) {
       <section className="border-y border-stone-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="answers-heading">
         <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[minmax(0,0.68fr)_minmax(0,1.32fr)] lg:gap-16">
           <div data-marketing-reveal>
-            <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--qf-brand-orange-text)]">Citation-ready product facts</p>
+            <p className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--qf-brand-orange-text)]">Clear product facts</p>
             <h2 id="answers-heading" className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
               Straight answers about QuoteFly
             </h2>

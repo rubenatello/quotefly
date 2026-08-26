@@ -7,6 +7,10 @@ import type { AiAssistantConversationTurn } from "./ai-assistant-contract";
 import type { SupportedLocale } from "./supported-locale";
 import { createOpenAiChatCompletion } from "../services/ai-provider-gateway";
 import { AiUsageLedgerError } from "../services/ai-usage-ledger";
+import {
+  claimAiQuoteProviderTimeout,
+  type AiQuoteProviderBudget,
+} from "../services/ai-quote-provider-budget";
 
 export type AiAssistantAnswerMode = "DETERMINISTIC" | "LLM_COMPOSED";
 
@@ -22,6 +26,9 @@ export type AiAssistantCompositionResult = Readonly<{
 }>;
 
 export type AiAssistantCompositionInput = Readonly<{
+  diagnosticContext?: Readonly<{
+    requestId: string;
+  }>;
   userMessage: string;
   tool: string;
   deterministicAnswer: string;
@@ -60,7 +67,28 @@ export type AiAssistantCompositionInput = Readonly<{
     content: string;
   }[];
   preferredLocale?: SupportedLocale;
+  providerBudget?: AiQuoteProviderBudget;
 }>;
+
+type ProviderFallbackCode =
+  | "PROVIDER_CALL_FAILED"
+  | "PROVIDER_OUTPUT_INVALID_JSON"
+  | "PROVIDER_OUTPUT_REJECTED";
+
+function emitProviderFallbackDiagnostic(
+  params: AiAssistantCompositionInput,
+  code: ProviderFallbackCode,
+  model: string,
+) {
+  const requestId = params.diagnosticContext?.requestId.trim();
+  console.warn(JSON.stringify({
+    event: "ai_assistant_provider_fallback",
+    requestId: requestId && /^[A-Za-z0-9._:-]{1,128}$/.test(requestId) ? requestId : "unavailable",
+    provider: "openai",
+    model: model.slice(0, 80),
+    failureCode: code,
+  }));
+}
 
 type AssistantPayloadSource = Readonly<{
   tool: string;
@@ -111,6 +139,7 @@ export type AiAssistantCompositionRequest = Readonly<{
   systemPrompt: string;
   inputJson: string;
   responseFormat: typeof COMPOSER_RESPONSE_FORMAT;
+  timeoutMs: number;
 }>;
 
 export type AiAssistantCompositionProviderResult = Readonly<{
@@ -668,7 +697,7 @@ async function defaultCompositionProvider(
         content: `Compose Kody's final answer from this authorized JSON only:\n${request.inputJson}`,
       },
     ],
-  }, { timeoutMs: env.OPENAI_ASSISTANT_TIMEOUT_MS });
+  }, { timeoutMs: request.timeoutMs });
 
   return {
     outputText: completion.choices[0]?.message?.content ?? "",
@@ -707,18 +736,19 @@ export async function composeAssistantAnswer(
   const model = composerModel();
   let result: AiAssistantCompositionProviderResult;
   try {
+    const timeoutMs = params.providerBudget
+      ? claimAiQuoteProviderTimeout(params.providerBudget)
+      : env.OPENAI_ASSISTANT_TIMEOUT_MS;
     result = await (providerForTest ?? defaultCompositionProvider)({
       model,
       systemPrompt: systemPromptForLocale(params.preferredLocale === "es-US" ? "es-US" : "en-US"),
       inputJson: JSON.stringify(payload),
       responseFormat: COMPOSER_RESPONSE_FORMAT,
+      timeoutMs,
     });
   } catch (error) {
     if (error instanceof AiUsageLedgerError) throw error;
-    console.warn(
-      "[ai-assistant] LLM composition failed; using deterministic answer.",
-      error instanceof Error ? error.name : "UnknownError",
-    );
+    emitProviderFallbackDiagnostic(params, "PROVIDER_CALL_FAILED", model);
     return deterministicComposition(params.deterministicAnswer, "OpenAI assistant composition failed closed.");
   }
 
@@ -726,6 +756,7 @@ export async function composeAssistantAnswer(
   try {
     parsed = parseComposerOutput(result.outputText);
   } catch {
+    emitProviderFallbackDiagnostic(params, "PROVIDER_OUTPUT_INVALID_JSON", result.model ?? model);
     return deterministicComposition(params.deterministicAnswer, "OpenAI assistant composition returned invalid JSON.", {
       model: result.model ?? model,
       telemetry: result.telemetry,
@@ -734,6 +765,7 @@ export async function composeAssistantAnswer(
 
   const invalidReason = invalidAnswerReason(parsed, params);
   if (invalidReason) {
+    emitProviderFallbackDiagnostic(params, "PROVIDER_OUTPUT_REJECTED", result.model ?? model);
     return deterministicComposition(params.deterministicAnswer, invalidReason, {
       model: result.model ?? model,
       telemetry: result.telemetry,

@@ -29,6 +29,8 @@ type InvoicePanelProps = {
   sourceAmount: string | number;
   canCreate: boolean;
   createBlockedReason?: string | null;
+  kodyInvoiceId?: string | null;
+  onKodyInvoiceConsumed?: () => void;
 };
 
 function addCalendarDays(dateValue: string, days: number) {
@@ -79,11 +81,14 @@ export function InvoicePanel({
   sourceAmount,
   canCreate,
   createBlockedReason,
+  kodyInvoiceId = null,
+  onKodyInvoiceConsumed,
 }: InvoicePanelProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { session } = useDashboard();
   const headingId = useId();
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const locale = i18n.resolvedLanguage ?? "en-US";
   const timeZone = validTimeZone(session?.timezone ?? "UTC");
   const sourceKey = jobId ? `job:${jobId}` : sourceQuoteId ? `quote:${sourceQuoteId}` : "missing";
@@ -205,6 +210,23 @@ export function InvoicePanel({
       quickBooksGenerationRef.current += 1;
     };
   }, [canCreate, invoice, loadQuickBooksPreview]);
+
+  useEffect(() => {
+    if (!kodyInvoiceId || loading || error) return;
+    if (invoice?.id !== kodyInvoiceId) {
+      onKodyInvoiceConsumed?.();
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      headingRef.current?.scrollIntoView({
+        block: "center",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+      headingRef.current?.focus({ preventScroll: true });
+      onKodyInvoiceConsumed?.();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [error, invoice, kodyInvoiceId, loading, onKodyInvoiceConsumed]);
 
   const dueAtUtc = useMemo(
     () => dueDate ? tenantWallTimeToIso(`${dueDate}T12:00`, timeZone) : null,
@@ -333,7 +355,13 @@ export function InvoicePanel({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("invoices.eyebrow")}</p>
-          <h2 id={headingId} className="mt-1 flex items-center gap-2 text-base font-semibold text-[var(--qf-text)]">
+          <h2
+            ref={headingRef}
+            id={headingId}
+            data-testid="invoice-panel-heading"
+            tabIndex={-1}
+            className="mt-1 flex items-center gap-2 text-base font-semibold text-[var(--qf-text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--qf-primary)]"
+          >
             <ReceiptText size={18} aria-hidden="true" />
             {invoice ? t("invoices.number", { number: invoice.invoiceNumber }) : t("invoices.title")}
           </h2>

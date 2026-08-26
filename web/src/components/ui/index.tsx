@@ -24,7 +24,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   secondary:
     "border-[var(--qf-action-secondary)] bg-[var(--qf-action-secondary)] text-[var(--qf-action-secondary-text)] shadow-[var(--qf-shadow-sm)] hover:border-[var(--qf-action-secondary-hover)] hover:bg-[var(--qf-action-secondary-hover)] active:border-[var(--qf-action-secondary-active)] active:bg-[var(--qf-action-secondary-active)]",
   kody:
-    "border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] text-[var(--qf-kody-action-text)] shadow-[0_8px_20px_rgba(249,105,40,0.24)] motion-safe:hover:-translate-y-0.5 hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_10px_24px_rgba(249,105,40,0.3)] active:border-[var(--qf-kody-action-active)] active:bg-[var(--qf-kody-action-active)]",
+    "border-[var(--qf-kody-action-border)] bg-[var(--qf-kody-action)] text-[var(--qf-kody-action-text)] shadow-[0_8px_20px_rgba(249,105,40,0.24)] hover:border-[var(--qf-kody-action-hover)] hover:bg-[var(--qf-kody-action-hover)] hover:shadow-[0_10px_24px_rgba(249,105,40,0.3)] active:border-[var(--qf-kody-action-active)] active:bg-[var(--qf-kody-action-active)]",
   kodyTrigger:
     "border-[var(--qf-kody-trigger-border)] bg-[var(--qf-kody-trigger)] text-[var(--qf-kody-trigger-text)] shadow-[0_9px_22px_rgba(3,7,18,0.24)] motion-safe:hover:-translate-y-0.5 hover:border-[var(--qf-kody-trigger-hover)] hover:bg-[var(--qf-kody-trigger-hover)] hover:shadow-[0_12px_26px_rgba(3,7,18,0.3)] active:border-[var(--qf-kody-trigger-active)] active:bg-[var(--qf-kody-trigger-active)]",
   outline:
@@ -52,7 +52,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         aria-busy={loading || undefined}
         className={cn(
           "inline-flex select-none items-center justify-center whitespace-nowrap rounded-xl border font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]",
-          !isDisabled && "motion-safe:active:translate-y-px",
           !isDisabled && BUTTON_VARIANTS[variant],
           BUTTON_SIZES[size],
           fullWidth && "w-full",

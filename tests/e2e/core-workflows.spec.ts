@@ -195,7 +195,7 @@ test.describe("controlled beta core workflow", () => {
     await expect(page).toHaveTitle("Activity | QuoteFly");
 
     await page.goto("/app/setup");
-    await expect(page).toHaveTitle("Setup | QuoteFly");
+    await expect(page).toHaveTitle("Workspace setup | QuoteFly");
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
   });
 

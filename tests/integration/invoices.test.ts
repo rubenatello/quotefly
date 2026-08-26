@@ -245,6 +245,44 @@ describe("invoice ledger API", () => {
     const owner = await signUp("invoice-accepted");
     const customer = await createCustomer(owner, "Invoice Accepted Customer");
     const quote = await createQuote(owner, customer.id, "Accepted invoice work");
+    const sourceLines = await Promise.all([
+      prisma.quoteLineItem.create({
+        data: {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Reviewed labor",
+          sectionType: "INCLUDED",
+          position: 0,
+          quantity: 2,
+          unitCost: 10,
+          unitPrice: 50,
+        },
+      }),
+      prisma.quoteLineItem.create({
+        data: {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Reviewed materials",
+          sectionType: "INCLUDED",
+          position: 1,
+          quantity: 1,
+          unitCost: 20,
+          unitPrice: 50,
+        },
+      }),
+      prisma.quoteLineItem.create({
+        data: {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Optional upgrade",
+          sectionType: "ALTERNATE",
+          position: 2,
+          quantity: 1,
+          unitCost: 40,
+          unitPrice: 100,
+        },
+      }),
+    ]);
     await acceptQuote(owner, quote.id);
 
     const idempotencyKey = `invoice-create-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -272,6 +310,13 @@ describe("invoice ledger API", () => {
         dueAtUtc: string;
         customer: { id: string; fullName: string };
         sourceQuote: { id: string; totalAmount: number };
+        lineItems: Array<{
+          sourceQuoteLineItemIdSnapshot: string | null;
+          description: string;
+          quantity: number;
+          unitPrice: number;
+          lineTotal: number;
+        }>;
       };
     };
     expect(body.duplicate).toBe(false);
@@ -288,7 +333,25 @@ describe("invoice ledger API", () => {
       dueAtUtc,
       customer: { id: customer.id, fullName: customer.fullName },
       sourceQuote: { id: quote.id, totalAmount: 162 },
+      lineItems: [
+        {
+          sourceQuoteLineItemIdSnapshot: sourceLines[0]!.id,
+          description: "Reviewed labor",
+          quantity: 2,
+          unitPrice: 50,
+          lineTotal: 100,
+        },
+        {
+          sourceQuoteLineItemIdSnapshot: sourceLines[1]!.id,
+          description: "Reviewed materials",
+          quantity: 1,
+          unitPrice: 50,
+          lineTotal: 50,
+        },
+      ],
     });
+    expect(body.invoice.lineItems).toHaveLength(2);
+    expect(body.invoice.lineItems.map((line) => line.description)).not.toContain("Optional upgrade");
     expect(created.body).not.toContain(owner.tenant.id);
     expect(created.body).not.toContain("scopeSnapshot");
     expect(created.body).not.toContain("providerPaymentId");
@@ -321,6 +384,25 @@ describe("invoice ledger API", () => {
       select: { nextValue: true },
     });
     expect(sequence.nextValue).toBe(2);
+
+    await prisma.quoteLineItem.update({
+      where: { id: sourceLines[0]!.id },
+      data: { description: "Changed after invoice", unitPrice: 999 },
+    });
+    const immutableInvoice = await app.inject({
+      method: "GET",
+      url: `/v1/invoices/${body.invoice.id}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(immutableInvoice.statusCode).toBe(200);
+    expect(immutableInvoice.json()).toMatchObject({
+      invoice: {
+        lineItems: [
+          { description: "Reviewed labor", unitPrice: 50, lineTotal: 100 },
+          { description: "Reviewed materials", unitPrice: 50, lineTotal: 50 },
+        ],
+      },
+    });
   });
 
   test("creates from completed jobs only and returns the existing invoice for the same source", async () => {
@@ -571,20 +653,24 @@ describe("invoice ledger API", () => {
       },
     });
     const event = await prisma.invoiceEvent.findFirstOrThrow({ where: { invoiceId } });
+    const invoiceLine = await prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId } });
+    const otherInvoiceLine = await prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId: otherInvoiceId } });
 
     const noContext = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
       const invoices = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "Invoice"`);
+      const lines = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "InvoiceLineItem"`);
       const payments = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "InvoicePayment"`);
       const events = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "InvoiceEvent"`);
-      return { invoices, payments, events };
+      return { invoices, lines, payments, events };
     });
-    expect(noContext).toEqual({ invoices: [], payments: [], events: [] });
+    expect(noContext).toEqual({ invoices: [], lines: [], payments: [], events: [] });
 
     const tenantA = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
       await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
       const invoices = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "Invoice" ORDER BY "id"`);
+      const lines = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "InvoiceLineItem" ORDER BY "id"`);
       const payments = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "InvoicePayment" ORDER BY "id"`);
       const events = await tx.$queryRaw<Array<{ invoiceId: string }>>(Prisma.sql`SELECT "invoiceId" FROM "InvoiceEvent" ORDER BY "invoiceId"`);
       const crossTenantInvoiceUpdate = await tx.$executeRaw(Prisma.sql`
@@ -593,13 +679,30 @@ describe("invoice ledger API", () => {
       const crossTenantPaymentUpdate = await tx.$executeRaw(Prisma.sql`
         UPDATE "InvoicePayment" SET "status" = 'SUCCEEDED'::"InvoicePaymentStatus" WHERE "id" = ${otherPayment.id}
       `);
-      return { invoices, payments, events, crossTenantInvoiceUpdate, crossTenantPaymentUpdate };
+      return { invoices, lines, payments, events, crossTenantInvoiceUpdate, crossTenantPaymentUpdate };
     });
     expect(tenantA.invoices.map((row) => row.id)).toEqual([invoiceId]);
+    expect(tenantA.lines.map((row) => row.id)).toEqual([invoiceLine.id]);
     expect(tenantA.payments.map((row) => row.id)).toEqual([payment.id]);
     expect(tenantA.events.every((row) => row.invoiceId === invoiceId)).toBe(true);
     expect(tenantA.crossTenantInvoiceUpdate).toBe(0);
     expect(tenantA.crossTenantPaymentUpdate).toBe(0);
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "InvoiceLineItem" SET "description" = 'cross-tenant tamper' WHERE "id" = ${otherInvoiceLine.id}
+      `);
+    })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "InvoiceLineItem" SET "description" = 'same-tenant tamper' WHERE "id" = ${invoiceLine.id}
+      `);
+    })).rejects.toThrow();
 
     const guessed = await app.inject({
       method: "GET",
@@ -631,6 +734,12 @@ describe("invoice ledger API", () => {
       await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
       await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
       await tx.$executeRaw(Prisma.sql`DELETE FROM "Invoice" WHERE "id" = ${invoiceId}`);
+    })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`DELETE FROM "InvoiceLineItem" WHERE "id" = ${invoiceLine.id}`);
     })).rejects.toThrow();
   });
 
@@ -669,6 +778,293 @@ describe("invoice ledger API", () => {
     expect(response.body).not.toContain("realm-preview");
     expect(quickBooksProviderMocks.ensureAccessToken).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+  });
+
+  test("QuickBooks preview and publish use immutable invoice lines after source quote changes", async () => {
+    const owner = await signUp("invoice-qb-snapshot-lines");
+    const customer = await createCustomer(owner, "Snapshot Line Customer");
+    const quote = await createQuote(owner, customer.id, "Snapshot line service", null, {
+      taxAmount: 0,
+      customerPriceSubtotal: 300,
+      totalAmount: 300,
+    });
+    await prisma.quoteLineItem.createMany({
+      data: [
+        {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Snapshot labor",
+          sectionType: "INCLUDED",
+          position: 0,
+          quantity: 2,
+          unitCost: 40,
+          unitPrice: 100,
+        },
+        {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Snapshot materials",
+          sectionType: "INCLUDED",
+          position: 1,
+          quantity: 1,
+          unitCost: 50,
+          unitPrice: 100,
+        },
+        {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          description: "Optional alternate excluded",
+          sectionType: "ALTERNATE",
+          position: 2,
+          quantity: 1,
+          unitCost: 25,
+          unitPrice: 999,
+        },
+      ],
+    });
+    await acceptQuote(owner, quote.id);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/invoices",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `invoice-qb-snapshot-${Date.now()}`,
+      },
+      payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+    });
+    expect(created.statusCode).toBe(201);
+    const invoice = (created.json() as { invoice: { id: string; version: number; invoiceNumber: number } }).invoice;
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId: `realm-snapshot-${Date.now()}`,
+        environment: "sandbox",
+        companyName: "Snapshot QuickBooks Company",
+        status: "CONNECTED",
+        accessTokenEncrypted: "test-token-envelope",
+        refreshTokenEncrypted: "test-refresh-envelope",
+        accessTokenExpiresAtUtc: new Date("2099-01-01T00:00:00.000Z"),
+      },
+    });
+    await prisma.quickBooksCustomerMap.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        customerId: customer.id,
+        quickBooksCustomerId: "qb-customer-snapshot",
+        quickBooksDisplayName: "Snapshot QuickBooks Customer",
+      },
+    });
+    await prisma.quickBooksItemMap.createMany({
+      data: ["Snapshot labor", "Snapshot materials"].map((description, index) => ({
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        itemKey: description.toLowerCase(),
+        quickBooksItemId: `qb-item-snapshot-${index + 1}`,
+        quickBooksItemName: description,
+      })),
+    });
+
+    const firstPreviewResponse = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(firstPreviewResponse.statusCode).toBe(200);
+    const firstPreview = (firstPreviewResponse.json() as {
+      preview: { reviewBinding: string; lineItems: Array<Record<string, unknown>> };
+    }).preview;
+    expect(firstPreview.lineItems).toEqual([
+      expect.objectContaining({ description: "Snapshot labor", quantity: 2, unitPrice: 100, amount: 200 }),
+      expect.objectContaining({ description: "Snapshot materials", quantity: 1, unitPrice: 100, amount: 100 }),
+    ]);
+    expect(JSON.stringify(firstPreview)).not.toContain("Optional alternate excluded");
+
+    const sourceLines = await prisma.quoteLineItem.findMany({
+      where: { tenantId: owner.tenant.id, quoteId: quote.id },
+      orderBy: { position: "asc" },
+    });
+    await prisma.quoteLineItem.update({
+      where: { id: sourceLines[0]!.id },
+      data: { description: "Mutated live quote labor", unitPrice: 999 },
+    });
+    await prisma.quoteLineItem.update({
+      where: { id: sourceLines[1]!.id },
+      data: { deletedAtUtc: new Date() },
+    });
+    await prisma.quoteLineItem.update({
+      where: { id: sourceLines[2]!.id },
+      data: { sectionType: "INCLUDED", description: "Late alternate mutation" },
+    });
+
+    const secondPreviewResponse = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(secondPreviewResponse.statusCode).toBe(200);
+    const secondPreview = (secondPreviewResponse.json() as {
+      preview: { reviewBinding: string; lineItems: Array<Record<string, unknown>> };
+    }).preview;
+    expect(secondPreview.lineItems).toEqual(firstPreview.lineItems);
+    expect(secondPreview.reviewBinding).toBe(firstPreview.reviewBinding);
+    expect(JSON.stringify(secondPreview)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
+
+    quickBooksProviderMocks.createInvoice.mockResolvedValue({
+      Id: "qb-invoice-snapshot",
+      DocNumber: `QF-${String(invoice.invoiceNumber).padStart(6, "0")}`,
+      TxnDate: "2026-08-25",
+      DueDate: "2026-10-01",
+      TotalAmt: 300,
+      Balance: 300,
+      CurrencyRef: { name: "USD" },
+      LinkedTxn: [],
+    });
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `qb-snapshot-publish-${Date.now()}`,
+      },
+      payload: { invoiceVersion: invoice.version, reviewBinding: firstPreview.reviewBinding },
+    });
+    expect(publish.statusCode).toBe(201);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+    const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
+      Line: Array<{ Description: string; Amount: number }>;
+    };
+    expect(providerPayload.Line).toEqual([
+      expect.objectContaining({ Description: "Snapshot labor", Amount: 200 }),
+      expect.objectContaining({ Description: "Snapshot materials", Amount: 100 }),
+    ]);
+    expect(JSON.stringify(providerPayload)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
+  });
+
+  test("reconciles fractional invoice lines to the accepted subtotal and publishes consistent QuickBooks math", async () => {
+    const owner = await signUp("invoice-fractional-lines");
+    const customer = await createCustomer(owner, "Fractional Line Customer");
+    const quote = await createQuote(owner, customer.id, "Fractional line service", null, {
+      internalCostSubtotal: 0,
+      customerPriceSubtotal: 0.05,
+      taxAmount: 0,
+      totalAmount: 0.05,
+    });
+    const descriptions = ["Fractional labor A", "Fractional labor B", "Fractional labor C"];
+    await prisma.quoteLineItem.createMany({
+      data: descriptions.map((description, position) => ({
+        tenantId: owner.tenant.id,
+        quoteId: quote.id,
+        description,
+        sectionType: "INCLUDED" as const,
+        position,
+        quantity: 0.33,
+        unitCost: 0,
+        unitPrice: 0.05,
+      })),
+    });
+    await acceptQuote(owner, quote.id);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/invoices",
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `invoice-fractional-${Date.now()}`,
+      },
+      payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+    });
+    expect(created.statusCode).toBe(201);
+    const invoice = (created.json() as {
+      invoice: { id: string; version: number; invoiceNumber: number; subtotalAmount: number };
+    }).invoice;
+    expect(invoice.subtotalAmount).toBe(0.05);
+
+    const storedLines = await prisma.invoiceLineItem.findMany({
+      where: { tenantId: owner.tenant.id, invoiceId: invoice.id },
+      orderBy: [{ position: "asc" }, { id: "asc" }],
+    });
+    expect(storedLines.map((line) => Number(line.lineTotal))).toEqual([0.02, 0.02, 0.01]);
+    expect(storedLines.reduce((sum, line) => sum + Number(line.lineTotal), 0)).toBeCloseTo(0.05, 8);
+
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId: `realm-fractional-${Date.now()}`,
+        environment: "sandbox",
+        companyName: "Fractional QuickBooks Company",
+        status: "CONNECTED",
+        accessTokenEncrypted: "test-token-envelope",
+        refreshTokenEncrypted: "test-refresh-envelope",
+        accessTokenExpiresAtUtc: new Date("2099-01-01T00:00:00.000Z"),
+      },
+    });
+    await prisma.quickBooksCustomerMap.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        customerId: customer.id,
+        quickBooksCustomerId: "qb-customer-fractional",
+        quickBooksDisplayName: "Fractional QuickBooks Customer",
+      },
+    });
+    await prisma.quickBooksItemMap.createMany({
+      data: descriptions.map((description, index) => ({
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        itemKey: description.toLowerCase(),
+        quickBooksItemId: `qb-item-fractional-${index + 1}`,
+        quickBooksItemName: description,
+      })),
+    });
+
+    const previewResponse = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(previewResponse.statusCode).toBe(200);
+    const preview = (previewResponse.json() as {
+      preview: {
+        ready: boolean;
+        blockers: string[];
+        reviewBinding: string;
+        lineItems: Array<{ amount: number }>;
+      };
+    }).preview;
+    expect(preview).toMatchObject({ ready: true, blockers: [] });
+    expect(preview.lineItems.reduce((sum, line) => sum + line.amount, 0)).toBeCloseTo(0.05, 8);
+
+    quickBooksProviderMocks.createInvoice.mockResolvedValue({
+      Id: "qb-invoice-fractional",
+      DocNumber: `QF-${String(invoice.invoiceNumber).padStart(6, "0")}`,
+      TxnDate: "2026-08-25",
+      DueDate: "2026-10-01",
+      TotalAmt: 0.05,
+      Balance: 0.05,
+      CurrencyRef: { name: "USD" },
+      LinkedTxn: [],
+    });
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `qb-fractional-publish-${Date.now()}`,
+      },
+      payload: { invoiceVersion: invoice.version, reviewBinding: preview.reviewBinding },
+    });
+    expect(publish.statusCode).toBe(201);
+    const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
+      Line: Array<{
+        Amount: number;
+        SalesItemLineDetail: { Qty: number; UnitPrice: number };
+      }>;
+    };
+    expect(providerPayload.Line.reduce((sum, line) => sum + line.Amount, 0)).toBeCloseTo(0.05, 8);
+    for (const line of providerPayload.Line) {
+      expect(Number((line.SalesItemLineDetail.Qty * line.SalesItemLineDetail.UnitPrice).toFixed(2))).toBe(line.Amount);
+    }
   });
 
   test("rejects stale customer, item, and realm reviews before any provider access", async () => {

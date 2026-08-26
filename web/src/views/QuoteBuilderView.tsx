@@ -509,6 +509,11 @@ type QuoteBuilderAiAssistTarget =
   | { kind: "overview" }
   | { kind: "lineDescription"; lineId: string };
 
+type AiPricingReview = {
+  lineDescriptions: string[];
+  acknowledged: boolean;
+};
+
 export function QuoteBuilderView() {
   usePageView("quote_builder");
   const { t, i18n } = useTranslation();
@@ -533,7 +538,7 @@ export function QuoteBuilderView() {
   const quoteCreationCompletedRef = useRef(false);
   const quoteCreateInFlightRef = useRef(false);
   const draftAutosaveEpochRef = useRef(0);
-  const draftAutosaveInFlightRef = useRef<Promise<string | null> | null>(null);
+  const pendingDraftAutosavesRef = useRef(new Set<Promise<string | null>>());
   const draftRecoveryStorageKeyRef = useRef<string | null>(null);
   const handledKodyDraftStateRef = useRef<unknown>(null);
   const kodyCustomerRequestIdRef = useRef(0);
@@ -549,10 +554,25 @@ export function QuoteBuilderView() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiAssistTarget, setAiAssistTarget] = useState<QuoteBuilderAiAssistTarget>({ kind: "quote" });
+
+  async function waitForPendingDraftAutosaves() {
+    while (pendingDraftAutosavesRef.current.size > 0) {
+      await Promise.allSettled([...pendingDraftAutosavesRef.current]);
+    }
+  }
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
+  const [aiStatusMessage, setAiStatusMessage] = useState<string | null>(null);
+  const aiRequestRef = useRef<{
+    id: string;
+    controller: AbortController;
+    fingerprint: string;
+    idempotencyKey: string;
+  } | null>(null);
+  const aiRetryIdentityRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const [aiInsight, setAiInsight] = useState<AiQuoteInsight | null>(null);
+  const [aiPricingReview, setAiPricingReview] = useState<AiPricingReview | null>(null);
   const [lastAppliedAiProvenance, setLastAppliedAiProvenance] = useState<QuoteAiProvenance | null>(null);
   const [quoteCreateRetryIdentity, setQuoteCreateRetryIdentity] = useState<QuoteCreateRetryIdentity | null>(null);
   const [kodyDraftHandoff, setKodyDraftHandoff] = useState<KodyQuoteDraftHandoff | null>(null);
@@ -847,7 +867,7 @@ export function QuoteBuilderView() {
     const timer = window.setTimeout(() => {
       if (quoteCreationCompletedRef.current || autosaveEpoch !== draftAutosaveEpochRef.current) return;
       const writePromise = writeStoredBuilderDraft(draftStorageKey, currentBuilderDraft);
-      draftAutosaveInFlightRef.current = writePromise;
+      pendingDraftAutosavesRef.current.add(writePromise);
       void writePromise
         .then((savedAtUtc) => {
           if (cancelled || autosaveEpoch !== draftAutosaveEpochRef.current) return;
@@ -855,9 +875,7 @@ export function QuoteBuilderView() {
           setDraftPersistenceFailed(hasMeaningfulDraft && !savedAtUtc);
         })
         .finally(() => {
-          if (draftAutosaveInFlightRef.current === writePromise) {
-            draftAutosaveInFlightRef.current = null;
-          }
+          pendingDraftAutosavesRef.current.delete(writePromise);
         });
     }, 650);
     return () => {
@@ -870,7 +888,11 @@ export function QuoteBuilderView() {
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey) return;
     const persistLatestDraft = () => {
       if (quoteCreationCompletedRef.current || !latestDraftRef.current) return;
-      void writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current, { keepalive: true });
+      const writePromise = writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current, { keepalive: true });
+      pendingDraftAutosavesRef.current.add(writePromise);
+      void writePromise.finally(() => {
+        pendingDraftAutosavesRef.current.delete(writePromise);
+      });
     };
     window.addEventListener("pagehide", persistLatestDraft);
     return () => {
@@ -970,6 +992,16 @@ export function QuoteBuilderView() {
     () => filteredDraftLines.filter((line) => isIncludedEditableQuoteLine(line)),
     [filteredDraftLines],
   );
+  const effectiveAiPricingReview = useMemo<AiPricingReview | null>(() => {
+    if (aiPricingReview) return aiPricingReview;
+    if (!lastAppliedAiRunId) return null;
+    const zeroPricedLines = includedDraftLines.filter((line) => Number(line.unitPrice) <= 0);
+    if (!zeroPricedLines.length) return null;
+    return {
+      lineDescriptions: zeroPricedLines.map((line) => line.title.trim() || t("quoteBuilder.aiPricingReview.untitledLine")),
+      acknowledged: false,
+    };
+  }, [aiPricingReview, includedDraftLines, lastAppliedAiRunId, t]);
 
   const savedPresetKeys = useMemo(
     () =>
@@ -1120,30 +1152,76 @@ export function QuoteBuilderView() {
       return;
     }
 
+    const requestBody = {
+      prompt,
+      customerId: activeCustomer?.id ?? undefined,
+      serviceType: quoteForm.serviceType,
+      currentTitle: quoteForm.title || undefined,
+      currentScopeText: quoteForm.scopeText || undefined,
+      currentLineItems: filteredDraftLines.map((line) => ({
+        id: line.id,
+        description: joinQuoteLineDescription(line.title, line.details),
+        sectionType: line.sectionType,
+        sectionLabel: line.sectionLabel || null,
+        quantity: Number(line.quantity) || 1,
+        unitCost: Number(line.unitCost) || 0,
+        unitPrice: Number(line.unitPrice) || 0,
+        sourcePresetId: line.sourcePresetId ?? undefined,
+      })),
+    };
+    const fingerprint = JSON.stringify(requestBody);
+    const idempotencyKey = aiRetryIdentityRef.current?.fingerprint === fingerprint
+      ? aiRetryIdentityRef.current.idempotencyKey
+      : `qf-ai-${crypto.randomUUID()}`;
+    const requestId = crypto.randomUUID();
+    const controller = new AbortController();
+    aiRequestRef.current = { id: requestId, controller, fingerprint, idempotencyKey };
+
     track("builder_ai_modal_submit");
     try {
       setAiSubmitting(true);
       setAiProgressEvent(null);
       setAiErrorMessage(null);
-      const { customer, parsed, suggestion, patch, insight, aiRunId, usage } = await api.quotes.suggestWithAi({
-        prompt,
-        customerId: activeCustomer?.id ?? undefined,
-        serviceType: quoteForm.serviceType,
-        currentTitle: quoteForm.title || undefined,
-        currentScopeText: quoteForm.scopeText || undefined,
-        currentLineItems: filteredDraftLines.map((line) => ({
-          id: line.id,
-          description: joinQuoteLineDescription(line.title, line.details),
-          sectionType: line.sectionType,
-          sectionLabel: line.sectionLabel || null,
-          quantity: Number(line.quantity) || 1,
-          unitCost: Number(line.unitCost) || 0,
-          unitPrice: Number(line.unitPrice) || 0,
-        })),
-      }, {
-        onProgress: setAiProgressEvent,
-        idempotencyKey: `qf-ai-${crypto.randomUUID()}`,
+      setAiStatusMessage(null);
+      const { customer, parsed, suggestion, patch, insight, aiRunId, usage } = await api.quotes.suggestWithAi(requestBody, {
+        onProgress: (event) => {
+          if (aiRequestRef.current?.id === requestId && !controller.signal.aborted) {
+            setAiProgressEvent(event);
+          }
+        },
+        idempotencyKey,
+        signal: controller.signal,
       });
+      if (aiRequestRef.current?.id !== requestId || controller.signal.aborted) return;
+      aiRetryIdentityRef.current = null;
+      const pricingReviewLines = suggestion.lineItems.filter((line) =>
+        line.sectionType !== "ALTERNATE"
+        && (line.priceProvenance === "UNRESOLVED" || line.unitPrice <= 0),
+      );
+      const unresolvedDescriptions = new Set(
+        pricingReviewLines
+          .filter((line) => line.priceProvenance === "UNRESOLVED")
+          .map((line) => line.description.trim().toLocaleLowerCase()),
+      );
+      const reviewedSuggestion = {
+        ...suggestion,
+        lineItems: suggestion.lineItems.map((line) =>
+          line.priceProvenance === "UNRESOLVED" && line.unitPrice !== 0
+            ? { ...line, unitPrice: 0 }
+            : line),
+      };
+      const reviewedPatch = {
+        ...patch,
+        lineChanges: patch.lineChanges.map((change) =>
+          change.action !== "REMOVE"
+          && change.unitPrice !== 0
+          && (
+            change.priceProvenance === "UNRESOLVED"
+            || unresolvedDescriptions.has(change.description.trim().toLocaleLowerCase())
+          )
+            ? { ...change, unitPrice: 0 }
+            : change),
+      };
 
       setChatParsed(parsed);
       setChatPrompt("");
@@ -1153,7 +1231,7 @@ export function QuoteBuilderView() {
 
       if (aiAssistTarget.kind !== "quote") {
         if (aiAssistTarget.kind === "title") {
-          const nextTitle = suggestion.title.trim();
+          const nextTitle = reviewedSuggestion.title.trim();
           if (nextTitle) {
             setQuoteForm((prev) => ({
               ...prev,
@@ -1164,8 +1242,8 @@ export function QuoteBuilderView() {
           setNotice(t("quoteBuilder.notices.aiTitleApplied"));
         } else if (aiAssistTarget.kind === "overview") {
           const nextOverview =
-            suggestion.scopeText.trim() ||
-            suggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
+            reviewedSuggestion.scopeText.trim() ||
+            reviewedSuggestion.lineItems.map((line) => line.description.trim()).filter(Boolean).join("\n\n");
           if (nextOverview) {
             setQuoteForm((prev) => ({
               ...prev,
@@ -1175,13 +1253,13 @@ export function QuoteBuilderView() {
           }
           setNotice(t("quoteBuilder.notices.aiOverviewApplied"));
         } else {
-          const targetedPatch = patch.lineChanges.find(
+          const targetedPatch = reviewedPatch.lineChanges.find(
             (change) => change.action !== "REMOVE" && change.targetLineId === aiAssistTarget.lineId,
           );
           const nextDescription =
             targetedPatch?.description.trim() ||
-            suggestion.lineItems[0]?.description?.trim() ||
-            suggestion.scopeText.trim();
+            reviewedSuggestion.lineItems[0]?.description?.trim() ||
+            reviewedSuggestion.scopeText.trim();
           if (nextDescription) {
             const { title, details } = splitQuoteLineDescription(nextDescription);
             setDraftLines((current) =>
@@ -1215,14 +1293,19 @@ export function QuoteBuilderView() {
       setQuoteForm((prev) => ({
         ...prev,
         customerId: customer?.id ?? prev.customerId,
-        serviceType: suggestion.serviceType,
-        title: suggestion.title,
-        scopeText: suggestion.scopeText,
-        internalCostSubtotal: String(suggestion.internalCostSubtotal ?? 0),
-        customerPriceSubtotal: String(suggestion.customerPriceSubtotal),
-        taxAmount: String(suggestion.taxAmount),
+        serviceType: reviewedSuggestion.serviceType,
+        title: reviewedSuggestion.title,
+        scopeText: reviewedSuggestion.scopeText,
+        internalCostSubtotal: String(reviewedSuggestion.internalCostSubtotal ?? 0),
+        customerPriceSubtotal: String(reviewedSuggestion.customerPriceSubtotal),
+        taxAmount: String(reviewedSuggestion.taxAmount),
       }));
-      setDraftLines((current) => applyAiQuoteLinePatch(current, patch));
+      setDraftLines((current) => applyAiQuoteLinePatch(current, reviewedPatch));
+      const requiresPricingReview = reviewedSuggestion.requiresPricingReview === true || pricingReviewLines.length > 0;
+      setAiPricingReview(requiresPricingReview ? {
+        lineDescriptions: pricingReviewLines.map((line) => splitQuoteLineDescription(line.description).title || line.description),
+        acknowledged: false,
+      } : null);
       setAiInsight(insight);
       setLastAppliedAiProvenance({
         auditEventId: aiRunId,
@@ -1235,9 +1318,9 @@ export function QuoteBuilderView() {
       publishAiUsageUpdate(usage);
       const usageSummary = formatAiUsageNotice(usage, locale);
       const patchSummary = [
-        patch.updated ? t("quoteBuilder.aiPatch.updated", { count: patch.updated }) : null,
-        patch.added ? t("quoteBuilder.aiPatch.added", { count: patch.added }) : null,
-        patch.removed ? t("quoteBuilder.aiPatch.removed", { count: patch.removed }) : null,
+        reviewedPatch.updated ? t("quoteBuilder.aiPatch.updated", { count: reviewedPatch.updated }) : null,
+        reviewedPatch.added ? t("quoteBuilder.aiPatch.added", { count: reviewedPatch.added }) : null,
+        reviewedPatch.removed ? t("quoteBuilder.aiPatch.removed", { count: reviewedPatch.removed }) : null,
       ]
         .filter(Boolean)
         .join(", ");
@@ -1249,15 +1332,39 @@ export function QuoteBuilderView() {
         }),
       );
     } catch (err) {
+      if (aiRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        return;
+      }
       const usageUpdate = aiUsageUpdateFromApiError(err);
       if (usageUpdate) publishAiUsageUpdate(usageUpdate);
       const message = localizedApiError(err, t, { fallbackKey: "quoteBuilder.errors.aiApply" });
       setAiErrorMessage(message);
       setError(message);
+      const ambiguousFailure = !(err instanceof ApiError) || err.status === 409 || err.status === 503;
+      aiRetryIdentityRef.current = ambiguousFailure ? { fingerprint, idempotencyKey } : null;
     } finally {
-      setAiSubmitting(false);
-      setAiProgressEvent(null);
+      if (aiRequestRef.current?.id === requestId) {
+        aiRequestRef.current = null;
+        setAiSubmitting(false);
+        setAiProgressEvent(null);
+      }
     }
+  }
+
+  function cancelAiDraftRequest() {
+    const activeRequest = aiRequestRef.current;
+    if (!activeRequest) return;
+    activeRequest.controller.abort();
+    aiRetryIdentityRef.current = {
+      fingerprint: activeRequest.fingerprint,
+      idempotencyKey: activeRequest.idempotencyKey,
+    };
+    aiRequestRef.current = null;
+    setAiSubmitting(false);
+    setAiProgressEvent(null);
+    setAiErrorMessage(null);
+    setAiStatusMessage(t("quoteComponents.aiModal.cancelled"));
+    track("builder_ai_modal_cancel");
   }
 
   function updateDraftLine(lineId: string, field: keyof EditableQuoteLine, value: string) {
@@ -1474,7 +1581,7 @@ export function QuoteBuilderView() {
     if (!draftStorageKey || quoteCreationCompletedRef.current) return;
     quoteCreationCompletedRef.current = true;
     draftAutosaveEpochRef.current += 1;
-    await draftAutosaveInFlightRef.current;
+    await waitForPendingDraftAutosaves();
     const cleared = await removeQuoteBuilderDraft(draftStorageKey);
     if (!cleared) {
       quoteCreationCompletedRef.current = false;
@@ -1499,7 +1606,7 @@ export function QuoteBuilderView() {
   async function clearStoredBuilderDraft() {
     quoteCreationCompletedRef.current = true;
     draftAutosaveEpochRef.current += 1;
-    await draftAutosaveInFlightRef.current;
+    await waitForPendingDraftAutosaves();
     if (draftStorageKey && hydratedDraftStorageKey === draftStorageKey) {
       const cleared = await removeQuoteBuilderDraft(draftStorageKey);
       if (!cleared) {
@@ -1532,6 +1639,7 @@ export function QuoteBuilderView() {
     setMobilePane("editor");
     setAiModalOpen(false);
     setAiInsight(null);
+    setAiPricingReview(null);
     setLastAppliedAiProvenance(null);
     setQuoteCreateRetryIdentity(null);
     setKodyDraftHandoff(null);
@@ -1582,6 +1690,11 @@ export function QuoteBuilderView() {
       setError(t("quoteBuilder.errors.customerVerification"));
       return;
     }
+    if (effectiveAiPricingReview && !effectiveAiPricingReview.acknowledged) {
+      setError(t("quoteBuilder.errors.aiPricingAcknowledgement"));
+      setMobilePane("editor");
+      return;
+    }
     if (!draftStorageKey || hydratedDraftStorageKey !== draftStorageKey || draftRecoveryStatus !== "ready") {
       setError(t("quoteBuilder.errors.recoveryNotReady"));
       return;
@@ -1621,6 +1734,7 @@ export function QuoteBuilderView() {
         taxAmount: Number(quoteForm.taxAmount),
         documentLocale: quoteForm.documentLocale,
         aiUsageEventId: lastAppliedAiRunId ?? undefined,
+        aiPricingReviewAcknowledged: effectiveAiPricingReview?.acknowledged === true ? true : undefined,
         lineItems: initialLineItems,
       });
       const payloadHash = await hashQuoteCreateCommand(serializedCreateCommand);
@@ -1630,7 +1744,7 @@ export function QuoteBuilderView() {
       }
       const retryIdentity = resolveQuoteCreateRetryIdentity(payloadHash, quoteCreateRetryIdentity);
       draftAutosaveEpochRef.current += 1;
-      await draftAutosaveInFlightRef.current;
+      await waitForPendingDraftAutosaves();
       const draftWithRetryIdentity: BuilderDraftData = {
         ...currentBuilderDraft,
         quoteCreateRetryIdentity: retryIdentity,
@@ -1652,12 +1766,13 @@ export function QuoteBuilderView() {
           customerPriceSubtotal: customerSubtotal.toFixed(2),
         },
         aiUsageEventId: lastAppliedAiRunId ?? undefined,
+        aiPricingReviewAcknowledged: effectiveAiPricingReview?.acknowledged === true ? true : undefined,
         initialLineItems,
         idempotencyKey: retryIdentity.idempotencyKey,
         beforeSuccessNavigation: async () => {
           quoteCreationCompletedRef.current = true;
           draftAutosaveEpochRef.current += 1;
-          await draftAutosaveInFlightRef.current;
+          await waitForPendingDraftAutosaves();
           const cleared = await removeQuoteBuilderDraft(draftStorageKey);
           if (!cleared) {
             quoteCreationCompletedRef.current = false;
@@ -1683,6 +1798,7 @@ export function QuoteBuilderView() {
         }
         setDraftLines([makeEditableQuoteLine()]);
         setAiInsight(null);
+        setAiPricingReview(null);
         setLastAppliedAiProvenance(null);
         if (!presetPromptLine && promptCandidate) {
           setPresetPromptLine(promptCandidate);
@@ -1985,6 +2101,34 @@ export function QuoteBuilderView() {
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {effectiveAiPricingReview ? (
+        <div
+          role="alert"
+          data-testid="ai-pricing-review"
+          className="rounded-xl border border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)] px-4 py-4 text-[var(--qf-text)]"
+        >
+          <p className="text-sm font-semibold">{t("quoteBuilder.aiPricingReview.title")}</p>
+          <p className="mt-1 text-sm leading-6 text-[var(--qf-text-soft)]">
+            {t("quoteBuilder.aiPricingReview.description")}
+          </p>
+          {effectiveAiPricingReview.lineDescriptions.length ? (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[var(--qf-text-soft)]">
+              {effectiveAiPricingReview.lineDescriptions.slice(0, 6).map((description, index) => (
+                <li key={`${description}-${index}`}>{description}</li>
+              ))}
+            </ul>
+          ) : null}
+          <label className="mt-3 flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-[var(--qf-warning-border)] bg-[var(--qf-panel)] px-3 py-2.5 text-sm font-medium text-[var(--qf-text)] focus-within:ring-4 focus-within:ring-[var(--qf-focus-ring)]">
+            <input
+              type="checkbox"
+              checked={effectiveAiPricingReview.acknowledged}
+              onChange={(event) => setAiPricingReview({ ...effectiveAiPricingReview, acknowledged: event.target.checked })}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--qf-action-primary)]"
+            />
+            <span>{t("quoteBuilder.aiPricingReview.acknowledge")}</span>
+          </label>
         </div>
       ) : null}
 
@@ -2408,8 +2552,13 @@ export function QuoteBuilderView() {
       <QuoteAiPromptModal
         open={aiModalOpen}
         onClose={() => {
+          if (aiSubmitting) {
+            cancelAiDraftRequest();
+            return;
+          }
           setAiModalOpen(false);
           setAiErrorMessage(null);
+          setAiStatusMessage(null);
         }}
         serviceType={quoteForm.serviceType}
         onServiceTypeChange={(value) =>
@@ -2437,8 +2586,10 @@ export function QuoteBuilderView() {
         usageHint={aiUsageHint}
         usageLimitMessage={aiUsage.paidActionsUnavailable ? aiUsageLimitMessage : null}
         errorMessage={aiErrorMessage}
+        statusMessage={aiStatusMessage}
         progressEvent={aiProgressEvent}
         loading={aiSubmitting}
+        onCancelRequest={cancelAiDraftRequest}
         disabled={!canUseChatToQuote || aiUsage.paidActionsUnavailable}
         onSubmit={(event) => void handleAiDraftSubmit(event)}
         title={

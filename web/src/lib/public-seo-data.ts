@@ -62,13 +62,13 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/services": {
     path: "/services",
-    lastModified: "2026-08-01",
-    title: "Customer Management and Quoting Services | QuoteFly",
+    lastModified: "2026-08-25",
+    title: "Contractor Quote, Job & Dispatch Software | QuoteFly",
     description:
-      "Explore QuoteFly customer management, estimates, branded quote PDFs, sharing, follow-up, and pipeline analytics for small contractors.",
+      "Explore QuoteFly customer management, Kody-assisted quote drafting, accepted-quote Jobs, scheduling, dispatch controls, and internal invoice records.",
     heading: "Customer management and quoting services in one simple app",
     summary:
-      "Move from customer intake to a reviewed estimate, branded quote PDF, and practical follow-up in one mobile-friendly service.",
+      "Move from customer intake to a Kody-assisted quote review, accepted Job, scheduled visit, dispatch update, and internal invoice record in one mobile-friendly workspace.",
     schemaType: "CollectionPage",
   },
   "/solutions": {
@@ -150,7 +150,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/about": {
     path: "/about",
-    lastModified: "2026-08-24",
+    lastModified: "2026-08-25",
     title: "About QuoteFly | Quoting, CRM & Dispatch Software",
     description:
       "QuoteFly brings quoting, customer management, job scheduling, and dispatch into one practical workflow for solo operators and small service teams.",

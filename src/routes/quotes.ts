@@ -43,6 +43,7 @@ import { parseChatToQuotePrompt, type ParsedChatToQuoteDraft } from "../services
 import {
   aiBuildQuoteRevisionPlan,
   aiParseChatToQuotePrompt,
+  createAiQuoteProviderBudget,
   createAiTelemetryAccumulator,
   getAiQuoteRuntimeInfo,
 } from "../services/ai-quote";
@@ -116,6 +117,7 @@ const CreateQuoteSchema = z.object({
   customerPriceSubtotal: z.number().nonnegative(),
   taxAmount: z.number().nonnegative().default(0),
   aiUsageEventId: z.string().min(1).optional(),
+  aiPricingReviewAcknowledged: z.boolean().optional(),
   assignedTenantUserId: z.string().min(1).nullable().optional(),
   documentLocale: SupportedLocaleSchema.optional(),
   lineItems: z
@@ -394,6 +396,7 @@ const SuggestQuoteWithAiSchema = z.object({
         quantity: z.number().positive(),
         unitCost: z.number().nonnegative(),
         unitPrice: z.number().nonnegative(),
+        sourcePresetId: z.string().min(1).optional(),
       }),
     )
     .max(100)
@@ -699,6 +702,12 @@ const RevisionSnapshotLineItemSchema = z.object({
   unitCost: z.number().finite(),
   unitPrice: z.number().finite(),
   lineTotal: z.number().finite(),
+  priceProvenance: z.enum(["MANUAL", "TENANT_PRESET", "AI_REVIEWED", "REVISION_RESTORE"]).optional(),
+  sourcePresetIdSnapshot: z.string().max(191).nullable().optional(),
+  sourcePresetNameSnapshot: z.string().max(191).nullable().optional(),
+  sourcePresetCatalogKeySnapshot: z.string().max(191).nullable().optional(),
+  sourcePresetCatalogVersionSnapshot: z.number().int().nullable().optional(),
+  sourcePresetUpdatedAtUtcSnapshot: z.string().datetime().nullable().optional(),
 });
 
 const RevisionSnapshotSchema = z.object({
@@ -792,6 +801,12 @@ async function getQuoteRevisionContext(
           quantity: true,
           unitCost: true,
           unitPrice: true,
+          priceProvenance: true,
+          sourcePresetIdSnapshot: true,
+          sourcePresetNameSnapshot: true,
+          sourcePresetCatalogKeySnapshot: true,
+          sourcePresetCatalogVersionSnapshot: true,
+          sourcePresetUpdatedAtUtcSnapshot: true,
         },
       },
     },
@@ -846,6 +861,12 @@ function buildQuoteRevisionSnapshot(
         unitCost: Number(lineItem.unitCost),
         unitPrice,
         lineTotal: roundCurrency(quantity * unitPrice),
+        priceProvenance: lineItem.priceProvenance,
+        sourcePresetIdSnapshot: lineItem.sourcePresetIdSnapshot,
+        sourcePresetNameSnapshot: lineItem.sourcePresetNameSnapshot,
+        sourcePresetCatalogKeySnapshot: lineItem.sourcePresetCatalogKeySnapshot,
+        sourcePresetCatalogVersionSnapshot: lineItem.sourcePresetCatalogVersionSnapshot,
+        sourcePresetUpdatedAtUtcSnapshot: lineItem.sourcePresetUpdatedAtUtcSnapshot?.toISOString() ?? null,
       };
     }),
     ...(options?.captureDocument
@@ -1099,6 +1120,14 @@ async function restoreQuoteRevision(
         quantity: roundCurrency(lineItem.quantity),
         unitCost: roundCurrency(lineItem.unitCost),
         unitPrice: roundCurrency(lineItem.unitPrice),
+        priceProvenance: lineItem.priceProvenance ?? "REVISION_RESTORE",
+        sourcePresetIdSnapshot: lineItem.sourcePresetIdSnapshot ?? null,
+        sourcePresetNameSnapshot: lineItem.sourcePresetNameSnapshot ?? null,
+        sourcePresetCatalogKeySnapshot: lineItem.sourcePresetCatalogKeySnapshot ?? null,
+        sourcePresetCatalogVersionSnapshot: lineItem.sourcePresetCatalogVersionSnapshot ?? null,
+        sourcePresetUpdatedAtUtcSnapshot: lineItem.sourcePresetUpdatedAtUtcSnapshot
+          ? new Date(lineItem.sourcePresetUpdatedAtUtcSnapshot)
+          : null,
       },
     });
   }
@@ -1272,24 +1301,6 @@ function requiredPlanForFeature(
   return "professional";
 }
 
-function defaultLaborRate(serviceType: z.infer<typeof ServiceTypeSchema>): number {
-  if (serviceType === "ROOFING") return 2.75;
-  if (serviceType === "FLOORING") return 2.1;
-  if (serviceType === "PLUMBING") return 2.6;
-  if (serviceType === "GARDENING") return 1.75;
-  if (serviceType === "CONSTRUCTION") return 3.1;
-  return 2.4;
-}
-
-function defaultMaterialMarkup(serviceType: z.infer<typeof ServiceTypeSchema>): number {
-  if (serviceType === "ROOFING") return 0.35;
-  if (serviceType === "FLOORING") return 0.3;
-  if (serviceType === "PLUMBING") return 0.38;
-  if (serviceType === "GARDENING") return 0.28;
-  if (serviceType === "CONSTRUCTION") return 0.34;
-  return 0.33;
-}
-
 function laborSplit(serviceType: z.infer<typeof ServiceTypeSchema>): number {
   if (serviceType === "ROOFING") return 0.45;
   if (serviceType === "FLOORING") return 0.5;
@@ -1432,7 +1443,8 @@ function lineValuesDiffer(current: AiCurrentLineItem, next: AiSuggestedLineItem)
     (current.sectionLabel ?? "").trim() !== (next.sectionLabel ?? "").trim() ||
     roundCurrency(current.quantity) !== roundCurrency(next.quantity) ||
     roundCurrency(current.unitCost) !== roundCurrency(next.unitCost) ||
-    roundCurrency(current.unitPrice) !== roundCurrency(next.unitPrice)
+    roundCurrency(current.unitPrice) !== roundCurrency(next.unitPrice) ||
+    (current.sourcePresetId ?? null) !== (next.sourcePresetId ?? null)
   );
 }
 
@@ -1474,6 +1486,8 @@ function buildDeterministicAiPatch(
           quantity: suggestion.quantity,
           unitCost: suggestion.unitCost,
           unitPrice: suggestion.unitPrice,
+          priceProvenance: suggestion.priceProvenance,
+          sourcePresetId: suggestion.sourcePresetId,
         };
         updated += 1;
         lineChanges.push({
@@ -1486,6 +1500,8 @@ function buildDeterministicAiPatch(
           quantity: suggestion.quantity,
           unitCost: suggestion.unitCost,
           unitPrice: suggestion.unitPrice,
+          priceProvenance: suggestion.priceProvenance,
+          sourcePresetId: suggestion.sourcePresetId,
           reason: "Aligned to the AI quote draft.",
         });
       }
@@ -1500,6 +1516,8 @@ function buildDeterministicAiPatch(
       quantity: suggestion.quantity,
       unitCost: suggestion.unitCost,
       unitPrice: suggestion.unitPrice,
+      priceProvenance: suggestion.priceProvenance,
+      sourcePresetId: suggestion.sourcePresetId,
     });
     added += 1;
     lineChanges.push({
@@ -1512,6 +1530,8 @@ function buildDeterministicAiPatch(
       quantity: suggestion.quantity,
       unitCost: suggestion.unitCost,
       unitPrice: suggestion.unitPrice,
+      priceProvenance: suggestion.priceProvenance,
+      sourcePresetId: suggestion.sourcePresetId,
       reason: "Added from the AI quote draft.",
     });
   }
@@ -1530,6 +1550,8 @@ function buildDeterministicAiPatch(
         quantity: roundCurrency(line.quantity),
         unitCost: roundCurrency(line.unitCost),
         unitPrice: roundCurrency(line.unitPrice),
+        priceProvenance: line.priceProvenance ?? "CURRENT_QUOTE",
+        sourcePresetId: line.sourcePresetId ?? undefined,
       })),
   };
 }
@@ -1557,6 +1579,7 @@ function applyAiRevisionPlan(
         quantity: roundCurrency(operation.quantity ?? 1),
         unitCost: roundCurrency(operation.unitCost ?? 0),
         unitPrice: roundCurrency(operation.unitPrice ?? 0),
+        priceProvenance: "UNRESOLVED",
       };
       workingLines.push({
         id: null,
@@ -1573,6 +1596,8 @@ function applyAiRevisionPlan(
         quantity: nextLine.quantity,
         unitCost: nextLine.unitCost,
         unitPrice: nextLine.unitPrice,
+        priceProvenance: nextLine.priceProvenance,
+        sourcePresetId: nextLine.sourcePresetId,
         reason: operation.reason,
       });
       continue;
@@ -1598,6 +1623,8 @@ function applyAiRevisionPlan(
         quantity: roundCurrency(current.quantity),
         unitCost: roundCurrency(current.unitCost),
         unitPrice: roundCurrency(current.unitPrice),
+        priceProvenance: current.priceProvenance ?? "CURRENT_QUOTE",
+        sourcePresetId: current.sourcePresetId,
         reason: operation.reason,
       });
       continue;
@@ -1613,6 +1640,14 @@ function applyAiRevisionPlan(
       quantity: roundCurrency(operation.quantity ?? current.quantity),
       unitCost: roundCurrency(operation.unitCost ?? current.unitCost),
       unitPrice: roundCurrency(operation.unitPrice ?? current.unitPrice),
+      priceProvenance:
+        operation.unitPrice !== null && operation.unitPrice !== undefined
+          ? "UNRESOLVED"
+          : current.priceProvenance ?? "CURRENT_QUOTE",
+      sourcePresetId:
+        operation.unitPrice !== null && operation.unitPrice !== undefined
+          ? undefined
+          : current.sourcePresetId,
     };
 
     if (!lineValuesDiffer(current, nextLine)) {
@@ -1634,6 +1669,8 @@ function applyAiRevisionPlan(
       quantity: nextLine.quantity,
       unitCost: nextLine.unitCost,
       unitPrice: nextLine.unitPrice,
+      priceProvenance: nextLine.priceProvenance,
+      sourcePresetId: nextLine.sourcePresetId,
       reason: operation.reason,
     });
   }
@@ -1653,6 +1690,8 @@ function applyAiRevisionPlan(
           quantity: roundCurrency(line.quantity),
           unitCost: roundCurrency(line.unitCost),
           unitPrice: roundCurrency(line.unitPrice),
+          priceProvenance: line.priceProvenance ?? "CURRENT_QUOTE",
+          sourcePresetId: line.sourcePresetId ?? undefined,
         })),
     };
   }
@@ -1672,6 +1711,8 @@ function applyAiRevisionPlan(
         quantity: roundCurrency(line.quantity),
         unitCost: roundCurrency(line.unitCost),
         unitPrice: roundCurrency(line.unitPrice),
+        priceProvenance: line.priceProvenance ?? "CURRENT_QUOTE",
+        sourcePresetId: line.sourcePresetId ?? undefined,
       })),
   };
 }
@@ -1769,6 +1810,7 @@ function buildAiSuggestionInsight(params: {
   similarQuotes: SimilarQuoteContext[];
   retrievalCitations?: AiRetrievalResult["citations"];
   targetAmount?: number | null;
+  requiresPricingReview?: boolean;
   patch: AiQuotePatchResult;
 }): AiSuggestionInsight {
   const confidence = assessAiSuggestionConfidence({
@@ -1860,7 +1902,9 @@ function buildAiSuggestionInsight(params: {
       level: confidence.level,
       label: confidence.label,
     },
-    riskNote: confidence.riskNote,
+    riskNote: params.requiresPricingReview
+      ? "One or more included lines do not have an authoritative customer price yet. Enter and review pricing before creating or sending the quote."
+      : confidence.riskNote,
     patch: {
       added: params.patch.added,
       updated: params.patch.updated,
@@ -2142,7 +2186,16 @@ type AiSuggestedLineItem = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  priceProvenance?: AiPriceProvenance;
+  sourcePresetId?: string;
 };
+
+type AiPriceProvenance =
+  | "EXPLICIT_PROMPT"
+  | "TENANT_PRESET"
+  | "STANDARD_CATALOG"
+  | "CURRENT_QUOTE"
+  | "UNRESOLVED";
 
 type AiSuggestedQuoteDraft = {
   serviceType: z.infer<typeof ServiceTypeSchema>;
@@ -2153,6 +2206,7 @@ type AiSuggestedQuoteDraft = {
   taxAmount: number;
   totalAmount: number;
   lineItems: AiSuggestedLineItem[];
+  requiresPricingReview: boolean;
   model: string;
 };
 
@@ -2164,6 +2218,8 @@ type AiCurrentLineItem = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  priceProvenance?: AiPriceProvenance;
+  sourcePresetId?: string;
 };
 
 type AiSuggestedLinePatch = {
@@ -2176,6 +2232,8 @@ type AiSuggestedLinePatch = {
   quantity: number;
   unitCost: number;
   unitPrice: number;
+  priceProvenance?: AiPriceProvenance;
+  sourcePresetId?: string;
   reason: string;
 };
 
@@ -2213,14 +2271,6 @@ type AiSuggestionInsight = {
     removed: number;
   };
 };
-
-const AI_GUARDRAIL_RETRY_HINT = [
-  "AI guardrail retry requirements:",
-  "- Produce concrete quote edits that can be applied immediately.",
-  "- Return at least one meaningful line item with non-empty description and positive quantity.",
-  "- If the user request includes multiple areas, phases, or options, keep them as separate lines.",
-  "- Do not return a no-op response.",
-].join("\n");
 
 type AiCurrentQuoteContextForDiff = {
   serviceType: z.infer<typeof ServiceTypeSchema>;
@@ -2296,6 +2346,13 @@ function resolveAiSuggestionFromPatch(params: {
       0,
     ),
   );
+  const resolvedLines = params.patch.resolvedLines.length
+    ? params.patch.resolvedLines
+    : params.baselineSuggestion.lineItems;
+  const requiresPricingReview = resolvedLines.some(
+    (lineItem) => isIncludedQuoteLineSection(lineItem.sectionType)
+      && (lineItem.priceProvenance === "UNRESOLVED" || lineItem.unitPrice <= 0),
+  );
 
   return {
     serviceType,
@@ -2309,9 +2366,8 @@ function resolveAiSuggestionFromPatch(params: {
       internalCostSubtotal,
       customerPriceSubtotal,
       totalAmount: calculateQuoteTotal(customerPriceSubtotal, params.baselineSuggestion.taxAmount),
-      lineItems: params.patch.resolvedLines.length
-        ? params.patch.resolvedLines
-        : params.baselineSuggestion.lineItems,
+      lineItems: resolvedLines,
+      requiresPricingReview,
     },
   };
 }
@@ -2960,6 +3016,7 @@ function buildExplicitAiLineItems(params: {
   prompt: string;
   parsedDraft: ParsedChatToQuoteDraft;
   tenantPresets: Array<{
+    id: string;
     catalogKey: string | null;
     name: string;
     description: string | null;
@@ -2990,19 +3047,23 @@ function buildExplicitAiLineItems(params: {
       : null;
     const matchedPreset = matchedTenantPreset
       ? {
+          sourcePresetId: matchedTenantPreset.id,
           unitType: matchedTenantPreset.unitType,
           defaultQuantity: Number(matchedTenantPreset.defaultQuantity),
           unitCost: Number(matchedTenantPreset.unitCost),
           unitPrice: Number(matchedTenantPreset.unitPrice),
           quantityMode: matchedStandardPreset?.quantityMode ?? "default",
+          priceProvenance: "TENANT_PRESET" as const,
         }
       : matchedStandardPreset
         ? {
+            sourcePresetId: undefined,
             unitType: matchedStandardPreset.unitType,
             defaultQuantity: matchedStandardPreset.defaultQuantity,
             unitCost: matchedStandardPreset.unitCost,
             unitPrice: matchedStandardPreset.unitPrice,
             quantityMode: matchedStandardPreset.quantityMode ?? "default",
+            priceProvenance: "STANDARD_CATALOG" as const,
           }
         : null;
 
@@ -3023,6 +3084,8 @@ function buildExplicitAiLineItems(params: {
       matched: Boolean(matchedPreset),
       baseUnitCost: matchedPreset ? roundCurrency(matchedPreset.unitCost) : 0,
       baseUnitPrice: matchedPreset ? roundCurrency(matchedPreset.unitPrice) : 0,
+      priceProvenance: matchedPreset?.priceProvenance ?? "UNRESOLVED" as const,
+      sourcePresetId: matchedPreset?.sourcePresetId,
     };
   });
 
@@ -3051,6 +3114,9 @@ function buildExplicitAiLineItems(params: {
 
   const rawLines = seededLines.map((lineItem) => {
     if (lineItem.matched) {
+      const priceProvenance = params.customerPriceSubtotal > 0
+        ? "EXPLICIT_PROMPT" as const
+        : lineItem.priceProvenance;
       return {
         description: lineItem.description,
         sectionType: lineItem.sectionType,
@@ -3058,6 +3124,8 @@ function buildExplicitAiLineItems(params: {
         quantity: lineItem.quantity,
         unitCost: lineItem.baseUnitCost,
         unitPrice: lineItem.baseUnitPrice,
+        priceProvenance,
+        sourcePresetId: priceProvenance === "TENANT_PRESET" ? lineItem.sourcePresetId : undefined,
       };
     }
 
@@ -3069,6 +3137,8 @@ function buildExplicitAiLineItems(params: {
       quantity: lineItem.quantity,
       unitCost: roundCurrency(remainingInternalSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
       unitPrice: roundCurrency(remainingCustomerSubtotal * quantityShare / Math.max(lineItem.quantity, 1)),
+      priceProvenance:
+        params.customerPriceSubtotal > 0 ? "EXPLICIT_PROMPT" as const : "UNRESOLVED" as const,
     };
   });
 
@@ -3078,11 +3148,11 @@ function buildExplicitAiLineItems(params: {
   return rawLines.map((lineItem) => ({
     ...lineItem,
     unitCost:
-      rawInternalSubtotal > 0
+      params.internalCostSubtotal > 0 && rawInternalSubtotal > 0
         ? roundCurrency(lineItem.unitCost * (params.internalCostSubtotal / rawInternalSubtotal))
         : lineItem.unitCost,
     unitPrice:
-      rawCustomerSubtotal > 0
+      params.customerPriceSubtotal > 0 && rawCustomerSubtotal > 0
         ? roundCurrency(lineItem.unitPrice * (params.customerPriceSubtotal / rawCustomerSubtotal))
         : lineItem.unitPrice,
   }));
@@ -3098,17 +3168,6 @@ async function buildAiSuggestedQuoteDraft(
   },
 ): Promise<AiSuggestedQuoteDraft> {
   const serviceType = params.serviceTypeOverride ?? params.parsedDraft.serviceType;
-  const pricingProfile = await prisma.pricingProfile.findFirst({
-    where: {
-      tenantId,
-      serviceType,
-      deletedAtUtc: null,
-    },
-    orderBy: {
-      isDefault: "desc",
-    },
-  });
-
   const tenantPresets = await prisma.workPreset.findMany({
     where: {
       tenantId,
@@ -3118,10 +3177,8 @@ async function buildAiSuggestedQuoteDraft(
     orderBy: [{ category: "asc" }, { name: "asc" }],
   });
 
-  const laborRate = Number(pricingProfile?.laborRate ?? defaultLaborRate(serviceType));
-  const materialMarkup = Number(pricingProfile?.materialMarkup ?? defaultMaterialMarkup(serviceType));
-  const estimatedUnits = params.parsedDraft.squareFeetEstimate ?? 100;
-  const taxAmount = roundCurrency(params.parsedDraft.estimatedTaxAmount ?? 0);
+  const deterministicPricing = parseChatToQuotePrompt(params.prompt);
+  const taxAmount = roundCurrency(deterministicPricing.estimatedTaxAmount ?? 0);
 
   const matchedStandardPreset = findBestStandardWorkPresetMatch(
     serviceType,
@@ -3140,6 +3197,8 @@ async function buildAiSuggestedQuoteDraft(
         unitCost: Number(matchedTenantPreset.unitCost),
         unitPrice: Number(matchedTenantPreset.unitPrice),
         quantityMode: matchedStandardPreset?.quantityMode ?? "default",
+        priceProvenance: "TENANT_PRESET" as const,
+        sourcePresetId: matchedTenantPreset.id,
       }
     : matchedStandardPreset
       ? {
@@ -3150,6 +3209,8 @@ async function buildAiSuggestedQuoteDraft(
           unitCost: matchedStandardPreset.unitCost,
           unitPrice: matchedStandardPreset.unitPrice,
           quantityMode: matchedStandardPreset.quantityMode ?? "default",
+          priceProvenance: "STANDARD_CATALOG" as const,
+          sourcePresetId: undefined,
         }
       : null;
   const preferExplicitAiLines = shouldPreserveExplicitAiLineStructure({
@@ -3187,6 +3248,8 @@ async function buildAiSuggestedQuoteDraft(
           unitCost: Number(tenantPreset.unitCost),
           unitPrice: Number(tenantPreset.unitPrice),
           quantityMode: preset.quantityMode ?? "default",
+          priceProvenance: "TENANT_PRESET" as const,
+          sourcePresetId: tenantPreset.id,
         }
       : {
           name: preset.name,
@@ -3196,10 +3259,12 @@ async function buildAiSuggestedQuoteDraft(
           unitCost: preset.unitCost,
           unitPrice: preset.unitPrice,
           quantityMode: preset.quantityMode ?? "default",
+          priceProvenance: "STANDARD_CATALOG" as const,
+          sourcePresetId: undefined,
         };
   });
 
-  let customerPriceSubtotal = roundCurrency(params.parsedDraft.estimatedTotalAmount ?? 0);
+  let customerPriceSubtotal = roundCurrency(deterministicPricing.estimatedTotalAmount ?? 0);
   if (customerPriceSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
     const matchedQuantity = inferPresetQuantity(
       matchedPreset.unitType,
@@ -3227,12 +3292,7 @@ async function buildAiSuggestedQuoteDraft(
     }, 0);
     customerPriceSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitPrice + supplementalSubtotal);
   }
-  if (customerPriceSubtotal <= 0) {
-    const baselineInternalCost = roundCurrency(estimatedUnits * laborRate);
-    customerPriceSubtotal = roundCurrency(baselineInternalCost * (1 + materialMarkup));
-  }
-
-  let internalCostSubtotal = roundCurrency(params.parsedDraft.estimatedInternalCostAmount ?? 0);
+  let internalCostSubtotal = roundCurrency(deterministicPricing.estimatedInternalCostAmount ?? 0);
   if (internalCostSubtotal <= 0 && matchedPreset && !preferExplicitAiLines) {
     const matchedQuantity = inferPresetQuantity(
       matchedPreset.unitType,
@@ -3260,12 +3320,6 @@ async function buildAiSuggestedQuoteDraft(
     }, 0);
     internalCostSubtotal = roundCurrency(primaryQuantity * matchedPreset.unitCost + supplementalSubtotal);
   }
-  if (internalCostSubtotal <= 0) {
-    const divisor = 1 + Math.max(materialMarkup, 0.05);
-    internalCostSubtotal = roundCurrency(customerPriceSubtotal / divisor);
-  }
-
-  const totalAmount = calculateQuoteTotal(customerPriceSubtotal, taxAmount);
   const title = matchedPreset?.name ?? params.parsedDraft.title;
   const scopeText = resolveChatQuoteScopeText(
     params.parsedDraft.scopeText,
@@ -3287,6 +3341,14 @@ async function buildAiSuggestedQuoteDraft(
             quantity: primaryQuantity,
             unitCost: roundCurrency(matchedPreset.unitCost),
             unitPrice: roundCurrency(matchedPreset.unitPrice),
+            priceProvenance:
+              deterministicPricing.estimatedTotalAmount && deterministicPricing.estimatedTotalAmount > 0
+                ? "EXPLICIT_PROMPT" as const
+                : matchedPreset.priceProvenance,
+            sourcePresetId:
+              !deterministicPricing.estimatedTotalAmount && matchedPreset.priceProvenance === "TENANT_PRESET"
+                ? matchedPreset.sourcePresetId
+                : undefined,
           },
         ];
 
@@ -3300,6 +3362,14 @@ async function buildAiSuggestedQuoteDraft(
           ),
           unitCost: roundCurrency(preset.unitCost),
           unitPrice: roundCurrency(preset.unitPrice),
+          priceProvenance:
+            deterministicPricing.estimatedTotalAmount && deterministicPricing.estimatedTotalAmount > 0
+              ? "EXPLICIT_PROMPT" as const
+              : preset.priceProvenance,
+          sourcePresetId:
+            !deterministicPricing.estimatedTotalAmount && preset.priceProvenance === "TENANT_PRESET"
+              ? preset.sourcePresetId
+              : undefined,
         }));
 
         const allLineItems = [...primaryLineItems, ...supplementalLineItems];
@@ -3331,6 +3401,24 @@ async function buildAiSuggestedQuoteDraft(
         });
       })();
 
+  customerPriceSubtotal = roundCurrency(
+    lineItems.reduce(
+      (sum, lineItem) => sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitPrice : 0),
+      0,
+    ),
+  );
+  internalCostSubtotal = roundCurrency(
+    lineItems.reduce(
+      (sum, lineItem) => sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitCost : 0),
+      0,
+    ),
+  );
+  const requiresPricingReview = lineItems.some(
+    (lineItem) => isIncludedQuoteLineSection(lineItem.sectionType)
+      && (lineItem.priceProvenance === "UNRESOLVED" || lineItem.unitPrice <= 0),
+  );
+  const totalAmount = calculateQuoteTotal(customerPriceSubtotal, taxAmount);
+
   return {
     serviceType,
     title,
@@ -3340,6 +3428,7 @@ async function buildAiSuggestedQuoteDraft(
     taxAmount,
     totalAmount,
     lineItems,
+    requiresPricingReview,
     model: getAiQuoteRuntimeInfo().model,
   };
 }
@@ -3520,12 +3609,11 @@ async function resolveQuoteCreateLineItems(
   transaction: Prisma.TransactionClient,
   access: AccessContext,
   lineItems: NonNullable<z.infer<typeof CreateQuoteSchema>["lineItems"]>,
+  options: { aiReviewed: boolean },
 ) {
   const canViewInternalCosts = hasCapability(access, "viewInternalCosts");
   const presetIds = Array.from(new Set(
-    canViewInternalCosts
-      ? []
-      : lineItems.flatMap((lineItem) => lineItem.sourcePresetId ? [lineItem.sourcePresetId] : []),
+    lineItems.flatMap((lineItem) => lineItem.sourcePresetId ? [lineItem.sourcePresetId] : []),
   ));
   const presets = presetIds.length
     ? await transaction.workPreset.findMany({
@@ -3534,10 +3622,17 @@ async function resolveQuoteCreateLineItems(
           id: { in: presetIds },
           deletedAtUtc: null,
         },
-        select: { id: true, unitCost: true },
+        select: {
+          id: true,
+          name: true,
+          catalogKey: true,
+          catalogVersion: true,
+          updatedAt: true,
+          unitCost: true,
+        },
       })
     : [];
-  const presetCosts = new Map(presets.map((preset) => [preset.id, Number(preset.unitCost)]));
+  const presetsById = new Map(presets.map((preset) => [preset.id, preset]));
   return lineItems.map((lineItem) => {
     const quantity = roundCurrency(lineItem.quantity);
     if (quantity <= 0) {
@@ -3547,17 +3642,59 @@ async function resolveQuoteCreateLineItems(
         "Line-item quantities must be at least 0.01 after rounding.",
       );
     }
+    const sourcePreset = lineItem.sourcePresetId
+      ? presetsById.get(lineItem.sourcePresetId) ?? null
+      : null;
+    if (lineItem.sourcePresetId && !sourcePreset) {
+      throw new QuoteCreateError(
+        422,
+        "SOURCE_PRESET_INVALID",
+        "A selected product or service is no longer available in this workspace. Refresh the quote and choose it again.",
+      );
+    }
     const resolvedUnitCost = canViewInternalCosts
       ? lineItem.unitCost
-      : lineItem.sourcePresetId
-        ? presetCosts.get(lineItem.sourcePresetId) ?? 0
+      : sourcePreset
+        ? Number(sourcePreset.unitCost)
         : 0;
     return {
       ...lineItem,
       quantity,
       unitCost: roundCurrency(resolvedUnitCost),
       unitPrice: roundCurrency(lineItem.unitPrice),
+      priceProvenance: sourcePreset
+        ? "TENANT_PRESET" as const
+        : options.aiReviewed
+          ? "AI_REVIEWED" as const
+          : "MANUAL" as const,
+      sourcePresetIdSnapshot: sourcePreset?.id ?? null,
+      sourcePresetNameSnapshot: sourcePreset?.name ?? null,
+      sourcePresetCatalogKeySnapshot: sourcePreset?.catalogKey ?? null,
+      sourcePresetCatalogVersionSnapshot: sourcePreset?.catalogVersion ?? null,
+      sourcePresetUpdatedAtUtcSnapshot: sourcePreset?.updatedAt ?? null,
     };
+  });
+}
+
+async function resolveQuoteLinePresetSnapshot(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  input: { tenantId: string; sourcePresetId?: string },
+) {
+  if (!input.sourcePresetId) return null;
+  return prisma.workPreset.findFirst({
+    where: {
+      id: input.sourcePresetId,
+      tenantId: input.tenantId,
+      deletedAtUtc: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      catalogKey: true,
+      catalogVersion: true,
+      updatedAt: true,
+      unitCost: true,
+    },
   });
 }
 
@@ -3693,6 +3830,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         credits: 1,
       }, async () => {
       const aiTelemetry = createAiTelemetryAccumulator();
+      const providerBudget = createAiQuoteProviderBudget();
       stream.progress(
         "analyzing_prompt",
         "Parsing the request and checking whether this is a new draft or a revision.",
@@ -3746,6 +3884,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             : "No customer is locked yet. AI will try to infer customer details from the prompt.",
       );
 
+      const preflightDraft = parseChatToQuotePrompt(payload.prompt);
       let selectedCustomer = payload.customerId
         ? await app.prisma.customer.findFirst({
             where: {
@@ -3762,7 +3901,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           })
         : existingQuote?.customer ?? null;
 
-    const preflightDraft = parseChatToQuotePrompt(payload.prompt);
+    if (!selectedCustomer && !payload.customerId && !existingQuote?.customerId) {
+      selectedCustomer = await findActivePromptCustomer(app.prisma, access, {
+        fullName: preflightDraft.customerName,
+        phone: normalizeNullablePhone(preflightDraft.customerPhone),
+        email: normalizeNullableEmail(preflightDraft.customerEmail),
+      });
+    }
+
     const preliminaryServiceType =
       existingQuote?.serviceType ?? payload.serviceType ?? preflightDraft.serviceType;
     const currentQuoteEstimatedTotal = payload.currentLineItems?.length
@@ -3860,6 +4006,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                   quantity: lineItem.quantity,
                   unitCost: lineItem.unitCost,
                   unitPrice: lineItem.unitPrice,
+                  sourcePresetId: lineItem.sourcePresetId,
                 }))
               : (existingQuote?.lineItems ?? []).map((lineItem) => ({
                   id: lineItem.id,
@@ -3898,6 +4045,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         requestId: request.id,
         customerId: selectedCustomer?.id ?? null,
         quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+        allowProviderCalls: false,
       });
       accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
     } catch (retrievalErr) {
@@ -3961,9 +4109,11 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       },
     );
 
-    let parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
+    const parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
       context: contextPrompt,
       telemetry: aiTelemetry,
+      providerBudget,
+      diagnosticContext: { requestId: request.id },
     });
 
     const customerPhone = normalizeNullablePhone(parsedDraft.customerPhone);
@@ -3984,7 +4134,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (selectedCustomer && !hadExplicitCustomerContext) {
+    if (selectedCustomer && !hadExplicitCustomerContext && currentQuoteContext) {
       try {
         governedRetrieval = await buildGovernedQuoteAiContext(app.prisma, {
           access,
@@ -3994,6 +4144,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           requestId: request.id,
           customerId: selectedCustomer.id,
           quoteId: existingQuote?.id ?? payload.quoteId ?? null,
+          allowProviderCalls: false,
         });
         accumulateAiUsageTelemetry(aiTelemetry, governedRetrieval?.telemetry);
       } catch (retrievalErr) {
@@ -4039,11 +4190,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         includeFinancialContext,
       }), payload.prompt);
 
-      parsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
-        context: contextPrompt,
-        telemetry: aiTelemetry,
-      });
-
       stream.progress(
         "drafting_quote_patch",
         `Matched authorized customer context from the prompt: ${selectedCustomer.fullName}. Refining the review draft without contact details or customer notes.`,
@@ -4059,7 +4205,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    let baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
+    const baselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
       prompt: payload.prompt,
       parsedDraft,
       serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
@@ -4070,12 +4216,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       : false;
     const currentLinesForPatch = currentQuoteContext?.lineItems ?? [];
 
-    let revisionPlan = hasCurrentSheetContext
+    const revisionPlan = hasCurrentSheetContext
       ? await aiBuildQuoteRevisionPlan(payload.prompt, {
           context: buildAiRevisionContextPrompt(contextPrompt, currentQuoteContext, baselineSuggestion, {
             includeFinancialContext,
           }),
           telemetry: aiTelemetry,
+          providerBudget,
+          diagnosticContext: { requestId: request.id },
         })
       : null;
 
@@ -4091,101 +4239,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         revisionPatch &&
         revisionPatch.lineChanges.length === 0,
     );
-    let patch = shouldFallbackToDeterministicPatch
+    const patch = shouldFallbackToDeterministicPatch
       ? buildDeterministicAiPatch(currentLinesForPatch, baselineSuggestion.lineItems)
       : (revisionPatch ?? buildDeterministicAiPatch(currentLinesForPatch, baselineSuggestion.lineItems));
-    let suggestion = resolveAiSuggestionFromPatch({
+    const suggestion = resolveAiSuggestionFromPatch({
       baselineSuggestion,
       revisionPlan,
       hasCurrentSheetContext,
       currentQuoteContext,
       patch,
     }).suggestion;
-    let guardrailRetryApplied = false;
-
-    if (
-      !hasAiPatchMutations(patch) &&
-      !hasAiSuggestionMetadataMutation({
-        hasCurrentSheetContext,
-        currentQuoteContext,
-        suggestion,
-      })
-    ) {
-      stream.progress(
-        "reviewing_line_changes",
-        "No concrete quote edits detected from the first pass. Retrying once with stricter line-level constraints.",
-      );
-
-      try {
-        const retryContextPrompt = appendAiPromptStructureHints(
-          `${contextPrompt}\n\n${AI_GUARDRAIL_RETRY_HINT}`,
-          payload.prompt,
-        );
-        const retryParsedDraft = await aiParseChatToQuotePrompt(payload.prompt, {
-          context: retryContextPrompt,
-          telemetry: aiTelemetry,
-          strictAi: true,
-        });
-        const retryBaselineSuggestion = await buildAiSuggestedQuoteDraft(app.prisma, claims.tenantId, {
-          prompt: payload.prompt,
-          parsedDraft: retryParsedDraft,
-          serviceTypeOverride: existingQuote?.serviceType ?? payload.serviceType,
-        });
-        const retryRevisionPlan = hasCurrentSheetContext
-          ? await aiBuildQuoteRevisionPlan(payload.prompt, {
-              context: buildAiRevisionContextPrompt(
-                retryContextPrompt,
-                currentQuoteContext,
-                retryBaselineSuggestion,
-                { includeFinancialContext },
-              ),
-              telemetry: aiTelemetry,
-            })
-          : null;
-        const retryRevisionPatch = retryRevisionPlan
-          ? applyAiRevisionPlan(currentLinesForPatch, retryBaselineSuggestion, retryRevisionPlan)
-          : null;
-        const retryPatch = retryRevisionPatch ?? buildDeterministicAiPatch(currentLinesForPatch, retryBaselineSuggestion.lineItems);
-        const retrySuggestionResolution = resolveAiSuggestionFromPatch({
-          baselineSuggestion: retryBaselineSuggestion,
-          revisionPlan: retryRevisionPlan,
-          hasCurrentSheetContext,
-          currentQuoteContext,
-          patch: retryPatch,
-        });
-        const retrySuggestion = retrySuggestionResolution.suggestion;
-        const retryProducedMutation =
-          hasAiPatchMutations(retryPatch) ||
-          hasAiSuggestionMetadataMutation({
-            hasCurrentSheetContext,
-            currentQuoteContext,
-            suggestion: retrySuggestion,
-          });
-
-        if (retryProducedMutation) {
-          parsedDraft = retryParsedDraft;
-          baselineSuggestion = retryBaselineSuggestion;
-          revisionPlan = retryRevisionPlan;
-          patch = retryPatch;
-          suggestion = retrySuggestion;
-          guardrailRetryApplied = true;
-          stream.progress(
-            "reviewing_line_changes",
-            `Guardrail retry recovered actionable edits: ${patch.updated} updated, ${patch.added} added, ${patch.removed} removed.`,
-            {
-              patchCounts: {
-                added: patch.added,
-                updated: patch.updated,
-                removed: patch.removed,
-              },
-            },
-          );
-        }
-      } catch (retryErr) {
-        if (retryErr instanceof AiUsageLedgerError) throw retryErr;
-        request.log.warn({ err: retryErr }, "[quotes/ai-suggest] guardrail retry failed");
-      }
-    }
+    const guardrailRetryApplied = false;
 
     if (
       !hasAiPatchMutations(patch) &&
@@ -4238,6 +4302,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       similarQuotes,
       retrievalCitations: governedRetrieval?.citations,
       targetAmount: suggestion.totalAmount,
+      requiresPricingReview: suggestion.requiresPricingReview,
       patch,
     });
 
@@ -4484,8 +4549,26 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const resolvedLineItems = payload.lineItems?.length
-          ? await resolveQuoteCreateLineItems(tx, access, payload.lineItems)
+          ? await resolveQuoteCreateLineItems(tx, access, payload.lineItems, {
+              aiReviewed: Boolean(payload.aiUsageEventId),
+            })
           : [];
+        const unresolvedIncludedLineNumbers = resolvedLineItems
+          .map((lineItem, index) => ({ lineItem, lineNumber: index + 1 }))
+          .filter(({ lineItem }) => isIncludedQuoteLineSection(lineItem.sectionType) && lineItem.unitPrice <= 0)
+          .map(({ lineNumber }) => lineNumber);
+        if (
+          payload.aiUsageEventId
+          && unresolvedIncludedLineNumbers.length > 0
+          && payload.aiPricingReviewAcknowledged !== true
+        ) {
+          throw new QuoteCreateError(
+            422,
+            "AI_PRICING_REVIEW_REQUIRED",
+            "Review and acknowledge every zero-priced AI quote line before creating the quote.",
+            { lineNumbers: unresolvedIncludedLineNumbers },
+          );
+        }
         const internalCostSubtotal = resolvedLineItems.length
           ? roundCurrency(resolvedLineItems.reduce((sum, lineItem) =>
               sum + (isIncludedQuoteLineSection(lineItem.sectionType) ? lineItem.quantity * lineItem.unitCost : 0), 0))
@@ -4551,6 +4634,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               quantity: lineItem.quantity,
               unitCost: lineItem.unitCost,
               unitPrice: lineItem.unitPrice,
+              priceProvenance: lineItem.priceProvenance,
+              sourcePresetIdSnapshot: lineItem.sourcePresetIdSnapshot,
+              sourcePresetNameSnapshot: lineItem.sourcePresetNameSnapshot,
+              sourcePresetCatalogKeySnapshot: lineItem.sourcePresetCatalogKeySnapshot,
+              sourcePresetCatalogVersionSnapshot: lineItem.sourcePresetCatalogVersionSnapshot,
+              sourcePresetUpdatedAtUtcSnapshot: lineItem.sourcePresetUpdatedAtUtcSnapshot,
             })),
           });
         }
@@ -5434,14 +5523,26 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             ? line.unitCost
             : existingLineCosts.get(line.id) ?? 0,
         })));
-        const newLineItems = await Promise.all(payload.newLineItems.map(async (line) => ({
-          ...line,
-          unitCost: await resolveMemberLineUnitCost(tx, {
-            access,
+        const newLineItems = await Promise.all(payload.newLineItems.map(async (line) => {
+          const sourcePreset = await resolveQuoteLinePresetSnapshot(tx, {
+            tenantId: claims.tenantId,
             sourcePresetId: line.sourcePresetId,
-            requestedUnitCost: line.unitCost,
-          }),
-        })));
+          });
+          return {
+            ...line,
+            unitCost: hasCapability(access, "viewInternalCosts")
+              ? line.unitCost
+              : sourcePreset
+                ? Number(sourcePreset.unitCost)
+                : 0,
+            priceProvenance: sourcePreset ? "TENANT_PRESET" as const : "MANUAL" as const,
+            sourcePresetIdSnapshot: sourcePreset?.id ?? null,
+            sourcePresetNameSnapshot: sourcePreset?.name ?? null,
+            sourcePresetCatalogKeySnapshot: sourcePreset?.catalogKey ?? null,
+            sourcePresetCatalogVersionSnapshot: sourcePreset?.catalogVersion ?? null,
+            sourcePresetUpdatedAtUtcSnapshot: sourcePreset?.updatedAt ?? null,
+          };
+        }));
         await applyQuoteSheetLineMutations(tx, {
           tenantId: claims.tenantId,
           quoteId: updatedQuote.id,
@@ -6402,6 +6503,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ position: "desc" }, { createdAt: "desc" }, { id: "desc" }],
         select: { position: true },
       });
+      const sourcePreset = await resolveQuoteLinePresetSnapshot(tx, {
+        tenantId: claims.tenantId,
+        sourcePresetId: payload.sourcePresetId,
+      });
 
       const lineItem = await tx.quoteLineItem.create({
         data: {
@@ -6412,12 +6517,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           sectionLabel: payload.sectionLabel?.trim() || null,
           position: (lastLineItem?.position ?? -1) + 1,
           quantity: payload.quantity,
-          unitCost: await resolveMemberLineUnitCost(tx, {
-            access,
-            sourcePresetId: payload.sourcePresetId,
-            requestedUnitCost: payload.unitCost,
-          }),
+          unitCost: hasCapability(access, "viewInternalCosts")
+            ? payload.unitCost
+            : sourcePreset
+              ? Number(sourcePreset.unitCost)
+              : 0,
           unitPrice: payload.unitPrice,
+          priceProvenance: sourcePreset ? "TENANT_PRESET" : "MANUAL",
+          sourcePresetIdSnapshot: sourcePreset?.id ?? null,
+          sourcePresetNameSnapshot: sourcePreset?.name ?? null,
+          sourcePresetCatalogKeySnapshot: sourcePreset?.catalogKey ?? null,
+          sourcePresetCatalogVersionSnapshot: sourcePreset?.catalogVersion ?? null,
+          sourcePresetUpdatedAtUtcSnapshot: sourcePreset?.updatedAt ?? null,
         },
       });
 

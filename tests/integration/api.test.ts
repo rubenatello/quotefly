@@ -579,6 +579,14 @@ describe("QuoteFly API integration", () => {
     });
     expect(customerResponse.statusCode).toBe(201);
     const { customer } = parseJson<CustomerResponse>(customerResponse);
+    const sourcePreset = await prisma.workPreset.findFirstOrThrow({
+      where: {
+        tenantId: owner.tenant.id,
+        serviceType: "ROOFING",
+        deletedAtUtc: null,
+      },
+      orderBy: [{ catalogKey: "asc" }, { id: "asc" }],
+    });
     const idempotencyKey = "quote-create-concurrent-command-0001";
     const payload = {
       customerId: customer.id,
@@ -595,6 +603,7 @@ describe("QuoteFly API integration", () => {
           quantity: 0.3333,
           unitCost: 4.006,
           unitPrice: 10.006,
+          sourcePresetId: sourcePreset.id,
         },
         {
           description: "Optional premium upgrade",
@@ -647,10 +656,20 @@ describe("QuoteFly API integration", () => {
       quantity: Number(lineItem.quantity),
       unitCost: Number(lineItem.unitCost),
       unitPrice: Number(lineItem.unitPrice),
+      priceProvenance: lineItem.priceProvenance,
     }))).toEqual([
-      { quantity: 0.33, unitCost: 4.01, unitPrice: 10.01 },
-      { quantity: 2, unitCost: 400, unitPrice: 900 },
+      { quantity: 0.33, unitCost: 4.01, unitPrice: 10.01, priceProvenance: "TENANT_PRESET" },
+      { quantity: 2, unitCost: 400, unitPrice: 900, priceProvenance: "MANUAL" },
     ]);
+    expect(storedQuote.lineItems[0]).toMatchObject({
+      sourcePresetIdSnapshot: sourcePreset.id,
+      sourcePresetNameSnapshot: sourcePreset.name,
+      sourcePresetCatalogKeySnapshot: sourcePreset.catalogKey,
+      sourcePresetCatalogVersionSnapshot: sourcePreset.catalogVersion,
+    });
+    expect(storedQuote.lineItems[0]?.sourcePresetUpdatedAtUtcSnapshot?.toISOString()).toBe(
+      sourcePreset.updatedAt.toISOString(),
+    );
     expect(storedQuote.revisions).toHaveLength(1);
     expect(storedQuote.revisions[0]?.eventType).toBe("CREATED");
     await expect(

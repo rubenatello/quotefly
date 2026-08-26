@@ -113,8 +113,10 @@ export function QuoteAiPromptModal({
   usageHint,
   usageLimitMessage,
   errorMessage,
+  statusMessage,
   progressEvent,
   loading,
+  onCancelRequest,
   disabled,
   onSubmit,
   title,
@@ -136,8 +138,10 @@ export function QuoteAiPromptModal({
   usageHint?: string | null;
   usageLimitMessage?: string | null;
   errorMessage?: string | null;
+  statusMessage?: string | null;
   progressEvent?: AiProgressEvent | null;
   loading?: boolean;
+  onCancelRequest?: () => void;
   disabled?: boolean;
   onSubmit: (event: FormEvent) => void | Promise<void>;
   title?: string;
@@ -214,8 +218,8 @@ export function QuoteAiPromptModal({
       };
 
   return (
-    <Modal open={open} onClose={loading ? () => {} : onClose} size="lg" ariaLabel={resolvedTitle}>
-      <ModalHeader title={resolvedTitle} description={resolvedDescription} onClose={loading ? undefined : onClose} />
+    <Modal open={open} onClose={loading && onCancelRequest ? onCancelRequest : onClose} size="lg" ariaLabel={resolvedTitle}>
+      <ModalHeader title={resolvedTitle} description={resolvedDescription} onClose={loading && onCancelRequest ? onCancelRequest : onClose} />
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
         <ModalBody className="space-y-5 bg-[var(--qf-panel-muted)] pb-4">
           <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-panel)] px-4 py-3 shadow-[var(--qf-shadow-sm)]">
@@ -411,6 +415,11 @@ export function QuoteAiPromptModal({
               {errorMessage}
             </div>
           ) : null}
+          {statusMessage ? (
+            <div className="rounded-xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] px-3 py-2 text-sm text-[var(--qf-info-text)]" role="status">
+              {statusMessage}
+            </div>
+          ) : null}
         </ModalBody>
 
         <ModalFooter className="justify-between gap-3 bg-[var(--qf-panel)]">
@@ -426,8 +435,8 @@ export function QuoteAiPromptModal({
             </p>
           </div>
           <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
-            <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
-              {t("common.cancel")}
+            <Button type="button" variant="ghost" onClick={loading && onCancelRequest ? onCancelRequest : onClose}>
+              {loading ? t("quoteComponents.aiModal.stop") : t("common.cancel")}
             </Button>
             <Button type="submit" variant="secondary" loading={loading} icon={<Sparkles size={14} />} disabled={disabled}>
               {resolvedSubmitLabel}

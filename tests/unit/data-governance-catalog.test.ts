@@ -125,6 +125,28 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
   assert.equal(fields.get("InvoicePayment.amount")?.classification, "C3_FINANCIAL_CONFIDENTIAL");
   assert.equal(fields.get("InvoicePayment.amount")?.ragStatus, "EXCLUDED");
 
+  for (const invoiceLineField of [
+    "InvoiceLineItem.quantity",
+    "InvoiceLineItem.unitPrice",
+    "InvoiceLineItem.lineTotal",
+  ]) {
+    assert.equal(fields.get(invoiceLineField)?.classification, "C3_FINANCIAL_CONFIDENTIAL", invoiceLineField);
+    assert.equal(fields.get(invoiceLineField)?.ragStatus, "EXCLUDED", invoiceLineField);
+  }
+  assert.equal(fields.get("InvoiceLineItem.description")?.classification, "C2_CUSTOMER_CONFIDENTIAL");
+  assert.equal(fields.get("InvoiceLineItem.description")?.ragStatus, "EXCLUDED");
+
+  for (const provenanceField of [
+    "QuoteLineItem.priceProvenance",
+    "QuoteLineItem.sourcePresetIdSnapshot",
+    "QuoteLineItem.sourcePresetCatalogKeySnapshot",
+    "QuoteLineItem.sourcePresetCatalogVersionSnapshot",
+    "QuoteLineItem.sourcePresetUpdatedAtUtcSnapshot",
+  ]) {
+    assert.equal(fields.get(provenanceField)?.classification, "C1_BUSINESS_INTERNAL", provenanceField);
+    assert.equal(fields.get(provenanceField)?.ragStatus, "EXCLUDED", provenanceField);
+  }
+
   for (const providerField of [
     "InvoicePayment.providerPaymentId",
     "InvoicePayment.providerInvoiceId",
