@@ -1,17 +1,27 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, Badge, Button, ConfirmModal, Input, Modal, ModalBody, ModalFooter, ModalHeader, Textarea } from "../ui";
-import { ApiError, api, type Customer, type CustomerDuplicateMatch } from "../../lib/api";
+import { ApiError, api, type Customer, type CustomerDuplicateMatch, type QuoteCustomerDraft } from "../../lib/api";
 import { localizedApiError } from "../../lib/localized-api-error";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits } from "../../lib/phone";
 
 type QuickCustomerIntent = "save" | "quote";
+export type QuoteDraftDuplicateErrorCode =
+  | "DUPLICATE_CANDIDATE"
+  | "STALE_DUPLICATE_TARGET"
+  | "USE_EXISTING_REQUIRES_RESTORE"
+  | "MERGE_CONTACT_CONFLICT"
+  | "PHONE_CONFLICT";
 
 type QuickCustomerModalProps = {
   open: boolean;
   onClose: () => void;
   draftValue?: QuickCustomerForm;
   onDraftChange?: (draft: QuickCustomerForm) => void;
+  quoteDraftMatches?: CustomerDuplicateMatch[];
+  quoteDraftErrorCode?: QuoteDraftDuplicateErrorCode | null;
+  onQuoteDraftReviewChange?: () => void;
+  onQuoteDraftStaged?: (draft: QuoteCustomerDraft) => Promise<void> | void;
   onCreated: (result: {
     customer: Customer;
     merged?: boolean;
@@ -65,7 +75,17 @@ function preferredDuplicateMatchId(matches: CustomerDuplicateMatch[]) {
   return matches[0]?.id ?? null;
 }
 
-export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, onCreated }: QuickCustomerModalProps) {
+export function QuickCustomerModal({
+  open,
+  onClose,
+  draftValue,
+  onDraftChange,
+  quoteDraftMatches,
+  quoteDraftErrorCode,
+  onQuoteDraftReviewChange,
+  onQuoteDraftStaged,
+  onCreated,
+}: QuickCustomerModalProps) {
   const { t } = useTranslation();
   const [internalForm, setInternalForm] = useState<QuickCustomerForm>(EMPTY_FORM);
   const form = draftValue ?? internalForm;
@@ -87,6 +107,39 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
   const selectedMatchInactive = Boolean(selectedMatch && isInactiveDuplicateMatch(selectedMatch));
   const dirty = Object.values(form).some((value) => value.trim().length > 0);
 
+  useEffect(() => {
+    if (!open || (!quoteDraftErrorCode && !quoteDraftMatches?.length)) return;
+    // Duplicate matches returned by the atomic quote command must stay in the
+    // quote-staging path even after this component has remounted during draft
+    // recovery. Otherwise the duplicate buttons can fall back to a standalone
+    // customer write and break the customer-plus-quote transaction boundary.
+    setIntent("quote");
+    const currentMatches = quoteDraftMatches ?? [];
+    setMatches(currentMatches);
+    setSelectedMatchId((currentSelection) => (
+      currentSelection && currentMatches.some((match) => match.id === currentSelection)
+        ? currentSelection
+        : preferredDuplicateMatchId(currentMatches)
+    ));
+    const reviewError = (() => {
+      switch (quoteDraftErrorCode) {
+        case "STALE_DUPLICATE_TARGET":
+          return t("customers.quick.changed");
+        case "USE_EXISTING_REQUIRES_RESTORE":
+          return t("customers.quick.restoreRequired");
+        case "MERGE_CONTACT_CONFLICT":
+          return t("customers.quick.contactConflict");
+        case "PHONE_CONFLICT":
+          return currentMatches.length > 0
+            ? t("customers.quick.phoneConflict")
+            : t("customers.quick.phoneConflictRestricted");
+        default:
+          return null;
+      }
+    })();
+    setError(reviewError);
+  }, [open, quoteDraftErrorCode, quoteDraftMatches, t]);
+
   function updateForm(updater: (current: QuickCustomerForm) => QuickCustomerForm) {
     const next = updater(form);
     if (
@@ -97,6 +150,7 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
       setMatches([]);
       setSelectedMatchId(null);
       setError(null);
+      onQuoteDraftReviewChange?.();
     }
     if (draftValue === undefined) setInternalForm(next);
     onDraftChange?.(next);
@@ -145,6 +199,29 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
     setIntent(mode);
 
     try {
+      if (mode === "quote" && onQuoteDraftStaged) {
+        const selectedPhone = selectedMatch
+          ? formatUsPhoneDisplay(selectedMatch.phone) || selectedMatch.phone
+          : payload.phone;
+        const effectivePayload = duplicateAction === "use_existing" && selectedMatch
+          ? {
+              ...payload,
+              fullName: selectedMatch.fullName,
+              phone: selectedPhone,
+              email: selectedMatch.email,
+            }
+          : payload;
+        await onQuoteDraftStaged({
+          ...effectivePayload,
+          duplicateAction,
+          duplicateCustomerId: duplicateAction ? selectedMatchId ?? undefined : undefined,
+        });
+        setMatches([]);
+        setSelectedMatchId(null);
+        setDiscardConfirmOpen(false);
+        onClose();
+        return;
+      }
       const result = await api.customers.create({
         ...payload,
         duplicateAction,
@@ -268,7 +345,11 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
                     name="duplicateCustomer"
                     className="mt-1"
                     checked={selectedMatchId === match.id}
-                    onChange={() => setSelectedMatchId(match.id)}
+                    onChange={() => {
+                      setSelectedMatchId(match.id);
+                      setError(null);
+                      onQuoteDraftReviewChange?.();
+                    }}
                     disabled={saving}
                   />
                   <div className="min-w-0">
@@ -326,9 +407,11 @@ export function QuickCustomerModal({ open, onClose, draftValue, onDraftChange, o
           </>
         ) : (
           <>
-            <Button variant="outline" onClick={() => void createCustomer("save")} disabled={saving}>
-              {t("customers.quick.saveCustomer")}
-            </Button>
+            {intent === "save" ? (
+              <Button variant="outline" onClick={() => void createCustomer("save")} disabled={saving}>
+                {t("customers.quick.saveCustomer")}
+              </Button>
+            ) : null}
             <Button onClick={() => void createCustomer("quote")} loading={saving} disabled={saving}>
               {t("customers.quick.saveQuote")}
             </Button>

@@ -18,12 +18,18 @@ import {
 } from "../lib/ai-retrieval";
 import { enqueueAiIndexJob, enqueueQuoteAiIndexJobs } from "../lib/ai-index-jobs";
 import { createCustomerActivityEvent, resolveActivityActor, type ActivityActor } from "../lib/activity";
-import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
+import {
+  normalizeCustomerPhone,
+  normalizePhoneSearchDigits,
+  normalizeUsPhoneDigits,
+  phoneNumbersEquivalent,
+} from "../lib/phone";
 import {
   PaginationQuerySchema,
   tenantActiveCustomerScope,
   tenantActiveQuoteScope,
   tenantActiveScope,
+  tenantScope,
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
@@ -108,8 +114,24 @@ const AfterSaleFollowUpStatusSchema = z.enum([
 
 const QuoteLineSectionTypeSchema = z.enum(["INCLUDED", "ALTERNATE"]);
 
+const QuoteCustomerPhoneSchema = z.string().trim().refine(
+  (phone) => normalizeUsPhoneDigits(phone) !== null,
+  { message: "Enter a valid 10-digit US phone number." },
+);
+
+const QuoteCustomerDraftSchema = z.object({
+  fullName: z.string().trim().min(2),
+  phone: QuoteCustomerPhoneSchema,
+  email: z.string().trim().email().nullable().optional(),
+  notes: z.string().max(5_000).nullable().optional(),
+  preferredLocale: SupportedLocaleSchema.nullable().optional(),
+  duplicateAction: z.enum(["merge", "create_new", "use_existing"]).optional(),
+  duplicateCustomerId: z.string().min(1).optional(),
+});
+
 const CreateQuoteSchema = z.object({
-  customerId: z.string().min(1),
+  customerId: z.string().min(1).optional(),
+  customerDraft: QuoteCustomerDraftSchema.optional(),
   serviceType: ServiceTypeSchema,
   title: z.string().min(3),
   scopeText: z.string().min(3),
@@ -134,6 +156,21 @@ const CreateQuoteSchema = z.object({
     )
     .max(300)
     .optional(),
+}).superRefine((payload, context) => {
+  if (Boolean(payload.customerId) === Boolean(payload.customerDraft)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Provide exactly one of customerId or customerDraft.",
+      path: ["customerId"],
+    });
+  }
+  if (payload.customerDraft?.duplicateAction && !payload.customerDraft.duplicateCustomerId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Choose a duplicate customer before applying a duplicate action.",
+      path: ["customerDraft", "duplicateCustomerId"],
+    });
+  }
 });
 
 const QuoteCreateIdempotencyKeySchema = z.string()
@@ -3605,6 +3642,382 @@ async function lockActiveCustomerForQuoteCreate(
   });
 }
 
+const QuoteCreateCustomerSelect = {
+  id: true,
+  fullName: true,
+  phone: true,
+  email: true,
+  notes: true,
+  assignedTenantUserId: true,
+  preferredLocale: true,
+  archivedAtUtc: true,
+  deletedAtUtc: true,
+  updatedAt: true,
+  tenant: { select: { defaultCustomerLocale: true } },
+} satisfies Prisma.CustomerSelect;
+
+type QuoteCreateCustomer = Prisma.CustomerGetPayload<{ select: typeof QuoteCreateCustomerSelect }>;
+type QuoteCreateCustomerResolution = {
+  customer: QuoteCreateCustomer;
+  customerCreated: boolean;
+  customerReused: boolean;
+  customerMerged: boolean;
+  customerRestored: boolean;
+};
+
+type QuoteCustomerDuplicateMatch = {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string | null;
+  archivedAtUtc: string | null;
+  deletedAtUtc: string | null;
+  createdAt: string;
+  matchReasons: Array<"phone" | "email">;
+};
+
+function isInactiveQuoteCustomerMatch(match: QuoteCustomerDuplicateMatch) {
+  return Boolean(match.archivedAtUtc || match.deletedAtUtc);
+}
+
+async function loadQuoteCustomerDuplicateMatches(
+  transaction: Prisma.TransactionClient,
+  input: {
+    tenantId: string;
+    assignedTenantUserId?: string;
+    normalizedPhone: string;
+    normalizedPhoneDigits: string;
+    normalizedEmail: string | null;
+  },
+): Promise<QuoteCustomerDuplicateMatch[]> {
+  const candidates = await transaction.customer.findMany({
+    where: {
+      ...tenantScope(input.tenantId),
+      ...(input.assignedTenantUserId
+        ? { assignedTenantUserId: input.assignedTenantUserId }
+        : {}),
+      OR: [
+        { phone: input.normalizedPhone },
+        { phoneDigits: input.normalizedPhoneDigits },
+        ...(input.normalizedEmail ? [{ email: input.normalizedEmail }] : []),
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+      archivedAtUtc: true,
+      deletedAtUtc: true,
+      createdAt: true,
+    },
+  });
+
+  return candidates
+    .map((candidate) => {
+      const matchReasons: Array<"phone" | "email"> = [];
+      if (phoneNumbersEquivalent(candidate.phone, input.normalizedPhone)) matchReasons.push("phone");
+      if (
+        input.normalizedEmail
+        && candidate.email?.trim().toLowerCase() === input.normalizedEmail
+      ) {
+        matchReasons.push("email");
+      }
+      return {
+        id: candidate.id,
+        fullName: candidate.fullName,
+        phone: normalizeCustomerPhone(candidate.phone),
+        email: candidate.email,
+        archivedAtUtc: candidate.archivedAtUtc?.toISOString() ?? null,
+        deletedAtUtc: candidate.deletedAtUtc?.toISOString() ?? null,
+        createdAt: candidate.createdAt.toISOString(),
+        matchReasons,
+      };
+    })
+    .filter((match) => match.matchReasons.length > 0)
+    .sort((left, right) => {
+      const phoneOrder = Number(!left.matchReasons.includes("phone")) - Number(!right.matchReasons.includes("phone"));
+      if (phoneOrder !== 0) return phoneOrder;
+      const lifecycleOrder = Number(isInactiveQuoteCustomerMatch(left)) - Number(isInactiveQuoteCustomerMatch(right));
+      if (lifecycleOrder !== 0) return lifecycleOrder;
+      return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+    });
+}
+
+async function resolveQuoteCreateCustomerDraft(
+  transaction: Prisma.TransactionClient,
+  input: {
+    access: AccessContext;
+    actor: ActivityActor;
+    draft: z.infer<typeof QuoteCustomerDraftSchema>;
+    requestedAssignedTenantUserId: string | null | undefined;
+  },
+): Promise<QuoteCreateCustomerResolution> {
+  const tenantId = input.access.tenantId;
+  const draftAssignee = await resolveRequestedQuoteAssignee(
+    transaction,
+    input.access,
+    input.requestedAssignedTenantUserId,
+    undefined,
+  );
+  if (!draftAssignee.allowed) {
+    throw new QuoteCreateError(403, "ASSIGNEE_INVALID", "Choose an active member from this workspace.");
+  }
+  if (
+    draftAssignee.assignedTenantUserId
+    && !await lockActiveTenantAssignee(transaction, {
+      tenantId,
+      tenantUserId: draftAssignee.assignedTenantUserId,
+    })
+  ) {
+    throw new QuoteCreateError(
+      409,
+      "ASSIGNEE_INACTIVE",
+      "That team member is no longer active. Choose another assignee.",
+    );
+  }
+
+  const normalizedPhone = normalizeCustomerPhone(input.draft.phone);
+  const normalizedPhoneDigits = normalizeUsPhoneDigits(input.draft.phone);
+  if (!normalizedPhoneDigits) {
+    throw new QuoteCreateError(400, "CUSTOMER_PHONE_INVALID", "Enter a valid 10-digit US phone number.");
+  }
+  const normalizedEmail = input.draft.email?.trim().toLowerCase() ?? null;
+  const recordScope = assignedRecordScope(input.access);
+  const duplicateMatchInput = {
+    tenantId,
+    assignedTenantUserId: recordScope.assignedTenantUserId,
+    normalizedPhone,
+    normalizedPhoneDigits,
+    normalizedEmail,
+  };
+  const refreshMatches = () => loadQuoteCustomerDuplicateMatches(transaction, duplicateMatchInput);
+  const matches = await refreshMatches();
+
+  if (matches.length > 0 && !input.draft.duplicateAction) {
+    throw new QuoteCreateError(
+      409,
+      "DUPLICATE_CANDIDATE",
+      "Potential duplicate customer found. Review the matches before creating the quote.",
+      { matches },
+    );
+  }
+
+  if (input.draft.duplicateAction) {
+    const selectedMatch = matches.find((match) => match.id === input.draft.duplicateCustomerId);
+    if (!selectedMatch) {
+      throw new QuoteCreateError(
+        409,
+        "STALE_DUPLICATE_TARGET",
+        "The selected customer changed and no longer matches. Review the latest results.",
+        { matches },
+      );
+    }
+
+    if (input.draft.duplicateAction === "use_existing") {
+      if (isInactiveQuoteCustomerMatch(selectedMatch)) {
+        throw new QuoteCreateError(
+          409,
+          "USE_EXISTING_REQUIRES_RESTORE",
+          "The selected customer is archived. Restore and use the customer to continue.",
+          { matches },
+        );
+      }
+      const customer = await lockActiveCustomerForQuoteCreate(transaction, {
+        customerId: selectedMatch.id,
+        tenantId,
+        assignedTenantUserId: recordScope.assignedTenantUserId,
+      });
+      if (!customer) {
+        throw new QuoteCreateError(
+          409,
+          "STALE_DUPLICATE_TARGET",
+          "The selected customer is no longer available. Review the latest results.",
+          { matches: await refreshMatches() },
+        );
+      }
+      const fullCustomer = await transaction.customer.findFirst({
+        where: { id: customer.id, ...tenantActiveCustomerScope(tenantId), ...recordScope },
+        select: QuoteCreateCustomerSelect,
+      });
+      if (!fullCustomer) {
+        throw new QuoteCreateError(404, "CUSTOMER_NOT_FOUND", "Customer not found for tenant.");
+      }
+      return {
+        customer: fullCustomer,
+        customerCreated: false,
+        customerReused: true,
+        customerMerged: false,
+        customerRestored: false,
+      };
+    }
+
+    if (input.draft.duplicateAction === "merge") {
+      const assignmentScope = recordScope.assignedTenantUserId
+        ? Prisma.sql`AND customer."assignedTenantUserId" = ${recordScope.assignedTenantUserId}`
+        : Prisma.empty;
+      const [lockedTarget] = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT customer.id
+        FROM "Customer" customer
+        WHERE customer.id = ${selectedMatch.id}
+          AND customer."tenantId" = ${tenantId}
+          ${assignmentScope}
+        FOR UPDATE OF customer
+      `);
+      if (!lockedTarget) {
+        throw new QuoteCreateError(
+          409,
+          "STALE_DUPLICATE_TARGET",
+          "The selected customer is no longer available. Review the latest results.",
+          { matches: await refreshMatches() },
+        );
+      }
+      const target = await transaction.customer.findFirst({
+        where: { id: selectedMatch.id, ...tenantScope(tenantId), ...recordScope },
+        select: QuoteCreateCustomerSelect,
+      });
+      if (!target) {
+        throw new QuoteCreateError(
+          409,
+          "STALE_DUPLICATE_TARGET",
+          "The selected customer is no longer available. Review the latest results.",
+          { matches: await refreshMatches() },
+        );
+      }
+      const targetEmail = target.email?.trim().toLowerCase() ?? null;
+      const stillMatchesPhone = phoneNumbersEquivalent(target.phone, normalizedPhone);
+      const stillMatchesEmail = Boolean(normalizedEmail && targetEmail === normalizedEmail);
+      if (!stillMatchesPhone && !stillMatchesEmail) {
+        throw new QuoteCreateError(
+          409,
+          "STALE_DUPLICATE_TARGET",
+          "The selected customer changed and no longer matches. Review the latest results.",
+          { matches: await refreshMatches() },
+        );
+      }
+      if (!stillMatchesPhone || (targetEmail && normalizedEmail && targetEmail !== normalizedEmail)) {
+        throw new QuoteCreateError(
+          409,
+          "MERGE_CONTACT_CONFLICT",
+          "Restore stopped because the customer contact details conflict. Use the existing record or save separately.",
+          { matches: await refreshMatches() },
+        );
+      }
+      const wasInactive = Boolean(target.archivedAtUtc || target.deletedAtUtc);
+      const normalizedDraftNotes = input.draft.notes?.trim() || null;
+      const notesChanged = Boolean(normalizedDraftNotes && normalizedDraftNotes !== (target.notes ?? ""));
+      const customer = await transaction.customer.update({
+        where: { id_tenantId: { id: target.id, tenantId } },
+        data: {
+          fullName: input.draft.fullName.trim(),
+          phone: normalizeCustomerPhone(target.phone),
+          phoneDigits: normalizePhoneSearchDigits(target.phone),
+          email: targetEmail || normalizedEmail,
+          notes: normalizedDraftNotes || target.notes,
+          ...(input.draft.preferredLocale !== undefined
+            ? { preferredLocale: input.draft.preferredLocale }
+            : {}),
+          archivedAtUtc: null,
+          deletedAtUtc: null,
+          assignedTenantUserId: draftAssignee.assignedTenantUserId,
+        },
+        select: QuoteCreateCustomerSelect,
+      });
+      await createCustomerActivityEvent(transaction, {
+        tenantId,
+        customerId: customer.id,
+        actor: input.actor,
+        eventType: wasInactive ? "RESTORED" : "MERGED",
+        title: wasInactive ? "Customer restored" : "Customer merged",
+        detail: wasInactive
+          ? `${customer.fullName} was restored while the quote was created.`
+          : `${customer.fullName} was merged while the quote was created.`,
+      });
+      if (notesChanged && normalizedDraftNotes) {
+        await createCustomerActivityEvent(transaction, {
+          tenantId,
+          customerId: customer.id,
+          actor: input.actor,
+          eventType: "NOTES_UPDATED",
+          title: "Customer notes updated",
+          detail: normalizedDraftNotes.slice(0, 500),
+        });
+      }
+      await enqueueAiIndexJob(transaction, {
+        tenantId,
+        sourceType: "Customer",
+        sourceId: customer.id,
+        operation: "UPSERT",
+        expectedSourceUpdatedAtUtc: customer.updatedAt,
+      });
+      return {
+        customer,
+        customerCreated: false,
+        customerReused: false,
+        customerMerged: true,
+        customerRestored: wasInactive,
+      };
+    }
+  }
+
+  if (matches.some((match) => match.matchReasons.includes("phone"))) {
+    throw new QuoteCreateError(
+      409,
+      "PHONE_CONFLICT",
+      "This phone number is already in use. Use or restore the matching customer.",
+      { matches },
+    );
+  }
+
+  const customer = await transaction.customer.create({
+    data: {
+      tenantId,
+      fullName: input.draft.fullName.trim(),
+      phone: normalizedPhone,
+      phoneDigits: normalizedPhoneDigits,
+      email: normalizedEmail,
+      notes: input.draft.notes?.trim() || null,
+      preferredLocale: input.draft.preferredLocale ?? null,
+      assignedTenantUserId: draftAssignee.assignedTenantUserId,
+    },
+    select: QuoteCreateCustomerSelect,
+  });
+  await createCustomerActivityEvent(transaction, {
+    tenantId,
+    customerId: customer.id,
+    actor: input.actor,
+    eventType: "CREATED",
+    title: "Customer added",
+    detail: `${customer.fullName} was added while the quote was created.`,
+  });
+  if (input.draft.notes?.trim()) {
+    await createCustomerActivityEvent(transaction, {
+      tenantId,
+      customerId: customer.id,
+      actor: input.actor,
+      eventType: "NOTES_ADDED",
+      title: "Customer notes added",
+      detail: input.draft.notes.trim().slice(0, 500),
+    });
+  }
+  await enqueueAiIndexJob(transaction, {
+    tenantId,
+    sourceType: "Customer",
+    sourceId: customer.id,
+    operation: "UPSERT",
+    expectedSourceUpdatedAtUtc: customer.updatedAt,
+  });
+  return {
+    customer,
+    customerCreated: true,
+    customerReused: false,
+    customerMerged: false,
+    customerRestored: false,
+  };
+}
+
 async function resolveQuoteCreateLineItems(
   transaction: Prisma.TransactionClient,
   access: AccessContext,
@@ -4516,14 +4929,31 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           );
         }
 
-        const customer = await lockActiveCustomerForQuoteCreate(tx, {
-          customerId: payload.customerId,
-          tenantId: claims.tenantId,
-          assignedTenantUserId: recordScope.assignedTenantUserId,
-        });
-        if (!customer) {
-          throw new QuoteCreateError(404, "CUSTOMER_NOT_FOUND", "Customer not found for tenant.");
-        }
+        const customerResolution = payload.customerDraft
+          ? await resolveQuoteCreateCustomerDraft(tx, {
+              access,
+              actor,
+              draft: payload.customerDraft,
+              requestedAssignedTenantUserId: payload.assignedTenantUserId,
+            })
+          : await (async () => {
+              const customer = await lockActiveCustomerForQuoteCreate(tx, {
+                customerId: payload.customerId!,
+                tenantId: claims.tenantId,
+                assignedTenantUserId: recordScope.assignedTenantUserId,
+              });
+              if (!customer) {
+                throw new QuoteCreateError(404, "CUSTOMER_NOT_FOUND", "Customer not found for tenant.");
+              }
+              return {
+                customer,
+                customerCreated: false,
+                customerReused: false,
+                customerMerged: false,
+                customerRestored: false,
+              };
+            })();
+        const customer = customerResolution.customer;
 
         const assignee = await resolveRequestedQuoteAssignee(
           tx,
@@ -4586,14 +5016,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             aiUsageEventId: payload.aiUsageEventId,
             tenantId: claims.tenantId,
             actorUserId: claims.userId,
-            customerId: payload.customerId,
+            customerId: customer.id,
           });
         }
 
         const createdQuote = await tx.quote.create({
           data: {
             tenantId: claims.tenantId,
-            customerId: payload.customerId,
+            customerId: customer.id,
             assignedTenantUserId: assignee.assignedTenantUserId,
             serviceType: payload.serviceType,
             title: payload.title,
@@ -4617,7 +5047,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             where: { id: payload.aiUsageEventId },
             data: {
               quoteId: createdQuote.id,
-              customerId: payload.customerId,
+              customerId: customer.id,
             },
           });
         }
@@ -4671,7 +5101,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           ],
         });
 
-        return { quote: createdQuote, duplicate: false as const };
+        return {
+          quote: createdQuote,
+          duplicate: false as const,
+          customerCreated: customerResolution.customerCreated,
+          customerReused: customerResolution.customerReused,
+          customerMerged: customerResolution.customerMerged,
+          customerRestored: customerResolution.customerRestored,
+        };
       });
 
       return reply.code(outcome.duplicate ? 200 : 201).send(outcome);
@@ -4681,6 +5118,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           code: error.code,
           error: error.message,
           ...(error.details ?? {}),
+        });
+      }
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return reply.code(409).send({
+          code: "PHONE_CONFLICT",
+          error: "This phone number is already in use. Search for the existing customer and try again.",
         });
       }
       throw error;

@@ -707,6 +707,553 @@ describe("QuoteFly API integration", () => {
     });
   });
 
+  test("creates or reuses the reviewed customer atomically with an idempotent quote", async () => {
+    const owner = await signUp("atomic-customer-quote");
+    const baseQuote = {
+      serviceType: "PLUMBING" as const,
+      title: "Reviewed water heater inspection",
+      scopeText: "Inspect the water heater, document damage, and complete approved repair work.",
+      internalCostSubtotal: 80,
+      customerPriceSubtotal: 320,
+      taxAmount: 0,
+      lineItems: [{
+        description: "Water heater inspection and repair labor",
+        quantity: 4,
+        unitCost: 20,
+        unitPrice: 80,
+      }],
+    };
+    const customerDraft = {
+      fullName: "Atomic Quote Customer",
+      phone: "555-010-7788",
+      email: "atomic.quote@example.com",
+      notes: "Kody-prepared customer details reviewed by the user.",
+    };
+    const createPayload = { ...baseQuote, customerDraft };
+    const idempotencyKey = "atomic-customer-quote-command-0001";
+
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/quotes",
+        headers: { ...authHeaders(owner.cookie), "idempotency-key": idempotencyKey },
+        payload: createPayload,
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/quotes",
+        headers: { ...authHeaders(owner.cookie), "idempotency-key": idempotencyKey },
+        payload: createPayload,
+      }),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 201]);
+    const responseBodies = responses.map((response) => response.json() as {
+      quote: { id: string; customerId: string };
+      duplicate: boolean;
+      customerCreated?: boolean;
+    });
+    expect(new Set(responseBodies.map((body) => body.quote.id)).size).toBe(1);
+    expect(new Set(responseBodies.map((body) => body.quote.customerId)).size).toBe(1);
+    expect(responseBodies.find((body) => !body.duplicate)?.customerCreated).toBe(true);
+
+    const createdCustomerId = responseBodies[0]!.quote.customerId;
+    await expect(prisma.customer.count({
+      where: { tenantId: owner.tenant.id, phone: "(555) 010-7788" },
+    })).resolves.toBe(1);
+    await expect(prisma.customerActivityEvent.count({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+    })).resolves.toBe(2);
+    await expect(prisma.aiIndexJob.count({
+      where: { tenantId: owner.tenant.id, sourceType: "Customer", sourceId: createdCustomerId },
+    })).resolves.toBe(1);
+
+    const invalidCustomerDraft = {
+      fullName: "Rolled Back Quote Customer",
+      phone: "555-010-7799",
+      email: "rollback.quote@example.com",
+    };
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-customer-quote-command-rollback-0002",
+      },
+      payload: {
+        ...baseQuote,
+        customerDraft: invalidCustomerDraft,
+        lineItems: [{
+          ...baseQuote.lineItems[0],
+          sourcePresetId: "missing-source-preset",
+        }],
+      },
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json()).toMatchObject({ code: "SOURCE_PRESET_INVALID" });
+    await expect(prisma.customer.count({
+      where: { tenantId: owner.tenant.id, email: invalidCustomerDraft.email },
+    })).resolves.toBe(0);
+
+    const duplicatePrompt = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-customer-quote-command-duplicate-0003",
+      },
+      payload: { ...baseQuote, title: "Duplicate review required", customerDraft },
+    });
+    expect(duplicatePrompt.statusCode).toBe(409);
+    const duplicateBody = duplicatePrompt.json() as {
+      code: string;
+      matches: Array<{ id: string; matchReasons: string[] }>;
+    };
+    expect(duplicateBody.code).toBe("DUPLICATE_CANDIDATE");
+    expect(duplicateBody.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: createdCustomerId, matchReasons: expect.arrayContaining(["phone", "email"]) }),
+    ]));
+
+    const reused = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-customer-quote-command-reuse-0004",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Explicitly reused customer",
+        customerDraft: {
+          ...customerDraft,
+          duplicateAction: "use_existing",
+          duplicateCustomerId: createdCustomerId,
+        },
+      },
+    });
+    expect(reused.statusCode).toBe(201);
+    expect(reused.json()).toMatchObject({
+      quote: { customerId: createdCustomerId },
+      customerCreated: false,
+      customerReused: true,
+    });
+
+    await prisma.customer.update({
+      where: { id_tenantId: { id: createdCustomerId, tenantId: owner.tenant.id } },
+      data: { archivedAtUtc: new Date() },
+    });
+    const beforeRollback = await prisma.customer.findUniqueOrThrow({
+      where: { id: createdCustomerId },
+      select: {
+        fullName: true,
+        phone: true,
+        phoneDigits: true,
+        email: true,
+        notes: true,
+        archivedAtUtc: true,
+        deletedAtUtc: true,
+        assignedTenantUserId: true,
+      },
+    });
+    const [activityCountBeforeRollback, indexCountBeforeRollback] = await Promise.all([
+      prisma.customerActivityEvent.count({
+        where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+      }),
+      prisma.aiIndexJob.count({
+        where: { tenantId: owner.tenant.id, sourceType: "Customer", sourceId: createdCustomerId },
+      }),
+    ]);
+    const rolledBackRestore = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-customer-quote-command-restore-rollback-0005",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Restored customer quote must roll back",
+        customerDraft: {
+          ...customerDraft,
+          fullName: "Uncommitted restored customer name",
+          notes: "This merge must disappear with the failed quote.",
+          duplicateAction: "merge",
+          duplicateCustomerId: createdCustomerId,
+        },
+        lineItems: [{
+          ...baseQuote.lineItems[0],
+          sourcePresetId: "missing-restore-source-preset",
+        }],
+      },
+    });
+    expect(rolledBackRestore.statusCode).toBe(422);
+    expect(rolledBackRestore.json()).toMatchObject({ code: "SOURCE_PRESET_INVALID" });
+    await expect(prisma.customer.findUniqueOrThrow({
+      where: { id: createdCustomerId },
+      select: {
+        fullName: true,
+        phone: true,
+        phoneDigits: true,
+        email: true,
+        notes: true,
+        archivedAtUtc: true,
+        deletedAtUtc: true,
+        assignedTenantUserId: true,
+      },
+    })).resolves.toEqual(beforeRollback);
+    await expect(prisma.customerActivityEvent.count({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+    })).resolves.toBe(activityCountBeforeRollback);
+    await expect(prisma.aiIndexJob.count({
+      where: { tenantId: owner.tenant.id, sourceType: "Customer", sourceId: createdCustomerId },
+    })).resolves.toBe(indexCountBeforeRollback);
+    await expect(prisma.quote.count({
+      where: { tenantId: owner.tenant.id, title: "Restored customer quote must roll back" },
+    })).resolves.toBe(0);
+
+    const restored = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-customer-quote-command-restore-0005",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Restored customer quote",
+        customerDraft: {
+          ...customerDraft,
+          notes: "Restored through the reviewed quote command.",
+          duplicateAction: "merge",
+          duplicateCustomerId: createdCustomerId,
+        },
+      },
+    });
+    expect(restored.statusCode).toBe(201);
+    expect(restored.json()).toMatchObject({
+      quote: { customerId: createdCustomerId },
+      customerMerged: true,
+      customerRestored: true,
+    });
+    await expect(prisma.customer.findUniqueOrThrow({
+      where: { id: createdCustomerId },
+      select: { archivedAtUtc: true, deletedAtUtc: true, notes: true },
+    })).resolves.toEqual({
+      archivedAtUtc: null,
+      deletedAtUtc: null,
+      notes: "Restored through the reviewed quote command.",
+    });
+    await expect(prisma.customerActivityEvent.count({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+    })).resolves.toBe(activityCountBeforeRollback + 2);
+    await expect(prisma.customerActivityEvent.findMany({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+      orderBy: { createdAt: "desc" },
+      take: 2,
+      select: { eventType: true, detail: true },
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventType: "RESTORED" }),
+      expect.objectContaining({
+        eventType: "NOTES_UPDATED",
+        detail: "Restored through the reviewed quote command.",
+      }),
+    ]));
+  });
+
+  test("keeps customerDraft duplicate resolution inside tenant and member assignment boundaries", async () => {
+    const owner = await signUp("atomic-customer-boundary-owner");
+    const outsider = await signUp("atomic-customer-boundary-outsider");
+    const createMember = async (label: string) => {
+      const email = `${label.toLowerCase().replaceAll(" ", "-")}-${Date.now()}@example.com`;
+      const password = "MemberPassword123!";
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/org/users",
+        headers: authHeaders(owner.cookie),
+        payload: { email, fullName: label, password, role: "member" },
+      });
+      expect(created.statusCode).toBe(201);
+      const signedIn = await app.inject({
+        method: "POST",
+        url: "/v1/auth/signin",
+        payload: { email, password },
+      });
+      expect(signedIn.statusCode).toBe(200);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
+      const tenantUser = await prisma.tenantUser.findUniqueOrThrow({
+        where: { tenantId_userId: { tenantId: owner.tenant.id, userId: user.id } },
+        select: { id: true },
+      });
+      return { cookie: extractSessionCookie(signedIn), tenantUserId: tenantUser.id };
+    };
+    const memberA = await createMember("Atomic Assignment Member A");
+    const memberB = await createMember("Atomic Assignment Member B");
+    const baseQuote = {
+      serviceType: "PLUMBING",
+      title: "Assignment-safe atomic quote",
+      scopeText: "Create a reviewed quote without exposing records outside the live assignment.",
+      internalCostSubtotal: 25,
+      customerPriceSubtotal: 100,
+      taxAmount: 0,
+      lineItems: [{ description: "Boundary-safe labor", quantity: 1, unitCost: 25, unitPrice: 100 }],
+    };
+
+    const hiddenAssignedCustomer = await prisma.customer.create({
+      data: {
+        tenantId: owner.tenant.id,
+        fullName: "Member A Private Customer",
+        phone: "(555) 010-7791",
+        phoneDigits: "5550107791",
+        email: "member-a-private@example.com",
+        assignedTenantUserId: memberA.tenantUserId,
+      },
+    });
+    const hiddenBefore = await prisma.customer.findUniqueOrThrow({ where: { id: hiddenAssignedCustomer.id } });
+
+    const hiddenDuplicate = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(memberB.cookie),
+        "idempotency-key": "atomic-hidden-assignment-duplicate-0001",
+      },
+      payload: {
+        ...baseQuote,
+        customerDraft: {
+          fullName: "Attempted hidden duplicate",
+          phone: hiddenAssignedCustomer.phone,
+          email: hiddenAssignedCustomer.email,
+        },
+      },
+    });
+    expect(hiddenDuplicate.statusCode).toBe(409);
+    expect(hiddenDuplicate.json()).toEqual({
+      code: "PHONE_CONFLICT",
+      error: "This phone number is already in use. Search for the existing customer and try again.",
+    });
+    expect(hiddenDuplicate.body).not.toContain(hiddenAssignedCustomer.id);
+    expect(hiddenDuplicate.body).not.toContain(hiddenAssignedCustomer.fullName);
+    expect(hiddenDuplicate.body).not.toContain(hiddenAssignedCustomer.email!);
+
+    const hiddenSelection = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(memberB.cookie),
+        "idempotency-key": "atomic-hidden-assignment-selection-0002",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Hidden assignment selection rejected",
+        customerDraft: {
+          fullName: "Attempted hidden selection",
+          phone: hiddenAssignedCustomer.phone,
+          email: hiddenAssignedCustomer.email,
+          duplicateAction: "merge",
+          duplicateCustomerId: hiddenAssignedCustomer.id,
+        },
+      },
+    });
+    expect(hiddenSelection.statusCode).toBe(409);
+    expect(hiddenSelection.json()).toEqual({
+      code: "STALE_DUPLICATE_TARGET",
+      error: "The selected customer changed and no longer matches. Review the latest results.",
+      matches: [],
+    });
+    await expect(prisma.customer.findUniqueOrThrow({ where: { id: hiddenAssignedCustomer.id } })).resolves.toEqual(hiddenBefore);
+
+    const outsiderCustomerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(outsider.cookie),
+      payload: {
+        fullName: "Other Tenant Private Customer",
+        phone: "555-010-7792",
+        email: "other-tenant-private@example.com",
+        notes: "Must not be visible or mutable outside this tenant.",
+      },
+    });
+    expect(outsiderCustomerResponse.statusCode).toBe(201);
+    const outsiderCustomer = parseJson<CustomerResponse>(outsiderCustomerResponse).customer;
+    const outsiderBefore = await prisma.customer.findUniqueOrThrow({ where: { id: outsiderCustomer.id } });
+
+    const localCreate = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(memberB.cookie),
+        "idempotency-key": "atomic-cross-tenant-local-create-0003",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Same contact remains tenant local",
+        customerDraft: {
+          fullName: "Member B Local Customer",
+          phone: outsiderCustomer.phone,
+          email: outsiderCustomer.email,
+        },
+      },
+    });
+    expect(localCreate.statusCode).toBe(201);
+    const localBody = localCreate.json() as { quote: { id: string; customerId: string } };
+    expect(localBody.quote.customerId).not.toBe(outsiderCustomer.id);
+    expect(localCreate.body).not.toContain(outsiderCustomer.id);
+    const [localCustomer, localQuote] = await Promise.all([
+      prisma.customer.findUniqueOrThrow({ where: { id: localBody.quote.customerId } }),
+      prisma.quote.findUniqueOrThrow({ where: { id: localBody.quote.id } }),
+    ]);
+    expect(localCustomer).toMatchObject({
+      tenantId: owner.tenant.id,
+      assignedTenantUserId: memberB.tenantUserId,
+      phone: outsiderCustomer.phone,
+      email: outsiderCustomer.email,
+    });
+    expect(localQuote).toMatchObject({
+      tenantId: owner.tenant.id,
+      customerId: localCustomer.id,
+      assignedTenantUserId: memberB.tenantUserId,
+    });
+
+    const foreignSelection = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(memberB.cookie),
+        "idempotency-key": "atomic-cross-tenant-selection-0004",
+      },
+      payload: {
+        ...baseQuote,
+        title: "Cross-tenant duplicate selection rejected",
+        customerDraft: {
+          fullName: "Cross-tenant selection attempt",
+          phone: outsiderCustomer.phone,
+          email: outsiderCustomer.email,
+          duplicateAction: "merge",
+          duplicateCustomerId: outsiderCustomer.id,
+        },
+      },
+    });
+    expect(foreignSelection.statusCode).toBe(409);
+    const foreignSelectionBody = foreignSelection.json() as {
+      code: string;
+      matches: Array<{ id: string; fullName: string; email: string | null }>;
+    };
+    expect(foreignSelectionBody.code).toBe("STALE_DUPLICATE_TARGET");
+    expect(foreignSelectionBody.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: localCustomer.id, fullName: localCustomer.fullName }),
+    ]));
+    expect(foreignSelection.body).not.toContain(outsiderCustomer.id);
+    expect(foreignSelection.body).not.toContain(outsiderCustomer.fullName);
+    await expect(prisma.customer.findUniqueOrThrow({ where: { id: outsiderCustomer.id } })).resolves.toEqual(outsiderBefore);
+  });
+
+  test("returns refreshed matches when a reviewed duplicate changes while merge waits on its row lock", async () => {
+    const owner = await signUp("atomic-customer-stale-lock");
+    const customerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(owner.cookie),
+      payload: {
+        fullName: "Initially Matching Customer",
+        phone: "555-010-7793",
+        email: "initial-match@example.com",
+      },
+    });
+    expect(customerResponse.statusCode).toBe(201);
+    const customer = parseJson<CustomerResponse>(customerResponse).customer;
+
+    let releaseRowLock!: () => void;
+    let rowLockReady!: () => void;
+    const rowLockHeld = new Promise<void>((resolve) => { rowLockReady = resolve; });
+    const releaseRowLockPromise = new Promise<void>((resolve) => { releaseRowLock = resolve; });
+    const lockingTransaction = prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT customer.id
+        FROM "Customer" customer
+        WHERE customer.id = ${customer.id}
+        FOR UPDATE OF customer
+      `;
+      await transaction.customer.update({
+        where: { id: customer.id },
+        data: {
+          phone: "(555) 010-7794",
+          phoneDigits: "5550107794",
+          email: "changed-after-review@example.com",
+        },
+      });
+      rowLockReady();
+      await releaseRowLockPromise;
+    });
+    await rowLockHeld;
+
+    const pendingMerge = app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: {
+        ...authHeaders(owner.cookie),
+        "idempotency-key": "atomic-stale-row-lock-0001",
+      },
+      payload: {
+        serviceType: "PLUMBING",
+        title: "Stale reviewed merge",
+        scopeText: "The selected customer changes after review and before the merge lock is acquired.",
+        internalCostSubtotal: 20,
+        customerPriceSubtotal: 80,
+        taxAmount: 0,
+        customerDraft: {
+          fullName: "Reviewed Customer Name",
+          phone: customer.phone,
+          email: customer.email,
+          duplicateAction: "merge",
+          duplicateCustomerId: customer.id,
+        },
+        lineItems: [{ description: "Lock-safe work", quantity: 1, unitCost: 20, unitPrice: 80 }],
+      },
+    });
+
+    let observedBlockedMerge = false;
+    try {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [blocked] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_stat_activity
+            WHERE pid <> pg_backend_pid()
+              AND datname = current_database()
+              AND "wait_event_type" = 'Lock'
+              AND query ILIKE '%FOR UPDATE OF customer%'
+          ) AS blocked
+        `;
+        if (blocked?.blocked) {
+          observedBlockedMerge = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      releaseRowLock();
+    }
+    expect(observedBlockedMerge).toBe(true);
+    await lockingTransaction;
+    const response = await pendingMerge;
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: "STALE_DUPLICATE_TARGET",
+      error: "The selected customer changed and no longer matches. Review the latest results.",
+      matches: [],
+    });
+    await expect(prisma.quote.count({
+      where: { tenantId: owner.tenant.id, title: "Stale reviewed merge" },
+    })).resolves.toBe(0);
+    await expect(prisma.customer.findUniqueOrThrow({
+      where: { id: customer.id },
+      select: { phone: true, email: true },
+    })).resolves.toEqual({
+      phone: "(555) 010-7794",
+      email: "changed-after-review@example.com",
+    });
+  });
+
   test("signup copies immutable catalog definitions into independent tenant-owned products", async () => {
     const definitions = getStandardWorkPresetCatalog(ServiceCategory.ROOFING);
     const alpha = await signUp("starter-copy-alpha");

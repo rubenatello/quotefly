@@ -1,7 +1,7 @@
 # QuoteFly Critical Improvements Program
 
 Status: Critical safety tranche complete; broader program in progress
-Program baseline: `7f75827112b4d6c8794c683af3bbaf488cb90a71` (`origin/main`, 2026-08-25)
+Program baseline: `c309b3d2fc34f16e33d43d6390e28c430362761a` (`origin/main`, 2026-08-25)
 Owner: Product and Engineering
 Release rule: Code completion is not production proof. Provider, database-role, device, and rollout evidence remain explicit gates.
 
@@ -56,10 +56,10 @@ Targets are engineering-quality goals, not ranking, citation, latency, or conver
 | QF-101 | Add tenant-configurable trade labels without silent Construction fallback | Planned | At least ten additional trade fixtures preserve the requested trade through quote, Job, catalog, analytics, and retrieval metadata |
 | QF-102 | Add deterministic Job search and status tools | Complete | `SEARCH_JOBS` and `GET_JOB_STATUS` are live-role, tenant, assignment, and lifecycle scoped, cap results at eight, omit operationally sensitive notes, and use zero provider budget |
 | QF-103 | Add deterministic invoice list and status tools | Complete | `LIST_INVOICES` and `GET_INVOICE_STATUS` scope through accessible Jobs, hide financial values without billing permission, return typed safe actions, and use zero vector/provider budget |
-| QF-104 | Add atomic reviewed customer-plus-quote creation | Planned | Duplicate resolution and create/reuse customer plus quote occur under one idempotent reviewed command; failure cannot leave an unintended partial customer |
+| QF-104 | Add atomic reviewed customer-plus-quote creation | Complete | The reviewed command creates, reuses, merges, or restores the tenant/assignment-scoped customer and creates the quote in one idempotent transaction. Duplicate selection, privacy-safe conflicts, concurrent stale matches, late-failure rollback, activity/index jobs, lost responses, and truthful final preview are covered by database and browser tests |
 | QF-105 | Persist catalog provenance | Complete | Quote lines retain typed pricing origin plus immutable tenant-preset id, name, catalog key, version, and source-update snapshots across create, sheet save, line add, revision, and restore paths. Current line quantity, price, and cost remain editable reviewed quote values and are not represented as immutable preset defaults |
 | QF-106 | Strengthen catalog match confidence | Planned | Low-confidence matches require confirmation; false-positive corpus covers aliases, single-token collisions, unsupported work, and more than 200 presets |
-| QF-107 | Add exact canonical prompt acceptance coverage | Partially complete | Exact inspection/range/no-price/no-write coverage and deterministic customer/job/invoice routing pass; atomic new-customer creation, full ambiguity matrix, and real-device acceptance remain open |
+| QF-107 | Add exact canonical prompt acceptance coverage | Partially complete | Exact inspection/range/no-price/no-write coverage, deterministic customer/job/invoice routing, and atomic reviewed new-customer creation pass; the full ambiguity matrix and real-device acceptance remain open |
 
 ## Phase 3 — Kody frontend resilience
 
@@ -69,7 +69,7 @@ Targets are engineering-quality goals, not ranking, citation, latency, or conver
 | QF-202 | Preserve retry identity after ambiguous failures | Complete | Kody and Quote AI preserve the exact request identity for safe retry while request changes receive a new identity; existing replay/payload-conflict backend checks remain green |
 | QF-203 | Add cancellation and ignore-late-result behavior | Complete | Kody and Quote AI cancel superseded requests, ignore late responses, preserve prompt state, and avoid stale-result overwrite |
 | QF-204 | Recover unfinished clarification safely | Existing gate; partially complete | Authenticated server recovery and browser plaintext purge tests pass; a dedicated multi-turn clarification recovery acceptance test remains open |
-| QF-205 | Maintain field accessibility | Complete in automated gates; real-device evidence remains | Kody totals/disclosure, invoice financial facts, focus visibility, reduced motion, and public Axe coverage are implemented; the full 103-case Playwright suite passed with only the intentional capture-only skip. Real-device evidence remains QF-604 |
+| QF-205 | Maintain field accessibility | Complete in automated gates; real-device evidence remains | Kody totals/disclosure, invoice financial facts, focus visibility, reduced motion, and public Axe coverage are implemented; the full 111-case Playwright suite passed all 110 runnable tests with only the intentional capture-only skip. Real-device evidence remains QF-604 |
 
 ## Phase 4 — RAG, privacy, and provider operations
 
@@ -114,12 +114,12 @@ Targets are engineering-quality goals, not ranking, citation, latency, or conver
 
 | ID | Work item | Status | Acceptance evidence |
 | --- | --- | --- | --- |
-| QF-601 | Keep focused tests green during implementation | Complete | Unit, integration, security, SEO/AEO, accessibility, deterministic AI/retrieval, and full Playwright gates pass; the final Playwright run reported 102 passed and one intentional capture-only skip |
+| QF-601 | Keep focused tests green during implementation | Complete | Unit, integration, security, SEO/AEO, accessibility, deterministic AI/retrieval, and full Playwright gates pass; the final Playwright run reported 110 passed and one intentional capture-only skip |
 | QF-602 | Pass `npm run verify` | Complete | Exact working tree passed the full repository gate on 2026-08-25 |
-| QF-603 | Pass migrated database launch gate | Complete | The exact final working tree passed `npm run verify:launch` on 2026-08-25: all 61 migrations were already applied to the clean guarded PostgreSQL database with 61 finished and zero rolled back, all 249 integration tests passed, and Playwright passed 102/102 runnable tests with one intentional capture-only skip |
+| QF-603 | Pass migrated database launch gate | Complete | The exact QF-104 working tree passed `npm run verify:launch` on 2026-08-25: all 61 migrations were already applied to the guarded PostgreSQL test database, all 252 integration tests passed, and Playwright passed 110/110 runnable tests with one intentional capture-only skip |
 | QF-604 | Run real-device workflow smoke | Owner/device evidence required | Customer lookup/create, Kody clarification, quote handoff/save, PDF, share, Job, schedule/dispatch, and invoice record on representative phones |
-| QF-605 | Obtain Opera verdict | Complete | Independent Opera re-review returned APPROVED on 2026-08-25 with no unresolved Critical, High, or release-blocking Medium code finding; QF-OP-01 through QF-OP-04 were confirmed remediated |
-| QF-606 | BCP/deploy only with explicit authorization | Not authorized | No commit, push, deploy, provider enablement, DNS change, or production migration occurs implicitly |
+| QF-605 | Obtain Opera verdict | Complete | Independent Opera re-review returned APPROVED on 2026-08-25 for the exact QF-104 nine-file code diff with high confidence and no unresolved Critical, High, or release-blocking Medium code finding |
+| QF-606 | BCP/deploy only with explicit authorization | Baseline BCP complete; current slice not authorized | The prior candidate was built, committed, and pushed to `origin/main` at `c309b3d`; the current QF-104 slice remains uncommitted. No deployment, provider enablement, DNS change, or production migration occurred |
 
 ## Canonical Kody acceptance scenario
 
@@ -144,6 +144,7 @@ Required behavior:
 
 | Date | Evidence | Result |
 | --- | --- | --- |
+| 2026-08-25 | Explicitly authorized BCP and `origin/main` verification | Build passed; commit `c309b3d2fc34f16e33d43d6390e28c430362761a` was pushed and verified as the exact remote main SHA |
 | 2026-08-25 | Exact `origin/main` CI launch gate at `7f75827` | Passed |
 | 2026-08-25 | AI parser evaluation | 17/17 passed |
 | 2026-08-25 | Assistant intent/context/safety evaluation | 83/83 passed |
@@ -152,13 +153,14 @@ Required behavior:
 | 2026-08-25 | Public desktop/mobile accessibility audit | No critical, serious, or moderate Axe violations in eight route states |
 | 2026-08-25 | Latest provider-backed evidence on prior SHA | Failed 4/6; exact-candidate rerun remains required |
 | 2026-08-25 | Clean disposable PostgreSQL migration rehearsal | 61/61 migrations applied; 61 finished, zero rolled back, schema current |
-| 2026-08-25 | Full database-backed integration suite on exact working tree | 24/24 files and 249/249 tests passed |
+| 2026-08-25 | Full database-backed integration suite on exact QF-104 working tree | 24/24 files and 252/252 tests passed |
 | 2026-08-25 | Full `npm run verify` on exact working tree | Passed: backend, 116-route audit, web build/prerender, lint, Prisma, security, unit, AI, assistant, retrieval, and dependency audits |
 | 2026-08-25 | Unit and security aggregate | 187 passed across the diagnostic pretest and main unit/web scripts, one intentional Redis skip; security 5/5 passed |
-| 2026-08-25 | Full Playwright workflow and accessibility suite | 102/102 runnable tests passed; one intentional capture-only test skipped |
+| 2026-08-25 | Full Playwright workflow and accessibility suite | 110/110 runnable tests passed; one intentional capture-only test skipped |
 | 2026-08-25 | Focused draft-cleanup race stress | 5/5 consecutive runs passed; successful cleanup remained the final draft write after delayed autosave |
-| 2026-08-25 | Exact final-tree `npm run verify:launch` | Passed end to end: build, route audit, web build/prerender, lint, Prisma, security, unit, 249 integration tests, all deterministic AI evaluations, dependency audits, and 102 runnable Playwright tests |
-| 2026-08-25 | Independent Opera quality gate | APPROVED; no unresolved Critical, High, or release-blocking Medium code finding; independent focused rerun passed 18/18 tests |
+| 2026-08-25 | Exact QF-104 code-tree `npm run verify:launch` | Passed end to end: build, 116-route audit, web build/prerender, lint, Prisma, security, unit, 252 integration tests, all deterministic AI evaluations, dependency audits, and 110 runnable Playwright tests |
+| 2026-08-25 | Focused QF-104 atomic API and browser evidence | API route file passed 55/55; concurrency, tenant/assignment isolation, rollback, duplicate selection, stale/conflict recovery, notes activity, truthful preview, and lost-response retry cases passed |
+| 2026-08-25 | Independent Opera QF-104 quality gate | APPROVED with high confidence; no unresolved Critical, High, or release-blocking Medium code finding; no schema or migration change |
 
 ## Status maintenance
 

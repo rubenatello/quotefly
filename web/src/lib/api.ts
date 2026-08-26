@@ -920,6 +920,16 @@ export type CustomerDuplicateMatch = {
   matchReasons: Array<"phone" | "email">;
 };
 
+export type QuoteCustomerDraft = {
+  fullName: string;
+  phone: string;
+  email?: string | null;
+  notes?: string | null;
+  preferredLocale?: SupportedLocale | null;
+  duplicateAction?: "merge" | "create_new" | "use_existing";
+  duplicateCustomerId?: string;
+};
+
 export type QuoteLineItem = {
   id: string;
   tenantId: string;
@@ -2835,7 +2845,8 @@ export const api = {
       }),
 
     create: (body: {
-      customerId: string;
+      customerId?: string;
+      customerDraft?: QuoteCustomerDraft;
       serviceType: ServiceType;
       title: string;
       scopeText: string;
@@ -2856,7 +2867,14 @@ export const api = {
         sourcePresetId?: string;
       }>;
     }, options?: { idempotencyKey?: string }) =>
-      request<{ quote: Quote; duplicate?: boolean }>(`/v1/quotes`, {
+      request<{
+        quote: Quote;
+        duplicate?: boolean;
+        customerCreated?: boolean;
+        customerReused?: boolean;
+        customerMerged?: boolean;
+        customerRestored?: boolean;
+      }>(`/v1/quotes`, {
         method: "POST",
         headers: activityCommandHeaders(options?.idempotencyKey),
         body: JSON.stringify(body),

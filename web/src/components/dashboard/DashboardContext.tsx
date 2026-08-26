@@ -13,6 +13,7 @@ import {
   type QuoteOutboundChannel,
   type QuoteOutboundEvent,
   type Quote,
+  type QuoteCustomerDraft,
   type QuoteAcceptedJobSummary,
   type QuoteRevision,
   type SaveQuoteSheetInput,
@@ -424,6 +425,8 @@ export interface DashboardContextValue {
     aiUsageEventId?: string;
     aiPricingReviewAcknowledged?: boolean;
     idempotencyKey?: string;
+    customerDraft?: QuoteCustomerDraft;
+    onCreateError?: (error: unknown) => boolean | Promise<boolean>;
     beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => Promise<Quote | null>;
   createQuote: (event: FormEvent) => Promise<void>;
@@ -917,6 +920,8 @@ export function DashboardProvider({
     aiUsageEventId?: string;
     aiPricingReviewAcknowledged?: boolean;
     idempotencyKey?: string;
+    customerDraft?: QuoteCustomerDraft;
+    onCreateError?: (error: unknown) => boolean | Promise<boolean>;
     beforeSuccessNavigation?: (quote: Quote) => Promise<boolean>;
   }) => {
     setSaving(true); setError(null);
@@ -926,7 +931,9 @@ export function DashboardProvider({
         ...(options?.quoteOverride ?? {}),
       };
       const createPayload = {
-        customerId: mergedQuoteForm.customerId,
+        ...(options?.customerDraft
+          ? { customerDraft: options.customerDraft }
+          : { customerId: mergedQuoteForm.customerId }),
         serviceType: mergedQuoteForm.serviceType,
         title: mergedQuoteForm.title,
         scopeText: mergedQuoteForm.scopeText,
@@ -951,14 +958,17 @@ export function DashboardProvider({
       if (options?.beforeSuccessNavigation && !(await options.beforeSuccessNavigation(quote))) {
         return null;
       }
-      setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: prev.customerId, documentLocale: prev.documentLocale }));
+      setQuoteForm((prev) => ({ ...EMPTY_QUOTE, customerId: quote.customerId, documentLocale: prev.documentLocale }));
       focusQuoteDesk(quote.id);
       setNotice(options?.successNotice ?? t("quoteFeedback.quote.created"));
       navigateToQuote(quote.id);
       void loadQuotes();
       return quote;
     } catch (err) {
-      setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.createError" }));
+      const handled = await options?.onCreateError?.(err) ?? false;
+      if (!handled) {
+        setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.quote.createError" }));
+      }
       return null;
     } finally { setSaving(false); }
   }, [focusQuoteDesk, quoteForm, loadQuotes, navigateToQuote, t]);

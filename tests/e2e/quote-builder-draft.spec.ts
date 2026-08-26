@@ -246,6 +246,77 @@ test.describe("quote builder secure server draft recovery", () => {
     expect(payload.quotes.filter((quote) => quote.title === "One response-loss quote")).toHaveLength(1);
   });
 
+  test("a lost-response retry stays locked when the staged customer is edited", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-staged-customer-response-loss");
+    await addSessionCookie(context, account);
+    const quoteCreateKeys: string[] = [];
+    const quoteCreateBodies: string[] = [];
+    let loseFirstResponse = true;
+
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      quoteCreateKeys.push(route.request().headers()["idempotency-key"] ?? "");
+      quoteCreateBodies.push(route.request().postData() ?? "");
+      const response = await route.fetch();
+      if (loseFirstResponse) {
+        loseFirstResponse = false;
+        await route.abort("failed");
+        return;
+      }
+      await route.fulfill({ response });
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Locked Retry Customer");
+    await customerDialog.getByLabel("Phone").fill("555-010-7840");
+    await customerDialog.getByLabel("Email").fill("locked-retry@example.com");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("One staged response-loss quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Response-safe staged work");
+    await visibleField(firstRow, "Existing line 1 price").fill("640");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect.poll(() => quoteCreateKeys.length).toBe(1);
+    expect(quoteCreateKeys[0]).toMatch(/^qf-quote-/);
+
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    await customerDialog.getByLabel("Full name").fill("Changed Retry Customer");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "This retry is locked to the original quote details" }).first(),
+    ).toBeVisible();
+    expect(quoteCreateKeys).toHaveLength(1);
+
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    await customerDialog.getByLabel("Full name").fill("Locked Retry Customer");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.reload();
+    await expect(page.getByTestId("quote-builder-draft-status")).toContainText("Draft restored");
+    await expect(page.getByLabel("Quote title")).toHaveValue("One staged response-loss quote");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+    expect(quoteCreateKeys).toHaveLength(2);
+    expect(quoteCreateKeys[1]).toBe(quoteCreateKeys[0]);
+    expect(quoteCreateBodies[1]).toBe(quoteCreateBodies[0]);
+
+    const quotesResponse = await request.get(`${apiBaseUrl}/v1/quotes?limit=100`, {
+      headers: { cookie: account.cookieHeader },
+    });
+    expect(quotesResponse.status()).toBe(200);
+    const quotesPayload = await quotesResponse.json() as { quotes: Array<{ title: string }> };
+    expect(quotesPayload.quotes.filter((quote) => quote.title === "One staged response-loss quote")).toHaveLength(1);
+    const customersResponse = await request.get(`${apiBaseUrl}/v1/customers?search=${encodeURIComponent("locked-retry@example.com")}&limit=100`, {
+      headers: { cookie: account.cookieHeader },
+    });
+    expect(customersResponse.status()).toBe(200);
+    const customersPayload = await customersResponse.json() as { customers: Array<{ email: string | null }> };
+    expect(customersPayload.customers.filter((customer) => customer.email === "locked-retry@example.com")).toHaveLength(1);
+  });
+
   test("successful cleanup is the final draft write after a delayed identity autosave", async ({ context, page, request }) => {
     const account = await signUpViaApi(request, "builder-create-cleanup-order");
     const customer = await createCustomerViaApi(request, account, { fullName: "Cleanup Ordering Customer" });
@@ -521,5 +592,464 @@ test.describe("quote builder secure server draft recovery", () => {
     await expect(page.getByLabel("Quote title")).toHaveValue("");
     await expect.poll(async () => getServerDraft(request, account)).toBeNull();
     await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
+  });
+
+  test("stages a new customer and persists it only inside the reviewed quote command", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-atomic-new-customer");
+    await addSessionCookie(context, account);
+    let standaloneCustomerWrites = 0;
+    const quoteCreateBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/customers", async (route) => {
+      if (route.request().method() === "POST") standaloneCustomerWrites += 1;
+      await route.fallback();
+    });
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() === "POST") {
+        quoteCreateBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Atomic Browser Customer");
+    await customerDialog.getByLabel("Phone").fill("555-010-7831");
+    await customerDialog.getByLabel("Email").fill("atomic-browser@example.com");
+    await customerDialog.getByLabel("Customer notes").fill("Create only with the reviewed quote.");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await expect(customerDialog).toBeHidden();
+    expect(standaloneCustomerWrites).toBe(0);
+    await expect(page.getByText("Atomic Browser Customer").filter({ visible: true }).first()).toBeVisible();
+
+    await page.getByLabel("Quote title").fill("Atomic browser quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Reviewed inspection labor");
+    await visibleField(firstRow, "Existing line 1 price").fill("420");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+
+    expect(standaloneCustomerWrites).toBe(0);
+    expect(quoteCreateBodies).toHaveLength(1);
+    expect(quoteCreateBodies[0]).not.toHaveProperty("customerId");
+    expect(quoteCreateBodies[0]).toMatchObject({
+      customerDraft: {
+        fullName: "Atomic Browser Customer",
+        phone: "(555) 010-7831",
+        email: "atomic-browser@example.com",
+        notes: "Create only with the reviewed quote.",
+      },
+    });
+    const customerResponse = await request.get(`${apiBaseUrl}/v1/customers?search=atomic-browser%40example.com`, {
+      headers: { cookie: account.cookieHeader },
+    });
+    expect(customerResponse.status()).toBe(200);
+    const customerPayload = await customerResponse.json() as { customers: Array<{ id: string }> };
+    expect(customerPayload.customers).toHaveLength(1);
+  });
+
+  test("reopens duplicate review and retries the atomic quote with explicit customer reuse", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-atomic-duplicate-customer");
+    const existing = await createCustomerViaApi(request, account, {
+      fullName: "Existing Atomic Customer",
+      phone: "555-010-7832",
+      email: "existing-atomic@example.com",
+    });
+    await addSessionCookie(context, account);
+    const quoteCreateBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() === "POST") {
+        quoteCreateBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Kody Duplicate Customer");
+    await customerDialog.getByLabel("Phone").fill(existing.phone);
+    await customerDialog.getByLabel("Email").fill(existing.email ?? "");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+
+    await page.getByLabel("Quote title").fill("Duplicate-safe atomic quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Duplicate-safe work");
+    await visibleField(firstRow, "Existing line 1 price").fill("510");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog).toContainText("Existing Atomic Customer");
+    await customerDialog.getByRole("button", { name: "Use existing", exact: true }).click();
+    await expect(customerDialog).toBeHidden();
+    await expect(page.getByTestId("quote-builder")).toContainText(existing.fullName);
+    await expect(page.getByTestId("quote-builder")).toContainText(existing.phone);
+    await expect(page.getByTestId("quote-builder")).toContainText(existing.email ?? "");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+
+    expect(quoteCreateBodies).toHaveLength(2);
+    expect(quoteCreateBodies[0]).toHaveProperty("customerDraft");
+    expect(quoteCreateBodies[0]!.customerDraft).not.toHaveProperty("duplicateAction");
+    expect(quoteCreateBodies[1]).toMatchObject({
+      customerDraft: {
+        fullName: existing.fullName,
+        phone: existing.phone,
+        email: existing.email,
+        duplicateAction: "use_existing",
+        duplicateCustomerId: existing.id,
+      },
+    });
+  });
+
+  test("preserves the explicitly selected nonpreferred duplicate in the atomic retry", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-atomic-nonpreferred-duplicate");
+    const sharedEmail = "shared-duplicate-review@example.com";
+    const olderCustomer = await createCustomerViaApi(request, account, {
+      fullName: "Older Nonpreferred Customer",
+      phone: "555-010-7828",
+      email: sharedEmail,
+    });
+    const newerCustomerResponse = await request.post(`${apiBaseUrl}/v1/customers`, {
+      headers: { cookie: account.cookieHeader },
+      data: {
+        fullName: "Newer Preferred Customer",
+        phone: "555-010-7829",
+        email: sharedEmail,
+        duplicateAction: "create_new",
+      },
+    });
+    expect(newerCustomerResponse.status()).toBe(201);
+    const { customer: newerCustomer } = await newerCustomerResponse.json() as {
+      customer: { id: string; fullName: string };
+    };
+    await addSessionCookie(context, account);
+    const quoteCreateBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() === "POST") {
+        quoteCreateBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Reviewed Email Duplicate");
+    await customerDialog.getByLabel("Phone").fill("555-010-7830");
+    await customerDialog.getByLabel("Email").fill(sharedEmail);
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("Selected duplicate stays selected");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Selection-safe work");
+    await visibleField(firstRow, "Existing line 1 price").fill("545");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog).toContainText(newerCustomer.fullName);
+    const olderMatch = customerDialog.locator("label").filter({ hasText: olderCustomer.fullName });
+    await olderMatch.getByRole("radio").check();
+    await expect(olderMatch.getByRole("radio")).toBeChecked();
+    await customerDialog.getByRole("button", { name: "Use existing", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+
+    expect(quoteCreateBodies).toHaveLength(2);
+    expect(quoteCreateBodies[1]).toMatchObject({
+      customerDraft: {
+        duplicateAction: "use_existing",
+        duplicateCustomerId: olderCustomer.id,
+      },
+    });
+  });
+
+  test("recovered staged customer keeps duplicate resolution inside the atomic quote command", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-recovered-atomic-duplicate");
+    const existing = await createCustomerViaApi(request, account, {
+      fullName: "Existing Recovered Customer",
+      phone: "555-010-7833",
+      email: "existing-recovered@example.com",
+    });
+    await addSessionCookie(context, account);
+    let standaloneCustomerWrites = 0;
+    const quoteCreateBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/customers", async (route) => {
+      if (route.request().method() === "POST") standaloneCustomerWrites += 1;
+      await route.fallback();
+    });
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() === "POST") {
+        quoteCreateBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Recovered Duplicate Customer");
+    await customerDialog.getByLabel("Phone").fill(existing.phone);
+    await customerDialog.getByLabel("Email").fill(existing.email ?? "");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("Recovered duplicate-safe quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Recovered duplicate-safe work");
+    await visibleField(firstRow, "Existing line 1 price").fill("615");
+    await expect.poll(async () => {
+      const draft = await getServerDraft(request, account);
+      return draft?.payload.quickCustomerDraft?.fullName;
+    }).toBe("Recovered Duplicate Customer");
+
+    await page.reload();
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Recovered Duplicate Customer").filter({ visible: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog).toContainText("Existing Recovered Customer");
+    await customerDialog.getByRole("button", { name: "Use existing", exact: true }).click();
+    await expect(customerDialog).toBeHidden();
+    expect(standaloneCustomerWrites).toBe(0);
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+
+    expect(standaloneCustomerWrites).toBe(0);
+    expect(quoteCreateBodies).toHaveLength(2);
+    expect(quoteCreateBodies[1]).toMatchObject({
+      customerDraft: {
+        duplicateAction: "use_existing",
+        duplicateCustomerId: existing.id,
+      },
+    });
+  });
+
+  test("merge contact conflict explains recovery and keeps every write atomic", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-atomic-merge-conflict");
+    const existing = await createCustomerViaApi(request, account, {
+      fullName: "Archived Contact Customer",
+      phone: "555-010-7834",
+      email: "saved-contact@example.com",
+    });
+    const archiveResponse = await request.post(`${apiBaseUrl}/v1/customers/${existing.id}/archive`, {
+      headers: { cookie: account.cookieHeader },
+    });
+    expect(archiveResponse.status()).toBe(204);
+    await addSessionCookie(context, account);
+    let standaloneCustomerWrites = 0;
+    const quoteCreateBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/customers", async (route) => {
+      if (route.request().method() === "POST") standaloneCustomerWrites += 1;
+      await route.fallback();
+    });
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() === "POST") {
+        quoteCreateBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Reviewed Restored Customer");
+    await customerDialog.getByLabel("Phone").fill(existing.phone);
+    await customerDialog.getByLabel("Email").fill("conflicting-contact@example.com");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("Atomic contact-conflict quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Conflict-safe restoration work");
+    await visibleField(firstRow, "Existing line 1 price").fill("725");
+
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await customerDialog.getByRole("button", { name: "Merge selected", exact: true }).click();
+    await expect(customerDialog).toBeHidden();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog.getByRole("alert")).toContainText(
+      "The selected customer has different saved contact details",
+    );
+    expect(standaloneCustomerWrites).toBe(0);
+
+    const archivedResponse = await request.get(
+      `${apiBaseUrl}/v1/customers?search=saved-contact%40example.com&lifecycle=archived`,
+      { headers: { cookie: account.cookieHeader } },
+    );
+    expect(archivedResponse.status()).toBe(200);
+    const archivedPayload = await archivedResponse.json() as {
+      customers: Array<{ id: string; fullName: string; email: string | null; archivedAtUtc: string | null }>;
+    };
+    expect(archivedPayload.customers).toContainEqual(expect.objectContaining({
+      id: existing.id,
+      fullName: "Archived Contact Customer",
+      email: "saved-contact@example.com",
+      archivedAtUtc: expect.any(String),
+    }));
+    const failedQuotesResponse = await request.get(
+      `${apiBaseUrl}/v1/quotes?customerId=${encodeURIComponent(existing.id)}&limit=100`,
+      { headers: { cookie: account.cookieHeader } },
+    );
+    expect(failedQuotesResponse.status()).toBe(200);
+    const failedQuotes = await failedQuotesResponse.json() as { quotes: Array<{ title: string }> };
+    expect(failedQuotes.quotes.filter((quote) => quote.title === "Atomic contact-conflict quote")).toHaveLength(0);
+
+    await customerDialog.getByLabel("Email").fill(existing.email ?? "");
+    await expect(customerDialog.getByRole("alert")).toHaveCount(0);
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await customerDialog.getByRole("button", { name: "Merge selected", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+
+    expect(standaloneCustomerWrites).toBe(0);
+    expect(quoteCreateBodies).toHaveLength(4);
+    expect(quoteCreateBodies[3]).toMatchObject({
+      customerDraft: {
+        duplicateAction: "merge",
+        duplicateCustomerId: existing.id,
+        email: "saved-contact@example.com",
+      },
+    });
+    const activeResponse = await request.get(
+      `${apiBaseUrl}/v1/customers?search=saved-contact%40example.com&lifecycle=active`,
+      { headers: { cookie: account.cookieHeader } },
+    );
+    expect(activeResponse.status()).toBe(200);
+    const activePayload = await activeResponse.json() as {
+      customers: Array<{ id: string; fullName: string; email: string | null; archivedAtUtc: string | null }>;
+    };
+    expect(activePayload.customers).toContainEqual(expect.objectContaining({
+      id: existing.id,
+      fullName: "Reviewed Restored Customer",
+      email: "saved-contact@example.com",
+      archivedAtUtc: null,
+    }));
+    const savedQuotesResponse = await request.get(
+      `${apiBaseUrl}/v1/quotes?customerId=${encodeURIComponent(existing.id)}&limit=100`,
+      { headers: { cookie: account.cookieHeader } },
+    );
+    const savedQuotes = await savedQuotesResponse.json() as { quotes: Array<{ title: string }> };
+    expect(savedQuotes.quotes.filter((quote) => quote.title === "Atomic contact-conflict quote")).toHaveLength(1);
+  });
+
+  test("restricted phone conflict reveals no candidate and recovers through quote-only restaging", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-restricted-phone-conflict");
+    await addSessionCookie(context, account);
+    let standaloneCustomerWrites = 0;
+    let quoteCreateAttempts = 0;
+    await page.route("**/v1/customers", async (route) => {
+      if (route.request().method() === "POST") standaloneCustomerWrites += 1;
+      await route.fallback();
+    });
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      quoteCreateAttempts += 1;
+      if (quoteCreateAttempts === 1) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "PHONE_CONFLICT",
+            error: "This phone number is already in use. Search for the existing customer and try again.",
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Restricted Phone Draft");
+    await customerDialog.getByLabel("Phone").fill("555-010-7835");
+    await customerDialog.getByLabel("Email").fill("restricted-phone@example.com");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("Restricted phone recovery quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Restricted phone recovery work");
+    await visibleField(firstRow, "Existing line 1 price").fill("825");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog.getByRole("alert")).toContainText(
+      "This phone cannot be added to your assigned records",
+    );
+    await expect(customerDialog.getByRole("button", { name: "Save customer", exact: true })).toHaveCount(0);
+    await expect(customerDialog.getByText(/Private Customer|existing customer details/i)).toHaveCount(0);
+    expect(standaloneCustomerWrites).toBe(0);
+
+    await customerDialog.getByLabel("Phone").fill("555-010-7836");
+    await expect(customerDialog.getByRole("alert")).toHaveCount(0);
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+    expect(standaloneCustomerWrites).toBe(0);
+    expect(quoteCreateAttempts).toBe(2);
+  });
+
+  test("zero-match stale duplicate reopens actionable quote-only review", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-zero-match-stale-duplicate");
+    await addSessionCookie(context, account);
+    let standaloneCustomerWrites = 0;
+    let quoteCreateAttempts = 0;
+    await page.route("**/v1/customers", async (route) => {
+      if (route.request().method() === "POST") standaloneCustomerWrites += 1;
+      await route.fallback();
+    });
+    await page.route("**/v1/quotes", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      quoteCreateAttempts += 1;
+      if (quoteCreateAttempts === 1) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "STALE_DUPLICATE_TARGET",
+            error: "The selected customer changed and no longer matches. Review the latest results.",
+            matches: [],
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Add customer", exact: true }).first().click();
+    const customerDialog = page.getByRole("dialog", { name: "Add customer fast" });
+    await customerDialog.getByLabel("Full name").fill("Stale Reviewed Customer");
+    await customerDialog.getByLabel("Phone").fill("555-010-7837");
+    await customerDialog.getByLabel("Email").fill("stale-reviewed@example.com");
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByLabel("Quote title").fill("Zero-match stale recovery quote");
+    const firstRow = page.getByTestId("quote-line-row-1");
+    await visibleField(firstRow, "Existing line 1 title").fill("Stale recovery work");
+    await visibleField(firstRow, "Existing line 1 price").fill("925");
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+
+    await expect(customerDialog).toBeVisible({ timeout: 30_000 });
+    await expect(customerDialog.getByRole("alert")).toContainText(
+      "Customer details changed after the duplicate warning",
+    );
+    await expect(customerDialog.getByRole("button", { name: "Save customer", exact: true })).toHaveCount(0);
+    expect(standaloneCustomerWrites).toBe(0);
+
+    await customerDialog.getByLabel("Email").fill("stale-reviewed-corrected@example.com");
+    await expect(customerDialog.getByRole("alert")).toHaveCount(0);
+    await customerDialog.getByRole("button", { name: "Save + build quote", exact: true }).click();
+    await page.getByRole("button", { name: "Create Quote" }).first().click();
+    await expect(page).toHaveURL(/\/app\/quotes\/[^/]+$/, { timeout: 30_000 });
+    expect(standaloneCustomerWrites).toBe(0);
+    expect(quoteCreateAttempts).toBe(2);
   });
 });

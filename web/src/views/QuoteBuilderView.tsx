@@ -6,7 +6,11 @@ import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, 
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import { openKody, publishKodyOutcome } from "../components/ai/kody-events";
-import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
+import {
+  QuickCustomerModal,
+  type QuickCustomerForm,
+  type QuoteDraftDuplicateErrorCode,
+} from "../components/customers/QuickCustomerModal";
 import { QuoteLivePreview } from "../components/quotes/QuoteLivePreview";
 import { QuoteAiPromptModal } from "../components/quotes/QuoteAiPromptModal";
 import { QuoteLineSectionField } from "../components/quotes/QuoteLineSectionField";
@@ -32,7 +36,17 @@ import {
   Textarea,
   WorkflowActionDock,
 } from "../components/ui";
-import { api, ApiError, type AiProgressEvent, type AiQuoteInsight, type SupportedLocale, type TenantBranding, type WorkPreset } from "../lib/api";
+import {
+  api,
+  ApiError,
+  type AiProgressEvent,
+  type AiQuoteInsight,
+  type CustomerDuplicateMatch,
+  type QuoteCustomerDraft,
+  type SupportedLocale,
+  type TenantBranding,
+  type WorkPreset,
+} from "../lib/api";
 import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import {
   applyKodyQuoteAiProvenance,
@@ -149,6 +163,7 @@ type BuilderDraftData = {
   mobilePane: BuilderPane;
   quickCustomerOpen: boolean;
   quickCustomerForm: QuickCustomerForm;
+  quickCustomerDraft: QuoteCustomerDraft | null;
   lastAppliedAiRunId: string | null;
   lastAppliedAiCustomerId: string | null;
   quoteCreateRetryIdentity: QuoteCreateRetryIdentity | null;
@@ -413,6 +428,29 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
     && value.lastAppliedAiCustomerId !== null
     && !isDraftString(value.lastAppliedAiCustomerId, 200)
   ) return null;
+  if (value.quickCustomerDraft !== undefined && value.quickCustomerDraft !== null) {
+    if (!isRecord(value.quickCustomerDraft)) return null;
+    if (
+      !isDraftString(value.quickCustomerDraft.fullName, 500)
+      || !isDraftString(value.quickCustomerDraft.phone, 100)
+      || (value.quickCustomerDraft.email !== undefined
+        && value.quickCustomerDraft.email !== null
+        && !isDraftString(value.quickCustomerDraft.email, 500))
+      || (value.quickCustomerDraft.notes !== undefined
+        && value.quickCustomerDraft.notes !== null
+        && !isDraftString(value.quickCustomerDraft.notes, 20_000))
+      || (value.quickCustomerDraft.preferredLocale !== undefined
+        && value.quickCustomerDraft.preferredLocale !== null
+        && value.quickCustomerDraft.preferredLocale !== "en-US"
+        && value.quickCustomerDraft.preferredLocale !== "es-US")
+      || (value.quickCustomerDraft.duplicateAction !== undefined
+        && value.quickCustomerDraft.duplicateAction !== "merge"
+        && value.quickCustomerDraft.duplicateAction !== "create_new"
+        && value.quickCustomerDraft.duplicateAction !== "use_existing")
+      || (value.quickCustomerDraft.duplicateCustomerId !== undefined
+        && !isDraftString(value.quickCustomerDraft.duplicateCustomerId, 200))
+    ) return null;
+  }
 
   const lines: BuilderDraftLine[] = [];
   for (const candidate of value.lines) {
@@ -461,6 +499,17 @@ function parseStoredBuilderDraft(raw: string): StoredBuilderDraft | null {
       email: quickCustomerForm.email,
       notes: quickCustomerForm.notes,
     },
+    quickCustomerDraft: value.quickCustomerDraft
+      ? {
+          fullName: value.quickCustomerDraft.fullName as string,
+          phone: value.quickCustomerDraft.phone as string,
+          email: value.quickCustomerDraft.email as string | null | undefined,
+          notes: value.quickCustomerDraft.notes as string | null | undefined,
+          preferredLocale: value.quickCustomerDraft.preferredLocale as SupportedLocale | null | undefined,
+          duplicateAction: value.quickCustomerDraft.duplicateAction as QuoteCustomerDraft["duplicateAction"],
+          duplicateCustomerId: value.quickCustomerDraft.duplicateCustomerId as string | undefined,
+        }
+      : null,
     lastAppliedAiRunId: value.lastAppliedAiRunId as string | null,
     lastAppliedAiCustomerId: value.lastAppliedAiRunId
       ? value.lastAppliedAiCustomerId === undefined
@@ -524,6 +573,9 @@ export function QuoteBuilderView() {
   const track = useTrack();
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quickCustomerForm, setQuickCustomerForm] = useState<QuickCustomerForm>(EMPTY_QUICK_CUSTOMER_FORM);
+  const [quickCustomerDraft, setQuickCustomerDraft] = useState<QuoteCustomerDraft | null>(null);
+  const [quickCustomerDuplicateMatches, setQuickCustomerDuplicateMatches] = useState<CustomerDuplicateMatch[]>([]);
+  const [quickCustomerDuplicateErrorCode, setQuickCustomerDuplicateErrorCode] = useState<QuoteDraftDuplicateErrorCode | null>(null);
   const [hydratedDraftStorageKey, setHydratedDraftStorageKey] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const [draftSavedAtUtc, setDraftSavedAtUtc] = useState<string | null>(null);
@@ -612,6 +664,17 @@ export function QuoteBuilderView() {
     () => customers.find((customer) => customer.id === quoteForm.customerId) ?? null,
     [customers, quoteForm.customerId],
   );
+  const quoteCustomer = useMemo(
+    () => activeCustomer ?? (quickCustomerDraft
+      ? {
+          fullName: quickCustomerDraft.fullName,
+          phone: quickCustomerDraft.phone,
+          email: quickCustomerDraft.email ?? null,
+        }
+      : null),
+    [activeCustomer, quickCustomerDraft],
+  );
+  const customerReady = Boolean(quoteCustomer);
   const aiUsage = useMemo(() => resolveAiUsagePresentation(session?.usage), [session?.usage]);
   const aiUsageLimitMessage = useMemo(
     () => formatAiPaidUsagePause(session?.usage ?? {}, locale),
@@ -659,11 +722,12 @@ export function QuoteBuilderView() {
       mobilePane,
       quickCustomerOpen,
       quickCustomerForm,
+      quickCustomerDraft,
       lastAppliedAiRunId,
       lastAppliedAiCustomerId: lastAppliedAiProvenance?.customerId ?? null,
       quoteCreateRetryIdentity,
     }),
-    [draftLines, lastAppliedAiProvenance, lastAppliedAiRunId, mobilePane, quickCustomerForm, quickCustomerOpen, quoteCreateRetryIdentity, quoteForm],
+    [draftLines, lastAppliedAiProvenance, lastAppliedAiRunId, mobilePane, quickCustomerDraft, quickCustomerForm, quickCustomerOpen, quoteCreateRetryIdentity, quoteForm],
   );
   const hasMeaningfulDraft = useMemo(() => hasMeaningfulBuilderDraft(currentBuilderDraft), [currentBuilderDraft]);
   const {
@@ -679,6 +743,13 @@ export function QuoteBuilderView() {
 
   useEffect(() => {
     setLastAppliedAiProvenance((current) => reconcileQuoteAiProvenanceCustomer(current, quoteForm.customerId));
+  }, [quoteForm.customerId]);
+
+  useEffect(() => {
+    if (!quoteForm.customerId) return;
+    setQuickCustomerDraft(null);
+    setQuickCustomerDuplicateMatches([]);
+    setQuickCustomerDuplicateErrorCode(null);
   }, [quoteForm.customerId]);
 
   useEffect(() => {
@@ -733,6 +804,7 @@ export function QuoteBuilderView() {
         setMobilePane(stored.mobilePane);
         setQuickCustomerOpen(stored.quickCustomerOpen);
         setQuickCustomerForm(stored.quickCustomerForm);
+        setQuickCustomerDraft(stored.quickCustomerDraft);
         setLastAppliedAiProvenance(stored.lastAppliedAiRunId ? {
           auditEventId: stored.lastAppliedAiRunId,
           customerId: stored.lastAppliedAiCustomerId,
@@ -812,6 +884,9 @@ export function QuoteBuilderView() {
         phone: draft.customerPhone ?? current.phone,
         email: draft.customerEmail ?? current.email,
       }));
+      setQuickCustomerDraft(null);
+      setQuickCustomerDuplicateMatches([]);
+      setQuickCustomerDuplicateErrorCode(null);
       setQuickCustomerOpen(true);
     }
     if (canApplyKodyContext && (draft.serviceType || draft.title || draft.scopeText || draft.estimatedTaxAmount !== null)) {
@@ -1041,8 +1116,8 @@ export function QuoteBuilderView() {
     [filteredDraftLines],
   );
   const aiPromptStarters = useMemo(
-    () => buildAiPromptStarters(t, quoteForm.serviceType, activeCustomer ? { fullName: activeCustomer.fullName, phone: activeCustomer.phone } : null),
-    [t, quoteForm.serviceType, activeCustomer],
+    () => buildAiPromptStarters(t, quoteForm.serviceType, quoteCustomer),
+    [t, quoteForm.serviceType, quoteCustomer],
   );
   const businessHint = useMemo(() => buildBusinessHint(branding), [branding]);
   const quoteAccentColor = useMemo(() => resolveQuoteAccentColor(branding), [branding]);
@@ -1062,7 +1137,7 @@ export function QuoteBuilderView() {
   );
 
   function buildBuilderAiAssistPrompt(target: QuoteBuilderAiAssistTarget) {
-    const customerName = activeCustomer?.fullName ?? t("quoteBuilder.customerGeneric");
+    const customerName = quoteCustomer?.fullName ?? t("quoteBuilder.customerGeneric");
     const trade = t(`domain.trade.${quoteForm.serviceType}`);
     const title = quoteForm.title.trim();
     const overview = quoteForm.scopeText.trim();
@@ -1100,7 +1175,7 @@ export function QuoteBuilderView() {
     }
 
     return [
-      activeCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: activeCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
+      quoteCustomer ? t("quoteBuilder.kodyPrompt.customer", { customer: quoteCustomer.fullName }) : t("quoteBuilder.kodyPrompt.newQuote"),
       t("quoteBuilder.kodyPrompt.trade", { trade }),
       title ? t("quoteBuilder.kodyPrompt.title", { title }) : "",
       overview ? t("quoteBuilder.kodyPrompt.scope", { scope: overview }) : t("quoteBuilder.kodyPrompt.askMissing"),
@@ -1502,6 +1577,7 @@ export function QuoteBuilderView() {
     setMobilePane(stored.mobilePane);
     setQuickCustomerOpen(stored.quickCustomerOpen);
     setQuickCustomerForm(stored.quickCustomerForm);
+    setQuickCustomerDraft(stored.quickCustomerDraft);
     setLastAppliedAiProvenance(stored.lastAppliedAiRunId ? {
       auditEventId: stored.lastAppliedAiRunId,
       customerId: stored.lastAppliedAiCustomerId,
@@ -1636,6 +1712,9 @@ export function QuoteBuilderView() {
     setDraftLines([makeEditableQuoteLine()]);
     setQuickCustomerOpen(false);
     setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
+    setQuickCustomerDraft(null);
+    setQuickCustomerDuplicateMatches([]);
+    setQuickCustomerDuplicateErrorCode(null);
     setMobilePane("editor");
     setAiModalOpen(false);
     setAiInsight(null);
@@ -1657,7 +1736,7 @@ export function QuoteBuilderView() {
 
   async function handleCreateQuote() {
     if (quoteCreateInFlightRef.current) return;
-    if (!quoteForm.customerId) {
+    if (!quoteForm.customerId && !quickCustomerDraft) {
       setError(t("quoteBuilder.errors.customerRequired"));
       return;
     }
@@ -1724,8 +1803,13 @@ export function QuoteBuilderView() {
     quoteCreateInFlightRef.current = true;
     track("builder_quote_create");
     try {
+      const quoteCustomerDraft = quickCustomerDraft
+        ? { ...quickCustomerDraft, preferredLocale: quoteForm.documentLocale }
+        : undefined;
       const serializedCreateCommand = JSON.stringify({
-        customerId: quoteForm.customerId,
+        ...(quoteForm.customerId
+          ? { customerId: quoteForm.customerId }
+          : { customerDraft: quoteCustomerDraft }),
         serviceType: quoteForm.serviceType,
         title: quoteForm.title,
         scopeText,
@@ -1769,6 +1853,28 @@ export function QuoteBuilderView() {
         aiPricingReviewAcknowledged: effectiveAiPricingReview?.acknowledged === true ? true : undefined,
         initialLineItems,
         idempotencyKey: retryIdentity.idempotencyKey,
+        customerDraft: quoteCustomerDraft,
+        onCreateError: (createError) => {
+          if (!(createError instanceof ApiError)) return false;
+          const details = createError.details as {
+            code?: string;
+            matches?: CustomerDuplicateMatch[];
+          } | undefined;
+          const duplicateCode = details?.code;
+          if (![
+            "DUPLICATE_CANDIDATE",
+            "STALE_DUPLICATE_TARGET",
+            "USE_EXISTING_REQUIRES_RESTORE",
+            "MERGE_CONTACT_CONFLICT",
+            "PHONE_CONFLICT",
+          ].includes(duplicateCode ?? "")) return false;
+          setQuickCustomerDuplicateMatches(Array.isArray(details?.matches) ? details.matches : []);
+          setQuickCustomerDuplicateErrorCode(duplicateCode as QuoteDraftDuplicateErrorCode);
+          setQuoteCreateRetryIdentity(null);
+          setQuickCustomerOpen(true);
+          setError(null);
+          return true;
+        },
         beforeSuccessNavigation: async () => {
           quoteCreationCompletedRef.current = true;
           draftAutosaveEpochRef.current += 1;
@@ -1789,13 +1895,18 @@ export function QuoteBuilderView() {
       });
 
       if (createdQuote) {
+        void loadCustomers();
         if (kodyDraftHandoff) {
           publishKodyOutcome({
             type: "QUOTE_CREATED",
             quoteTitle: createdQuote.title,
-            customerName: activeCustomer?.fullName,
+            customerName: quoteCustomer?.fullName,
           });
         }
+        setQuickCustomerDraft(null);
+        setQuickCustomerDuplicateMatches([]);
+        setQuickCustomerDuplicateErrorCode(null);
+        setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
         setDraftLines([makeEditableQuoteLine()]);
         setAiInsight(null);
         setAiPricingReview(null);
@@ -1893,10 +2004,16 @@ export function QuoteBuilderView() {
         email: handoff.customerEmail ?? "",
         notes: "",
       });
+      setQuickCustomerDraft(null);
+      setQuickCustomerDuplicateMatches([]);
+      setQuickCustomerDuplicateErrorCode(null);
       setQuickCustomerOpen(true);
     } else if (strategy === "replace" && handoff.customerId) {
       setQuickCustomerOpen(false);
       setQuickCustomerForm(EMPTY_QUICK_CUSTOMER_FORM);
+      setQuickCustomerDraft(null);
+      setQuickCustomerDuplicateMatches([]);
+      setQuickCustomerDuplicateErrorCode(null);
     }
 
     setKodyDraftHandoff({ ...handoff, needsDraftChoice: false });
@@ -1913,7 +2030,7 @@ export function QuoteBuilderView() {
     setMobilePane("editor");
   }
 
-  const mobileBuilderStep = mobilePane === "preview" ? 3 : activeCustomer ? 2 : 1;
+  const mobileBuilderStep = mobilePane === "preview" ? 3 : customerReady ? 2 : 1;
 
   return (
     <div className="space-y-5" data-testid="quote-builder">
@@ -2191,7 +2308,7 @@ export function QuoteBuilderView() {
             {canViewInternalCosts ? <SummaryRow label={t("quoteComponents.math.margin")} value={new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(estimatedMarginPercent / 100)} tone={estimatedMarginPercent >= 10 ? "good" : "bad"} /> : null}
           </div>
           <div className="mt-4 space-y-2 text-sm text-slate-700">
-            <ChecklistItem compact complete={Boolean(activeCustomer)} label={t("quoteBuilder.selected")} />
+            <ChecklistItem compact complete={customerReady} label={t("quoteBuilder.selected")} />
             <ChecklistItem compact complete={Boolean(quoteForm.title.trim())} label={t("quoteBuilder.titleAdded")} />
             <ChecklistItem compact complete={filteredDraftLines.length > 0} label={t("quoteBuilder.linesReady", { count: filteredDraftLines.length || 0 })} />
           </div>
@@ -2216,8 +2333,8 @@ export function QuoteBuilderView() {
             }
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
-            customerHint={activeCustomer ? `${activeCustomer.phone}${activeCustomer.email ? ` / ${activeCustomer.email}` : ""}` : t("quoteBuilder.customerHint")}
+            customerName={quoteCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
+            customerHint={quoteCustomer ? `${quoteCustomer.phone}${quoteCustomer.email ? ` / ${quoteCustomer.email}` : ""}` : t("quoteBuilder.customerHint")}
             headerTools={
               <InlineCustomerLookup
                 selectedCustomer={activeCustomer}
@@ -2283,7 +2400,7 @@ export function QuoteBuilderView() {
               </div>
             }
           >
-            {!activeCustomer ? (
+            {!customerReady ? (
               <div className="space-y-3 rounded-xl border border-dashed border-quotefly-blue/25 bg-quotefly-blue/[0.04] px-3 py-3 text-sm text-slate-600 xl:hidden">
                 <p>{t("quoteBuilder.selectToStart")}</p>
                 <KodyFieldAssistButton
@@ -2297,7 +2414,7 @@ export function QuoteBuilderView() {
               </div>
             ) : null}
 
-            <div className={`grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2 ${activeCustomer ? "grid" : "hidden"} xl:hidden`}>
+            <div className={`grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2 ${customerReady ? "grid" : "hidden"} xl:hidden`}>
               <Select
                 label={t("quoteBuilder.workType")}
                 value={quoteForm.serviceType}
@@ -2401,7 +2518,7 @@ export function QuoteBuilderView() {
               </div>
             </div>
 
-            <div className={`overflow-x-auto rounded-2xl border border-slate-200 bg-white ${activeCustomer ? "block" : "hidden"} xl:block`}>
+            <div className={`overflow-x-auto rounded-2xl border border-slate-200 bg-white ${customerReady ? "block" : "hidden"} xl:block`}>
               <div
                 className={`hidden gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid ${QUOTE_BUILDER_LINE_GRID_COLUMNS} ${QUOTE_BUILDER_LINE_GRID_MIN_WIDTH}`}
               >
@@ -2446,9 +2563,9 @@ export function QuoteBuilderView() {
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
-            customerPhone={activeCustomer?.phone ?? null}
-            customerEmail={activeCustomer?.email ?? null}
+            customerName={quoteCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
+            customerPhone={quoteCustomer?.phone ?? null}
+            customerEmail={quoteCustomer?.email ?? null}
             preparedDateLabel={preparedDateLabel}
             sentDateLabel={quoteDocumentCopy(quoteForm.documentLocale).notAvailable}
             quoteTitle={quoteForm.title}
@@ -2469,7 +2586,7 @@ export function QuoteBuilderView() {
         </div>
       ) : null}
 
-      {activeCustomer || mobilePane === "preview" ? <div className="xl:hidden">
+      {customerReady || mobilePane === "preview" ? <div className="xl:hidden">
         <div className="h-20" />
         <WorkflowActionDock className="px-3 py-2.5">
           {error ? <p role="alert" className="mb-2 line-clamp-2 text-xs font-medium text-red-700">{error}</p> : null}
@@ -2502,8 +2619,26 @@ export function QuoteBuilderView() {
         open={quickCustomerOpen}
         onClose={() => setQuickCustomerOpen(false)}
         draftValue={quickCustomerForm}
-        onDraftChange={setQuickCustomerForm}
+        onDraftChange={(draft) => {
+          setQuickCustomerForm(draft);
+          setQuickCustomerDraft(null);
+          setQuickCustomerDuplicateMatches([]);
+          setQuickCustomerDuplicateErrorCode(null);
+        }}
+        quoteDraftMatches={quickCustomerDuplicateMatches}
+        quoteDraftErrorCode={quickCustomerDuplicateErrorCode}
+        onQuoteDraftReviewChange={() => setQuickCustomerDuplicateErrorCode(null)}
+        onQuoteDraftStaged={(draft) => {
+          setQuoteForm((current) => ({ ...current, customerId: "" }));
+          setQuickCustomerDraft({ ...draft, preferredLocale: quoteForm.documentLocale });
+          setQuickCustomerDuplicateMatches([]);
+          setQuickCustomerDuplicateErrorCode(null);
+          setNotice(t("quoteBuilder.notices.customerReady", { name: draft.fullName }));
+        }}
         onCreated={async ({ customer, intent, merged, restored, reusedExisting }) => {
+          setQuickCustomerDraft(null);
+          setQuickCustomerDuplicateMatches([]);
+          setQuickCustomerDuplicateErrorCode(null);
           void loadCustomers();
           selectQuoteCustomer(customer.id);
           const createNotice = reusedExisting
@@ -2571,18 +2706,18 @@ export function QuoteBuilderView() {
         onPromptChange={setChatPrompt}
         starterPrompts={aiPromptStarters}
         onUseStarterPrompt={setChatPrompt}
-        customerContextName={activeCustomer?.fullName ?? null}
+        customerContextName={quoteCustomer?.fullName ?? null}
         customerContextDetails={
-          activeCustomer
-            ? [activeCustomer.phone, activeCustomer.email].filter(Boolean).join(" • ")
+          quoteCustomer
+            ? [quoteCustomer.phone, quoteCustomer.email].filter(Boolean).join(" • ")
             : null
         }
         customerContextText={
-          activeCustomer
-            ? `${activeCustomer.fullName}${activeCustomer.phone ? ` • ${activeCustomer.phone}` : ""}${activeCustomer.email ? ` • ${activeCustomer.email}` : ""}`
+          quoteCustomer
+            ? `${quoteCustomer.fullName}${quoteCustomer.phone ? ` • ${quoteCustomer.phone}` : ""}${quoteCustomer.email ? ` • ${quoteCustomer.email}` : ""}`
             : t("quoteBuilder.noCustomerAi")
         }
-        customerContextBadge={activeCustomer ? t("quoteBuilder.usingCustomer") : null}
+        customerContextBadge={quoteCustomer ? t("quoteBuilder.usingCustomer") : null}
         usageHint={aiUsageHint}
         usageLimitMessage={aiUsage.paidActionsUnavailable ? aiUsageLimitMessage : null}
         errorMessage={aiErrorMessage}
@@ -2626,9 +2761,9 @@ export function QuoteBuilderView() {
           <QuoteLivePreview
             businessName={session?.tenantName ?? "QuoteFly"}
             businessHint={businessHint}
-            customerName={activeCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
-            customerPhone={activeCustomer?.phone ?? null}
-            customerEmail={activeCustomer?.email ?? null}
+            customerName={quoteCustomer?.fullName ?? t("quoteBuilder.selectCustomer")}
+            customerPhone={quoteCustomer?.phone ?? null}
+            customerEmail={quoteCustomer?.email ?? null}
             preparedDateLabel={preparedDateLabel}
             sentDateLabel={quoteDocumentCopy(quoteForm.documentLocale).notAvailable}
             quoteTitle={quoteForm.title}
