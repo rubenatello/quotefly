@@ -501,7 +501,10 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
       renewsAtUtc: "2026-09-01T00:00:00.000Z",
     };
 
-    if (body.tool === "SEARCH_CUSTOMERS") {
+    // The client deliberately submits AUTO so the backend remains the single
+    // authority for intent classification. Infer the mocked response from the
+    // natural-language request just as the real assistant route does.
+    if (/\bfind\s+customer\b/i.test(message)) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -770,11 +773,13 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
 
   expect(aiRequests).toEqual(expect.arrayContaining([
     expect.objectContaining({
-      tool: "SEARCH_CUSTOMERS",
+      tool: "AUTO",
+      message: expect.stringContaining(`Find customer ${customer.fullName}`),
       context: expect.objectContaining({ currentPage: "customers" }),
     }),
     expect.objectContaining({
-      tool: "DRAFT_QUOTE",
+      tool: "AUTO",
+      message: expect.stringContaining(`Draft a quote for ${customer.fullName}`),
       context: expect.objectContaining({ currentPage: "quotes" }),
     }),
   ]));
@@ -972,7 +977,8 @@ test("Kody applies a parsed quote draft to an empty mobile builder without savin
   )).toBe(true);
   expect(aiRequests).toEqual([
     expect.objectContaining({
-      tool: "DRAFT_QUOTE",
+      tool: "AUTO",
+      message: expect.stringContaining(`Draft a quote for ${customer.fullName}`),
       context: expect.objectContaining({ currentPage: "quotes" }),
     }),
   ]);
