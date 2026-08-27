@@ -4803,7 +4803,7 @@ describe("AI assistant", () => {
     expect(booking.statusCode).toBe(200);
     const bookingBody = booking.json() as { assistant: { tool: string; answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }> }; usage: { consumedCredits: number } };
     expect(bookingBody.assistant.tool).toBe("PREPARE_BOOKING");
-    expect(bookingBody.assistant.answer).toMatch(/todav.*no cambi.*nada/i);
+    expect(bookingBody.assistant.answer).toMatch(/nothing changed yet/i);
     expect(bookingBody.assistant.actions).toHaveLength(1);
     expect(bookingBody.assistant.actions[0]).toMatchObject({
       type: "OPEN_BOOKING_REVIEW",
@@ -4844,7 +4844,7 @@ describe("AI assistant", () => {
     });
     expect(fold.statusCode).toBe(200);
     const foldBody = fold.json() as { assistant: { answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: { startsAtUtc: string } }> } };
-    expect(foldBody.assistant.answer).toMatch(/ocurre dos veces/i);
+    expect(foldBody.assistant.answer).toMatch(/occurs twice/i);
     expect(foldBody.assistant.actions).toHaveLength(2);
     expect(new Set(foldBody.assistant.actions.map((action) => action.payload.startsAtUtc)).size).toBe(2);
     expect(foldBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);
