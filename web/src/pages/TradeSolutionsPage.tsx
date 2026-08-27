@@ -568,7 +568,7 @@ export function TradeSolutionsPage({ trade, onOpenAuth }: { trade: TradeSolution
                 <li key={stage.title} data-marketing-reveal className={`rounded-3xl border bg-slate-50 p-5 ${content.accent.softBorder}`} style={{ transitionDelay: `${(index % 3) * 45}ms` }}>
                   <div className="flex items-start justify-between gap-4">
                     <span className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl ${content.accent.icon}`}><StageIcon size={21} aria-hidden="true" /></span>
-                    <span className="text-xs font-bold tracking-[0.16em] text-slate-400">0{index + 1}</span>
+                    <span className="text-xs font-bold tracking-[0.16em] text-slate-600">0{index + 1}</span>
                   </div>
                   <h3 className="mt-4 text-lg font-bold text-slate-950">{stage.title}</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-600">{detail}</p>
