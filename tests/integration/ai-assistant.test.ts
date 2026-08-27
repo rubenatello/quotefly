@@ -4568,6 +4568,14 @@ describe("AI assistant", () => {
       },
     });
 
+    const englishPreference = await app.inject({
+      method: "PATCH",
+      url: "/v1/auth/me/preferences",
+      headers: { cookie: owner.cookie },
+      payload: { preferredLocale: "en-US" },
+    });
+    expect(englishPreference.statusCode).toBe(200);
+
     const inaccessibleInvoiceStatus = await app.inject({
       method: "POST",
       url: "/v1/ai/assistant",
@@ -4661,7 +4669,7 @@ describe("AI assistant", () => {
       };
       usage: { consumedCredits: number };
     };
-    expect(openingBody.assistant.answer).toMatch(/espacios? en el calendario.*sin citas activas de QuoteFly superpuestas/i);
+    expect(openingBody.assistant.answer).toMatch(/calendar openings?.*no overlapping active QuoteFly booking/i);
     expect(openingBody.assistant.results).toHaveLength(3);
     expect(openingBody.assistant.results.every((result) => result.jobId === ownerJob.job.id && result.scheduleOpening)).toBe(true);
     expect(openingBody.assistant.actions).toHaveLength(3);
