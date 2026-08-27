@@ -225,7 +225,7 @@ const PREPARE_ACTIVITY_INTENT_PATTERN =
 const PREPARE_DISPATCH_INTENT_PATTERN =
   /(?:\b(?:dispatch|send\s+out|despachar|despacha|enviar\s+al\s+trabajo)\b.{0,96}\b(?:job|crew|technician|appointment|visit|trabajo|equipo|tecnico|cita|visita)\b)|(?:\b(?:job|appointment|visit|trabajo|cita|visita)\b.{0,96}\b(?:dispatch|despachar|despacha)\b)/i;
 const PREPARE_BOOKING_INTENT_PATTERN =
-  /(?:\b(?:book|schedule|reschedule|set\s+up|agendar|agenda|programar|programa|reagendar|reagenda)\b.{0,96}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,96}\b(?:book|schedule|reschedule|agendar|agenda|programar|programa|reagendar|reagenda)\b)/i;
+  /(?:\b(?:book|schedule|reschedule|set\s+up|agendar|agenda|programar|programa|reagendar|reagenda)\b.{0,96}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,96}\b(?:book|schedule|reschedule|agendar|agenda|programar|programa|reagendar|reagenda)\b)|(?:\b(?:find|show|check|what|when|buscar|busca|mostrar|muestra|revisar|revisa|que|cuando|can\b.{0,24}\bfind|puede\b.{0,24}\bencontrar)\b.{0,128}\b(?:openings?|availability|available\s+(?:time|slot|opening)|free|gaps?|slots?|fit|espacios?|disponibilidad|disponible\s+(?:hora|espacio)|libre|huecos?|cabe)\b.{0,128}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:find|can\b.{0,24}\bfind)\s+(?:an?\s+)?time\s+for\b.{0,96}\b(?:job|work|appointment|visit)\b)|(?:\b(?:buscar|busca|puede\b.{0,24}\bencontrar)\s+(?:una?\s+)?hora\s+para\b.{0,96}\b(?:trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,128}\b(?:openings?|availability|available\s+(?:time|slot|opening)|free|gaps?|slots?|fit|espacios?|disponibilidad|disponible\s+(?:hora|espacio)|libre|huecos?|cabe)\b)/i;
 const LIST_SCHEDULE_INTENT_PATTERN =
   /\b(?:my\s+schedule|our\s+schedule|team\s+schedule|today(?:'s)?\s+(?:schedule|appointments?|bookings?)|tomorrow(?:'s)?\s+(?:schedule|appointments?|bookings?)|schedule\s+(?:today|tomorrow|this\s+week|for\s+the\s+week)|appointments?\s+(?:today|tomorrow|this\s+week)|what(?:'s|\s+is)\s+(?:on\s+)?(?:my|our|the|today(?:'s)?|tomorrow(?:'s)?)?\s*schedule|mi\s+agenda|nuestro\s+calendario|agenda\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|citas?\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|que\s+(?:tengo|tenemos|hay)\s+(?:en\s+)?(?:mi|nuestra|la)?\s*(?:agenda|calendario))\b/i;
 const ACTIVITY_TODAY_INTENT_PATTERN = /\b(?:today|this\s+morning|this\s+afternoon|tonight|hoy|esta\s+ma(?:n|ñ)ana|esta\s+tarde|esta\s+noche)\b/i;
@@ -250,6 +250,8 @@ const QUOTE_SEND_FOLLOW_UP_PATTERN =
   /^(?:send|email|text|share|use\s+(?:email|text)|the\s+(?:first|second|third|latest)|for\s+|to\s+|enviar|envia|correo|texto|compartir|comparte|usa\s+(?:correo|texto)|la\s+(?:primera|segunda|tercera|ultima)|el\s+(?:primero|segundo|tercero|ultimo)|para\s+|a\s+)/i;
 const QUOTE_DRAFT_FOLLOW_UP_PATTERN =
   /^(?:please\s+)?(?:use|change|set|update|make|keep|remove|add|materials?|labor|total|price|cost|tax)\b.{0,120}(?:\b(?:total|materials?|labor|price|cost|line\s+items?|hours?|quantity|tax)\b|\$\s*\d|\b\d+(?:\.\d+)?\b)/i;
+const BOOKING_FOLLOW_UP_PATTERN =
+  /^(?:today|tomorrow|this\s+week|next\s+(?:7|seven)\s+days?|(?:(?:next)\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)|on\s+20\d{2}-\d{1,2}-\d{1,2}|20\d{2}-\d{1,2}-\d{1,2}|(?:(?:for|a)\s+)?(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*[- ]?\s*(?:hours?|hrs?|minutes?|mins?)(?:\s+visit)?|between\s+\d|from\s+\d|additional\s+visit|hoy|manana|esta\s+semana|proximos?\s+7\s+dias?|(?:(?:proximo|proxima)\s+)?(?:domingo|lunes|martes|miercoles|jueves|viernes|sabado)|el\s+20\d{2}-\d{1,2}-\d{1,2}|(?:(?:por|una?)\s+)?(?:\d+(?:\.\d+)?|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*[- ]?\s*(?:horas?|minutos?)(?:\s+de\s+visita)?|entre\s+\d|de\s+\d|visita\s+adicional)\b/i;
 const QUOTE_WORK_DETAIL_PATTERN =
   /\b(?:hvac|plumb(?:ing)?|roof(?:ing)?|floor(?:ing)?|garden(?:ing)?|landscap(?:ing)?|construction|repair|replace(?:ment)?|install(?:ation)?|inspect(?:ion)?|diagnos(?:e|is|tic)|service|maintenance|clean(?:ing|up)?|labor|material|fixture|faucet|toilet|sink|heater|pipe|drain|sewer|hours?|hrs?|sq\s*ft|sqft|square\s+feet|techo|plomeria|piso|jardineria|paisajismo|construccion|reparacion|reemplazo|instalacion|inspeccion|servicio|mano\s+de\s+obra|horas?)\b/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me|ir|ve|abrir|abre|navegar|navega|llevame|moverme|muestrame)\b/i;
@@ -937,6 +939,7 @@ export function resolveAssistantTool(
   if (PREPARE_DISPATCH_INTENT_PATTERN.test(routingMessage)) return "PREPARE_DISPATCH";
   if (PREPARE_BOOKING_INTENT_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
+  if (previousTool === "PREPARE_BOOKING" && BOOKING_FOLLOW_UP_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
   const autoSelectOperationalLookup = !requestedTool || requestedTool === "AUTO";
   if (autoSelectOperationalLookup && INVOICE_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_INVOICE_STATUS";
   if (autoSelectOperationalLookup && INVOICE_LIST_INTENT_PATTERN.test(routingMessage)) return "LIST_INVOICES";
@@ -3160,7 +3163,7 @@ async function runScheduleList(
       timeZone: tenant?.timezone ?? "UTC",
       limit: params.context?.limit ?? DEFAULT_SCHEDULE_LIMIT,
     });
-  });
+  }, { maxWait: 5_000, timeout: 15_000 });
   const count = schedule.items.length;
   const rangeLabel = schedule.range === "TODAY"
     ? localeText(params, "today", "hoy")
@@ -3270,19 +3273,27 @@ async function runBookingPreview(
   params: AiAssistantInput,
   generatedAtUtc: Date,
 ): Promise<AiAssistantRunResult> {
+  const bookingMessage = [
+    ...(params.conversation ?? [])
+      .filter((turn) => turn.resolvedTool === "PREPARE_BOOKING")
+      .slice(-3)
+      .map((turn) => turn.message),
+    params.message,
+  ].join(" ");
   const preview = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
     const tenant = await transaction.tenant.findFirst({
       where: { id: params.access.tenantId, deletedAtUtc: null },
       select: { timezone: true },
     });
     return prepareAssistantBooking(transaction, params.access, {
-      message: params.message,
+      message: bookingMessage,
       now: generatedAtUtc,
       timeZone: tenant?.timezone ?? "UTC",
       jobId: params.context?.jobId,
+      quoteId: params.context?.quoteId,
       search: params.context?.search,
     });
-  });
+  }, { maxWait: 5_000, timeout: 15_000 });
   const job = preview.job;
   const answer = preview.outcome === "FORBIDDEN"
     ? localeText(params, "Only an owner or admin can prepare a job booking. Nothing changed.", "Solo un propietario o administrador puede preparar una cita de trabajo. No cambió nada.")
@@ -3293,18 +3304,34 @@ async function runBookingPreview(
         : preview.outcome === "JOB_UNASSIGNED"
           ? localeText(params, "Assign this job to an active workspace member before booking it. Nothing changed.", "Asigna este trabajo a un miembro activo antes de agendarlo. No cambió nada.")
           : preview.outcome === "MISSING_DATE"
-            ? localeText(params, "Include an exact date, today, or tomorrow so I can prepare the booking. Nothing changed.", "Incluye una fecha exacta, hoy o mañana para preparar la cita. No cambió nada.")
+            ? localeText(params, "Include a weekday, exact date, today, tomorrow, this week, or the next 7 days so I can prepare the booking. Nothing changed.", "Incluye un día de la semana, una fecha exacta, hoy, mañana, esta semana o los próximos 7 días para preparar la cita. No cambió nada.")
             : preview.outcome === "MISSING_TIME"
               ? localeText(params, "Include an explicit start and end time, or a start time plus duration. Use AM/PM or 24-hour time so I do not guess. Nothing changed.", "Incluye una hora explícita de inicio y fin, o una hora de inicio y duración. Usa a. m./p. m. o formato de 24 horas para evitar suposiciones. No cambió nada.")
+              : preview.outcome === "MISSING_DURATION"
+                ? localeText(params, "Tell me how long the visit should take so I can look for a calendar opening. Nothing changed.", "Dime cuánto debe durar la visita para buscar un espacio en el calendario. No cambió nada.")
+                : preview.outcome === "MISSING_SEARCH_WINDOW"
+                  ? localeText(params, "Include the earliest and latest times I should search, such as between 8 AM and 5 PM. QuoteFly does not guess working hours. Nothing changed.", "Incluye la hora más temprana y la más tarde que debo buscar, por ejemplo entre las 8 a. m. y las 5 p. m. QuoteFly no adivina el horario laboral. No cambió nada.")
               : preview.outcome === "INVALID_LOCAL_TIME"
                 ? localeText(params, "That local time does not exist in the workspace timezone because of a daylight-saving change. Choose another time. Nothing changed.", "Esa hora local no existe en la zona horaria del espacio debido al cambio de horario. Elige otra hora. No cambió nada.")
                 : preview.outcome === "PAST_TIME"
                   ? localeText(params, "That booking window is already in the past. Choose a future time. Nothing changed.", "Ese horario ya pasó. Elige una hora futura. No cambió nada.")
+                  : preview.outcome === "SLOT_CONFLICT"
+                    ? localeText(params, "That time overlaps an active QuoteFly booking for the assigned team member. Choose another time or ask me to find an opening. Nothing changed.", "Ese horario se superpone con una cita activa de QuoteFly para el miembro asignado. Elige otra hora o pídeme buscar un espacio. No cambió nada.")
+                    : preview.outcome === "NO_OPEN_SLOT"
+                      ? localeText(params, "I found no calendar opening in that date and time window for the assigned team member. Broaden the window or shorten the visit. Nothing changed.", "No encontré un espacio en ese rango de fechas y horas para el miembro asignado. Amplía el horario o reduce la duración. No cambió nada.")
+                      : preview.outcome === "SCHEDULE_LIMIT_REACHED"
+                        ? localeText(params, "This schedule is too dense for me to suggest an opening safely. Open the Job schedule to review it directly. Nothing changed.", "Este calendario está demasiado lleno para sugerir un espacio de forma segura. Abre el calendario del trabajo para revisarlo. No cambió nada.")
                   : preview.outcome === "ACTIVE_APPOINTMENT_LOCKED"
                     ? localeText(params, "This job has a dispatched or arrived visit, so I will not move it. Ask for an additional visit or review the job first. Nothing changed.", "Este trabajo tiene una visita despachada o iniciada, así que no la moveré. Pide una visita adicional o revisa el trabajo primero. No cambió nada.")
                     : preview.outcome === "APPOINTMENT_AMBIGUOUS"
                       ? localeText(params, "This job has more than one scheduled visit. Open the job and choose the visit to reschedule. Nothing changed.", "Este trabajo tiene más de una visita programada. Abre el trabajo y elige la visita que quieres reprogramar. No cambió nada.")
-                      : preview.repeatedLocalTime
+                      : preview.availabilitySearched
+                        ? localeText(
+                            params,
+                            `I found ${preview.options.length} calendar ${preview.options.length === 1 ? "opening" : "openings"} for ${job!.assigneeName} with no overlapping active QuoteFly booking. Review one before saving; nothing changed yet.`,
+                            `Encontré ${preview.options.length} ${preview.options.length === 1 ? "espacio" : "espacios"} en el calendario de ${job!.assigneeName} sin citas activas de QuoteFly superpuestas. Revisa uno antes de guardar; todavía no cambió nada.`,
+                          )
+                        : preview.repeatedLocalTime
                         ? localeText(
                             params,
                             `That local time occurs twice because daylight saving time ends. Review one of the two offset choices (${preview.options.map((option) => option.offsetLabel).join(" or ")}); nothing changed yet.`,
@@ -3333,12 +3360,15 @@ async function runBookingPreview(
         endsAtUtc: option.endsAtUtc,
         timeZone: preview.timeZone,
         offsetLabel: option.offsetLabel,
+        scheduleOpening: option.scheduleOpening === true,
       }))
     : [...preview.jobMatches];
   const actions: AiAssistantAction[] = preview.outcome === "READY"
-    ? preview.options.map((option) => ({
+    ? preview.options.map((option, index) => ({
         type: "OPEN_BOOKING_REVIEW",
-        label: preview.repeatedLocalTime
+        label: preview.availabilitySearched
+          ? localeText(params, `Review opening ${index + 1}`, `Revisar espacio ${index + 1}`)
+          : preview.repeatedLocalTime
           ? localeText(params, `Review ${option.offsetLabel} option`, `Revisar opción ${option.offsetLabel}`)
           : localeText(params, preview.mode === "RESCHEDULE" ? "Review reschedule" : "Review booking", preview.mode === "RESCHEDULE" ? "Revisar reprogramación" : "Revisar cita"),
         requiresConfirmation: false,
@@ -3427,6 +3457,7 @@ async function runBookingPreview(
           timeZone: preview.timeZone,
           optionCount: preview.options.length,
           repeatedLocalTime: preview.repeatedLocalTime,
+          availabilitySearched: preview.availabilitySearched === true,
           writesPerformed: false,
         },
       }),

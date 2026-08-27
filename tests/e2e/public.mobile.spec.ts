@@ -81,7 +81,7 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   const kodySimulation = page.locator("#kody");
   await kodySimulation.scrollIntoViewIfNeeded();
   const kodyControls = kodySimulation.getByRole("group", { name: "Kody scripted workflows" }).getByRole("button");
-  await expect(kodyControls).toHaveCount(3);
+  await expect(kodyControls).toHaveCount(4);
   for (const control of await kodyControls.all()) {
     expect((await control.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   }

@@ -1229,6 +1229,7 @@ function quoteChangedFields(payload: z.infer<typeof UpdateQuoteSchema>): string[
 type AcceptedJobSummary = {
   id: string;
   jobNumber: number;
+  status: JobPublic["status"];
 };
 
 function serializeAcceptedJobSummary(job: JobPublic | null | undefined): AcceptedJobSummary | null {
@@ -1236,6 +1237,7 @@ function serializeAcceptedJobSummary(job: JobPublic | null | undefined): Accepte
   return {
     id: job.id,
     jobNumber: job.jobNumber,
+    status: job.status,
   };
 }
 
@@ -5676,6 +5678,16 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             deletedAtUtc: true,
           },
         },
+        job: {
+          select: {
+            id: true,
+            jobNumber: true,
+            status: true,
+            assignedTenantUserId: true,
+            archivedAtUtc: true,
+            deletedAtUtc: true,
+          },
+        },
       },
     });
 
@@ -5683,7 +5695,19 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Quote not found for tenant." });
     }
 
-    return { quote };
+    const { job, ...quotePayload } = quote;
+    const jobIsVisible = Boolean(
+      job
+      && !job.archivedAtUtc
+      && !job.deletedAtUtc
+      && (hasCapability(access, "viewAllWorkspaceRecords") || job.assignedTenantUserId === access.tenantUserId),
+    );
+    return {
+      quote: {
+        ...quotePayload,
+        acceptedJob: jobIsVisible && job ? { id: job.id, jobNumber: job.jobNumber, status: job.status } : null,
+      },
+    };
   });
 
   app.get("/quotes/:quoteId/pdf", { preHandler: [app.authenticate] }, async (request, reply) => {

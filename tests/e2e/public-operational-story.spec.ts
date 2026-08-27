@@ -62,6 +62,7 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
     ["Add customer", "#kody-panel-customer", /Jon.*Bacon.*555.*jon\.bacon@example\.com/is],
     ["New quote", "#kody-panel-quote", /Custom Wooden Dining Table Quote.*materials.*\$2,000.*labor.*\$1,500.*\$3,500/is],
     ["Today’s priorities", "#kody-panel-attention", /Call Morgan about the sent estimate.*Confirm tomorrow’s HVAC access.*Review the table quote measurements/is],
+    ["Book job from quote", "#kody-panel-booking", /Accepted quote.*Linked Job.*QuoteFly calendar opening.*No active booking overlap.*Dispatch is a second confirmed step/is],
   ] as const;
   for (const [label, panelSelector, resultPattern] of operationalKodyExamples) {
     const control = page.getByRole("button", { name: label, exact: true });
@@ -81,14 +82,27 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
   await expect.poll(() => page.locator("#basic-plan").evaluate((element) => element.getBoundingClientRect().top)).toBeLessThanOrEqual(110);
 
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/pricing"].heading })).toBeVisible();
+  await expect(page.getByText("Basic payment timeline", { exact: true })).toBeVisible();
   await expect(page.getByText("Accepted-quote Jobs with day/week scheduling and dispatch controls")).toBeVisible();
   await expect(page.getByText("Internal invoice records from accepted quotes or completed Jobs")).toBeVisible();
-  await expect(page.getByText(/does not send that invoice, collect payment, or create and reconcile a QuickBooks invoice/i)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What Basic includes—and where it stops" })).toBeVisible();
+  await expect(page.getByText("QuoteFly calendar only; no external-calendar sync or route optimization.")).toBeVisible();
+  await expect(page.getByText("Basic does not send that invoice, collect payment, or create and reconcile a QuickBooks invoice.")).toBeVisible();
+  const integrations = page.locator("#integrations");
+  await expect(integrations.getByRole("heading", { name: "Integrations on the horizon" })).toBeVisible();
+  await expect(integrations.getByRole("article")).toHaveCount(3);
+  await expect(integrations.getByText("QuickBooks-friendly CSV export", { exact: true })).toBeVisible();
+  await expect(integrations.getByText(/does not currently connect to QuickBooks Online/i)).toBeVisible();
+  await expect(integrations.getByText(/EDI is not currently planned/i)).toBeVisible();
+  await expect(integrations.getByRole("link", { name: "Request an integration" })).toHaveAttribute("href", "/support#feature-request");
+  await expect(page.getByRole("link", { name: "Integrations roadmap" })).toHaveAttribute("href", "/pricing#integrations");
   await expect(page.getByText(/Most popular/i)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Coming Soon" })).toHaveCount(2);
   for (const button of await page.getByRole("button", { name: "Coming Soon" }).all()) {
     await expect(button).toBeDisabled();
   }
+  await page.getByText("Is there a free trial?", { exact: true }).click();
+  await expect(page.getByText(/Every workspace starts with a 20-day free trial/i)).toBeVisible();
 
   await page.goto("/solutions/hvac");
   await expect(page.getByRole("link", { name: "See the quote-to-job workflow" })).toHaveAttribute("href", "/solutions#workflow");
@@ -117,6 +131,8 @@ test("operational marketing pages stay responsive at release widths", async ({ p
   await page.goto("/solutions");
   const kodyControlBox = await page.getByRole("button", { name: "Today’s priorities", exact: true }).boundingBox();
   expect(kodyControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const bookingControlBox = await page.getByRole("button", { name: "Book job from quote", exact: true }).boundingBox();
+  expect(bookingControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   await page.goto("/");
   const trialControlBox = await page.getByRole("button", { name: /Start your 20-day free trial/i }).first().boundingBox();
   expect(trialControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
@@ -131,6 +147,14 @@ test("operational marketing pages stay responsive at release widths", async ({ p
     const controlBox = await page.locator("#product-story").getByRole("button", { name: controlName, exact: true }).boundingBox();
     expect(controlBox?.height ?? 0, `${controlName} must remain touchable at 390px`).toBeGreaterThanOrEqual(44);
   }
+
+  await page.goto("/pricing");
+  const pricingTrialBox = await page.getByRole("button", { name: "Start Free Trial" }).first().boundingBox();
+  expect(pricingTrialBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const pricingFaqBox = await page.locator("details").filter({ hasText: "Is there a free trial?" }).locator("summary").boundingBox();
+  expect(pricingFaqBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const integrationRequestBox = await page.getByRole("link", { name: "Request an integration" }).boundingBox();
+  expect(integrationRequestBox?.height ?? 0).toBeGreaterThanOrEqual(44);
 
   await page.goto("/services");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/services"].heading })).toBeVisible();
@@ -185,6 +209,12 @@ test("Kody examples support keyboard use and reduced motion", async ({ page }) =
   await expect(quoteControl).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#kody-panel-quote")).toContainText(/Custom Wooden Dining Table Quote/i);
   await expect(page.getByRole("status")).toHaveText("Showing the New quote sample result.");
+  const bookingControl = page.getByRole("button", { name: "Book job from quote", exact: true });
+  await bookingControl.focus();
+  await bookingControl.press("Enter");
+  await expect(bookingControl).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#kody-panel-booking")).toContainText(/No active booking overlap/i);
+  await expect(page.getByRole("status")).toHaveText("Showing the Book job from quote sample result.");
   const kodyAnimatedStyles = await page.locator("#kody .qf-demo-pane-enter").evaluateAll((elements) =>
     elements.map((element) => {
       const style = window.getComputedStyle(element);

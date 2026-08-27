@@ -3,6 +3,7 @@ import {
   ArrowRight,
   BriefcaseBusiness,
   CalendarClock,
+  CalendarPlus2,
   Check,
   CheckCircle2,
   CircleDollarSign,
@@ -13,13 +14,14 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Truck,
   UserPlus,
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
-type KodyScenarioId = "customer" | "quote" | "attention";
+type KodyScenarioId = "customer" | "quote" | "attention" | "booking";
 
 type KodyScenario = {
   id: KodyScenarioId;
@@ -54,6 +56,14 @@ const KODY_SCENARIOS: readonly KodyScenario[] = [
     prompt: "Kody, what needs my attention today?",
     summary: "Kody ranks the active tasks assigned to you that are overdue or due today.",
     icon: ClipboardCheck,
+  },
+  {
+    id: "booking",
+    label: "Book job from quote",
+    eyebrow: "Schedule and dispatch review",
+    prompt: "Find a 2-hour opening next Thursday between 8 AM and 5 PM for Job #104, then prepare it for review.",
+    summary: "Kody checks the assigned team member’s active QuoteFly bookings and prepares up to three non-overlapping openings.",
+    icon: CalendarPlus2,
   },
 ] as const;
 
@@ -139,6 +149,27 @@ function AttentionResult() {
   );
 }
 
+function BookingResult() {
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <PreviewField label="Accepted quote" value="Custom dining table · $3,500" icon={CheckCircle2} />
+        <PreviewField label="Linked Job" value="#104 · Rober California" icon={BriefcaseBusiness} />
+        <PreviewField label="Assigned to" value="Alex Rivera" icon={UsersRound} />
+        <PreviewField label="QuoteFly calendar opening" value="Thursday · 10:00 AM–12:00 PM" icon={CalendarClock} />
+      </div>
+      <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+        <ShieldCheck size={18} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />
+        <span><strong>No active booking overlap.</strong> Review this opening, then confirm once to add the visit to QuoteFly’s schedule.</span>
+      </div>
+      <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">
+        <Truck size={18} className="mt-0.5 shrink-0 text-slate-500" aria-hidden="true" />
+        <span>Dispatch is a second confirmed step after booking. This preview does not send email or text messages, optimize routes, or update an external calendar.</span>
+      </div>
+    </div>
+  );
+}
+
 function PreviewField({ label, value, icon: Icon }: { label: string; value: string; icon?: LucideIcon }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -154,7 +185,8 @@ function PreviewField({ label, value, icon: Icon }: { label: string; value: stri
 function ScenarioResult({ scenario }: { scenario: KodyScenario }) {
   if (scenario.id === "customer") return <CustomerResult />;
   if (scenario.id === "quote") return <QuoteResult />;
-  return <AttentionResult />;
+  if (scenario.id === "attention") return <AttentionResult />;
+  return <BookingResult />;
 }
 
 export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKodyShowcaseProps) {
@@ -169,7 +201,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-blue-800">Kody turns requests into reviewable work</p>
             <h2 id="kody-teaser-heading" className="mt-3 text-3xl font-bold tracking-[-0.035em] text-slate-950 sm:text-4xl">Ask naturally. Review structured results.</h2>
             <p className="mt-4 text-lg leading-8 text-slate-600">
-              See how Kody can prepare a customer, organize a new quote, or surface today’s priorities without saving or sending anything before you confirm.
+              See how Kody can prepare a customer, organize a new quote, surface today’s priorities, or find a QuoteFly calendar opening for an accepted-quote Job—without saving or sending anything before you confirm.
             </p>
             <Link to="/solutions#kody" className="mt-7 inline-flex min-h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-quotefly-blue focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200">
               Explore the guided Kody simulation <ArrowRight size={16} aria-hidden="true" />
@@ -183,7 +215,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
                   <img src="/images/kody/kody-ai-thumbnail.webp" alt="" width="112" height="112" loading="lazy" decoding="async" className="h-10 w-10 object-contain" />
                 </span>
                 <div>
-                  <p className="font-bold text-white">Three jobs. One assistant.</p>
+                  <p className="font-bold text-white">Four workflows. One assistant.</p>
                   <p className="text-xs text-slate-400">Fictional sample workspace</p>
                 </div>
               </div>
@@ -338,9 +370,10 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+        <div className="mt-5 grid gap-3 text-sm text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
           <p className="flex items-start gap-2"><CheckCircle2 size={17} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />Customer search and structured intake</p>
           <p className="flex items-start gap-2"><CircleDollarSign size={17} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />Separate, editable quote line items</p>
+          <p className="flex items-start gap-2"><CalendarPlus2 size={17} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />Accepted-quote Job booking review</p>
           <p className="flex items-start gap-2"><ShieldCheck size={17} className="mt-0.5 shrink-0 text-quotefly-blue" aria-hidden="true" />Tenant-scoped, permission-aware review</p>
         </div>
       </div>

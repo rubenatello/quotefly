@@ -44,6 +44,29 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("Show my schedule today"), "LIST_SCHEDULE");
   assert.equal(resolveAssistantTool("What is on our schedule this week?"), "LIST_SCHEDULE");
   assert.equal(resolveAssistantTool("Book job #12 tomorrow from 9 AM to 11 AM"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Find a 2-hour opening tomorrow between 8 AM and 5 PM for Job #4102"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("What openings are available for Job #12 tomorrow between 8 AM and 5 PM?"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Check Job #12 for a free 2-hour slot tomorrow between 8 AM and 5 PM"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("When can we fit Job #12 in tomorrow?"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Find a slot for Job #12 tomorrow"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Can Kody find a time for Job #12 tomorrow?"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("What is free for Job #12 tomorrow?"), "PREPARE_BOOKING");
+  for (const existingScheduleQuestion of [
+    "What time is Job #12 tomorrow?",
+    "What time does Job #12 start tomorrow?",
+    "Show the time for Job #12",
+    "Find the completion time for Job #12",
+  ]) {
+    assert.notEqual(resolveAssistantTool(existingScheduleQuestion), "PREPARE_BOOKING", existingScheduleQuestion);
+  }
+  assert.equal(resolveAssistantTool("Tomorrow", "AUTO", { currentPage: "jobs" }, [{ message: "Find an opening for Job #4102", resolvedTool: "PREPARE_BOOKING" }]), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("between 8 AM and 5 PM", "AUTO", { currentPage: "jobs" }, [{ message: "2 hours", resolvedTool: "PREPARE_BOOKING" }]), "PREPARE_BOOKING");
+  for (const durationFollowUp of ["two hours", "for two hours", "a two-hour visit"]) {
+    assert.equal(
+      resolveAssistantTool(durationFollowUp, "AUTO", { currentPage: "jobs" }, [{ message: "Find an opening for Job #4102 tomorrow", resolvedTool: "PREPARE_BOOKING" }]),
+      "PREPARE_BOOKING",
+    );
+  }
   assert.equal(resolveAssistantTool("Reschedule the visit for job #12 tomorrow at 14:00 for 2 hours"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Dispatch next job"), "PREPARE_DISPATCH");
   assert.equal(resolveAssistantTool("Show jobs for Maria Lopez"), "SEARCH_JOBS");

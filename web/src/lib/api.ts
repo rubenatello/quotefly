@@ -996,6 +996,7 @@ export type Quote = {
   updatedAt: string;
   assignedTenantUserId?: string | null;
   assignedTenantUser?: WorkspaceAssignee | null;
+  acceptedJob?: QuoteAcceptedJobSummary | null;
   customer?: Customer;
   lineItems?: QuoteLineItem[];
   quickBooksInvoiceSyncs?: Array<{
@@ -1843,6 +1844,7 @@ export type QuickBooksInvoiceOperationResponse = {
 export type QuoteAcceptedJobSummary = {
   id: string;
   jobNumber: number;
+  status: JobStatus;
 };
 
 function activityCommandHeaders(idempotencyKey?: string): HeadersInit {

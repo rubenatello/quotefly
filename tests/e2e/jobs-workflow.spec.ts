@@ -15,6 +15,7 @@ type JobPayload = {
     assignedTenantUserId: string | null;
     accessInstructions: string | null;
     jobNumber: number;
+    status: "UNSCHEDULED" | "SCHEDULED" | "DISPATCHED" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
   };
 };
 
@@ -48,12 +49,32 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   await addSessionCookie(context, owner);
   await page.goto(`/app/quotes/${quote.id}`);
   await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Accept quote & create job", exact: true }).click();
+  const [acceptResponse] = await Promise.all([
+    page.waitForResponse((response) => response.request().method() === "PATCH" && new URL(response.url()).pathname === `/v1/quotes/${quote.id}`),
+    page.getByRole("button", { name: "Accept quote & create job", exact: true }).click(),
+  ]);
+  expect(acceptResponse.status()).toBe(200);
+  const acceptedPayload = (await acceptResponse.json()) as { job: { id: string; jobNumber: number } };
 
   const jobReady = page.getByRole("status").filter({ hasText: /Job #\d+ is ready from this accepted quote\./ });
   await expect(jobReady).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("invoice-panel")).toContainText("Create a draft invoice from this accepted quote.");
   await expect(page.getByRole("button", { name: "Create draft invoice", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(jobReady).toBeVisible({ timeout: 20_000 });
+  await jobReady.getByRole("button", { name: "Book with Kody", exact: true }).click();
+  const kodyPanel = page.getByTestId("kody-chat-panel");
+  await expect(kodyPanel).toBeVisible();
+  await expect(kodyPanel.getByTestId("kody-prompt")).toHaveValue(new RegExp(`find a QuoteFly schedule opening for Job #${acceptedPayload.job.jobNumber}`));
+  const [assistantRequest] = await Promise.all([
+    page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/ai/assistant"),
+    kodyPanel.getByTestId("kody-prompt").press("Enter"),
+  ]);
+  expect(assistantRequest.postDataJSON()).toMatchObject({
+    tool: "PREPARE_BOOKING",
+    context: { currentPage: "jobs", jobId: acceptedPayload.job.id, quoteId: quote.id },
+  });
+  await kodyPanel.getByRole("button", { name: "Close Kody", exact: true }).click();
   await jobReady.getByRole("button", { name: "Open job", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/jobs\/[^/?#]+$/);
   const jobId = page.url().match(/\/app\/jobs\/([^/?#]+)/)?.[1];
@@ -90,6 +111,19 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
     .poll(async () => (await getJob(request, owner.cookieHeader, jobId!)).job.assignedTenantUserId)
     .toBe(member.membershipId);
 
+  await context.clearCookies();
+  await addSessionCookie(context, member);
+  await page.goto(`/app/quotes/${quote.id}`);
+  const memberLinkedJob = page.getByRole("status").filter({ hasText: new RegExp(`Job #${acceptedPayload.job.jobNumber} is linked to this accepted quote\\.`) });
+  await expect(memberLinkedJob).toBeVisible({ timeout: 20_000 });
+  await expect(memberLinkedJob.getByRole("button", { name: "Book with Kody", exact: true })).toHaveCount(0);
+  await expect(memberLinkedJob.getByRole("button", { name: "Open job", exact: true })).toBeVisible();
+
+  await context.clearCookies();
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/jobs/${jobId}`);
+  await expect(page.getByText("Job #1", { exact: true })).toBeVisible({ timeout: 20_000 });
+
   const savedJob = (await getJob(request, owner.cookieHeader, jobId!)).job;
   const externalUpdate = await request.patch(`${apiBaseUrl}/v1/jobs/${jobId}`, {
     headers: { Cookie: owner.cookieHeader },
@@ -124,6 +158,14 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   await expect(page.getByText("Arrived", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Complete visit", exact: true }).click();
   await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await getJob(request, owner.cookieHeader, jobId!)).job.status).toBe("COMPLETED");
+
+  await page.goto(`/app/quotes/${quote.id}`);
+  const completedLinkedJob = page.getByRole("status").filter({ hasText: new RegExp(`Job #${acceptedPayload.job.jobNumber} is linked to this accepted quote\\.`) });
+  await expect(completedLinkedJob).toBeVisible({ timeout: 20_000 });
+  await expect(completedLinkedJob.getByRole("button", { name: "Book with Kody", exact: true })).toHaveCount(0);
+  await completedLinkedJob.getByRole("button", { name: "Open job", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/jobs/${jobId}$`));
 
   const invoicePanel = page.getByTestId("invoice-panel");
   await expect(invoicePanel.getByLabel("Invoice due date", { exact: true })).toBeVisible();

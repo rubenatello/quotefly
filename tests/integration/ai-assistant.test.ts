@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { buildServer } from "../../src/app";
 import { setAssistantCompositionProviderForTest } from "../../src/lib/ai-assistant-composer";
 import { prisma } from "../../src/lib/prisma";
+import { tenantWallTimeToUtc } from "../../src/lib/tenant-time";
 import { setAiQuoteChatCompletionForTest } from "../../src/services/ai-quote";
 
 type Session = {
@@ -4362,6 +4363,27 @@ describe("AI assistant", () => {
         balanceDue: 500 + index,
       });
     }
+    const openingDate = addCalendarDays(
+      tenantDateIso(new Date().toISOString(), "America/Los_Angeles"),
+      3,
+    );
+    const [openingYear, openingMonth, openingDay] = openingDate.split("-").map(Number);
+    const conflictStartsAtUtc = tenantWallTimeToUtc({
+      year: openingYear!,
+      month: openingMonth!,
+      day: openingDay!,
+      hour: 10,
+      minute: 0,
+    }, "America/Los_Angeles");
+    expect(conflictStartsAtUtc).not.toBeNull();
+    const calendarConflictJob = await createScheduledJob({
+      session: owner,
+      assignedTenantUserId: ownerMembership.id,
+      createdByTenantUserId: ownerMembership.id,
+      jobNumber: 4300,
+      customerName: "Owner Calendar Conflict Customer",
+      startsAtUtc: conflictStartsAtUtc!,
+    });
 
     setAssistantCompositionProviderForTest(async () => {
       throw new Error("Deterministic schedule tools must never call the composition provider.");
@@ -4613,6 +4635,85 @@ describe("AI assistant", () => {
     const ownerResults = (ownerList.json() as { assistant: { results: Array<{ jobId: string }> } }).assistant.results;
     expect(ownerResults.map((item) => item.jobId)).toEqual(expect.arrayContaining([memberJob.job.id, ownerJob.job.id]));
     expect(ownerResults.map((item) => item.jobId)).not.toContain(foreignJob.job.id);
+
+    const openingSearch = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "between 8 AM and 5 PM",
+        tool: "AUTO",
+        context: { currentPage: "quotes", quoteId: ownerJob.quote.id },
+        conversation: [
+          { message: "Find a QuoteFly schedule opening for this accepted quote", resolvedTool: "PREPARE_BOOKING" },
+          { message: `on ${openingDate}`, resolvedTool: "PREPARE_BOOKING" },
+          { message: "2 hours", resolvedTool: "PREPARE_BOOKING" },
+        ],
+      },
+    });
+    expect(openingSearch.statusCode).toBe(200);
+    const openingBody = openingSearch.json() as {
+      assistant: {
+        answer: string;
+        results: Array<{ jobId: string; startsAtUtc: string; endsAtUtc: string; scheduleOpening: boolean }>;
+        actions: Array<{ type: string; label: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+        diagnostics: { filters: { availabilitySearched: boolean; writesPerformed: boolean } };
+      };
+      usage: { consumedCredits: number };
+    };
+    expect(openingBody.assistant.answer).toMatch(/calendar openings?.*no overlapping active QuoteFly booking/i);
+    expect(openingBody.assistant.results).toHaveLength(3);
+    expect(openingBody.assistant.results.every((result) => result.jobId === ownerJob.job.id && result.scheduleOpening)).toBe(true);
+    expect(openingBody.assistant.actions).toHaveLength(3);
+    expect(new Set(openingBody.assistant.actions.map((action) => action.label)).size).toBe(3);
+    expect(openingBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);
+    expect(openingBody.assistant.diagnostics.filters).toMatchObject({ availabilitySearched: true, writesPerformed: false });
+    expect(openingBody.usage.consumedCredits).toBe(0);
+    expect(JSON.stringify(openingBody.assistant)).not.toContain(foreignJob.job.id);
+    expect(openingBody.assistant.results.every((result) => (
+      new Date(result.endsAtUtc) <= calendarConflictJob.appointment.startsAtUtc
+      || new Date(result.startsAtUtc) >= calendarConflictJob.appointment.endsAtUtc
+    ))).toBe(true);
+
+    const occupiedSlot = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `Book an additional visit for job #${ownerJob.job.jobNumber} on ${openingDate} from 10 AM to 12 PM`,
+        tool: "AUTO",
+        context: { currentPage: "jobs" },
+      },
+    });
+    expect(occupiedSlot.statusCode).toBe(200);
+    expect(occupiedSlot.json()).toMatchObject({
+      assistant: {
+        tool: "PREPARE_BOOKING",
+        answer: expect.stringMatching(/overlaps an active QuoteFly booking/i),
+        actions: [],
+        diagnostics: { filters: { outcome: "SLOT_CONFLICT", writesPerformed: false } },
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const weekdayOpening = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `Find a 2-hour opening next Thursday between 8 AM and 5 PM for Job #${ownerJob.job.jobNumber}`,
+        tool: "AUTO",
+        context: { currentPage: "jobs" },
+      },
+    });
+    expect(weekdayOpening.statusCode).toBe(200);
+    const weekdayOpeningBody = weekdayOpening.json() as { assistant: { tool: string; results: unknown[]; actions: unknown[]; diagnostics: { filters: { availabilitySearched: boolean } } }; usage: { consumedCredits: number } };
+    expect(weekdayOpeningBody.assistant.tool).toBe("PREPARE_BOOKING");
+    expect(weekdayOpeningBody.assistant.results.length).toBeGreaterThan(0);
+    expect(weekdayOpeningBody.assistant.results.length).toBeLessThanOrEqual(3);
+    expect(weekdayOpeningBody.assistant.actions).toHaveLength(weekdayOpeningBody.assistant.results.length);
+    expect(weekdayOpeningBody.assistant.diagnostics.filters.availabilitySearched).toBe(true);
+    expect(weekdayOpeningBody.usage.consumedCredits).toBe(0);
 
     const memberBooking = await app.inject({
       method: "POST",

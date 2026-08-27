@@ -124,6 +124,15 @@ test("publishes the current Basic price, trial, and introductory offer", () => {
 test("pricing describes the paid-AI cap without hiding deterministic Kody tools", async () => {
   const html = await readFile(join(distDir, "pricing", "index.html"), "utf8");
   const text = decodeHtmlText(html);
+  assert.match(text, /Basic payment timeline/i);
+  assert.match(text, /What Basic includes—and where it stops/i);
+  assert.match(text, /Basic is the only plan available today/i);
+  assert.match(text, /QuoteFly calendar only; no external-calendar sync or route optimization/i);
+  assert.match(text, /Integrations on the horizon/i);
+  assert.match(text, /does not currently connect to QuickBooks Online or another external accounting platform/i);
+  assert.match(text, /QuickBooks-friendly CSV export/i);
+  assert.match(text, /No launch date is promised/i);
+  assert.match(text, /EDI is not currently planned/i);
   assert.match(text, /billing-cycle limit/i);
   assert.match(text, /next billing cycle/i);
   assert.match(text, /schedule, task, product-catalog, navigation, and review actions remain available/i);
@@ -492,12 +501,21 @@ test("solutions prerender contains the complete deterministic Kody simulation", 
     "Confirm tomorrow’s HVAC access",
     "Review the table quote measurements",
     "Kody only ranks your assigned active tasks",
+    "Book job from quote",
+    "Find a 2-hour opening next Thursday between 8 AM and 5 PM for Job #104",
+    "Accepted quote",
+    "Linked Job",
+    "No active booking overlap",
+    "Review this opening, then confirm once to add the visit to QuoteFly’s schedule",
+    "Dispatch is a second confirmed step after booking",
+    "does not send email or text messages, optimize routes, or update an external calendar",
   ]) {
     assert.ok(text.includes(expected), `/solutions raw HTML must include the Kody proof: ${expected}`);
   }
 
   assert.ok(html.includes('aria-pressed="true"'));
   assert.ok(html.includes('aria-controls="kody-panel-customer"'));
+  assert.ok(html.includes('aria-controls="kody-panel-booking"'));
   assert.doesNotMatch(html, /jbaconzz99@yahoo\.com|555-555-6868|\(555\) 555-6868/i);
   assert.doesNotMatch(html, /freeform prompt|type your prompt/i);
 });

@@ -174,6 +174,13 @@ Phase 3C release-candidate evidence:
 - Appointment and Kody success copy is derived from the confirmed API receipt: an eligible in-app team update may become available, while no customer, email, SMS, AI, or external provider is contacted.
 - Fresh-schema evidence applies all 55 migrations, including the additive AI retrieval-audit planner index; exact-candidate `verify:launch` passes with 113 routes, zero unmatched declarations, 210/210 integration tests, and 84/84 browser tests. Focused notification browser coverage passes 2/2, AI-usage hardening passes 5/5, Kody schedule coverage 5/5, and Jobs schedule coverage 1/1 with English/Spanish, light/dark, keyboard, mobile, stale-response, cutoff-race, no-op feedback, and Axe assertions.
 
+Current candidate extension — Kody opening discovery:
+
+- An accepted Quote reload exposes only the linked active Job summary the current user may see, preserving a `Book with Kody` handoff without duplicating Job state in the Quote.
+- Kody can resolve that Job from Job or Quote context and search a user-supplied date/date range, visit duration, and earliest/latest daily times. The bounded scan covers at most seven days, checks only the assigned member's active QuoteFly appointments, fails closed above its conflict-row cap, and returns at most three review options.
+- Kody performs no booking or dispatch write. Selecting an opening opens the existing normal booking form; the authoritative appointment API reacquires tenant/member locks and rechecks assignment, lifecycle, timezone, and overlap before saving. Dispatch remains a separate reviewed transition.
+- QuoteFly does not infer business hours or time off and does not claim external-calendar availability, multi-crew optimization, route optimization, autonomous booking, or customer notification.
+
 ## Phase 4 — Invoicing and payments
 
 Status: Partial accounting export exists; Phase 4A invoice/payment ledger, internal API, and responsive Quote/Job workflow are committed and release-verified on `main`. A bounded Phase 4B provider-safe creation/reconciliation foundation is implemented in the current uncommitted workspace and has fresh-schema, concurrency, RLS, API, responsive UI, exact local launch-gate, backend, security, UX, and independent Opera approval. Provider workflows remain default-off; production enablement is not asserted.

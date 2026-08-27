@@ -722,6 +722,7 @@ function KodyResultCard({
     const jobNumber = getFiniteNumber(result.jobNumber);
     const assigneeName = getString(result.assigneeName);
     const status = getString(result.appointmentStatus) ?? getString(result.status);
+    const scheduleOpening = result.scheduleOpening === true;
     return (
       <div data-testid="kody-schedule-card" className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] p-3 transition-colors hover:border-[var(--qf-info-border)]">
         <div className="flex items-start gap-2">
@@ -731,6 +732,12 @@ function KodyResultCard({
           <p className="min-w-0 text-sm font-semibold text-[var(--qf-text)]">{customerName}</p>
         </div>
         <dl className="mt-2 grid gap-1.5 text-xs text-[var(--qf-text-soft)]">
+          {scheduleOpening ? (
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.scheduleCard.availability")}</dt>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-success-text)] sm:text-right">{t("kody.scheduleCard.opening")}</dd>
+            </div>
+          ) : null}
           {start && end ? (
             <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.scheduleCard.window", { timeZone })}</dt>
@@ -803,6 +810,7 @@ function KodyResponse({
   const [lastFeedbackSave, setLastFeedbackSave] = useState<"rating" | "note" | null>(null);
   const [visibleActionCount, setVisibleActionCount] = useState(3);
   const [visibleResultCount, setVisibleResultCount] = useState(4);
+  const [resultsOpen, setResultsOpen] = useState(response.diagnostics.resolvedTool === "PREPARE_BOOKING");
   const isScheduleResponse = response.diagnostics.resolvedTool === "LIST_SCHEDULE"
     || response.diagnostics.resolvedTool === "PREPARE_BOOKING"
     || response.diagnostics.resolvedTool === "PREPARE_DISPATCH"
@@ -996,6 +1004,8 @@ function KodyResponse({
 
       {response.results.length ? (
         <details
+          open={resultsOpen}
+          onToggle={(event) => setResultsOpen(event.currentTarget.open)}
           className="group order-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2"
           data-testid="kody-results"
         >
@@ -1188,10 +1198,9 @@ export function KodyAssistant({
       setOpen(true);
       setError(null);
       setPrompt(detail.prompt);
-      // Context buttons suggest useful starting text, but the user can replace
-      // it with a completely different request. AUTO keeps that edited prompt
-      // from being trapped in a stale customer/quote tool selection.
-      setSelectedTool("AUTO");
+      // Preserve the launcher's requested workflow for its untouched seed.
+      // Editing the seed below releases it back to automatic routing.
+      setSelectedTool(detail.tool ?? "AUTO");
       setContextOverride(detail.context ?? null);
       window.setTimeout(() => inputRef.current?.focus(), 0);
       track("kody_context_received", {
@@ -1446,7 +1455,11 @@ export function KodyAssistant({
       });
       publishAiUsageUpdate(response.usage);
       setSelectedTool("AUTO");
-      setContextOverride(null);
+      const bookingOutcome = assistantResponse.diagnostics.filters.outcome;
+      const bookingNeedsClarification = assistantResponse.tool === "PREPARE_BOOKING"
+        && typeof bookingOutcome === "string"
+        && ["MISSING_DATE", "MISSING_TIME", "MISSING_DURATION", "MISSING_SEARCH_WINDOW"].includes(bookingOutcome);
+      if (!bookingNeedsClarification) setContextOverride(null);
     } catch (err) {
       if (activeRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
         return;
@@ -1995,7 +2008,10 @@ export function KodyAssistant({
                 ref={inputRef}
                 data-testid="kody-prompt"
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  if (selectedTool !== "AUTO") setSelectedTool("AUTO");
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                     event.preventDefault();

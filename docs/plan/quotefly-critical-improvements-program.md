@@ -95,6 +95,7 @@ Targets are engineering-quality goals, not ranking, citation, latency, or conver
 | QF-404 | Add payment recording and reconciliation | Planned | Partial/full payments, balance, duplicate/replay, provider event, failure, and cross-tenant tests pass |
 | QF-405 | Define refunds and disputes | Planned | Explicit state machine and accounting/provider reconciliation policy approved before implementation |
 | QF-406 | Preserve honest marketing boundaries | Ongoing gate | Public pages continue to say internal invoice records do not themselves collect payment until that changes and is proven |
+| QF-407 | Add Kody open-schedule discovery and accepted-quote booking handoff | Implementation complete; database/browser evidence pending | Kody resolves a visible linked Job from Job or Quote context, searches at most seven tenant-local days on a 30-minute grid, returns at most three openings without overlapping the assigned member's active QuoteFly bookings, performs zero business writes, and hands one reviewed option to the existing overlap-rechecking booking API. Accepted Quote detail preserves a `Book with Kody` handoff after reload; dispatch remains a separate confirmed status transition. No working-hours, external-calendar, route-optimization, or autonomous-booking claim is made |
 
 ## Phase 6 — Public website and product evidence
 

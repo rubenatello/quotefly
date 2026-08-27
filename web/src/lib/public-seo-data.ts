@@ -76,10 +76,10 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
     lastModified: "2026-08-27",
     title: "Contractor Quoting, Kody AI & Dispatch Solutions | QuoteFly",
     description:
-      "See Kody prepare customers, quotes, and daily priorities, then explore quoting, Jobs, scheduling, dispatch, and internal invoice records by trade.",
+      "See Kody prepare customers, quotes, schedule openings, booking and dispatch reviews across QuoteFly’s accepted-quote Jobs and internal invoice records.",
     heading: "Built for the work. Not the paperwork.",
     summary:
-      "See how Kody structures customer and quote requests for review, then move accepted work into a Job, scheduled visit, dispatch update, and internal invoice record.",
+      "See how Kody structures customer and quote requests, reads the permission-scoped QuoteFly schedule, and prepares booking or dispatch reviews. Accepted quotes become linked Jobs, and a user confirms every booking and status change.",
     schemaType: "CollectionPage",
   },
   "/solutions/hvac": {

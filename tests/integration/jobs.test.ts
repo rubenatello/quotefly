@@ -352,11 +352,21 @@ describe("jobs from accepted quotes", () => {
       },
     });
     expect(sheetAcceptance.statusCode).toBe(200);
-    expect(sheetAcceptance.json()).toMatchObject({
+    const acceptedBody = sheetAcceptance.json() as { job: { id: string; jobNumber: number } };
+    expect(acceptedBody).toMatchObject({
       quote: { status: "ACCEPTED", jobStatus: "NOT_STARTED", jobCompletedAtUtc: null },
       job: { jobNumber: 1 },
     });
     expect((await jobForQuote(owner.tenant.id, quote.id)).status).toBe("UNSCHEDULED");
+    const reloadedQuote = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(reloadedQuote.statusCode).toBe(200);
+    expect(reloadedQuote.json()).toMatchObject({
+      quote: { acceptedJob: { id: acceptedBody.job.id, jobNumber: acceptedBody.job.jobNumber, status: "UNSCHEDULED" } },
+    });
 
     const compatiblePatch = await app.inject({
       method: "PATCH",
@@ -843,6 +853,27 @@ describe("jobs from accepted quotes", () => {
         status: "COMPLETED",
         completedAtUtc: new Date(),
       },
+    });
+
+    const completedReload = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(completedReload.statusCode).toBe(200);
+    expect(completedReload.json()).toMatchObject({
+      quote: { acceptedJob: { id: job.id, jobNumber: job.jobNumber, status: "COMPLETED" } },
+    });
+
+    await prisma.job.update({ where: { id: job.id }, data: { status: "CANCELED", canceledAtUtc: new Date() } });
+    const canceledReload = await app.inject({
+      method: "GET",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(canceledReload.statusCode).toBe(200);
+    expect(canceledReload.json()).toMatchObject({
+      quote: { acceptedJob: { id: job.id, jobNumber: job.jobNumber, status: "CANCELED" } },
     });
 
     const blockedPatch = await app.inject({

@@ -5,6 +5,7 @@ import { BASIC_PLAN_PRICING_PATH } from "../lib/plans";
 const PRODUCT_LINKS = [
   { label: "Services", to: "/services" },
   { label: "Pricing", to: BASIC_PLAN_PRICING_PATH },
+  { label: "Integrations roadmap", to: "/pricing#integrations" },
   { label: "Solutions", to: "/solutions" },
   { label: "About", to: "/about" },
   { label: "Support", to: "/support" },

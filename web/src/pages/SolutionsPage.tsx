@@ -240,7 +240,7 @@ const WORKFLOW_STEPS = [
   {
     number: "04",
     title: "Assign and schedule",
-    detail: "Choose an active teammate, book an overlap-safe visit, and see the schedule by day or week.",
+    detail: "Choose an active teammate, then book directly or ask Kody to find an opening without overlapping that teammate’s active QuoteFly bookings. You confirm the visit before it reaches the calendar.",
     icon: CalendarDays,
   },
   {
@@ -412,6 +412,10 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
             <p className="mt-4 text-lg leading-8 text-slate-600">
               QuoteFly keeps the commercial quote separate from the operational Job, while carrying the approved customer and scope forward. You can finish with an internal invoice record; external invoice sending, payment collection, and QuickBooks invoice creation are not part of this workflow.
             </p>
+            <a href="#kody" className="mt-4 inline-flex min-h-11 items-center gap-2 text-sm font-bold text-quotefly-blue underline decoration-blue-200 decoration-2 underline-offset-4 transition hover:text-blue-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200">
+              See Kody find a QuoteFly calendar opening and prepare dispatch for review
+              <ArrowRight size={16} aria-hidden="true" />
+            </a>
 
             <ol className="mt-8 space-y-3">
               {WORKFLOW_STEPS.map((step) => {

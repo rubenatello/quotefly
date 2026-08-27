@@ -19,6 +19,7 @@ Cross-area follow-up: the current quote/Kody/privacy/invoice/public-site remedia
 - Legacy QuickBooks provider workflows are default-off in the current candidate; public copy does not market automatic provider invoicing, reconciliation, or payment collection.
 - Current public-site evidence includes the web build, lint, i18n `12/12`, 16-route prerender, SEO `10/10`, focused public responsive/Axe/keyboard/reduced-motion coverage `5/5`, and the full local `npm run verify` gate. The opt-in deterministic capture lane passed twice and reproduced identical SHA-256 hashes for all 24 standard/Retina assets generated from the same frozen 2x render. Database-backed launch gates were not rerun because this slice changes only public-site code, deterministic capture fixtures, and checked-in marketing assets.
 - `main` now lets one natural Kody request resolve an active visible customer, preserve an estimated labor-hour range, match saved tenant products/services, and hand the Quote Builder separate priced, source-linked lines for review. Missing customer or work details produce a bounded clarification instead of a guessed or silently created record.
+- The current candidate adds a fourth deterministic `/solutions` Kody scenario for `Book job from quote`. It mirrors the product boundary: accepted Quote to linked Job, assigned-member QuoteFly schedule scan, up to three non-overlapping review options, normal booking confirmation, and a separate confirmed dispatch step. The demo explicitly excludes external calendars, route optimization, autonomous mutation, and automatic customer messaging.
 - GitHub run `32784331528` proved that the provider secret and isolated database were available, then failed the synthetic Kody quality gate at 4/6: one follow-up response did not preserve the requested total count in the evaluator's accepted form, and one safe quote-draft response was forced into deterministic fallback because no citation had been authorized. The current workspace addresses both cases without relaxing mutation, hidden-field, or citation validation.
 - Historical Phase 4B local evidence recorded on 2026-08-25 covered the QuickBooks Invoice slice, but it predates the current `7f75827` program baseline and is not release evidence for the current working tree. Current candidate counts, gate results, residuals, and the independent-review verdict are recorded only in the [QuoteFly Critical Improvements Program](../plan/quotefly-critical-improvements-program.md) after each exact gate finishes.
 
@@ -228,6 +229,14 @@ Capture requirements:
 - [x] Run the exact-`b72ec1b` database-backed launch gate and responsive browser scenarios.
 - [ ] Commit the current composer/evaluator repair only after explicit BCP authorization, then rerun the live-provider evaluation on that exact SHA and require 6/6.
 - [ ] Run staging/mobile smoke checks and collect owner-operated release evidence.
+
+### Slice F — Kody accepted-quote booking and dispatch handoff
+
+- [x] Preserve the active linked Job summary on accepted Quote reload and expose `Book with Kody` plus `Open job` actions.
+- [x] Add bounded tenant-scoped opening discovery for the assigned member using explicit duration, date/date range, and earliest/latest times.
+- [x] Keep discovery review-only and route every save through the existing overlap-rechecking booking API; keep dispatch as a separate confirmed transition.
+- [x] Add the deterministic fourth `/solutions` scenario, answer-first metadata, raw-HTML assertions, and responsive/keyboard/Axe coverage.
+- [ ] Run the database-backed integration and browser suites on the exact candidate, then obtain independent Opera approval before BCP.
 
 ## Definition of done
 

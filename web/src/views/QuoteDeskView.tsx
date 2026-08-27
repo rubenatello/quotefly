@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { TFunction } from "i18next";
 import {
   Archive,
+  CalendarPlus2,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
 import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
+import { openKody } from "../components/ai/kody-events";
 import { InvoicePanel } from "../components/invoices/InvoicePanel";
 import {
   FeatureLockedCard,
@@ -56,6 +58,7 @@ import {
   WorkflowActionDock,
 } from "../components/ui";
 import { api, ApiError, type AiProgressEvent, type AiQuoteInsight, type AiQuoteRun, type OrganizationUser, type Quote, type QuoteAcceptedJobSummary, type QuoteRevision, type TenantBranding, type WorkPreset } from "../lib/api";
+import { resolveAcceptedJobAction } from "../lib/accepted-job-handoff";
 import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageAvailability, formatAiUsageNotice, publishAiUsageUpdate, resolveAiUsagePresentation } from "../lib/ai-credits";
 import { canNativePdfShareOnDevice } from "../lib/quote-pdf-actions";
 import {
@@ -392,6 +395,7 @@ export function QuoteDeskView() {
   const [restoreRevisionSaving, setRestoreRevisionSaving] = useState(false);
   const [pendingLifecycleStatus, setPendingLifecycleStatus] = useState<PendingLifecycleStatus>(null);
   const [acceptedJobAction, setAcceptedJobAction] = useState<QuoteAcceptedJobSummary | null>(null);
+  const acceptedJobQuoteIdRef = useRef<string | null>(null);
   const [lifecyclePreparationSaving, setLifecyclePreparationSaving] = useState(false);
   const [isEditUnlocked, setIsEditUnlocked] = useState(true);
   const [mobilePane, setMobilePane] = useState<DeskPane>("editor");
@@ -456,10 +460,25 @@ export function QuoteDeskView() {
     navigateToQuote,
   } = useDashboard();
   const canCreateInvoices = session?.role === "owner" || session?.role === "admin";
+  const selectedQuoteIdForAcceptedJob = selectedQuote?.id ?? null;
+  const selectedQuoteIsAccepted = selectedQuote?.status === "ACCEPTED";
+  const selectedAcceptedJob = selectedQuote?.acceptedJob;
+  const acceptedJobCanBeBooked = Boolean(
+    acceptedJobAction
+    && canManageAssignments
+    && (acceptedJobAction.status === "UNSCHEDULED" || acceptedJobAction.status === "SCHEDULED"),
+  );
 
   useEffect(() => {
-    setAcceptedJobAction(null);
-  }, [selectedQuote?.id]);
+    const quoteChanged = acceptedJobQuoteIdRef.current !== selectedQuoteIdForAcceptedJob;
+    acceptedJobQuoteIdRef.current = selectedQuoteIdForAcceptedJob;
+    setAcceptedJobAction((current) => resolveAcceptedJobAction({
+      current,
+      quoteChanged,
+      quoteIsAccepted: selectedQuoteIsAccepted,
+      acceptedJob: selectedAcceptedJob,
+    }));
+  }, [selectedAcceptedJob, selectedQuoteIdForAcceptedJob, selectedQuoteIsAccepted]);
   const formatLocalDateTime = (value: string | null | undefined) => value ? formatDateTime(value, locale, session?.timezone) : "—";
   const { quoteId } = useParams<{ quoteId: string }>();
   const deskDraftStorageKey = useMemo(
@@ -1848,11 +1867,26 @@ export function QuoteDeskView() {
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
       {acceptedJobAction ? (
         <div role="status" className="flex flex-col gap-3 rounded-2xl border border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] px-4 py-3 text-sm text-[var(--qf-success-text)] sm:flex-row sm:items-center sm:justify-between">
-          <span>{t("quoteDesk.lifecycle.jobReady", { number: acceptedJobAction.jobNumber })}</span>
-          <Button variant="outline" size="sm" onClick={() => navigate(`/app/jobs/${acceptedJobAction.id}`)}>
-            <ExternalLink size={15} />
-            {t("quoteDesk.lifecycle.openJob")}
-          </Button>
+          <span>{t(acceptedJobCanBeBooked ? "quoteDesk.lifecycle.jobReady" : "quoteDesk.lifecycle.jobLinked", { number: acceptedJobAction.jobNumber })}</span>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {acceptedJobCanBeBooked ? (
+              <Button
+                size="sm"
+                onClick={() => openKody({
+                  prompt: t("quoteDesk.lifecycle.bookWithKodyPrompt", { number: acceptedJobAction.jobNumber }),
+                  tool: "PREPARE_BOOKING",
+                  context: { currentPage: "jobs", jobId: acceptedJobAction.id, quoteId: selectedQuote.id },
+                })}
+              >
+                <CalendarPlus2 size={15} />
+                {t("quoteDesk.lifecycle.bookWithKody")}
+              </Button>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={() => navigate(`/app/jobs/${acceptedJobAction.id}`)}>
+              <ExternalLink size={15} />
+              {t("quoteDesk.lifecycle.openJob")}
+            </Button>
+          </div>
         </div>
       ) : null}
       {selectedQuote.status === "ACCEPTED" ? (
