@@ -140,7 +140,7 @@ export const WORKSPACE_PAGE_META: Record<
     headingPlacement: "shell",
   },
   setup: {
-    label: "Setup",
+    label: "Workspace setup",
     hint: "Configure trades, starter jobs, and onboarding defaults.",
     translationKey: "pages.setup",
     activeNavigation: "settings",

@@ -422,6 +422,7 @@ test("a changed builder state rejects stale Apply without partial mutation", asy
   await review.getByRole("button", { name: "Apply to quote" }).click();
 
   await expect(review).toContainText("The quote changed after Kody prepared this review");
+  await review.getByRole("button", { name: "Close modal" }).click();
   await expect(trade).toHaveValue("ROOFING");
   await expect(page.getByLabel("Quote title")).toHaveValue("Operator's newer quote title");
   await expect(lineTitle).toHaveValue("Operator's newer line");

@@ -1143,6 +1143,7 @@ export function KodyAssistant({
     : aiUsageRenewalLabel
       ? t("kody.usage.paidPausedUntil", { date: aiUsageRenewalLabel })
       : t("kody.usage.paidPaused");
+  const hasContextualKodyLauncher = workspacePage === "home" || workspacePage === "build";
   const hasMobileActionDock = workspacePage === "build" || workspacePage === "quote-desk" || workspacePage === "branding";
   const allQuickPrompts = useMemo(() => quickPrompts(t), [t]);
   const availableQuickPrompts = canViewInternalCosts
@@ -1768,7 +1769,7 @@ export function KodyAssistant({
 
   return (
     <>
-      {!open ? (
+      {!open && !hasContextualKodyLauncher ? (
         <button
           ref={launcherRef}
           type="button"
