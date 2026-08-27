@@ -135,7 +135,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   const signUpRateLimit = {
     config: {
       rateLimit: {
-        max: app.env.NODE_ENV === "test" ? 100 : 5,
+        max: app.env.NODE_ENV === "test" ? 10_000 : 5,
         timeWindow: "10 minutes",
       },
     },
