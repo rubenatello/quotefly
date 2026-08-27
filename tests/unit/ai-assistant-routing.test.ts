@@ -155,18 +155,20 @@ test("customer draft parsing separates unlabeled contact details from the full n
 });
 
 test("quote conversation resolves a corrected component total without dropping the original draft", async () => {
-  const { quotePromptForConversation } = await import("../../src/lib/ai-assistant");
+  const { quotePromptForConversation, resolveAssistantTool } = await import("../../src/lib/ai-assistant");
   const { parseChatToQuotePrompt } = await import("../../src/services/chat-to-quote");
   const original = "Prepare a construction quote for Ana Gomez. Materials are $2000 and labor is $1500, but the total is $3000.";
+  const conversation = [{ message: original, resolvedTool: "DRAFT_QUOTE" as const }];
   for (const message of [
     "Use $3500 as the total.",
     "Use the materials and labor total of $3500.",
     "Use $3500 as the total for this quote.",
     "Materials are $2000, labor is $1500, and total is $3500.",
   ]) {
+    assert.equal(resolveAssistantTool(message, "AUTO", undefined, conversation), "DRAFT_QUOTE", message);
     const merged = quotePromptForConversation({
       message,
-      conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+      conversation,
     } as Parameters<typeof quotePromptForConversation>[0]);
     const parsed = parseChatToQuotePrompt(merged);
 
@@ -179,7 +181,7 @@ test("quote conversation resolves a corrected component total without dropping t
 
   const revisedComponents = parseChatToQuotePrompt(quotePromptForConversation({
     message: "Change materials to $1500 and use $3000 total.",
-    conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+    conversation,
   } as Parameters<typeof quotePromptForConversation>[0]));
   assert.equal(revisedComponents.customerName, "Ana Gomez");
   assert.equal(revisedComponents.estimatedTotalAmount, 3000);
@@ -188,7 +190,7 @@ test("quote conversation resolves a corrected component total without dropping t
 
   const unchangedComponents = parseChatToQuotePrompt(quotePromptForConversation({
     message: "Use $3000 as the total.",
-    conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+    conversation,
   } as Parameters<typeof quotePromptForConversation>[0]));
   assert.deepEqual(unchangedComponents.pricingConflict, {
     materialAmount: 2000,

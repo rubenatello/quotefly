@@ -248,6 +248,8 @@ const CUSTOMER_DRAFT_DETAIL_PATTERN =
   /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
 const QUOTE_SEND_FOLLOW_UP_PATTERN =
   /^(?:send|email|text|share|use\s+(?:email|text)|the\s+(?:first|second|third|latest)|for\s+|to\s+|enviar|envia|correo|texto|compartir|comparte|usa\s+(?:correo|texto)|la\s+(?:primera|segunda|tercera|ultima)|el\s+(?:primero|segundo|tercero|ultimo)|para\s+|a\s+)/i;
+const QUOTE_DRAFT_FOLLOW_UP_PATTERN =
+  /^(?:please\s+)?(?:use|change|set|update|make|keep|remove|add|materials?|labor|total|price|cost|tax)\b.{0,120}(?:\b(?:total|materials?|labor|price|cost|line\s+items?|hours?|quantity|tax)\b|\$\s*\d|\b\d+(?:\.\d+)?\b)/i;
 const QUOTE_WORK_DETAIL_PATTERN =
   /\b(?:hvac|plumb(?:ing)?|roof(?:ing)?|floor(?:ing)?|garden(?:ing)?|landscap(?:ing)?|construction|repair|replace(?:ment)?|install(?:ation)?|inspect(?:ion)?|diagnos(?:e|is|tic)|service|maintenance|clean(?:ing|up)?|labor|material|fixture|faucet|toilet|sink|heater|pipe|drain|sewer|hours?|hrs?|sq\s*ft|sqft|square\s+feet|techo|plomeria|piso|jardineria|paisajismo|construccion|reparacion|reemplazo|instalacion|inspeccion|servicio|mano\s+de\s+obra|horas?)\b/i;
 const NAVIGATION_VERB_PATTERN = /\b(?:go|open|navigate|take\s+me|bring\s+me|move\s+me|show\s+me|ir|ve|abrir|abre|navegar|navega|llevame|moverme|muestrame)\b/i;
@@ -946,7 +948,7 @@ export function resolveAssistantTool(
   if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
   if (
     previousTool === "DRAFT_QUOTE"
-    && CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)
+    && (CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage) || QUOTE_DRAFT_FOLLOW_UP_PATTERN.test(routingMessage))
     && !CUSTOMER_DRAFT_COMMAND_PATTERN.test(routingMessage)
   ) return "DRAFT_QUOTE";
   if (
@@ -1020,7 +1022,10 @@ export function resolveAssistantTool(
   if (PIPELINE_INTENT_PATTERN.test(lower)) return "SUMMARIZE_PIPELINE";
   if (QUOTE_DRAFT_INTENT_PATTERN.test(lower)) return "DRAFT_QUOTE";
 
-  if (previousTool === "DRAFT_QUOTE" && CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage)) {
+  if (
+    previousTool === "DRAFT_QUOTE"
+    && (CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage) || QUOTE_DRAFT_FOLLOW_UP_PATTERN.test(routingMessage))
+  ) {
     return "DRAFT_QUOTE";
   }
   if (previousTool === "DRAFT_CUSTOMER" && CUSTOMER_DRAFT_DETAIL_PATTERN.test(routingMessage)) {

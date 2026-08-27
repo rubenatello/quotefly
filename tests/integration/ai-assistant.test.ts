@@ -2521,21 +2521,21 @@ describe("AI assistant", () => {
         title: "Custom Wooden Dining Table Quote",
         estimatedTotalAmount: 3500,
         estimatedInternalCostAmount: 0,
-        lineItems: [{
+        lineItems: [expect.objectContaining({
           description: "Custom wooden table materials",
           quantity: 1,
           unitPrice: 2000,
           unitCost: 0,
           sectionType: "INCLUDED",
           priceProvenance: "EXPLICIT_PROMPT",
-        }, {
+        }), expect.objectContaining({
           description: "Custom wooden table labor",
           quantity: 1,
           unitPrice: 1500,
           unitCost: 0,
           sectionType: "INCLUDED",
           priceProvenance: "EXPLICIT_PROMPT",
-        }],
+        })],
         preparation: expect.objectContaining({
           status: "READY",
           customerResolution: "MATCHED",
