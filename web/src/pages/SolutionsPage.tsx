@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
+import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
 import { MarketingAction } from "../components/marketing/PublicPageLayout";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { BASIC_PLAN, BASIC_PLAN_PRICING_PATH, basicFirstPaidMonthPriceLabel } from "../lib/plans";
@@ -394,6 +395,8 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
           </div>
         </div>
       </section>
+
+      <LandingKodyShowcase onOpenAuth={onOpenAuth} />
 
       <section id="workflow" className="scroll-mt-24 border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="workflow-heading">
         <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] lg:gap-16">

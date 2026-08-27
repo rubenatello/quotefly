@@ -76,6 +76,7 @@ export type QuotePreparationClarificationCode =
   | "CUSTOMER_NAME_REQUIRED"
   | "CUSTOMER_PHONE_REQUIRED"
   | "CUSTOMER_SELECTION_REQUIRED"
+  | "PRICING_BREAKDOWN_CONFLICT"
   | "WORK_REQUIRED";
 
 export type QuotePreparationResult = Readonly<{
@@ -404,6 +405,14 @@ function clarificationFor(input: {
       message: `I found ${input.candidates.length} matching customers. Choose the correct customer to continue.`,
     };
   }
+  if (input.parsed.pricingConflict) {
+    const conflict = input.parsed.pricingConflict;
+    return {
+      status: "NEEDS_CLARIFICATION" as const,
+      code: "PRICING_BREAKDOWN_CONFLICT" as const,
+      message: `Materials and labor add up to $${conflict.componentTotalAmount.toFixed(2)}, but the stated total is $${conflict.statedTotalAmount.toFixed(2)}. Reply "use $${conflict.componentTotalAmount.toFixed(2)} total," or tell me which component price to change so the line items match the total.`,
+    };
+  }
   if (!input.customer && !input.parsed.customerName && !input.parsed.customerEmail && !input.parsed.customerPhone) {
     return {
       status: "NEEDS_CLARIFICATION" as const,
@@ -481,6 +490,19 @@ export async function prepareQuoteReview(
     : null);
 
   const deterministicParsed = parseChatToQuotePrompt(prompt);
+  const explicitlyPricedIncludedLines = deterministicParsed.lineItems.filter(
+    (line) => line.sectionType !== "ALTERNATE" && line.unitPrice !== undefined,
+  );
+  const explicitLinePriceSubtotal = roundCurrency(explicitlyPricedIncludedLines.reduce(
+    (sum, line) => sum + line.quantity * (line.unitPrice ?? 0),
+    0,
+  ));
+  const hasAuthoritativeExplicitBreakdown = explicitlyPricedIncludedLines.length > 0
+    && explicitlyPricedIncludedLines.length === deterministicParsed.lineItems.filter(
+      (line) => line.sectionType !== "ALTERNATE",
+    ).length
+    && deterministicParsed.estimatedTotalAmount !== null
+    && Math.abs(explicitLinePriceSubtotal - deterministicParsed.estimatedTotalAmount) <= 0.01;
   let parsed = deterministicParsed;
   let resolution = await resolveCustomer(prisma, input.access, {
     selectedCustomer,
@@ -507,7 +529,11 @@ export async function prepareQuoteReview(
   let retrievalDegraded = retrieval.degraded;
   const telemetry = input.telemetry ?? createAiTelemetryAccumulator();
 
-  if (input.providerMode === "BOUNDED_ENHANCEMENT" && !preliminaryClarification) {
+  if (
+    input.providerMode === "BOUNDED_ENHANCEMENT"
+    && !preliminaryClarification
+    && !hasAuthoritativeExplicitBreakdown
+  ) {
     const providerParsed = await aiParseChatToQuotePrompt(prompt, {
       context: providerContext({
         selectedQuote,
@@ -547,11 +573,14 @@ export async function prepareQuoteReview(
     }
   }
 
+  const parsedLinesForCatalog = deterministicParsed.lineItems.some((line) => line.unitPrice !== undefined)
+    ? deterministicParsed.lineItems
+    : parsed.lineItems;
   const preparedCatalog = await prepareCatalogQuoteLines(prisma, {
     tenantId: input.access.tenantId,
     serviceType,
     prompt,
-    parsedLines: parsed.lineItems,
+    parsedLines: parsedLinesForCatalog,
     estimatedDurationHoursHigh: parsed.estimatedDurationHoursHigh,
     includeInternalCost,
   });

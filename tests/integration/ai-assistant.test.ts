@@ -2414,6 +2414,290 @@ describe("AI assistant", () => {
     await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.quotes);
   });
 
+  test("Kody keeps custom-table customer, trade, and explicit material and labor prices in one review handoff", async () => {
+    const owner = await signUp("assistant-custom-table-quote-owner");
+    const customer = await createCustomer({
+      session: owner,
+      name: "Rober California",
+      phoneDigits: "5554047171",
+    });
+    const before = {
+      customers: await prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+      quotes: await prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    };
+    let parserCalls = 0;
+    let compositionCalls = 0;
+    setAiQuoteChatCompletionForTest(async () => {
+      parserCalls += 1;
+      return {
+        id: "chatcmpl-must-not-override-explicit-breakdown",
+        object: "chat.completion",
+        created: 1,
+        model: "test-quote-parser",
+        choices: [{
+          index: 0,
+          finish_reason: "stop",
+          logprobs: null,
+          message: {
+            role: "assistant",
+            refusal: null,
+            content: JSON.stringify({
+              customerName: "Wrong Customer",
+              customerPhone: null,
+              customerEmail: null,
+              serviceType: "HVAC",
+              title: "Wrong HVAC Title",
+              scopeText: "Wrong provider scope",
+              squareFeetEstimate: null,
+              estimatedTotalAmount: 9999,
+              estimatedTaxAmount: null,
+              estimatedInternalCostAmount: 8888,
+              lineItems: [{ description: "Wrong HVAC line", quantity: 1 }],
+            }),
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+      };
+    });
+    setAssistantCompositionProviderForTest(async () => {
+      compositionCalls += 1;
+      return {
+        outputText: JSON.stringify({
+          answer: "Prepared the custom-table quote for review.",
+          sourceKeys: [],
+          safetyNotes: [],
+        }),
+        model: "test-kody-composer",
+        telemetry: {
+          requestCount: 1,
+          promptTokens: 10,
+          completionTokens: 10,
+          totalTokens: 20,
+          estimatedCostUsd: 0.001,
+        },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "lets do a quote for Rober California for a construction job that we are building him a custom wooden table for a large dining area, cost of materials is $2000 and labor will be about $1500. Total job estimated to be about 3500",
+        tool: "AUTO",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+      };
+    };
+    expect(body.assistant.tool).toBe("DRAFT_QUOTE");
+    expect(parserCalls).toBe(0);
+    expect(compositionCalls).toBe(1);
+    expect(body.assistant.results[0]).toMatchObject({
+      status: "READY",
+      customerName: "Rober California",
+      customerResolution: "MATCHED",
+      serviceType: "CONSTRUCTION",
+      title: "Custom Wooden Dining Table Quote",
+      estimatedTotalAmount: 3500,
+      estimatedInternalCostAmount: 0,
+      lineItemCount: 2,
+      requiresPricingReview: false,
+    });
+    expect(body.assistant.actions).toHaveLength(1);
+    expect(body.assistant.actions[0]).toMatchObject({
+      type: "OPEN_QUOTE_DRAFT",
+      requiresConfirmation: true,
+      payload: expect.objectContaining({
+        customerId: customer.id,
+        customerName: "Rober California",
+        serviceType: "CONSTRUCTION",
+        title: "Custom Wooden Dining Table Quote",
+        estimatedTotalAmount: 3500,
+        estimatedInternalCostAmount: 0,
+        lineItems: [{
+          description: "Custom wooden table materials",
+          quantity: 1,
+          unitPrice: 2000,
+          unitCost: 0,
+          sectionType: "INCLUDED",
+          priceProvenance: "EXPLICIT_PROMPT",
+        }, {
+          description: "Custom wooden table labor",
+          quantity: 1,
+          unitPrice: 1500,
+          unitCost: 0,
+          sectionType: "INCLUDED",
+          priceProvenance: "EXPLICIT_PROMPT",
+        }],
+        preparation: expect.objectContaining({
+          status: "READY",
+          customerResolution: "MATCHED",
+          customer: expect.objectContaining({ id: customer.id }),
+          draft: expect.objectContaining({
+            customerPriceSubtotal: 3500,
+            internalCostSubtotal: 0,
+            totalAmount: 3500,
+            requiresPricingReview: false,
+          }),
+        }),
+      }),
+    });
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.quotes);
+  });
+
+  test("Kody asks which total to use when material and labor prices contradict the stated quote total", async () => {
+    const owner = await signUp("assistant-conflicting-quote-total-owner");
+    await createCustomer({
+      session: owner,
+      name: "Ana Gomez",
+      phoneDigits: "5554047272",
+    });
+    const before = {
+      customers: await prisma.customer.count({ where: { tenantId: owner.tenant.id } }),
+      quotes: await prisma.quote.count({ where: { tenantId: owner.tenant.id } }),
+    };
+    let parserCalls = 0;
+    let compositionCalls = 0;
+    const originalRequest = "Prepare a construction quote for Ana Gomez. Materials are $2000 and labor is $1500, but the total is $3000.";
+    setAiQuoteChatCompletionForTest(async () => {
+      parserCalls += 1;
+      throw new Error("The provider parser must not resolve conflicting explicit prices.");
+    });
+    setAssistantCompositionProviderForTest(async () => {
+      compositionCalls += 1;
+      return {
+        outputText: JSON.stringify({
+          answer: "Prepared the corrected quote total for review.",
+          sourceKeys: [],
+          safetyNotes: [],
+        }),
+        model: "test-kody-composer",
+        telemetry: {
+          requestCount: 1,
+          promptTokens: 10,
+          completionTokens: 10,
+          totalTokens: 20,
+          estimatedCostUsd: 0.001,
+        },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: originalRequest,
+        tool: "AUTO",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        results: [],
+        actions: [],
+      },
+      usage: { consumedCredits: 0 },
+    });
+    expect(response.json().assistant.answer).toMatch(/add up to \$3500\.00.*stated total is \$3000\.00/i);
+    expect(parserCalls).toBe(0);
+    expect(compositionCalls).toBe(0);
+
+    const corrected = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Use $3500 as the total.",
+        tool: "AUTO",
+        conversation: [{ message: originalRequest, resolvedTool: "DRAFT_QUOTE" }],
+      },
+    });
+
+    expect(corrected.statusCode).toBe(200);
+    expect(corrected.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        results: [expect.objectContaining({
+          status: "READY",
+          customerName: "Ana Gomez",
+          serviceType: "CONSTRUCTION",
+          estimatedTotalAmount: 3500,
+          lineItemCount: 2,
+          requiresPricingReview: false,
+        })],
+        actions: [expect.objectContaining({
+          type: "OPEN_QUOTE_DRAFT",
+          requiresConfirmation: true,
+          payload: expect.objectContaining({
+            customerName: "Ana Gomez",
+            serviceType: "CONSTRUCTION",
+            estimatedTotalAmount: 3500,
+            lineItems: [
+              expect.objectContaining({ unitPrice: 2000, priceProvenance: "EXPLICIT_PROMPT" }),
+              expect.objectContaining({ unitPrice: 1500, priceProvenance: "EXPLICIT_PROMPT" }),
+            ],
+          }),
+        })],
+      },
+    });
+    expect(parserCalls).toBe(0);
+    expect(compositionCalls).toBe(1);
+
+    const correctedComponent = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Change materials to $1500 and use $3000 total.",
+        tool: "AUTO",
+        conversation: [{ message: originalRequest, resolvedTool: "DRAFT_QUOTE" }],
+      },
+    });
+
+    expect(correctedComponent.statusCode).toBe(200);
+    expect(correctedComponent.json()).toMatchObject({
+      assistant: {
+        tool: "DRAFT_QUOTE",
+        results: [expect.objectContaining({
+          status: "READY",
+          customerName: "Ana Gomez",
+          serviceType: "CONSTRUCTION",
+          estimatedTotalAmount: 3000,
+          lineItemCount: 2,
+          requiresPricingReview: false,
+        })],
+        actions: [expect.objectContaining({
+          type: "OPEN_QUOTE_DRAFT",
+          requiresConfirmation: true,
+          payload: expect.objectContaining({
+            customerName: "Ana Gomez",
+            serviceType: "CONSTRUCTION",
+            estimatedTotalAmount: 3000,
+            lineItems: [
+              expect.objectContaining({ unitPrice: 1500, priceProvenance: "EXPLICIT_PROMPT" }),
+              expect.objectContaining({ unitPrice: 1500, priceProvenance: "EXPLICIT_PROMPT" }),
+            ],
+          }),
+        })],
+      },
+    });
+    expect(parserCalls).toBe(0);
+    expect(compositionCalls).toBe(2);
+    await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.customers);
+    await expect(prisma.quote.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(before.quotes);
+  });
+
   test("Kody asks for a missing customer and keeps the work details for the reply", async () => {
     const owner = await signUp("assistant-quote-clarification-owner");
     const customer = await createCustomer({
@@ -3110,35 +3394,50 @@ describe("AI assistant", () => {
     const owner = await signUp("assistant-customer-draft-owner");
     const beforeCount = await prisma.customer.count({ where: { tenantId: owner.tenant.id } });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/ai/assistant",
-      headers: { cookie: owner.cookie },
-      payload: {
+    for (const testCase of [
+      {
         message: "Add a new customer named Maria Lopez, phone 555-444-3333, email maria@example.com",
-        tool: "DRAFT_CUSTOMER",
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as {
-      assistant: {
-        tool: string;
-        actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
-      };
-      usage: { consumedCredits: number; consumedSpendUsd: number };
-    };
-    expect(body.assistant.tool).toBe("DRAFT_CUSTOMER");
-    expect(body.assistant.actions).toEqual([expect.objectContaining({
-      type: "OPEN_CUSTOMER_DRAFT",
-      requiresConfirmation: true,
-      payload: expect.objectContaining({
         fullName: "Maria Lopez",
         phone: "(555) 444-3333",
         email: "maria@example.com",
-      }),
-    })]);
-    expect(body.usage).toMatchObject({ consumedCredits: 0 });
+      },
+      {
+        message: "Add customer Jon Bacon 555-555-6868 jbaconzz99@yahoo.com",
+        fullName: "Jon Bacon",
+        phone: "(555) 555-6868",
+        email: "jbaconzz99@yahoo.com",
+      },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: {
+          message: testCase.message,
+          tool: "AUTO",
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        assistant: {
+          tool: string;
+          actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }>;
+        };
+        usage: { consumedCredits: number; consumedSpendUsd: number };
+      };
+      expect(body.assistant.tool).toBe("DRAFT_CUSTOMER");
+      expect(body.assistant.actions).toEqual([expect.objectContaining({
+        type: "OPEN_CUSTOMER_DRAFT",
+        requiresConfirmation: true,
+        payload: expect.objectContaining({
+          fullName: testCase.fullName,
+          phone: testCase.phone,
+          email: testCase.email,
+        }),
+      })]);
+      expect(body.usage).toMatchObject({ consumedCredits: 0 });
+    }
     await expect(prisma.customer.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(beforeCount);
   });
 

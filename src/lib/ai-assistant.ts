@@ -201,7 +201,8 @@ function highestClassification(...values: readonly DataClassification[]) {
 }
 const STOP_CUSTOMER_SEARCH_PREFIX =
   /^(?:please\s+|por\s+favor\s+)?(?:find|search|look\s+up|show|show\s+me|open|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|abrir|abre)\s+(?:a\s+|al\s+|el\s+|la\s+|los\s+|las\s+|un\s+|una\s+)?(?:customer|client|contact|customers|clients|contacts|cliente|clientes|contacto|contactos)\s*(?:named|called|for|matching|with|llamado|llamada|que\s+se\s+llama|con)?\s*/i;
-const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margin|gross|cost|costs|rank|underpriced|low[-\s]*margin|ganancia|ganancias|rentabilidad|rentable|margen|margenes|costo|costos|clasificar|clasifica|ordenar|ordena)\b/i;
+const FINANCIAL_INTENT_PATTERN = /\b(profit|profitable|profitability|margins?|gross|cost|costs|rank|underpriced|low[-\s]*margins?|ganancia|ganancias|rentabilidad|rentable|margen|margenes|costo|costos|clasificar|clasifica|ordenar|ordena)\b/i;
+const FINANCIAL_ANALYSIS_CUE_PATTERN = /\b(report|summary|summarize|which|what|highest|lowest|most\s+profitable|least\s+profitable|rank|compare|analysis|reporte|resumen|resume|cual|cuales|mayor|menor|mas\s+rentable|menos\s+rentable|comparar|compara|analisis)\b/i;
 const PIPELINE_INTENT_PATTERN = /\b(pipeline|sales|revenue|win\s*rate|accepted|sent|open\s+quotes?|follow[-\s]*up|forecast|projection|projected|ventas|ingresos|tasa\s+de\s+cierre|aceptad[ao]s?|enviad[ao]s?|cotizaci(?:on|ones)\s+abiertas?|seguimiento|pronostico|proyecci(?:on|ones)|proyectad[ao]s?)\b/i;
 const CUSTOMER_INTENT_PATTERN = /\b(customer|client|contact|phone|email|find|search|look\s+up|cliente|clientes|contacto|contactos|telefono|correo|buscar|busca|encontrar|encuentra)\b/i;
 const JOB_STATUS_INTENT_PATTERN = /\b(?:status|state|progress|where\s+(?:is|are)|what(?:'s|\s+is)\s+happening\s+with|estado|progreso|donde\s+esta|como\s+va)\b.{0,72}\b(?:job|work\s+order|trabajo|obra)\b|\b(?:job|work\s+order|trabajo|obra)\b.{0,72}\b(?:status|state|progress|estado|progreso|como\s+va)\b/i;
@@ -209,10 +210,16 @@ const JOB_SEARCH_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|whi
 const INVOICE_STATUS_INTENT_PATTERN = /\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b.{0,72}\b(?:invoice|bill|factura|cobro)\b|\b(?:invoice|bill|factura|cobro)\b.{0,72}\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b/i;
 const INVOICE_LIST_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|abrir|abre|cual|cuales|que)\b.{0,72}\b(?:invoices?|bills?|facturas?|cobros?)\b|\b(?:invoices?|bills?|facturas?|cobros?)\b.{0,72}\b(?:find|search|look\s*up|show|list|open|buscar|busca|mostrar|muestra|muestrame|listar|lista|abrir|abre)\b/i;
 const QUOTE_DRAFT_INTENT_PATTERN = /\b(quote|estimate|draft|bid|proposal|new\s+job|sq\s*ft|sqft|roof|roofing|floor|flooring|hvac|plumb|plumbing|landscap|construction|cotizacion|presupuesto|estimado|propuesta|borrador|nuevo\s+trabajo|pies?\s+cuadrados?|techo|techado|piso|pisos|plomeria|jardineria|paisajismo|construccion)\b/i;
+const QUOTE_DRAFT_COMMAND_PATTERN =
+  /(?:\b(?:draft|prepare|create|make|write|build|start|prepara|preparar|crea|crear|haz|hacer|let(?:s|\s+us)?\s+do)\b.{0,72}\b(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:\b(?:need\s+(?:a|an|new)|necesito\s+(?:un|una|nuevo|nueva))\s+(?:[a-z0-9-]+\s+){0,3}(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:^(?:please\s+)?(?:new\s+)?(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\s+(?:for|with|covering|para|con|sobre)\b)/i;
+const STRUCTURED_QUOTE_DRAFT_COMMAND_PATTERN =
+  /(?:\b(?:draft|prepare|create|make|write|build|start)\s+(?:(?:me|us)\s+)?(?:(?:a|an|the|new)\s+)?(?:(?!(?:report|summary|analysis|comparison|ranking|showing|which|what|highest|lowest|most|least)\b)[a-z0-9-]+\s+){0,4}(?:quote|estimate|bid|proposal)\b)|(?:\blet(?:s|\s+us)?\s+do\b.{0,32}\b(?:quote|estimate|bid|proposal)\b)|(?:\bneed\s+(?:a|an|new)\s+(?:[a-z0-9-]+\s+){0,3}(?:quote|estimate|bid|proposal)\b)/i;
 const ACTIVITY_TASK_INTENT_PATTERN =
   /\b(?:my\s+(?:day|tasks?|to[-\s]*dos?|work|activities|follow[-\s]*ups?)|(?:active|open|due)\s+tasks?|tasks?\s+(?:assigned|due|open|active)|tasks?.{0,24}assigned\s+to\s+me|to[-\s]*dos?|activity|activities|work\s+assigned|assigned\s+(?:work|tasks?)|mis\s+(?:tareas|seguimientos|actividades)|mi\s+dia|trabajo\s+asignado|tareas?\s+(?:activas?|asignadas?|pendientes?|para\s+hoy)|tareas?.{0,24}asignadas?|que\s+tengo\s+que\s+hacer|seguimientos?\s+asignados?)\b/i;
 const PRIORITIZE_MY_DAY_PATTERN =
   /\b(?:prioriti[sz]e|what\s+should\s+i\s+do\s+first|where\s+should\s+i\s+start|plan\s+my\s+day|organize\s+my\s+day|organise\s+my\s+day|my\s+day|top\s+priorit(?:y|ies)|prioriza|priorizar|que\s+hago\s+primero|por\s+donde\s+empiezo|organiza\s+mi\s+dia|mis\s+prioridades|prioridades\s+de\s+hoy)\b/i;
+const NATURAL_ATTENTION_AGENDA_PATTERN =
+  /^\s*(?:kody\s*[,;:\-]?\s*)?what\s+needs\s+my\s+attention(?:\s+today)?\s*[?.!]*\s*$/i;
 const PREPARE_ACTIVITY_INTENT_PATTERN =
   /(?:\b(?:add|create|make|schedule|set\s+up|remind|reminder|agregar|agrega|crear|crea|hacer|programar|programa|recordar|recordatorio)\b.{0,96}\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b)|(?:\b(?:follow\s+up\s+with|call|dar\s+seguimiento\s+a|llamar)\b.{0,96}\b[\p{L}\p{N}][\p{L}\p{N}\s.'-]{1,80})|(?:\b(?:task|to[-\s]*do|follow[-\s]*up|reminder|activity|tarea|seguimiento|recordatorio|actividad)\b.{0,96}\b(?:for|with|to|para|con|a)\b)/iu;
 const PREPARE_DISPATCH_INTENT_PATTERN =
@@ -545,8 +552,11 @@ function extractCustomerDraftName(message: string) {
     .split(/[,;\n]/, 1)[0]
     ?.trim();
   const candidate = (commandMatch?.[1] ?? withoutContactDetails ?? "")
+    .replace(CUSTOMER_DRAFT_EMAIL_PATTERN, " ")
+    .replace(CUSTOMER_DRAFT_PHONE_PATTERN, " ")
     .replace(/\b(?:phone|mobile|cell|email|e-mail|notes?|telefono|celular|correo|correo\s+electronico|notas?)\b.*$/i, "")
     .trim()
+    .replace(/\s+/g, " ")
     .replace(/[.!?]+$/, "")
     .slice(0, 120);
   if (
@@ -557,7 +567,7 @@ function extractCustomerDraftName(message: string) {
   return candidate;
 }
 
-function parseCustomerDraft(message: string): CustomerDraftPreview {
+export function parseCustomerDraft(message: string): CustomerDraftPreview {
   const phoneRaw = message.match(CUSTOMER_DRAFT_PHONE_PATTERN)?.[0] ?? null;
   const phoneDigits = normalizeUsPhoneDigits(phoneRaw);
   const email = message.match(CUSTOMER_DRAFT_EMAIL_PATTERN)?.[0]?.toLowerCase() ?? null;
@@ -930,7 +940,9 @@ export function resolveAssistantTool(
   if (autoSelectOperationalLookup && INVOICE_LIST_INTENT_PATTERN.test(routingMessage)) return "LIST_INVOICES";
   if (autoSelectOperationalLookup && JOB_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_JOB_STATUS";
   if (autoSelectOperationalLookup && JOB_SEARCH_INTENT_PATTERN.test(routingMessage)) return "SEARCH_JOBS";
-  if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage)) return "PRIORITIZE_MY_DAY";
+  if (PRIORITIZE_MY_DAY_PATTERN.test(routingMessage) || NATURAL_ATTENTION_AGENDA_PATTERN.test(routingMessage)) {
+    return "PRIORITIZE_MY_DAY";
+  }
   if (ACTIVITY_TASK_INTENT_PATTERN.test(routingMessage)) return "LIST_MY_ACTIVITIES";
   if (
     previousTool === "DRAFT_QUOTE"
@@ -942,6 +954,15 @@ export function resolveAssistantTool(
     && !QUOTE_DRAFT_INTENT_PATTERN.test(routingMessage)
   ) return "DRAFT_CUSTOMER";
   if (QUOTE_SEND_INTENT_PATTERN.test(routingMessage)) return "PREPARE_QUOTE_SEND";
+  // Component-price wording such as "materials cost" belongs to a quote
+  // draft when the operator explicitly asks Kody to prepare one. Financial
+  // ranking remains reserved for analytical questions about margin/cost.
+  const isFinancialAnalysisRequest = FINANCIAL_INTENT_PATTERN.test(routingMessage)
+    && FINANCIAL_ANALYSIS_CUE_PATTERN.test(routingMessage);
+  if (
+    STRUCTURED_QUOTE_DRAFT_COMMAND_PATTERN.test(routingMessage)
+    || (QUOTE_DRAFT_COMMAND_PATTERN.test(routingMessage) && !isFinancialAnalysisRequest)
+  ) return "DRAFT_QUOTE";
   const lower = routingMessage.toLowerCase();
   // Catalog lookup is deterministic and should not inherit a stale customer
   // search selection. Quote drafting and financial wording retain precedence.
@@ -963,6 +984,7 @@ export function resolveAssistantTool(
       || JOB_STATUS_INTENT_PATTERN.test(lower)
       || JOB_SEARCH_INTENT_PATTERN.test(lower)
       || PRIORITIZE_MY_DAY_PATTERN.test(lower)
+      || NATURAL_ATTENTION_AGENDA_PATTERN.test(lower)
       || ACTIVITY_TASK_INTENT_PATTERN.test(lower)
       || CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)
       || FOLLOW_UP_INTENT_PATTERN.test(lower)
@@ -987,7 +1009,9 @@ export function resolveAssistantTool(
   if (INVOICE_LIST_INTENT_PATTERN.test(lower)) return "LIST_INVOICES";
   if (JOB_STATUS_INTENT_PATTERN.test(lower)) return "GET_JOB_STATUS";
   if (JOB_SEARCH_INTENT_PATTERN.test(lower)) return "SEARCH_JOBS";
-  if (PRIORITIZE_MY_DAY_PATTERN.test(lower)) return "PRIORITIZE_MY_DAY";
+  if (PRIORITIZE_MY_DAY_PATTERN.test(lower) || NATURAL_ATTENTION_AGENDA_PATTERN.test(lower)) {
+    return "PRIORITIZE_MY_DAY";
+  }
   if (ACTIVITY_TASK_INTENT_PATTERN.test(lower)) return "LIST_MY_ACTIVITIES";
   if (CUSTOMERS_WITHOUT_QUOTES_PATTERN.test(lower)) return "CUSTOMERS_WITHOUT_QUOTES";
   if (FOLLOW_UP_INTENT_PATTERN.test(lower)) return "FOLLOW_UP_QUEUE";
@@ -4155,13 +4179,56 @@ function quotePromptForParser(message: string) {
     .replace(/\b(?:costo\s+interno|nuestro\s+costo)\s+(?:es|de|sera|seria)?\s*/gi, "internal cost ");
 }
 
-function quotePromptForConversation(params: AiAssistantInput) {
+function pricingConflictTotalResolution(
+  reply: string,
+  conflict: NonNullable<ReturnType<typeof parseChatToQuotePrompt>["pricingConflict"]>,
+) {
+  const normalizedReply = normalizeAssistantRoutingText(reply);
+  const hasResolutionCommand = /\b(?:use|set|make|change|correct|update|go\s+with|usar|usa|utilizar|utiliza|establecer|establece|cambiar|cambia|corregir|corrige)\b/i.test(normalizedReply);
+  const hasTotalCue = /\b(?:total|materials?\s+(?:and|&|plus)\s+labor|labor\s+(?:and|&|plus)\s+materials?|materiales?\s+y\s+mano\s+de\s+obra)\b/i.test(normalizedReply);
+  if (!hasResolutionCommand || !hasTotalCue) return null;
+
+  const amounts = Array.from(normalizedReply.matchAll(/\$?\s*([\d,]+(?:\.\d{1,2})?)/g))
+    .map((match) => Number((match[1] ?? "").replace(/,/g, "")))
+    .filter((amount) => Number.isFinite(amount) && amount >= 0);
+  const requestedAmount = amounts.length === 1
+    ? amounts[0]!
+    : /\b(?:materials?\s+(?:and|&|plus)\s+labor|labor\s+(?:and|&|plus)\s+materials?|materiales?\s+y\s+mano\s+de\s+obra)\b/i.test(normalizedReply)
+      ? conflict.componentTotalAmount
+      : null;
+  return requestedAmount !== null && Math.abs(requestedAmount - conflict.componentTotalAmount) <= 0.01
+    ? requestedAmount
+    : null;
+}
+
+function appendQuoteConversationReply(mergedPrompt: string, reply: string) {
+  const normalizedReply = normalizeAssistantRoutingText(reply);
+  if (!normalizedReply) return mergedPrompt;
+  const accumulatedDraft = parseChatToQuotePrompt(mergedPrompt);
+  const resolvedTotal = accumulatedDraft.pricingConflict
+    ? pricingConflictTotalResolution(normalizedReply, accumulatedDraft.pricingConflict)
+    : null;
+  const needsCustomerName = !accumulatedDraft.customerName;
+  const isShortEntityReply = CONTEXTUAL_ENTITY_QUERY_PATTERN.test(normalizedReply);
+  const isDirectContactReply = CUSTOMER_DRAFT_DETAIL_PATTERN.test(normalizedReply);
+  const retainedReply = resolvedTotal !== null
+    ? `total is $${resolvedTotal.toFixed(2)}`
+    : needsCustomerName && isShortEntityReply && !isDirectContactReply
+      ? `customer ${normalizedReply}`
+      : normalizedReply;
+  const priorPrompt = mergedPrompt.trimEnd();
+  return priorPrompt
+    ? `${priorPrompt}${/[.!?;:,]$/.test(priorPrompt) ? "" : "."}\n${retainedReply}`
+    : retainedReply;
+}
+
+export function quotePromptForConversation(params: AiAssistantInput) {
   const currentPrompt = quotePromptForParser(params.message);
   const quoteNounPattern = /\b(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b/i;
   const quoteTurns = (params.conversation ?? [])
     .filter((turn) => turn.resolvedTool === "DRAFT_QUOTE")
     .map((turn) => quotePromptForParser(turn.message.slice(0, 500)));
-  if (!quoteTurns.length || quoteNounPattern.test(currentPrompt)) {
+  if (!quoteTurns.length) {
     return currentPrompt;
   }
 
@@ -4174,23 +4241,23 @@ function quotePromptForConversation(params: AiAssistantInput) {
   const retainedTurns = quoteTurns.slice(Math.max(0, latestQuoteAnchorIndex));
   let mergedPrompt = retainedTurns.shift() ?? "";
 
-  for (const reply of [...retainedTurns, currentPrompt]) {
-    const normalizedReply = normalizeAssistantRoutingText(reply);
-    if (!normalizedReply) continue;
-    const accumulatedDraft = parseChatToQuotePrompt(mergedPrompt);
-    const needsCustomerName = !accumulatedDraft.customerName;
-    const isShortEntityReply = CONTEXTUAL_ENTITY_QUERY_PATTERN.test(normalizedReply);
-    const isDirectContactReply = CUSTOMER_DRAFT_DETAIL_PATTERN.test(normalizedReply);
-    const retainedReply = needsCustomerName && isShortEntityReply && !isDirectContactReply
-      ? `customer ${normalizedReply}`
-      : normalizedReply;
-    const priorPrompt = mergedPrompt.trimEnd();
-    mergedPrompt = priorPrompt
-      ? `${priorPrompt}${/[.!?;:,]$/.test(priorPrompt) ? "" : "."}\n${retainedReply}`
-      : retainedReply;
+  for (const reply of retainedTurns) {
+    mergedPrompt = appendQuoteConversationReply(mergedPrompt, reply);
   }
 
-  return mergedPrompt;
+  const accumulatedDraft = parseChatToQuotePrompt(mergedPrompt);
+  const mergedWithCurrent = appendQuoteConversationReply(mergedPrompt, currentPrompt);
+  const mergedDraft = parseChatToQuotePrompt(mergedWithCurrent);
+  const resolvesPricingConflict = Boolean(
+    accumulatedDraft.pricingConflict
+    && !mergedDraft.pricingConflict
+    && mergedDraft.estimatedTotalAmount !== null,
+  );
+  if (quoteNounPattern.test(currentPrompt) && !resolvesPricingConflict) {
+    return currentPrompt;
+  }
+
+  return mergedWithCurrent;
 }
 
 function spanishQuoteTitle(serviceType: ServiceCategory) {
@@ -4754,7 +4821,7 @@ function quotePreparationActionPayload(
     squareFeetEstimate: preparation.draft.squareFeetEstimate,
     squareFeetEstimateLow: preparation.draft.squareFeetEstimateLow,
     squareFeetEstimateHigh: preparation.draft.squareFeetEstimateHigh,
-    estimatedTotalAmount: preparation.draft.customerPriceSubtotal,
+    estimatedTotalAmount: preparation.draft.totalAmount,
     estimatedTaxAmount: preparation.draft.taxAmount,
     ...(typeof preparation.draft.internalCostSubtotal === "number"
       ? { estimatedInternalCostAmount: preparation.draft.internalCostSubtotal }
@@ -4857,7 +4924,7 @@ async function runDraftQuotePreview(
     customerName: preparation.customer?.fullName ?? preparation.customerDraft.fullName,
     customerResolution: preparation.customerResolution,
     totalAmount: preparation.draft.totalAmount,
-    estimatedTotalAmount: preparation.draft.customerPriceSubtotal,
+    estimatedTotalAmount: preparation.draft.totalAmount,
     estimatedTaxAmount: preparation.draft.taxAmount,
     estimatedInternalCostAmount: preparation.draft.internalCostSubtotal ?? null,
     estimatedDurationHoursLow: preparation.draft.estimatedDurationHoursLow,

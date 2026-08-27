@@ -9,8 +9,24 @@ import {
   hasUnsupportedStructuralQuotePatch,
   isQuotePricingReviewBlocking,
   parseQuotePricingReviewState,
+  resolveQuoteHandoffCustomerTotal,
   resolveQuotePreparationRetryIdentity,
 } from "../src/lib/quote-preparation";
+
+test("uses the tax-inclusive prepared total for the Kody quote handoff", () => {
+  assert.equal(resolveQuoteHandoffCustomerTotal({
+    customerPriceSubtotal: 875,
+    totalAmount: 950,
+  }, 900), 950);
+  assert.equal(resolveQuoteHandoffCustomerTotal({
+    customerPriceSubtotal: 875,
+    totalAmount: null,
+  }, 900), 875);
+  assert.equal(resolveQuoteHandoffCustomerTotal({
+    customerPriceSubtotal: 875,
+  }, 900), 875);
+  assert.equal(resolveQuoteHandoffCustomerTotal({}, 900), 900);
+});
 
 test("forces unresolved suggestion and patch prices to zero for every quote-preparation consumer", () => {
   const line = {

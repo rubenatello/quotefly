@@ -40,7 +40,7 @@ export type PublicRouteSeo = {
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   "/": {
     path: "/",
-    lastModified: "2026-08-25",
+    lastModified: "2026-08-27",
     title: "Contractor Quoting, CRM & Dispatch Software | QuoteFly",
     description:
       "QuoteFly connects contractor quoting, customer management, scheduling, dispatch, and internal invoice records for solo operators and small service teams.",
@@ -73,79 +73,79 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/solutions": {
     path: "/solutions",
-    lastModified: "2026-08-23",
-    title: "Contractor Quoting, Scheduling & Dispatch Solutions | QuoteFly",
+    lastModified: "2026-08-27",
+    title: "Contractor Quoting, Kody AI & Dispatch Solutions | QuoteFly",
     description:
-      "See how QuoteFly connects contractor quoting, accepted-quote Jobs, day and week scheduling, dispatch controls, and internal invoice records across the trades.",
+      "See Kody prepare customers, quotes, and daily priorities, then explore quoting, Jobs, scheduling, dispatch, and internal invoice records by trade.",
     heading: "Built for the work. Not the paperwork.",
     summary:
-      "Turn fresh job details into a clear quote, then schedule, dispatch, and finish the work without rebuilding the customer or approved scope.",
+      "See how Kody structures customer and quote requests for review, then move accepted work into a Job, scheduled visit, dispatch update, and internal invoice record.",
     schemaType: "CollectionPage",
   },
   "/solutions/hvac": {
     path: "/solutions/hvac",
-    lastModified: "2026-08-23",
+    lastModified: "2026-08-27",
     title: "HVAC Quoting and Estimating Software | QuoteFly",
     description:
-      "Create HVAC estimates for service, equipment replacement, ductwork, startup, maintenance, and customer upgrade options with QuoteFly.",
+      "Manage HVAC customers, Kody-assisted estimates, repair and replacement quotes, accepted Jobs, technician scheduling, dispatch, and internal invoice records.",
     heading: "HVAC quotes that make repair and replacement options clear",
     summary:
-      "Build HVAC estimates from reusable service, equipment, labor, and upgrade items, then send a branded quote and keep follow-up visible.",
+      "QuoteFly helps HVAC contractors keep the customer, diagnosis, repair or replacement quote, accepted Job, technician visit, and internal invoice status connected in one small-team workspace.",
     schemaType: "WebPage",
   },
   "/solutions/plumbing": {
     path: "/solutions/plumbing",
-    lastModified: "2026-08-23",
+    lastModified: "2026-08-27",
     title: "Plumbing Quote and Estimate Software | QuoteFly",
     description:
-      "Create plumbing estimates for service calls, repairs, fixtures, water heaters, repiping, materials, and replacement options with QuoteFly.",
+      "Manage plumbing customers, Kody-assisted estimates, repair and replacement quotes, accepted Jobs, service scheduling, dispatch, and internal invoice records.",
     heading: "Plumbing quotes that keep diagnosis, repair, and replacement choices clear",
     summary:
-      "Turn a plumbing diagnosis into a customer-ready estimate with reusable work, clear options, branded PDFs, and practical follow-up.",
+      "QuoteFly helps plumbing contractors move from customer lookup and on-site diagnosis to a reviewed repair or replacement quote, an accepted Job, a scheduled service visit, and an internal invoice record.",
     schemaType: "WebPage",
   },
   "/solutions/flooring": {
     path: "/solutions/flooring",
-    lastModified: "2026-08-23",
+    lastModified: "2026-08-27",
     title: "Flooring Estimating and Quote Software | QuoteFly",
     description:
-      "Create flooring estimates for square footage, demolition, floor preparation, material, waste, stairs, transitions, and finishing with QuoteFly.",
+      "Manage flooring customers, measured-scope estimates, preparation and material lines, accepted installation Jobs, crew scheduling, and internal invoice records.",
     heading: "Flooring estimates that protect prep work, quantities, and margin",
     summary:
-      "Build clear flooring quotes with measured material, preparation, labor, waste, transitions, finishes, and customer options kept organized.",
+      "QuoteFly helps flooring contractors keep measured scope, preparation, material, labor, customer options, the accepted installation Job, and scheduled crew visit connected without turning every quote into a new spreadsheet.",
     schemaType: "WebPage",
   },
   "/solutions/roofing": {
     path: "/solutions/roofing",
-    lastModified: "2026-08-23",
+    lastModified: "2026-08-27",
     title: "Roofing Estimate and Quote Software | QuoteFly",
     description:
-      "Create roofing estimates for repairs, tear-off, materials, underlayment, flashing, ventilation, disposal, decking allowances, and upgrades.",
+      "Manage roofing customers, repair and reroof estimates, allowances, accepted Jobs, crew scheduling, dispatch controls, and internal invoice records.",
     heading: "Roofing quotes that make the full system and allowances visible",
     summary:
-      "Build customer-ready roofing quotes that explain tear-off, materials, system components, allowances, upgrades, and the next follow-up.",
+      "QuoteFly helps roofing contractors turn inspection details into a readable repair or reroof quote, keep allowances clear, move accepted work into a Job, and schedule the crew without rebuilding the customer record.",
     schemaType: "WebPage",
   },
   "/solutions/landscaping": {
     path: "/solutions/landscaping",
-    lastModified: "2026-08-23",
-    title: "Landscaping and Gardening Quote Software | QuoteFly",
+    lastModified: "2026-08-27",
+    title: "Landscaping Quote, Job & Scheduling Software | QuoteFly",
     description:
-      "Create landscaping and gardening estimates with hourly, per-visit, square-foot, material, and recurring-service pricing in QuoteFly.",
-    heading: "Landscaping and gardening quotes built around the way you work",
+      "Manage landscaping customers, flexible estimates, accepted Jobs, crew scheduling, dispatch controls, and internal invoice records with QuoteFly.",
+    heading: "Landscaping quotes built around the way your crew works",
     summary:
-      "Build clear landscaping estimates from reusable labor, material, area, and recurring-service items, then share a branded quote and track follow-up.",
+      "QuoteFly helps landscaping contractors connect the customer and site request to a reviewed maintenance or installation quote, an accepted Job, a scheduled crew visit, and an internal invoice record.",
     schemaType: "WebPage",
   },
   "/solutions/construction": {
     path: "/solutions/construction",
-    lastModified: "2026-08-23",
+    lastModified: "2026-08-27",
     title: "Construction Estimating and Quote Software | QuoteFly",
     description:
-      "Create construction estimates for renovations, additions, repairs, labor, materials, subcontract work, allowances, and customer alternates.",
+      "Manage construction customers, Kody-assisted estimates, phased quotes, accepted Jobs, field scheduling, dispatch controls, and internal invoice records.",
     heading: "Construction quotes that organize complex work into a clear decision",
     summary:
-      "Organize construction phases, labor, materials, allowances, and alternates into a branded customer quote with visible follow-up.",
+      "QuoteFly helps small construction teams connect customer intake, a phased estimate, human quote review, an accepted Job, scheduled field visits, and internal invoice status without adopting a full enterprise project-management suite.",
     schemaType: "WebPage",
   },
   "/about": {

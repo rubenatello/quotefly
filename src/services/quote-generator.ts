@@ -203,6 +203,12 @@ const serviceKeywords: Record<ServiceCategory, string[]> = {
   ],
   CONSTRUCTION: [
     "construction",
+    "carpentry",
+    "woodworking",
+    "wooden table",
+    "custom furniture",
+    "cabinetry",
+    "millwork",
     "remodel",
     "renovation",
     "framing",
@@ -343,6 +349,18 @@ function scoreKeywordMatch(
 export function inferServiceType(message: string): ServiceCategory {
   const normalizedMessage = normalizeKeywordText(message);
   const messageTokens = getNormalizedTokens(normalizedMessage);
+
+  const explicitTradeContext: Array<[ServiceCategory, RegExp]> = [
+    ["HVAC", /\b(?:hvac|heating|cooling)\s+(?:job|project|quote|work|service)\b/],
+    ["PLUMBING", /\bplumbing\s+(?:job|project|quote|work|service)\b/],
+    ["FLOORING", /\bflooring\s+(?:job|project|quote|work|service)\b/],
+    ["ROOFING", /\broofing\s+(?:job|project|quote|work|service)\b/],
+    ["GARDENING", /\b(?:gardening|landscaping)\s+(?:job|project|quote|work|service)\b/],
+    ["CONSTRUCTION", /\b(?:construction|carpentry|woodworking)\s+(?:job|project|quote|work|service)\b/],
+  ];
+  const explicitTrade = explicitTradeContext.find(([, pattern]) => pattern.test(normalizedMessage));
+  if (explicitTrade) return explicitTrade[0];
+
   const serviceScores: Array<{ service: ServiceCategory; score: number }> = [];
 
   for (const [service, keywords] of Object.entries(serviceKeywords) as [ServiceCategory, string[]][]) {

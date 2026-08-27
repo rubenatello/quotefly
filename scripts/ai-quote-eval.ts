@@ -12,6 +12,8 @@ type EvalCase = {
   expectedTitle?: string;
   expectedDurationHoursLow?: number;
   expectedDurationHoursHigh?: number;
+  expectedTotalAmount?: number;
+  expectedLineUnitPrices?: number[];
   requiredKeywords: string[];
   minLineCount: number;
 };
@@ -24,6 +26,17 @@ type EvalResult = {
 };
 
 const EVAL_CASES: EvalCase[] = [
+  {
+    id: "construction-custom-table-price-breakdown",
+    prompt: "lets do a quote for Rober California for a construction job that we are building him a custom wooden table for a large dining area, cost of materials is $2000 and labor will be about $1500. Total job estimated to be about 3500",
+    expectedServiceType: "CONSTRUCTION",
+    expectedCustomerName: "Rober California",
+    expectedTitle: "Custom Wooden Dining Table Quote",
+    expectedTotalAmount: 3500,
+    expectedLineUnitPrices: [2000, 1500],
+    requiredKeywords: ["custom", "wooden", "table", "materials", "labor"],
+    minLineCount: 2,
+  },
   {
     id: "kody-natural-faucet-duration",
     prompt: "Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review.",
@@ -241,6 +254,20 @@ function scoreCase(testCase: EvalCase, parsed: ReturnType<typeof parseChatToQuot
   ) {
     score = Math.max(0, score - 25);
     misses.push(`duration high expected ${testCase.expectedDurationHoursHigh}, got ${parsed.estimatedDurationHoursHigh ?? "none"}`);
+  }
+  if (
+    testCase.expectedTotalAmount !== undefined
+    && parsed.estimatedTotalAmount !== testCase.expectedTotalAmount
+  ) {
+    score = Math.max(0, score - 25);
+    misses.push(`total expected ${testCase.expectedTotalAmount}, got ${parsed.estimatedTotalAmount ?? "none"}`);
+  }
+  if (testCase.expectedLineUnitPrices) {
+    const actualPrices = parsed.lineItems.map((line) => line.unitPrice ?? null);
+    if (JSON.stringify(actualPrices) !== JSON.stringify(testCase.expectedLineUnitPrices)) {
+      score = Math.max(0, score - 25);
+      misses.push(`line prices expected ${testCase.expectedLineUnitPrices.join(",")}, got ${actualPrices.join(",")}`);
+    }
   }
 
   return {

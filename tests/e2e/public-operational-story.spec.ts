@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { BASIC_PLAN_PRICING_PATH } from "../../web/src/lib/plans";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
-const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/services", "/pricing", "/about"] as const;
+const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/solutions/hvac", "/solutions/landscaping", "/services", "/pricing", "/about"] as const;
 const RESPONSIVE_WIDTHS = [360, 390, 768, 1280, 1440] as const;
 
 async function expectNoSeriousAccessibilityViolations(page: Page, label: string) {
@@ -56,20 +56,19 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
     await expect(homeWorkflow.getByRole("heading", { name: stage })).toBeVisible();
   }
 
-  const operationalKodyExamples = [
-    ["What is on my schedule today?", /read-only result.*does not change/i],
-    ["Prepare a visit for the Smith job tomorrow at 9 a.m.", /Nothing is booked until.*reviews and confirms/i],
-    ["Prepare my next visit for dispatch.", /stays scheduled until you confirm/i],
-  ] as const;
-  for (const [prompt, resultPattern] of operationalKodyExamples) {
-    const control = page.getByRole("button", { name: prompt });
-    await control.click();
-    await expect(control).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("#kody-example-response")).toContainText(resultPattern);
-  }
-
   await page.goto("/solutions");
   await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO["/solutions"].heading })).toBeVisible();
+  const operationalKodyExamples = [
+    ["Add customer", "#kody-panel-customer", /Jon.*Bacon.*555.*jon\.bacon@example\.com/is],
+    ["New quote", "#kody-panel-quote", /Custom Wooden Dining Table Quote.*materials.*\$2,000.*labor.*\$1,500.*\$3,500/is],
+    ["Today’s priorities", "#kody-panel-attention", /Call Morgan about the sent estimate.*Confirm tomorrow’s HVAC access.*Review the table quote measurements/is],
+  ] as const;
+  for (const [label, panelSelector, resultPattern] of operationalKodyExamples) {
+    const control = page.getByRole("button", { name: label, exact: true });
+    await control.click();
+    await expect(control).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(panelSelector)).toContainText(resultPattern);
+  }
   const solutionsWorkflow = page.locator("#workflow").getByRole("list");
   await expect(solutionsWorkflow.getByRole("listitem")).toHaveCount(6);
   await expect(page.getByText(/external invoice sending, payment collection, and QuickBooks invoice creation are not part/i)).toBeVisible();
@@ -114,11 +113,19 @@ test("operational marketing pages stay responsive at release widths", async ({ p
   }
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
-  const kodyControlBox = await page.getByRole("button", { name: "What is on my schedule today?" }).boundingBox();
+  await page.goto("/solutions");
+  const kodyControlBox = await page.getByRole("button", { name: "Today’s priorities", exact: true }).boundingBox();
   expect(kodyControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await page.goto("/");
   const trialControlBox = await page.getByRole("button", { name: /Start your 20-day free trial/i }).first().boundingBox();
   expect(trialControlBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const kodyTeaserLink = page.getByRole("link", { name: "Explore the guided Kody simulation" });
+  expect((await kodyTeaserLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await kodyTeaserLink.click();
+  await expect(page).toHaveURL(/\/solutions#kody$/);
+  await expect(page.getByRole("heading", { name: "One request becomes organized work." })).toBeVisible();
+  await expect(page.locator("#kody")).toBeInViewport();
+  await page.goto("/");
   for (const controlName of ["My Day", "Kody review", "Schedule", "Job detail", "Invoice record", "Notifications"]) {
     const controlBox = await page.locator("#product-story").getByRole("button", { name: controlName, exact: true }).boundingBox();
     expect(controlBox?.height ?? 0, `${controlName} must remain touchable at 390px`).toBeGreaterThanOrEqual(44);
@@ -155,23 +162,39 @@ test("operational marketing pages pass Axe at phone and desktop widths", async (
 });
 
 test("Kody examples support keyboard use and reduced motion", async ({ page }) => {
+  const aiRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/v1\/ai(?:\/|\?|$)/.test(new URL(request.url()).pathname)) aiRequests.push(request.url());
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/solutions");
+
+  const customerControl = page.getByRole("button", { name: "Add customer", exact: true });
+  await customerControl.focus();
+  await expect(customerControl).toBeFocused();
+  await customerControl.press("Enter");
+  await expect(customerControl).toHaveAttribute("aria-pressed", "true");
+  await expect(customerControl).not.toHaveCSS("box-shadow", "none");
+
+  await customerControl.press("Tab");
+  const quoteControl = page.getByRole("button", { name: "New quote", exact: true });
+  await expect(quoteControl).toBeFocused();
+  await quoteControl.press("Space");
+  await expect(quoteControl).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#kody-panel-quote")).toContainText(/Custom Wooden Dining Table Quote/i);
+  await expect(page.getByRole("status")).toHaveText("Showing the New quote sample result.");
+  const kodyAnimatedStyles = await page.locator("#kody .qf-demo-pane-enter").evaluateAll((elements) =>
+    elements.map((element) => {
+      const style = window.getComputedStyle(element);
+      return { animationName: style.animationName, transitionDuration: style.transitionDuration };
+    }),
+  );
+  expect(kodyAnimatedStyles.length).toBeGreaterThan(0);
+  expect(kodyAnimatedStyles.every((style) => style.animationName === "none" && style.transitionDuration === "0s")).toBe(true);
+  expect(aiRequests).toEqual([]);
+
   await page.goto("/");
-
-  const scheduleControl = page.getByRole("button", { name: "What is on my schedule today?" });
-  await scheduleControl.focus();
-  await expect(scheduleControl).toBeFocused();
-  await scheduleControl.press("Enter");
-  await expect(scheduleControl).toHaveAttribute("aria-pressed", "true");
-  await expect(scheduleControl).not.toHaveCSS("box-shadow", "none");
-
-  await scheduleControl.press("Tab");
-  const bookingControl = page.getByRole("button", { name: "Prepare a visit for the Smith job tomorrow at 9 a.m." });
-  await expect(bookingControl).toBeFocused();
-  await bookingControl.press("Space");
-  await expect(page.locator("#kody-example-response")).toContainText(/Nothing is booked until/i);
-
   const jobDetailControl = page.locator("#product-story").getByRole("button", { name: "Job detail", exact: true });
   await jobDetailControl.focus();
   await expect(jobDetailControl).toBeFocused();

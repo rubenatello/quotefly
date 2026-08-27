@@ -185,23 +185,35 @@ function routeSchema(path: PublicRoutePath) {
   }
 
   if (path.startsWith("/solutions/")) {
+    const tradeLabel = path.slice("/solutions/".length);
+    const breadcrumbName = tradeLabel === "hvac"
+      ? "HVAC"
+      : `${tradeLabel.charAt(0).toUpperCase()}${tradeLabel.slice(1)}`;
     return {
       "@context": "https://schema.org",
       "@graph": [
         {
           "@type": "WebPage",
+          "@id": `${canonical}#page`,
           name: route.heading,
           description: route.description,
           url: canonical,
           isPartOf: { "@type": "WebSite", name: "QuoteFly", url: `${PUBLIC_SITE_URL}/` },
+          about: { "@id": `${PUBLIC_SITE_URL}/#software` },
         },
         {
           "@type": "BreadcrumbList",
           itemListElement: [
             { "@type": "ListItem", position: 1, name: "Home", item: `${PUBLIC_SITE_URL}/` },
             { "@type": "ListItem", position: 2, name: "Trade solutions", item: publicCanonicalUrl("/solutions") },
-            { "@type": "ListItem", position: 3, name: route.heading, item: canonical },
+            { "@type": "ListItem", position: 3, name: breadcrumbName, item: canonical },
           ],
+        },
+        {
+          ...softwareApplication,
+          "@id": `${PUBLIC_SITE_URL}/#software`,
+          description: PUBLIC_ROUTE_SEO["/"].description,
+          url: `${PUBLIC_SITE_URL}/`,
         },
       ],
     };

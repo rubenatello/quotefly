@@ -293,27 +293,28 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
   const quote = await createQuoteViaApi(request, account, customer.id, {
     title: "Kody Action Roof Repair",
   });
+  let customerCreateAttempts = 0;
   const confirmedSendRequests: unknown[] = [];
   let confirmSendAttempts = 0;
 
   await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
     const requestBody = route.request().postDataJSON() as { message?: string; tool?: string };
-    const customerDraft = requestBody.message?.toLowerCase().includes("new customer");
+    const customerDraft = requestBody.message?.toLowerCase().includes("add customer");
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         assistant: customerDraft ? {
           tool: "DRAFT_CUSTOMER",
-          answer: "I prepared Maria Kody for review. Nothing is saved yet.",
+          answer: "I prepared Jon Bacon for review. Nothing is saved yet.",
           actions: [{
             type: "OPEN_CUSTOMER_DRAFT",
             label: "Review customer draft",
             requiresConfirmation: true,
             payload: {
-              fullName: "Maria Kody",
-              phone: "(555) 444-3333",
-              email: "maria-kody@example.com",
+              fullName: "Jon Bacon",
+              phone: "(555) 555-6868",
+              email: "jbaconzz99@yahoo.com",
               notes: "Requested through Kody.",
             },
           }],
@@ -354,6 +355,10 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
       }),
     });
   });
+  await page.route(`${apiBaseUrl}/v1/customers`, async (route) => {
+    if (route.request().method() === "POST") customerCreateAttempts += 1;
+    await route.fallback();
+  });
   await page.route(`${apiBaseUrl}/v1/quotes/${quote.id}/confirm-send`, async (route) => {
     confirmSendAttempts += 1;
     confirmedSendRequests.push(route.request().postDataJSON());
@@ -371,25 +376,26 @@ test("Kody opens review-only customer and quote-send workflows on mobile", async
 
   await page.getByTestId("kody-launcher").click();
   let kody = page.getByTestId("kody-chat-panel");
-  await kody.getByTestId("kody-prompt").fill("Add a new customer named Maria Kody, phone 555-444-3333");
+  await kody.getByTestId("kody-prompt").fill("Add customer Jon Bacon 555-555-6868 jbaconzz99@yahoo.com");
   await kody.getByRole("button", { name: "Send", exact: true }).click();
   await kody.getByRole("button", { name: "Review customer draft" }).click();
-  const customerConfirm = page.getByRole("dialog", { name: "Review Maria Kody?" });
+  const customerConfirm = page.getByRole("dialog", { name: "Review Jon Bacon?" });
   await expect(customerConfirm).toContainText("Nothing is saved");
   await customerConfirm.getByRole("button", { name: "Open customer review" }).click();
 
   await expect(kody).toBeHidden();
   const customerModal = page.getByRole("dialog", { name: "Add customer fast" });
   await expect(customerModal).toBeVisible();
-  await expect(customerModal.getByLabel("Full name")).toHaveValue("Maria Kody");
-  await expect(customerModal.getByLabel("Phone")).toHaveValue("(555) 444-3333");
-  await expect(customerModal.getByLabel("Email")).toHaveValue("maria-kody@example.com");
+  await expect(customerModal.getByLabel("Full name")).toHaveValue("Jon Bacon");
+  await expect(customerModal.getByLabel("Phone")).toHaveValue("(555) 555-6868");
+  await expect(customerModal.getByLabel("Email")).toHaveValue("jbaconzz99@yahoo.com");
+  expect(customerCreateAttempts).toBe(0);
   await customerModal.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("dialog", { name: "Discard unsaved customer?" }).getByRole("button", { name: "Discard changes" }).click();
 
   await page.getByTestId("kody-launcher").click();
   kody = page.getByTestId("kody-chat-panel");
-  await expect(kody.getByText("I prepared Maria Kody for review.", { exact: false })).toBeVisible();
+  await expect(kody.getByText("I prepared Jon Bacon for review.", { exact: false })).toBeVisible();
   await kody.getByTestId("kody-prompt").fill(`Send ${quote.title} to ${customer.fullName}`);
   await kody.getByRole("button", { name: "Send", exact: true }).click();
   const sendAction = kody.getByRole("button", { name: "Review quote delivery", exact: true });

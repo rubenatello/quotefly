@@ -26,6 +26,21 @@ export type QuotePreparationRetryIdentity = {
   idempotencyKey: string;
 };
 
+function readNonnegativeFiniteAmount(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+  const amount = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+export function resolveQuoteHandoffCustomerTotal(
+  draft: { totalAmount?: unknown; customerPriceSubtotal?: unknown },
+  fallback: unknown,
+): number | null {
+  return readNonnegativeFiniteAmount(draft.totalAmount)
+    ?? readNonnegativeFiniteAmount(draft.customerPriceSubtotal)
+    ?? readNonnegativeFiniteAmount(fallback);
+}
+
 export function isQuotePricingReviewBlocking(
   review: QuotePricingReviewState | null | undefined,
   quoteId: string | null | undefined,

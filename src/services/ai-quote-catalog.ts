@@ -29,7 +29,7 @@ export type PreparedCatalogQuoteLine = {
   unitType: PresetUnitType | null;
   unitPrice: number | null;
   unitCost: number | null;
-  priceProvenance: "TENANT_PRESET" | "STANDARD_CATALOG" | "UNRESOLVED";
+  priceProvenance: "TENANT_PRESET" | "STANDARD_CATALOG" | "EXPLICIT_PROMPT" | "UNRESOLVED";
   catalogMatched: boolean;
 };
 
@@ -157,6 +157,22 @@ function fallbackLine(parsedLine: ChatQuoteLineItemSuggestion): PreparedCatalogQ
   };
 }
 
+function lineFromExplicitPrompt(parsedLine: ChatQuoteLineItemSuggestion): PreparedCatalogQuoteLine {
+  return {
+    description: parsedLine.description,
+    quantity: positiveQuantity(parsedLine.quantity),
+    sectionType: parsedLine.sectionType ?? "INCLUDED",
+    sectionLabel: parsedLine.sectionLabel ?? null,
+    sourcePresetId: null,
+    catalogKey: parsedLine.catalogKey ?? null,
+    unitType: parsedLine.unitType ?? null,
+    unitPrice: money(parsedLine.unitPrice),
+    unitCost: null,
+    priceProvenance: "EXPLICIT_PROMPT",
+    catalogMatched: false,
+  };
+}
+
 export async function prepareCatalogQuoteLines(
   prisma: PrismaClient,
   input: {
@@ -194,8 +210,14 @@ export async function prepareCatalogQuoteLines(
   );
   const usedIds = new Set<string>();
   const lines: PreparedCatalogQuoteLine[] = [];
+  const hasExplicitLinePricing = input.parsedLines.some((line) => line.unitPrice !== undefined);
 
   for (const parsedLine of input.parsedLines.slice(0, 8)) {
+    if (parsedLine.unitPrice !== undefined) {
+      lines.push(lineFromExplicitPrompt(parsedLine));
+      continue;
+    }
+
     let preset = parsedLine.catalogKey ? byCatalogKey.get(parsedLine.catalogKey) ?? null : null;
     if (!preset && parsedLine.unitType === "HOUR" && input.estimatedDurationHoursHigh) {
       preset = selectHourlyPreset(presets, usedIds);
@@ -233,7 +255,7 @@ export async function prepareCatalogQuoteLines(
     }
   }
 
-  const explicitlyNamedPresets = presets
+  const explicitlyNamedPresets = hasExplicitLinePricing ? [] : presets
     .filter((preset) => !usedIds.has(preset.id))
     .map((preset) => ({ preset, score: explicitPresetScore(preset, input.prompt) }))
     .filter((candidate) => candidate.score >= 20)

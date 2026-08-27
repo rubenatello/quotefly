@@ -11,6 +11,7 @@ import {
   PUBLIC_SITE_URL,
   publicCanonicalUrl,
 } from "../src/lib/public-seo-data";
+import { BASIC_PLAN_PRICING_PATH } from "../src/lib/plans";
 import { renderPublicSitemap } from "./sitemap";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -374,13 +375,16 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
     "Build the quote while the job is still fresh.",
     "QuoteFly is quoting, customer management, scheduling, and dispatch software for solo contractors and small service teams.",
     "Who is QuoteFly for?",
-    "Tell Kody what you are trying to get done.",
+    "Ask naturally. Review structured results.",
     "Move from accepted quote to a finished, billable job.",
     "Actual QuoteFly interface · Sanitized fictional data · No production customer data, internal costs, or margins.",
     "See the day, then ask Kody what deserves attention.",
     "Keep the accepted scope connected to the field visit.",
     "Create the billing record and keep changes visible.",
-    "Find Elena Torres.",
+    "Add customer",
+    "New quote",
+    "Today’s priorities",
+    "Guided product simulation. No AI API call or record mutation.",
     "HVAC quoting software",
     "Start your 20-day free trial",
     "First paid month $14.50",
@@ -465,4 +469,94 @@ test("homepage prerender contains the real product, Kody, trade, and offer conte
   assert.ok(html.includes("1440w") && html.includes("2880w"), "desktop product proof must expose 1x and 2x width candidates");
   assert.ok(html.includes('sizes="min(430px, calc(100vw - 48px))"'), "mobile product proof must describe its rendered size");
   assert.ok(html.includes('aria-pressed="true"') && html.includes("aria-controls="), "product-story controls must be explicit in raw HTML");
+});
+
+test("solutions prerender contains the complete deterministic Kody simulation", async () => {
+  const html = decodeHtmlAttribute(await readFile(join(distDir, "solutions", "index.html"), "utf8"));
+  const text = decodeHtmlText(html);
+  assert.match(PUBLIC_ROUTE_SEO["/solutions"].description, /internal invoice records/i);
+
+  for (const expected of [
+    "One request becomes organized work.",
+    "Guided product simulation. Fictional sample workspace. No AI API call or record mutation.",
+    "Add customer Jon Bacon 555-555-0168 jon.bacon@example.com",
+    "Jon",
+    "Bacon",
+    "(555) 555-0168",
+    "Custom Wooden Dining Table Quote",
+    "Custom wooden table materials",
+    "Custom wooden table labor",
+    "$3,500",
+    "Kody, what needs my attention today?",
+    "Call Morgan about the sent estimate",
+    "Confirm tomorrow’s HVAC access",
+    "Review the table quote measurements",
+    "Kody only ranks your assigned active tasks",
+  ]) {
+    assert.ok(text.includes(expected), `/solutions raw HTML must include the Kody proof: ${expected}`);
+  }
+
+  assert.ok(html.includes('aria-pressed="true"'));
+  assert.ok(html.includes('aria-controls="kody-panel-customer"'));
+  assert.doesNotMatch(html, /jbaconzz99@yahoo\.com|555-555-6868|\(555\) 555-6868/i);
+  assert.doesNotMatch(html, /freeform prompt|type your prompt/i);
+});
+
+test("trade pages answer the full workflow with differentiated facts and honest limits", async () => {
+  const tradeExpectations = {
+    "/solutions/hvac": ["Condenser Replacement and Startup Quote", "Manual J calculations", "repair or replacement quote"],
+    "/solutions/plumbing": ["Kitchen Faucet and Shutoff Valve Quote", "diagnose plumbing conditions", "on-site diagnosis"],
+    "/solutions/flooring": ["LVP Removal, Preparation, and Installation Quote", "automated takeoffs", "measured scope"],
+    "/solutions/roofing": ["Residential Tear-Off and Reroof Quote", "aerial measurements", "inspection details"],
+    "/solutions/landscaping": ["Spring Cleanup and Mulch Installation Quote", "automatic recurring billing", "site request"],
+    "/solutions/construction": ["Custom Wooden Dining Table Quote", "dedicated construction project-management software", "phased estimate"],
+  } as const;
+
+  for (const [path, routeExpectations] of Object.entries(tradeExpectations) as Array<[keyof typeof tradeExpectations, readonly string[]]>) {
+    const outputPath = join(distDir, path.slice(1), "index.html");
+    const html = await readFile(outputPath, "utf8");
+    const text = decodeHtmlText(html);
+    const route = PUBLIC_ROUTE_SEO[path];
+
+    assert.match(route.description, /internal invoice records?/i, `${path} metadata must describe internal invoice records accurately`);
+    assert.ok(text.includes(route.summary), `${path} must visibly render its canonical answer summary`);
+    for (const expected of routeExpectations) {
+      assert.ok(text.includes(expected), `${path} must include differentiated fact: ${expected}`);
+    }
+    for (const expected of [
+      `How does QuoteFly help ${path === "/solutions/hvac" ? "HVAC" : path.split("/").at(-1)![0].toUpperCase() + path.split("/").at(-1)!.slice(1)} contractors?`,
+      "Find or add the customer",
+      "Prepare the quote",
+      "Review and share",
+      "Turn an accepted quote into a Job",
+      "Assign, schedule, and dispatch",
+      "Record the internal invoice",
+      "No AI API call or record mutation occurs on this page",
+      "Kody does not supply market prices",
+    ]) {
+      assert.ok(text.includes(expected), `${path} must include: ${expected}`);
+    }
+    for (const href of ["/solutions#kody", "/solutions#workflow", "/services", BASIC_PLAN_PRICING_PATH]) {
+      assert.ok(html.includes(`href="${href}"`), `${path} must link to ${href}`);
+    }
+    assert.equal((html.match(/<h1(?:\s|>)/g) ?? []).length, 1, `${path} must have exactly one H1`);
+
+    const jsonLdText = extract(html, /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/i, `${path} JSON-LD`);
+    const jsonLd = JSON.parse(jsonLdText) as {
+      "@graph"?: Array<{
+        "@type"?: string;
+        "@id"?: string;
+        about?: { "@id"?: string };
+        itemListElement?: Array<{ position?: number; name?: string; item?: string }>;
+      }>;
+    };
+    const graph = jsonLd["@graph"] ?? [];
+    const pageNode = graph.find((node) => node["@type"] === "WebPage");
+    const softwareNode = graph.find((node) => node["@type"] === "SoftwareApplication");
+    const breadcrumbNode = graph.find((node) => node["@type"] === "BreadcrumbList");
+    assert.equal(pageNode?.about?.["@id"], `${PUBLIC_SITE_URL}/#software`);
+    assert.equal(softwareNode?.["@id"], `${PUBLIC_SITE_URL}/#software`);
+    assert.equal(breadcrumbNode?.itemListElement?.at(-1)?.item, publicCanonicalUrl(path));
+    assert.ok((breadcrumbNode?.itemListElement?.at(-1)?.name.length ?? 0) < route.heading.length);
+  }
 });

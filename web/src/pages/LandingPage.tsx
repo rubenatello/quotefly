@@ -106,7 +106,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       </section>
 
       <LandingProductShowcase onOpenAuth={onOpenAuth} />
-      <LandingKodyShowcase onOpenAuth={onOpenAuth} />
+      <LandingKodyShowcase onOpenAuth={onOpenAuth} variant="teaser" />
       <LandingTradeRail />
 
       <section className="border-y border-slate-200 bg-white px-4 py-16 sm:px-6 sm:py-20 lg:px-8" aria-labelledby="who-uses-quotefly-heading">

@@ -28,6 +28,16 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("Which customers need follow up today?"), "FOLLOW_UP_QUEUE");
   assert.equal(resolveAssistantTool("Which quotes haven't been followed up on?"), "FOLLOW_UP_QUEUE");
   assert.equal(resolveAssistantTool("Prioritize my day"), "PRIORITIZE_MY_DAY");
+  assert.equal(
+    resolveAssistantTool("Kody, what needs my attention today?", "AUTO", { currentPage: "dashboard" }),
+    "PRIORITIZE_MY_DAY",
+  );
+  assert.equal(resolveAssistantTool("What needs my attention on quote margins today?"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("What needs my attention in the pipeline today?"), "SUMMARIZE_PIPELINE");
+  assert.equal(
+    resolveAssistantTool("What needs my attention with customers without quotes today?"),
+    "CUSTOMERS_WITHOUT_QUOTES",
+  );
   assert.equal(resolveAssistantTool("What active tasks are assigned to me?"), "LIST_MY_ACTIVITIES");
   assert.equal(resolveAssistantTool("Create a follow-up task for Robert tomorrow"), "PREPARE_ACTIVITY");
   assert.equal(resolveAssistantTool("Schedule a task for Robert California"), "PREPARE_ACTIVITY");
@@ -82,6 +92,22 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("Draft a quote for customer Robert"), "DRAFT_QUOTE");
   assert.equal(resolveAssistantTool("Draft a roofing quote for Ruben"), "DRAFT_QUOTE");
   assert.equal(
+    resolveAssistantTool("lets do a quote for Rober California for a construction job that we are building him a custom wooden table for a large dining area, cost of materials is $2000 and labor will be about $1500. Total job estimated to be about 3500"),
+    "DRAFT_QUOTE",
+  );
+  assert.equal(resolveAssistantTool("Which quote for Rober had the highest margin?"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Show me the most profitable quote for Rober California"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Which quote has the highest cost for materials?"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("I need to know which quote for Rober had the highest margin"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Need the highest-margin quote for Rober"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("I need the cost of quote 123"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Prepare a report showing which quote had the highest margin"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Make a summary of quote profitability"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Write a report about the most profitable quote"), "RANK_PROFITABLE_JOBS");
+  assert.equal(resolveAssistantTool("Prepare a construction quote showing materials cost $2000 and labor $1500 for Rober California"), "DRAFT_QUOTE");
+  assert.equal(resolveAssistantTool("Prepare a quote showing customer cost and price for Rober California"), "DRAFT_QUOTE");
+  assert.equal(resolveAssistantTool("Make a quote summary with labor cost and customer price for Rober California"), "DRAFT_QUOTE");
+  assert.equal(
     resolveAssistantTool("Kody I need a plumbing quote for faucet replacement for Maria Lopez. It should take about 3-4 hours depending on damage or inspection. Please prepare quote for review."),
     "DRAFT_QUOTE",
   );
@@ -113,6 +139,63 @@ test("routes operational Kody prompts before broad customer and quote intents", 
     ),
     "PREPARE_QUOTE_SEND",
   );
+});
+
+test("customer draft parsing separates unlabeled contact details from the full name", async () => {
+  const { parseCustomerDraft, resolveAssistantTool } = await import("../../src/lib/ai-assistant");
+  const prompt = "Add customer Jon Bacon 555-555-6868 jbaconzz99@yahoo.com";
+
+  assert.equal(resolveAssistantTool(prompt), "DRAFT_CUSTOMER");
+  assert.deepEqual(parseCustomerDraft(prompt), {
+    fullName: "Jon Bacon",
+    phone: "(555) 555-6868",
+    email: "jbaconzz99@yahoo.com",
+    notes: null,
+  });
+});
+
+test("quote conversation resolves a corrected component total without dropping the original draft", async () => {
+  const { quotePromptForConversation } = await import("../../src/lib/ai-assistant");
+  const { parseChatToQuotePrompt } = await import("../../src/services/chat-to-quote");
+  const original = "Prepare a construction quote for Ana Gomez. Materials are $2000 and labor is $1500, but the total is $3000.";
+  for (const message of [
+    "Use $3500 as the total.",
+    "Use the materials and labor total of $3500.",
+    "Use $3500 as the total for this quote.",
+    "Materials are $2000, labor is $1500, and total is $3500.",
+  ]) {
+    const merged = quotePromptForConversation({
+      message,
+      conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+    } as Parameters<typeof quotePromptForConversation>[0]);
+    const parsed = parseChatToQuotePrompt(merged);
+
+    assert.equal(parsed.customerName, "Ana Gomez", message);
+    assert.equal(parsed.serviceType, "CONSTRUCTION", message);
+    assert.equal(parsed.estimatedTotalAmount, 3500, message);
+    assert.equal(parsed.pricingConflict, null, message);
+    assert.deepEqual(parsed.lineItems.map((line) => line.unitPrice), [2000, 1500], message);
+  }
+
+  const revisedComponents = parseChatToQuotePrompt(quotePromptForConversation({
+    message: "Change materials to $1500 and use $3000 total.",
+    conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+  } as Parameters<typeof quotePromptForConversation>[0]));
+  assert.equal(revisedComponents.customerName, "Ana Gomez");
+  assert.equal(revisedComponents.estimatedTotalAmount, 3000);
+  assert.equal(revisedComponents.pricingConflict, null);
+  assert.deepEqual(revisedComponents.lineItems.map((line) => line.unitPrice), [1500, 1500]);
+
+  const unchangedComponents = parseChatToQuotePrompt(quotePromptForConversation({
+    message: "Use $3000 as the total.",
+    conversation: [{ message: original, resolvedTool: "DRAFT_QUOTE" }],
+  } as Parameters<typeof quotePromptForConversation>[0]));
+  assert.deepEqual(unchangedComponents.pricingConflict, {
+    materialAmount: 2000,
+    laborAmount: 1500,
+    componentTotalAmount: 3500,
+    statedTotalAmount: 3000,
+  });
 });
 
 test("routes neutral Spanish QuoteFly workflows without changing canonical tool names", async () => {

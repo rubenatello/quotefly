@@ -8,6 +8,7 @@ import {
 export interface ChatQuoteLineItemSuggestion {
   description: string;
   quantity: number;
+  unitPrice?: number;
   sectionType?: "INCLUDED" | "ALTERNATE";
   sectionLabel?: string | null;
   catalogKey?: string;
@@ -26,6 +27,12 @@ export interface ParsedChatToQuoteDraft {
   squareFeetEstimateLow: number | null;
   squareFeetEstimateHigh: number | null;
   estimatedTotalAmount: number | null;
+  pricingConflict?: {
+    materialAmount: number;
+    laborAmount: number;
+    componentTotalAmount: number;
+    statedTotalAmount: number;
+  } | null;
   estimatedTaxAmount: number | null;
   estimatedInternalCostAmount: number | null;
   estimatedDurationHoursLow: number | null;
@@ -352,6 +359,63 @@ function extractNamedAmount(prompt: string, patterns: RegExp[]): number | null {
   return null;
 }
 
+function extractLastNamedAmount(prompt: string, patterns: RegExp[]): number | null {
+  let latest: { index: number; amount: number } | null = null;
+  for (const pattern of patterns) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    for (const match of prompt.matchAll(new RegExp(pattern.source, flags))) {
+      const amount = parseCurrencyLiteral(match[1] ?? "");
+      if (amount === null || match.index === undefined) continue;
+      if (!latest || match.index >= latest.index) latest = { index: match.index, amount };
+    }
+  }
+  return latest?.amount ?? null;
+}
+
+function extractComponentAmount(prompt: string, component: "material" | "labor"): number | null {
+  const componentPattern = component === "material" ? "materials?" : "labor";
+  return extractLastNamedAmount(prompt, [
+    new RegExp(
+      `(?:cost\\s+of\\s+)?${componentPattern}(?:\\s+(?:cost|price|allowance))?\\s+` +
+      `(?:(?:is|are|will\\s+be|should\\s+be|to)\\s+)?(?:about|around|approximately|roughly)?\\s*` +
+      `\\$\\s*([\\d,]+(?:\\.\\d{1,2})?)`,
+      "i",
+    ),
+    new RegExp(
+      `\\$\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+(?:for|in|of)?\\s*${componentPattern}\\b`,
+      "i",
+    ),
+  ]);
+}
+
+function extractEstimatedTotalAmount(prompt: string): number | null {
+  const explicitTotal = extractLastNamedAmount(prompt, [
+    /\b(?:use|set|make|change|correct|update|go\s+with)\s+\$?\s*([\d,]+(?:\.\d{1,2})?)\s+(?:as\s+)?(?:the\s+)?total\b/i,
+    /\btotal(?:\s+(?:job|project|quote|price|amount))?\s+(?:(?:is|will\s+be|should\s+be|estimated(?:\s+to\s+be)?|comes?\s+to)\s+)?(?:around|about|approximately|roughly|at)?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\b(?:whole\s+(?:job|project|quote)|(?:job|project|quote)\s+total)\s+(?:(?:is|will\s+be|should\s+be|estimated(?:\s+to\s+be)?)\s+)?(?:around|about|approximately|roughly|at)?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\b(?:quote|price|budget)\s+(?:should\s+be|is|will\s+be|around|about|for|at)\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\b(?:comes?\s+to|estimate(?:d)?\s+at|budget(?:ed)?\s+at)\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+  ]);
+  if (explicitTotal !== null) return explicitTotal;
+
+  const currencyValues = Array.from(prompt.matchAll(/\$\s*([\d,]+(?:\.\d{1,2})?)/g))
+    .map((match) => parseCurrencyLiteral(match[1] ?? ""))
+    .filter((value): value is number => value !== null);
+  const componentLabelPattern = "(?:materials?|labor|equipment|parts?|permit|tax|internal\\s+cost|our\\s+cost|cost\\s+to\\s+us)";
+  const hasComponentPricing = new RegExp(
+    `(?:\\b${componentLabelPattern}\\b[^.;\\n]{0,48}\\$|\\$\\s*[\\d,]+(?:\\.\\d{1,2})?[^.;\\n]{0,24}\\b${componentLabelPattern}\\b)`,
+    "i",
+  ).test(prompt);
+  return currencyValues.length === 1 && !hasComponentPricing ? currencyValues[0]! : null;
+}
+
+function isAmbiguousQuoteForCandidate(value: string): boolean {
+  const normalized = value.trim();
+  return /(?:^|\s)(?:review|approval)$/i.test(normalized)
+    || /^(?:a|an|the|this)\s+/i.test(normalized)
+    || /\b(?:replacement|repair|installation|install|service|labor|inspection|maintenance|remodel|roofing|flooring|landscaping|construction|job|work|project|area|room)\b/i.test(normalized);
+}
+
 function extractCustomerName(prompt: string): string | undefined {
   const explicitCustomerMatch = prompt.match(
     /\b(?:customer|client)\s+(?:named?\s+)?([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3})(?=\s*(?:[,.;:]|\b(?:phone|email|number|should|please|who|that|with)\b|$))/i,
@@ -372,25 +436,20 @@ function extractCustomerName(prompt: string): string | undefined {
     .find((value): value is string => Boolean(
       value
       && !/(?:^|\s)(?:review|approval)$/i.test(value)
-      && !/^(?:inspection|the\s+(?:job|work|project)|this\s+(?:job|work|project))$/i.test(value),
+      && !/^(?:inspection|the\s+(?:job|work|project)|this\s+(?:job|work|project))$/i.test(value)
+      && !/^(?:a|an|the|this)\s+/i.test(value)
+      && !/\b(?:job|work|project|area|room)\b/i.test(value)
     ));
-  const directMatchRemainder = directQuoteMatch?.index === undefined
-    ? ""
-    : prompt.slice(directQuoteMatch.index + directQuoteMatch[0].length);
-  const directQuoteCandidate = /^\s+for\b/i.test(directMatchRemainder)
-    ? undefined
-    : directQuoteMatch?.[1];
-  const candidate = explicitCustomerMatch?.[1] ?? trailingCustomerMatch ?? directQuoteCandidate;
-  const candidateCameFromAmbiguousQuoteFor = !explicitCustomerMatch?.[1]
-    && !trailingCustomerMatch
-    && Boolean(directQuoteCandidate);
+  const directQuoteCandidate = directQuoteMatch?.[1]?.trim();
+  const trustedDirectQuoteCandidate = directQuoteCandidate && !isAmbiguousQuoteForCandidate(directQuoteCandidate)
+    ? directQuoteCandidate
+    : undefined;
+  const candidate = explicitCustomerMatch?.[1] ?? trustedDirectQuoteCandidate ?? trailingCustomerMatch;
   if (!candidate) return undefined;
   const normalized = candidate.trim().replace(/[,.]$/, "");
   if (
     /(?:^|\s)(?:review|approval)$/i.test(normalized)
     || /^(?:inspection|the\s+(?:job|work|project)|this\s+(?:job|work|project))$/i.test(normalized)
-    || (candidateCameFromAmbiguousQuoteFor
-      && /\b(?:replacement|repair|installation|install|service|labor|inspection|maintenance|remodel|roofing|plumbing|flooring|landscaping|construction)\b/i.test(normalized))
   ) {
     return undefined;
   }
@@ -566,12 +625,23 @@ function inferTitle(
   prompt: string,
   matchedStandardPreset?: StandardWorkPresetDefinition | null,
 ): string {
+  const lower = prompt.toLowerCase();
+  if (serviceType === "CONSTRUCTION") {
+    if (/\bcustom\s+(?:wooden|wood)\s+(?:dining\s+)?table\b/.test(lower)) {
+      return /\bdining\b/.test(lower)
+        ? "Custom Wooden Dining Table Quote"
+        : "Custom Wooden Table Quote";
+    }
+    if (/\b(?:woodworking|carpentry|custom furniture|cabinetry|millwork)\b/.test(lower)) {
+      return "Custom Carpentry Quote";
+    }
+  }
+
   matchedStandardPreset ??= findBestStandardWorkPresetMatch(serviceType, prompt, { primaryOnly: true });
   if (matchedStandardPreset) {
     return matchedStandardPreset.name;
   }
 
-  const lower = prompt.toLowerCase();
   if (serviceType === "ROOFING") {
     if (/\b(spanish|clay|concrete|barrel|mission|s[-\s]?tile)\b/.test(lower)) {
       return "Spanish/Tile Roof Replacement Quote";
@@ -672,11 +742,25 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
   const squareFeetEstimate = structuredSquareFeetEstimate ?? extractExplicitSquareFeet(prompt);
   const squareFeetRange = deriveSquareFeetEstimateRange(prompt, squareFeetEstimate);
 
-  const estimatedTotalAmount = extractNamedAmount(prompt, [
-    /(?:whole\s+job|project|quote|total|price|cost)\s+(?:should\s+be|is|around|about|for)?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /(?:comes?\s+to|estimate(?:d)?\s+at|budget(?:ed)?\s+at)\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /\$\s*([\d,]+(?:\.\d{1,2})?)/,
-  ]);
+  const materialAmount = extractComponentAmount(prompt, "material");
+  const laborAmount = extractComponentAmount(prompt, "labor");
+  const statedTotalAmount = extractEstimatedTotalAmount(prompt);
+  const componentTotalAmount = materialAmount !== null && laborAmount !== null
+    ? Number((materialAmount + laborAmount).toFixed(2))
+    : null;
+  const componentBreakdownReconciles = componentTotalAmount !== null
+    && (statedTotalAmount === null || Math.abs(componentTotalAmount - statedTotalAmount) <= 0.01);
+  const pricingConflict = componentTotalAmount !== null
+    && statedTotalAmount !== null
+    && Math.abs(componentTotalAmount - statedTotalAmount) > 0.01
+      ? {
+          materialAmount: materialAmount!,
+          laborAmount: laborAmount!,
+          componentTotalAmount,
+          statedTotalAmount,
+        }
+      : null;
+  const estimatedTotalAmount = statedTotalAmount ?? (componentBreakdownReconciles ? componentTotalAmount : null);
 
   const estimatedTaxAmount = extractNamedAmount(prompt, [
     /(?:sales\s+tax|tax)\s+(?:is|of|around|about|at)?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
@@ -743,22 +827,45 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
           unitType: "HOUR",
         }]
       : [];
+  const explicitComponentLineItems: ChatQuoteLineItemSuggestion[] = componentBreakdownReconciles
+    ? [{
+        description: /\bcustom\s+(?:wooden|wood)\s+(?:dining\s+)?table\b/i.test(prompt)
+          ? "Custom wooden table materials"
+          : `${serviceTitle(serviceType)} materials`,
+        quantity: 1,
+        unitPrice: materialAmount!,
+        sectionType: "INCLUDED",
+        sectionLabel: null,
+        unitType: "FLAT",
+      }, {
+        description: /\bcustom\s+(?:wooden|wood)\s+(?:dining\s+)?table\b/i.test(prompt)
+          ? "Custom wooden table labor"
+          : `${serviceTitle(serviceType)} labor`,
+        quantity: 1,
+        unitPrice: laborAmount!,
+        sectionType: "INCLUDED",
+        sectionLabel: null,
+        unitType: "FLAT",
+      }]
+    : [];
   const parsedLineItems: ChatQuoteLineItemSuggestion[] =
     structuredLineItems.length > 0
       ? structuredLineItems
-      : matchedLineItems.length > 0
-        ? [...matchedLineItems, ...durationLineItems]
-        : [
-            {
-              description: laborDescription(serviceType, squareFeetEstimate),
-              quantity: estimatedDuration.high ?? inferLaborQuantity(serviceType, squareFeetEstimate),
-              unitType: estimatedDuration.high ? "HOUR" : undefined,
-            },
-            {
-              description: inferMaterialDescription(serviceType, prompt),
-              quantity: 1,
-            },
-          ];
+      : explicitComponentLineItems.length > 0
+        ? explicitComponentLineItems
+        : matchedLineItems.length > 0
+          ? [...matchedLineItems, ...durationLineItems]
+          : [
+              {
+                description: laborDescription(serviceType, squareFeetEstimate),
+                quantity: estimatedDuration.high ?? inferLaborQuantity(serviceType, squareFeetEstimate),
+                unitType: estimatedDuration.high ? "HOUR" : undefined,
+              },
+              {
+                description: inferMaterialDescription(serviceType, prompt),
+                quantity: 1,
+              },
+            ];
 
   return {
     customerName,
@@ -772,6 +879,7 @@ export function parseChatToQuotePrompt(rawPrompt: string): ParsedChatToQuoteDraf
     squareFeetEstimateLow: squareFeetRange.squareFeetEstimateLow,
     squareFeetEstimateHigh: squareFeetRange.squareFeetEstimateHigh,
     estimatedTotalAmount,
+    pricingConflict,
     estimatedTaxAmount,
     estimatedInternalCostAmount,
     estimatedDurationHoursLow: estimatedDuration.low,

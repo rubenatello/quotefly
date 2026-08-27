@@ -87,7 +87,11 @@ import { usePageView, useTrack } from "../lib/analytics";
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { formatQuoteDocumentDate, quoteDocumentCopy } from "../lib/quote-document-copy";
 import { localizedApiError } from "../lib/localized-api-error";
-import { applyQuotePreparationPricingGuard, type AppliedQuotePreparation } from "../lib/quote-preparation";
+import {
+  applyQuotePreparationPricingGuard,
+  resolveQuoteHandoffCustomerTotal,
+  type AppliedQuotePreparation,
+} from "../lib/quote-preparation";
 
 function localizedQuoteHeadingError(
   t: TFunction,
@@ -319,7 +323,7 @@ function readKodyQuoteDraftState(t: TFunction, value: unknown): KodyQuoteDraftHa
         scopeText: preparedDraft.scopeText ?? payload.scopeText,
         estimatedDurationHoursLow: preparedDraft.estimatedDurationHoursLow ?? payload.estimatedDurationHoursLow,
         estimatedDurationHoursHigh: preparedDraft.estimatedDurationHoursHigh ?? payload.estimatedDurationHoursHigh,
-        estimatedTotalAmount: preparedDraft.customerPriceSubtotal ?? payload.estimatedTotalAmount,
+        estimatedTotalAmount: resolveQuoteHandoffCustomerTotal(preparedDraft, payload.estimatedTotalAmount),
         estimatedTaxAmount: preparedDraft.taxAmount ?? payload.estimatedTaxAmount,
         estimatedInternalCostAmount: preparedDraft.internalCostSubtotal ?? payload.estimatedInternalCostAmount,
         lineItems: preparedDraft.lineItems ?? payload.lineItems,
@@ -2993,12 +2997,17 @@ function KodyDraftHandoffBanner({
             {visibleLines.length ? (
               <ul className="mt-1 space-y-1 text-sm text-[var(--qf-text-soft)]">
                 {visibleLines.map((lineItem, index) => (
-                  <li key={`${lineItem.description}-${index}`} className="flex gap-2">
+                  <li key={`${lineItem.description}-${index}`} className="flex items-start gap-2">
                     <span className="text-[var(--qf-text-muted)]">{index + 1}.</span>
-                    <span className="min-w-0">
+                    <span className="min-w-0 flex-1">
                       {lineItem.description}
                       {lineItem.quantity ? <span className="text-[var(--qf-text-muted)]"> · {t("quoteBuilder.handoff.quantity", { count: lineItem.quantity })}</span> : null}
                     </span>
+                    {lineItem.quantity !== null && lineItem.unitPrice !== null ? (
+                      <span className="shrink-0 whitespace-nowrap font-semibold text-[var(--qf-text)]">
+                        {t("quoteBuilder.handoff.lineAmount", { amount: money(lineItem.quantity * lineItem.unitPrice, locale) })}
+                      </span>
+                    ) : null}
                   </li>
                 ))}
                 {extraLineCount ? <li className="text-xs font-semibold text-[var(--qf-text-muted)]">{t("quoteBuilder.handoff.moreInPrompt", { count: extraLineCount })}</li> : null}

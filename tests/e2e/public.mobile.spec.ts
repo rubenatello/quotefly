@@ -78,6 +78,15 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   await expect(page.getByRole("img", { name: /residential construction worker framing/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /quoting headaches do not/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: "HVAC", exact: true })).toBeVisible();
+  const kodySimulation = page.locator("#kody");
+  await kodySimulation.scrollIntoViewIfNeeded();
+  const kodyControls = kodySimulation.getByRole("group", { name: "Kody scripted workflows" }).getByRole("button");
+  await expect(kodyControls).toHaveCount(3);
+  for (const control of await kodyControls.all()) {
+    expect((await control.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+  await kodySimulation.getByRole("button", { name: "New quote", exact: true }).click();
+  await expect(kodySimulation.getByText("Custom Wooden Dining Table Quote", { exact: true })).toBeVisible();
 
   const fieldImage = page.getByRole("img", { name: /contractor inspecting field equipment/i });
   await fieldImage.scrollIntoViewIfNeeded();
@@ -103,18 +112,22 @@ test("public navigation, services, legal pages, and consent work on mobile", asy
   expect(aboutOverflow).toBeLessThanOrEqual(1);
 
   const tradeRoutes = [
-    ["/solutions/hvac", /HVAC technician servicing/i],
-    ["/solutions/plumbing", /Residential plumber repairing/i],
-    ["/solutions/flooring", /Flooring installer aligning/i],
-    ["/solutions/roofing", /Roofing contractor carrying/i],
-    ["/solutions/landscaping", /Landscaping professional preparing/i],
-    ["/solutions/construction", /Construction professional framing/i],
+    ["/solutions/hvac", "HVAC", /HVAC technician servicing/i],
+    ["/solutions/plumbing", "Plumbing", /Residential plumber repairing/i],
+    ["/solutions/flooring", "Flooring", /Flooring installer aligning/i],
+    ["/solutions/roofing", "Roofing", /Roofing contractor carrying/i],
+    ["/solutions/landscaping", "Landscaping", /Landscaping professional preparing/i],
+    ["/solutions/construction", "Construction", /Construction professional framing/i],
   ] as const;
 
-  for (const [route, imageName] of tradeRoutes) {
+  for (const [route, tradeName, imageName] of tradeRoutes) {
     await page.goto(route);
     await expect(page.getByRole("heading", { level: 1, name: PUBLIC_ROUTE_SEO[route].heading })).toBeVisible();
     await expect(page.getByRole("img", { name: imageName })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `How does QuoteFly help ${tradeName} contractors?` })).toBeVisible();
+    await expect(page.getByRole("list", { name: `${tradeName} customer-to-invoice workflow` }).getByRole("listitem")).toHaveCount(6);
+    await expect(page.getByRole("heading", { name: new RegExp(`Describe the ${tradeName.toLowerCase()} work`, "i") })).toBeVisible();
+    await expect(page.getByText("Important boundary:", { exact: false })).toBeVisible();
     const tradeOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(tradeOverflow).toBeLessThanOrEqual(1);
   }

@@ -146,3 +146,59 @@ test("uses the standard trade catalog with explicit provenance when no tenant pr
   assert.equal((prepared.lines[0]?.unitPrice ?? 0) > 0, true);
   assert.equal(prepared.lines[0]?.unitCost, null);
 });
+
+test("preserves reconciled prompt prices as separate lines without adding catalog matches", async () => {
+  const prepared = await prepareCatalogQuoteLines(fakePrisma([{
+    id: "construction-labor",
+    catalogKey: null,
+    name: "General labor",
+    description: null,
+    category: "LABOR",
+    unitType: "HOUR",
+    defaultQuantity: 1,
+    unitCost: 50,
+    unitPrice: 100,
+  }]), {
+    tenantId: "tenant-1",
+    serviceType: "CONSTRUCTION",
+    prompt: "Custom wooden table with $2000 materials and $1500 labor.",
+    parsedLines: [{
+      description: "Custom wooden table materials",
+      quantity: 1,
+      unitPrice: 2000,
+      sectionType: "INCLUDED",
+      sectionLabel: null,
+      unitType: "FLAT",
+    }, {
+      description: "Custom wooden table labor",
+      quantity: 1,
+      unitPrice: 1500,
+      sectionType: "INCLUDED",
+      sectionLabel: null,
+      unitType: "FLAT",
+    }],
+    estimatedDurationHoursHigh: null,
+    includeInternalCost: true,
+  });
+
+  assert.deepEqual(prepared.lines.map((line) => ({
+    description: line.description,
+    unitPrice: line.unitPrice,
+    unitCost: line.unitCost,
+    sourcePresetId: line.sourcePresetId,
+    priceProvenance: line.priceProvenance,
+  })), [{
+    description: "Custom wooden table materials",
+    unitPrice: 2000,
+    unitCost: null,
+    sourcePresetId: null,
+    priceProvenance: "EXPLICIT_PROMPT",
+  }, {
+    description: "Custom wooden table labor",
+    unitPrice: 1500,
+    unitCost: null,
+    sourcePresetId: null,
+    priceProvenance: "EXPLICIT_PROMPT",
+  }]);
+  assert.deepEqual(prepared.matchedPresetLabels, []);
+});
