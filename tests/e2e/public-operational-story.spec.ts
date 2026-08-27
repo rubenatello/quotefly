@@ -67,6 +67,7 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
     const control = page.getByRole("button", { name: label, exact: true });
     await control.click();
     await expect(control).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(panelSelector)).toHaveAttribute("role", "region");
     await expect(page.locator(panelSelector)).toContainText(resultPattern);
   }
   const solutionsWorkflow = page.locator("#workflow").getByRole("list");

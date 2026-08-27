@@ -292,6 +292,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
                 <div
                   key={scenario.id}
                   id={`kody-panel-${scenario.id}`}
+                  role="region"
                   aria-labelledby={`kody-tab-${scenario.id}`}
                   hidden={scenario.id !== active.id}
                   className="qf-demo-pane-enter"
