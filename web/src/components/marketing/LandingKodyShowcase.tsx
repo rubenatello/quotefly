@@ -8,18 +8,18 @@ import {
   CheckCircle2,
   CircleDollarSign,
   ClipboardCheck,
-  FilePlus2,
   Mail,
   Phone,
   Search,
   ShieldCheck,
-  Sparkles,
   Truck,
-  UserPlus,
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { MarketingFeatureIcon } from "../Icons";
+import { TablerIcons, type QuoteFlyTablerIcon } from "../icon-system";
+import { KodySparkIcon } from "../ai/KodySparkIcon";
 
 type KodyScenarioId = "customer" | "quote" | "attention" | "booking";
 
@@ -29,7 +29,7 @@ type KodyScenario = {
   eyebrow: string;
   prompt: string;
   summary: string;
-  icon: LucideIcon;
+  icon: QuoteFlyTablerIcon;
 };
 
 const KODY_SCENARIOS: readonly KodyScenario[] = [
@@ -39,7 +39,7 @@ const KODY_SCENARIOS: readonly KodyScenario[] = [
     eyebrow: "Customer intake",
     prompt: "Add customer Jon Bacon 555-555-0168 jon.bacon@example.com",
     summary: "Kody separates the contact details and prepares a customer record for review.",
-    icon: UserPlus,
+    icon: TablerIcons.marketing.customer,
   },
   {
     id: "quote",
@@ -47,7 +47,7 @@ const KODY_SCENARIOS: readonly KodyScenario[] = [
     eyebrow: "Quote preparation",
     prompt: "Prepare a construction quote for Rober California: custom dining table, $2,000 materials and $1,500 labor.",
     summary: "Kody matches the customer and turns the scope and prices into editable quote fields.",
-    icon: FilePlus2,
+    icon: TablerIcons.marketing.quote,
   },
   {
     id: "attention",
@@ -55,7 +55,7 @@ const KODY_SCENARIOS: readonly KodyScenario[] = [
     eyebrow: "Workspace review",
     prompt: "Kody, what needs my attention today?",
     summary: "Kody ranks the active tasks assigned to you that are overdue or due today.",
-    icon: ClipboardCheck,
+    icon: TablerIcons.marketing.schedule,
   },
   {
     id: "booking",
@@ -63,7 +63,7 @@ const KODY_SCENARIOS: readonly KodyScenario[] = [
     eyebrow: "Schedule and dispatch review",
     prompt: "Find a 2-hour opening next Thursday between 8 AM and 5 PM for Job #104, then prepare it for review.",
     summary: "Kody checks the assigned team member’s active QuoteFly bookings and prepares up to three non-overlapping openings.",
-    icon: CalendarPlus2,
+    icon: TablerIcons.marketing.work,
   },
 ] as const;
 
@@ -212,7 +212,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
             <div className="rounded-[22px] border border-white/10 bg-white/[0.05] p-5 sm:p-6">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white/[0.08] ring-1 ring-white/15">
-                  <img src="/images/kody/kody-ai-thumbnail.webp" alt="" width="112" height="112" loading="lazy" decoding="async" className="h-10 w-10 object-contain" />
+                  <KodySparkIcon size={34} />
                 </span>
                 <div>
                   <p className="font-bold text-white">Four workflows. One assistant.</p>
@@ -224,7 +224,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
                   const ScenarioIcon = scenario.icon;
                   return (
                     <div key={scenario.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/15 px-4 py-3 text-sm text-slate-200">
-                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-200"><ScenarioIcon size={17} aria-hidden="true" /></span>
+                      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-200"><MarketingFeatureIcon icon={ScenarioIcon} size={18} /></span>
                       <span className="font-semibold">{scenario.label}</span>
                       <CheckCircle2 size={17} className="ml-auto shrink-0 text-quotefly-orange" aria-hidden="true" />
                     </div>
@@ -262,7 +262,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white/[0.08] ring-1 ring-white/15">
-                  <img src="/images/kody/kody-ai-thumbnail.webp" alt="" width="112" height="112" loading="lazy" decoding="async" className="h-10 w-10 object-contain" />
+                  <KodySparkIcon size={34} />
                 </span>
                 <div>
                   <p className="font-bold text-white">Kody workspace preview</p>
@@ -297,7 +297,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
                       }`}
                     >
                       <span className="flex items-center gap-3">
-                        <ScenarioIcon size={18} className={isActive ? "text-blue-300" : "text-slate-400"} aria-hidden="true" />
+                        <MarketingFeatureIcon icon={ScenarioIcon} size={19} className={isActive ? "text-blue-300" : "text-slate-400"} />
                         <span className="font-bold">{scenario.label}</span>
                       </span>
                     </button>
@@ -336,7 +336,7 @@ export function LandingKodyShowcase({ onOpenAuth, variant = "full" }: LandingKod
 
                   <div className="my-4 flex items-center gap-3 px-1 text-xs font-bold uppercase tracking-[0.13em] text-blue-700">
                     <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-blue-100 text-quotefly-blue">
-                      <Sparkles size={16} aria-hidden="true" />
+                      <MarketingFeatureIcon icon={TablerIcons.marketing.ai} size={17} />
                     </span>
                     {scenario.eyebrow}
                     <span className="h-px flex-1 bg-blue-100" aria-hidden="true" />

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { Check, ChevronRight, Hammer, Palette, Plus, RotateCcw, Ruler, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Hammer, Palette, Plus, RotateCcw, Ruler, Trash2 } from "lucide-react";
+import { KodySparkIcon } from "../components/ai/KodySparkIcon";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, ProgressBar, Select, Textarea } from "../components/ui";
 import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
 import {
@@ -772,7 +773,7 @@ export function SetupPage({ session, onSetupSaved }: SetupPageProps) {
               </div>
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
                 <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
-                  <Sparkles size={18} />
+                  <KodySparkIcon size={18} />
                 </div>
                 <div>
                   <p className="font-medium text-slate-900">{t("setup.chatQuote")}</p>

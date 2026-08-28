@@ -202,6 +202,72 @@ describe("AI assistant", () => {
     await prisma.$disconnect();
   });
 
+  test("reports QuickBooks setup deterministically without provider, RAG, or member disclosure", async () => {
+    const owner = await signUp("ai-quickbooks-setup");
+    const member = await addWorkspaceUser(owner, "member");
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId: "realm-kody-must-not-render",
+        environment: "sandbox",
+        companyName: "Kody Secret Accounting Company",
+        status: "CONNECTED",
+        scopes: ["com.intuit.quickbooks.accounting"],
+        accessTokenEncrypted: "encrypted-access-must-not-render",
+        refreshTokenEncrypted: "encrypted-refresh-must-not-render",
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000),
+      },
+    });
+    let compositionCalls = 0;
+    setAssistantCompositionProviderForTest(async () => {
+      compositionCalls += 1;
+      throw new Error("QuickBooks setup status must remain deterministic.");
+    });
+
+    const ownerResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "Is QuickBooks connected and ready?", tool: "AUTO", context: { currentPage: "dashboard" } },
+    });
+    expect(ownerResponse.statusCode).toBe(200);
+    const ownerBody = ownerResponse.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string }>;
+        auditEventId: string;
+        diagnostics: { filters: Record<string, unknown> };
+      };
+      usage: { consumedCredits: number };
+    };
+    expect(ownerBody.assistant.tool).toBe("GET_QUICKBOOKS_SETUP_STATUS");
+    expect(ownerBody.assistant.results[0]).toMatchObject({ phase: "ACTION_REQUIRED", environment: "sandbox" });
+    expect(ownerBody.assistant.actions).toEqual(expect.arrayContaining([expect.objectContaining({ type: "OPEN_QUICKBOOKS_SETUP" })]));
+    expect(ownerBody.assistant.diagnostics.filters).toMatchObject({ modelCalled: false, providerCalled: false, ragCalled: false });
+    expect(ownerBody.usage.consumedCredits).toBe(0);
+    expect(ownerResponse.body).not.toContain("realm-kody-must-not-render");
+    expect(ownerResponse.body).not.toContain("Kody Secret Accounting Company");
+    expect(ownerResponse.body).not.toContain("encrypted-access-must-not-render");
+
+    const audit = await prisma.aiUsageEvent.findUniqueOrThrow({ where: { id: ownerBody.assistant.auditEventId } });
+    expect(audit).toMatchObject({ creditsConsumed: 0, requestCount: 0, classification: "C3_FINANCIAL_CONFIDENTIAL" });
+
+    const memberResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: "Is QuickBooks connected and ready?", tool: "AUTO", context: { currentPage: "dashboard" } },
+    });
+    expect(memberResponse.statusCode).toBe(200);
+    const memberBody = memberResponse.json() as { assistant: { results: unknown[]; actions: Array<{ type: string }> } };
+    expect(memberBody.assistant.results).toEqual([]);
+    expect(memberBody.assistant.actions).toEqual(expect.arrayContaining([expect.objectContaining({ type: "REQUEST_ADMIN_ACCESS" })]));
+    expect(memberResponse.body).not.toContain("sandbox");
+    expect(memberResponse.body).not.toContain("Kody Secret Accounting Company");
+    expect(compositionCalls).toBe(0);
+  });
+
   test("supports one-release missing-key clients across public paid AI routes without weakening explicit validation", async () => {
     const owner = await signUp("ai-idempotency-compatibility");
     const compatibilityHeader = "x-quotefly-ai-idempotency-compatibility";
@@ -4774,9 +4840,9 @@ describe("AI assistant", () => {
     }).toEqual(businessWritesBefore);
 
     for (const message of [
-      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 11 PM to 1 AM`,
-      `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 11 p. m. a 1 a. m.`,
-      `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow from 14:00 to 16:00`,
+      `Book an additional visit for job #${ownerJob.job.jobNumber} on ${openingDate} from 11 PM to 1 AM`,
+      `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} el ${openingDate} de 11 p. m. a 1 a. m.`,
+      `Book an additional visit for job #${ownerJob.job.jobNumber} on ${openingDate} from 14:00 to 16:00`,
     ]) {
       const explicitRange = await app.inject({
         method: "POST",
@@ -4798,12 +4864,12 @@ describe("AI assistant", () => {
       method: "POST",
       url: "/v1/ai/assistant",
       headers: { cookie: owner.cookie },
-      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} tomorrow at 9 AM for 2 hours`, tool: "AUTO", context: { currentPage: "jobs" } },
+      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on ${openingDate} at 8 AM for 2 hours`, tool: "AUTO", context: { currentPage: "jobs" } },
     });
     expect(booking.statusCode).toBe(200);
     const bookingBody = booking.json() as { assistant: { tool: string; answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: Record<string, unknown> }> }; usage: { consumedCredits: number } };
     expect(bookingBody.assistant.tool).toBe("PREPARE_BOOKING");
-    expect(bookingBody.assistant.answer).toMatch(/nothing changed yet/i);
+    expect(bookingBody.assistant.answer).toMatch(/nothing changed/i);
     expect(bookingBody.assistant.actions).toHaveLength(1);
     expect(bookingBody.assistant.actions[0]).toMatchObject({
       type: "OPEN_BOOKING_REVIEW",
@@ -4816,7 +4882,7 @@ describe("AI assistant", () => {
       method: "POST",
       url: "/v1/ai/assistant",
       headers: { cookie: owner.cookie },
-      payload: { message: `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} mañana de 9 a. m. a 11 a. m.`, tool: "AUTO", context: { currentPage: "jobs" } },
+      payload: { message: `Programa una visita adicional para el trabajo #${ownerJob.job.jobNumber} el ${openingDate} de 8 a. m. a 10 a. m.`, tool: "AUTO", context: { currentPage: "jobs" } },
     });
     expect(spanishBooking.statusCode).toBe(200);
     expect(spanishBooking.json()).toMatchObject({

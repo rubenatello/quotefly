@@ -22,6 +22,8 @@ import { LanguageSelector } from "../components/settings/LanguageSelector";
 import { notify } from "../lib/notifications";
 import { aiUsageProgressTone, formatAiUsageBreakdown } from "../lib/ai-credits";
 import { localizedApiError } from "../lib/localized-api-error";
+import { QuickBooksSetupPanel } from "../components/integrations/QuickBooksSetupPanel";
+import { isTrustedQuickBooksAuthorizationUrl, normalizeQuickBooksStatusPayload } from "../lib/quickbooks";
 
 interface AdminPageProps {
   session?: {
@@ -49,6 +51,7 @@ type NewUserForm = {
 };
 
 type BillingAction = PlanCode | "portal" | null;
+type QuickBooksAction = "connect" | "confirm" | "disconnect" | null;
 
 type PlanCard = {
   code: PlanCode;
@@ -192,6 +195,7 @@ function integrationNoticeText(code: string | null, t: TFunction): string | null
   if (code === "quickbooks_denied") return t("admin.notices.quickBooksDenied");
   if (code === "quickbooks_invalid_state") return t("admin.notices.quickBooksInvalid");
   if (code === "quickbooks_realm_in_use") return t("admin.notices.quickBooksInUse");
+  if (code === "quickbooks_disconnect_pending") return t("admin.notices.quickBooksDisconnectPending");
   if (code === "quickbooks_not_configured") return t("admin.notices.quickBooksUnavailable");
   if (code === "quickbooks_error") return t("admin.notices.quickBooksError");
   return null;
@@ -249,6 +253,10 @@ export function AdminPage({ session }: AdminPageProps) {
   const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
   const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
   const [quickBooksLoading, setQuickBooksLoading] = useState(true);
+  const [quickBooksError, setQuickBooksError] = useState<string | null>(null);
+  const [quickBooksAction, setQuickBooksAction] = useState<QuickBooksAction>(null);
+  const [confirmQuickBooksSetupOpen, setConfirmQuickBooksSetupOpen] = useState(false);
+  const [disconnectQuickBooksOpen, setDisconnectQuickBooksOpen] = useState(false);
   const memberRequestIdRef = useRef(0);
   const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
@@ -308,15 +316,78 @@ export function AdminPage({ session }: AdminPageProps) {
     }
 
     setQuickBooksLoading(true);
+    setQuickBooksError(null);
     try {
       const result = await api.integrations.quickbooks.status();
-      setQuickBooksStatus(result);
+      const normalizedStatus = normalizeQuickBooksStatusPayload(result);
+      if (!normalizedStatus) {
+        setQuickBooksStatus(null);
+        setQuickBooksError(t("admin.quickBooksSetup.loadError"));
+        return;
+      }
+      setQuickBooksStatus(normalizedStatus);
     } catch (err) {
-      setError(localizedApiError(err, t, { fallbackKey: "admin.errors.loadQuickBooks" }));
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "admin.errors.loadQuickBooks" }));
     } finally {
       setQuickBooksLoading(false);
     }
   }, [canManageQuickBooks, t]);
+
+  const startQuickBooksConnection = useCallback(async () => {
+    setQuickBooksAction("connect");
+    setQuickBooksError(null);
+    try {
+      const result = await api.integrations.quickbooks.connect();
+      if (!isTrustedQuickBooksAuthorizationUrl(result.authorizationUrl)) {
+        throw new Error(t("admin.quickBooksSetup.untrustedAuthorizationUrl"));
+      }
+      window.location.assign(result.authorizationUrl);
+    } catch (err) {
+      setQuickBooksError(
+        err instanceof Error && err.message === t("admin.quickBooksSetup.untrustedAuthorizationUrl")
+          ? err.message
+          : localizedApiError(err, t, { fallbackKey: "admin.quickBooksSetup.connectError" }),
+      );
+      setQuickBooksAction(null);
+    }
+  }, [t]);
+
+  const confirmQuickBooksSetup = useCallback(async () => {
+    if (!quickBooksStatus) return;
+    setQuickBooksAction("confirm");
+    setQuickBooksError(null);
+    try {
+      await api.integrations.quickbooks.confirmSetup({
+        checklistVersion: quickBooksStatus.setup.checklistVersion,
+        companyConfirmed: true,
+        reviewResponsibilityConfirmed: true,
+      });
+      setConfirmQuickBooksSetupOpen(false);
+      setNotice(t("admin.notices.quickBooksSetupConfirmed"));
+      await loadQuickBooksStatus();
+    } catch (err) {
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "admin.quickBooksSetup.confirmError" }));
+    } finally {
+      setQuickBooksAction(null);
+    }
+  }, [loadQuickBooksStatus, quickBooksStatus, t]);
+
+  const disconnectQuickBooks = useCallback(async () => {
+    setQuickBooksAction("disconnect");
+    setQuickBooksError(null);
+    try {
+      const result = await api.integrations.quickbooks.disconnect();
+      setDisconnectQuickBooksOpen(false);
+      setNotice(result.revocationPending
+        ? t("admin.notices.quickBooksDisconnectPending")
+        : t("admin.notices.quickBooksDisconnected"));
+      await loadQuickBooksStatus();
+    } catch (err) {
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "admin.quickBooksSetup.disconnectError" }));
+    } finally {
+      setQuickBooksAction(null);
+    }
+  }, [loadQuickBooksStatus, t]);
 
   useEffect(() => {
     setSEOMetadata({
@@ -329,6 +400,16 @@ export function AdminPage({ session }: AdminPageProps) {
   useEffect(() => {
     void loadMembers();
   }, [loadMembers]);
+
+  useEffect(() => {
+    if (location.hash !== "#admin-quickbooks") return;
+    const frame = window.requestAnimationFrame(() => {
+      const section = document.getElementById("admin-quickbooks");
+      section?.scrollIntoView({ behavior: "smooth", block: "start" });
+      section?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash, quickBooksLoading]);
 
   useEffect(() => {
     const billingState = new URLSearchParams(location.search).get("billing");
@@ -852,60 +933,20 @@ export function AdminPage({ session }: AdminPageProps) {
             id="admin-quickbooks"
             step={t("admin.accounting.step")}
             title={t("admin.accounting.title")}
-            description={starterLaunchMode ? t("admin.accounting.basicDescription") : t("admin.accounting.advancedDescription")}
-            actions={<Badge tone="amber">{t("admin.accounting.roadmap")}</Badge>}
+            description={t("admin.quickBooksSetup.sectionDescription")}
+            actions={quickBooksStatus ? <Badge tone={quickBooksStatus.setup.confirmed ? "emerald" : quickBooksStatus.setup.phase === "UNAVAILABLE" ? "red" : "amber"}>{t(`admin.quickBooksSetup.phases.${quickBooksStatus.setup.phase === "UNAVAILABLE" ? "unavailable" : quickBooksStatus.setup.phase === "NOT_CONNECTED" ? "notConnected" : quickBooksStatus.setup.phase === "ACTION_REQUIRED" ? "actionRequired" : quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "readyToConfirm" : "confirmed"}`)}</Badge> : undefined}
           >
-            <Card variant="elevated" padding="lg">
-        <CardHeader
-          title={t("admin.accounting.roadmapTitle")}
-          subtitle={starterLaunchMode ? t("admin.accounting.basicRoadmap") : t("admin.accounting.advancedRoadmap")}
-        />
-
-        <div className="flex flex-wrap gap-2">
-          <Badge tone="blue">{t("admin.accounting.pdfLive")}</Badge>
-          <Badge tone="blue">{t("admin.accounting.pipelineLive")}</Badge>
-          <Badge tone="orange">{t("admin.accounting.syncLater")}</Badge>
-        </div>
-
-        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
-          <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("admin.accounting.shipsNow")}</p>
-            <div className="mt-3 grid gap-2 text-sm text-slate-700">
-              <p><span className="font-semibold text-slate-900">{t("admin.accounting.pipelineLabel")}</span> {t("admin.accounting.pipelineText")}</p>
-              <p><span className="font-semibold text-slate-900">{t("admin.accounting.quoteLabel")}</span> {t("admin.accounting.quoteText")}</p>
-              <p><span className="font-semibold text-slate-900">{t("admin.accounting.teamLabel")}</span> {t("admin.accounting.teamText")}</p>
-              <p><span className="font-semibold text-slate-900">{t("admin.accounting.exportsLabel")}</span> {t("admin.accounting.exportsText")}</p>
-            </div>
-          </div>
-
-          <Card variant="default" padding="md">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{t("admin.accounting.laterRelease")}</p>
-            <div className="mt-3 space-y-3 text-sm text-slate-600">
-              <p>{t("admin.accounting.laterDescription")}</p>
-              <ul className="space-y-2 text-sm text-slate-700">
-                <li>- {t("admin.accounting.quickBooks")}</li>
-                <li>- {t("admin.accounting.invoice")}</li>
-                <li>- {t("admin.accounting.automation")}</li>
-              </ul>
-              {!canManageQuickBooks ? (
-                <p className="text-xs text-slate-500">{t("admin.accounting.managerFoundation")}</p>
-              ) : quickBooksLoading ? (
-                <p className="text-xs text-slate-400">{t("admin.accounting.checking")}</p>
-              ) : (
-                <p className="text-xs text-slate-500">
-                  {t("admin.accounting.foundation", {
-                    status: !quickBooksStatus?.configured
-                      ? t("admin.accounting.notConfigured")
-                      : !quickBooksStatus.providerWorkflowsEnabled
-                        ? t("admin.accounting.workflowsPaused")
-                        : t("admin.accounting.configured"),
-                  })}
-                </p>
-              )}
-            </div>
-          </Card>
-        </div>
-            </Card>
+            <QuickBooksSetupPanel
+              canManage={canManageQuickBooks}
+              status={quickBooksStatus}
+              loading={quickBooksLoading}
+              error={quickBooksError}
+              action={quickBooksAction}
+              onRetry={() => void loadQuickBooksStatus()}
+              onConnect={() => void startQuickBooksConnection()}
+              onConfirm={() => setConfirmQuickBooksSetupOpen(true)}
+              onDisconnect={() => setDisconnectQuickBooksOpen(true)}
+            />
           </WorkspaceSection>
           ) : null}
 
@@ -1118,6 +1159,26 @@ export function AdminPage({ session }: AdminPageProps) {
         </div>
       </div>
 
+      <ConfirmModal
+        open={confirmQuickBooksSetupOpen}
+        onClose={() => setConfirmQuickBooksSetupOpen(false)}
+        onConfirm={() => void confirmQuickBooksSetup()}
+        title={t("admin.quickBooksSetup.confirmTitle")}
+        description={t("admin.quickBooksSetup.confirmDescription", { company: quickBooksStatus?.connection?.companyName ?? t("admin.quickBooksSetup.connectedCompany") })}
+        confirmLabel={t("admin.quickBooksSetup.confirmButton")}
+        confirmVariant="success"
+        loading={quickBooksAction === "confirm"}
+      />
+      <ConfirmModal
+        open={disconnectQuickBooksOpen}
+        onClose={() => setDisconnectQuickBooksOpen(false)}
+        onConfirm={() => void disconnectQuickBooks()}
+        title={t("admin.quickBooksSetup.disconnectTitle")}
+        description={t("admin.quickBooksSetup.disconnectDescription")}
+        confirmLabel={t("admin.quickBooksSetup.disconnectButton")}
+        confirmVariant="warning"
+        loading={quickBooksAction === "disconnect"}
+      />
       <ConfirmModal
         open={pendingRemovalMember !== null}
         onClose={() => setPendingRemovalMember(null)}

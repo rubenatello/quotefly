@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest"
 import { buildServer } from "../../src/app";
 import { env } from "../../src/config/env";
 import { prisma } from "../../src/lib/prisma";
+import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 
 type Session = {
   cookie: string;
@@ -125,23 +126,71 @@ describe("superuser data-governance control plane", () => {
         notes: "Never expose this tenant note from the control plane.",
       },
     });
+    const otherMembership = await prisma.tenantUser.findUniqueOrThrow({
+      where: { tenantId_userId: { tenantId: other.tenant.id, userId: other.user.id } },
+      select: { id: true },
+    });
+    const quickBooksRealm = "realm-superuser-must-not-render";
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: other.tenant.id,
+        realmId: quickBooksRealm,
+        environment: "sandbox",
+        companyName: "Private QuickBooks Company",
+        status: "CONNECTED",
+        scopes: ["com.intuit.quickbooks.accounting"],
+        accessTokenEncrypted: "encrypted-access-superuser-sentinel",
+        refreshTokenEncrypted: "encrypted-refresh-superuser-sentinel",
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000),
+        setupConfirmedAtUtc: new Date(),
+        setupConfirmedByTenantUserId: otherMembership.id,
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+        realmBinding: { create: { realmId: quickBooksRealm, active: true } },
+        cdcCursor: { create: { changedSinceUtc: new Date() } },
+      },
+    });
 
     const tenantsResponse = await app.inject({
       method: "GET",
-      url: "/v1/internal/control-plane/tenants?lifecycle=all&limit=25&search=Private",
+      url: "/v1/internal/control-plane/tenants?lifecycle=all&quickBooks=confirmed&limit=25&search=Private",
       headers: { cookie: superuser.cookie },
     });
     expect(tenantsResponse.statusCode).toBe(200);
+    expect(tenantsResponse.headers["cache-control"]).toBe("private, no-store");
     const tenantBody = tenantsResponse.json() as {
       tenants: Array<Record<string, unknown>>;
       fieldsExcluded: string[];
     };
     expect(tenantBody.tenants).toHaveLength(1);
+    expect(tenantBody.tenants[0]).toMatchObject({
+      quickBooks: {
+        present: true,
+        status: "CONNECTED",
+        setupPhase: "CONFIRMED",
+        environment: "sandbox",
+      },
+    });
     expect(tenantBody.fieldsExcluded).toContain("customer records");
     expect(tenantsResponse.body).not.toContain(privateOwnerEmail);
     expect(tenantsResponse.body).not.toContain(privateCustomerEmail);
     expect(tenantsResponse.body).not.toContain(privateProviderId);
     expect(tenantsResponse.body).not.toContain("Never expose this tenant note");
+    expect(tenantsResponse.body).not.toContain(quickBooksRealm);
+    expect(tenantsResponse.body).not.toContain("Private QuickBooks Company");
+    expect(tenantsResponse.body).not.toContain("encrypted-access-superuser-sentinel");
+    expect(tenantsResponse.body).not.toContain("encrypted-refresh-superuser-sentinel");
+    expect(tenantsResponse.body).not.toContain("com.intuit.quickbooks.accounting");
+
+    const summaryResponse = await app.inject({
+      method: "GET",
+      url: "/v1/internal/control-plane/summary",
+      headers: { cookie: superuser.cookie },
+    });
+    expect(summaryResponse.statusCode).toBe(200);
+    expect(summaryResponse.headers["cache-control"]).toBe("private, no-store");
+    expect(summaryResponse.json()).toMatchObject({
+      totals: { quickBooksConnectedTenants: 1, quickBooksConfirmedTenants: 1, quickBooksReadyTenants: 1 },
+    });
 
     const catalogResponse = await app.inject({
       method: "GET",
@@ -405,8 +454,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 48,
-      fieldCount: 741,
+      modelCount: 53,
+      fieldCount: 828,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

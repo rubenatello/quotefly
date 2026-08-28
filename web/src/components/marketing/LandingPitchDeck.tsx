@@ -2,7 +2,6 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import {
   ArrowLeft,
   ArrowRight,
-  Bot,
   CircleCheck,
   ClipboardCheck,
   Search,
@@ -11,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { KodySparkIcon } from "../ai/KodySparkIcon";
 import { MarketingAction } from "./PublicPageLayout";
 
 type PitchSlide = {
@@ -20,7 +20,7 @@ type PitchSlide = {
   description: string;
   image: string;
   imageAlt: string;
-  icon: LucideIcon;
+  icon: LucideIcon | typeof KodySparkIcon;
   accent: "blue" | "orange" | "emerald";
   highlights: readonly string[];
 };
@@ -46,7 +46,7 @@ const PITCH_SLIDES: readonly PitchSlide[] = [
       "Kody can help find the right customer, organize a rough scope, suggest quote items, and surface follow-up work. It accelerates familiar steps without replacing trade judgment.",
     image: "/quote-workflow.jpg",
     imageAlt: "QuoteFly customer, estimate builder, and quote preview workflow",
-    icon: Bot,
+    icon: KodySparkIcon,
     accent: "blue",
     highlights: ["Uses your workspace context", "Drafts, not decisions", "No blank-page slowdown"],
   },

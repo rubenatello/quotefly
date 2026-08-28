@@ -63,6 +63,10 @@ import { createAiQuoteProviderBudget, createAiTelemetryAccumulator } from "../se
 import { parseChatToQuotePrompt } from "../services/chat-to-quote";
 import { AiUsageLedgerError } from "../services/ai-usage-ledger";
 import { prepareQuoteReview, type QuotePreparationResult } from "../services/quote-preparation";
+import {
+  deriveQuickBooksSetupReadiness,
+  type QuickBooksSetupRuntime,
+} from "../services/quickbooks-setup";
 import { visibleJobWhere } from "../services/jobs";
 import type { SupportedLocale } from "./supported-locale";
 
@@ -97,6 +101,7 @@ export type AiAssistantAction = Readonly<{
     | "OPEN_QUOTE_SEND"
     | "OPEN_ANALYTICS"
     | "OPEN_WORKSPACE_PAGE"
+    | "OPEN_QUICKBOOKS_SETUP"
     | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
@@ -153,6 +158,7 @@ export type AiAssistantInput = Readonly<{
   now?: Date;
   usageSnapshot?: MonthlyAiUsageSnapshot;
   preferredLocale?: SupportedLocale;
+  quickBooksRuntime?: QuickBooksSetupRuntime;
 }>;
 
 const DEFAULT_CUSTOMER_LIMIT = 5;
@@ -209,6 +215,8 @@ const JOB_STATUS_INTENT_PATTERN = /\b(?:status|state|progress|where\s+(?:is|are)
 const JOB_SEARCH_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|abrir|abre|cual|cuales|que)\b.{0,72}\b(?:jobs?|work\s+orders?|trabajos?|obras?)\b|\b(?:jobs?|work\s+orders?|trabajos?|obras?)\b.{0,72}\b(?:find|search|look\s*up|show|list|open|buscar|busca|mostrar|muestra|muestrame|listar|lista|abrir|abre)\b/i;
 const INVOICE_STATUS_INTENT_PATTERN = /\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b.{0,72}\b(?:invoice|bill|factura|cobro)\b|\b(?:invoice|bill|factura|cobro)\b.{0,72}\b(?:status|state|payment|paid|balance|due|overdue|estado|pago|pagada?|saldo|vence|vencida?)\b/i;
 const INVOICE_LIST_INTENT_PATTERN = /\b(?:find|search|look\s*up|show|list|open|which|what|buscar|busca|encontrar|encuentra|mostrar|muestra|muestrame|listar|lista|abrir|abre|cual|cuales|que)\b.{0,72}\b(?:invoices?|bills?|facturas?|cobros?)\b|\b(?:invoices?|bills?|facturas?|cobros?)\b.{0,72}\b(?:find|search|look\s*up|show|list|open|buscar|busca|mostrar|muestra|muestrame|listar|lista|abrir|abre)\b/i;
+const QUICKBOOKS_SETUP_INTENT_PATTERN =
+  /\bquickbooks\b.{0,80}\b(?:setup|set\s+up|connected|connection|integration|ready|configured|configuration|finish|status|health|sync|confirm(?:ed|ation)?|configurar|configuracion|conectad[ao]|conexion|integracion|listo|estado|sincronizacion|confirmad[ao])\b|\b(?:setup|set\s+up|connected|connection|integration|ready|configured|configuration|finish|status|health|sync|confirm(?:ed|ation)?|configurar|configuracion|conectad[ao]|conexion|integracion|listo|estado|sincronizacion|confirmad[ao])\b.{0,80}\bquickbooks\b/i;
 const QUOTE_DRAFT_INTENT_PATTERN = /\b(quote|estimate|draft|bid|proposal|new\s+job|sq\s*ft|sqft|roof|roofing|floor|flooring|hvac|plumb|plumbing|landscap|construction|cotizacion|presupuesto|estimado|propuesta|borrador|nuevo\s+trabajo|pies?\s+cuadrados?|techo|techado|piso|pisos|plomeria|jardineria|paisajismo|construccion)\b/i;
 const QUOTE_DRAFT_COMMAND_PATTERN =
   /(?:\b(?:draft|prepare|create|make|write|build|start|prepara|preparar|crea|crear|haz|hacer|let(?:s|\s+us)?\s+do)\b.{0,72}\b(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:\b(?:need\s+(?:a|an|new)|necesito\s+(?:un|una|nuevo|nueva))\s+(?:[a-z0-9-]+\s+){0,3}(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\b)|(?:^(?:please\s+)?(?:new\s+)?(?:quote|estimate|bid|proposal|cotizacion|presupuesto|estimado|propuesta)\s+(?:for|with|covering|para|con|sobre)\b)/i;
@@ -941,6 +949,7 @@ export function resolveAssistantTool(
   if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
   if (previousTool === "PREPARE_BOOKING" && BOOKING_FOLLOW_UP_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
   const autoSelectOperationalLookup = !requestedTool || requestedTool === "AUTO";
+  if (QUICKBOOKS_SETUP_INTENT_PATTERN.test(routingMessage)) return "GET_QUICKBOOKS_SETUP_STATUS";
   if (autoSelectOperationalLookup && INVOICE_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_INVOICE_STATUS";
   if (autoSelectOperationalLookup && INVOICE_LIST_INTENT_PATTERN.test(routingMessage)) return "LIST_INVOICES";
   if (autoSelectOperationalLookup && JOB_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_JOB_STATUS";
@@ -985,6 +994,7 @@ export function resolveAssistantTool(
       || PREPARE_BOOKING_INTENT_PATTERN.test(lower)
       || LIST_SCHEDULE_INTENT_PATTERN.test(lower)
       || INVOICE_STATUS_INTENT_PATTERN.test(lower)
+      || QUICKBOOKS_SETUP_INTENT_PATTERN.test(lower)
       || INVOICE_LIST_INTENT_PATTERN.test(lower)
       || JOB_STATUS_INTENT_PATTERN.test(lower)
       || JOB_SEARCH_INTENT_PATTERN.test(lower)
@@ -1011,6 +1021,7 @@ export function resolveAssistantTool(
   if (PREPARE_BOOKING_INTENT_PATTERN.test(lower)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(lower)) return "LIST_SCHEDULE";
   if (INVOICE_STATUS_INTENT_PATTERN.test(lower)) return "GET_INVOICE_STATUS";
+  if (QUICKBOOKS_SETUP_INTENT_PATTERN.test(lower)) return "GET_QUICKBOOKS_SETUP_STATUS";
   if (INVOICE_LIST_INTENT_PATTERN.test(lower)) return "LIST_INVOICES";
   if (JOB_STATUS_INTENT_PATTERN.test(lower)) return "GET_JOB_STATUS";
   if (JOB_SEARCH_INTENT_PATTERN.test(lower)) return "SEARCH_JOBS";
@@ -1088,6 +1099,7 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "GET_JOB_STATUS",
     "LIST_INVOICES",
     "GET_INVOICE_STATUS",
+    "GET_QUICKBOOKS_SETUP_STATUS",
     "PREPARE_BOOKING",
     "PREPARE_DISPATCH",
     "SEARCH_PRODUCTS",
@@ -2086,6 +2098,164 @@ async function runInvoiceLookup(
           includeArchivedEffective: false,
           resultsTruncated: invoicesTruncated,
         },
+      }),
+    },
+  };
+}
+
+async function runQuickBooksSetupStatus(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "manageIntegrations")) {
+    const answer = localeText(
+      params,
+      "QuickBooks setup details are available only to workspace owners and admins. Ask one of them to review the integration in Settings.",
+      "Los detalles de configuracion de QuickBooks solo estan disponibles para propietarios y administradores. Pidele a uno que revise la integracion en Configuracion.",
+    );
+    const event = await createAssistantUsageEvent(prisma, {
+      access: params.access,
+      actor: params.actor,
+      message: params.message,
+      answer,
+      classification: "C3_FINANCIAL_CONFIDENTIAL",
+      sourceTypes: ["QuickBooksSetupReadiness"],
+      sourceLabels: ["QuickBooks setup access denied"],
+      creditsConsumed: 0,
+      telemetry: ZERO_AI_TELEMETRY,
+      confidenceLevel: "high",
+      confidenceLabel: "Deterministic integration authorization",
+      riskNote: "Denied before retrieving any QuickBooks connection state because the live role cannot manage integrations.",
+    });
+    return {
+      consumedCredits: 0,
+      consumedSpendUsd: 0,
+      assistant: {
+        tool: "GET_QUICKBOOKS_SETUP_STATUS",
+        generatedAtUtc,
+        policyVersion: AI_DATA_POLICY_VERSION,
+        maxClassification: "C3_FINANCIAL_CONFIDENTIAL",
+        answer,
+        results: [],
+        citations: [],
+        actions: [{
+          type: "REQUEST_ADMIN_ACCESS",
+          label: localeText(params, "Ask an admin to review QuickBooks", "Pedir a un administrador que revise QuickBooks"),
+          requiresConfirmation: true,
+          payload: { capability: "manageIntegrations" },
+        }],
+        auditEventId: event.id,
+        fieldsExcluded: [...defaultExcludedFields(false), "all QuickBooks connection state"],
+        diagnostics: diagnostics({
+          input: params,
+          resolvedTool: "GET_QUICKBOOKS_SETUP_STATUS",
+          resultCount: 0,
+          citationCount: 0,
+          emptyReason: "The live role cannot manage integrations; no QuickBooks rows were retrieved.",
+          archivePolicy: "Role denial occurs before QuickBooks setup retrieval.",
+          filters: { managerAccess: false, modelCalled: false, providerCalled: false },
+        }),
+      },
+    };
+  }
+
+  const connection = await withTenantRlsContext(prisma, params.access.tenantId, (transaction) =>
+    transaction.quickBooksConnection.findFirst({
+      where: { tenantId: params.access.tenantId, deletedAtUtc: null },
+      select: {
+        status: true,
+        environment: true,
+        scopes: true,
+        accessTokenEncrypted: true,
+        refreshTokenEncrypted: true,
+        accessTokenExpiresAtUtc: true,
+        setupConfirmedAtUtc: true,
+        setupConfirmedByTenantUserId: true,
+        setupChecklistVersion: true,
+        realmBinding: { select: { active: true } },
+        cdcCursor: { select: { id: true } },
+      },
+    }),
+  );
+  const setup = deriveQuickBooksSetupReadiness(params.quickBooksRuntime ?? {
+    providerConfigured: false,
+    providerWorkflowsEnabled: false,
+    webhookConfigured: false,
+    environment: env.QUICKBOOKS_ENVIRONMENT,
+  }, connection);
+  const answer = setup.phase === "CONFIRMED"
+    ? localeText(params, "QuickBooks setup is confirmed and ready for reviewed invoice sync.", "La configuracion de QuickBooks esta confirmada y lista para sincronizar facturas revisadas.")
+    : setup.phase === "READY_FOR_CONFIRMATION"
+      ? localeText(params, "QuickBooks is connected and ready for an owner or admin to confirm the setup checklist in Settings.", "QuickBooks esta conectado y listo para que un propietario o administrador confirme la lista de configuracion.")
+      : setup.phase === "NOT_CONNECTED"
+        ? localeText(params, "QuickBooks is not connected yet. An owner or admin can start setup in Settings.", "QuickBooks aun no esta conectado. Un propietario o administrador puede iniciar la configuracion.")
+        : setup.phase === "UNAVAILABLE"
+          ? localeText(params, "QuickBooks setup is currently unavailable while QuoteFly provider configuration or workflows are paused.", "La configuracion de QuickBooks no esta disponible mientras la configuracion del proveedor o los flujos de QuoteFly estan pausados.")
+          : localeText(params, "QuickBooks needs attention before setup can be confirmed. Open Settings to see the exact readiness checks.", "QuickBooks necesita atencion antes de confirmar la configuracion. Abre Configuracion para ver las verificaciones.");
+  const result = {
+    phase: setup.phase,
+    ready: setup.ready,
+    confirmed: setup.confirmed,
+    environment: connection?.environment ?? params.quickBooksRuntime?.environment ?? null,
+    connectionStatus: connection?.status ?? null,
+    setupConfirmedAtUtc: setup.confirmedAtUtc?.toISOString() ?? null,
+    failedCheckCount: setup.checks.filter((check) => !check.passed).length,
+  };
+  const citation: AiAssistantCitation = {
+    key: "Q1",
+    label: localeText(params, "Authorized QuickBooks setup readiness", "Estado autorizado de configuracion de QuickBooks"),
+    sourceType: "QuickBooksSetupReadiness",
+    classification: "C3_FINANCIAL_CONFIDENTIAL",
+  };
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    classification: "C3_FINANCIAL_CONFIDENTIAL",
+    sourceTypes: ["QuickBooksConnection", "QuickBooksRealmBinding", "QuickBooksCdcCursor"],
+    sourceLabels: ["Authorized deterministic QuickBooks setup readiness"],
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: "high",
+    confidenceLabel: "Deterministic setup readiness",
+    riskNote: "Tenant-scoped setup metadata was projected without provider calls, vector retrieval, credentials, realm identifiers, company names, scopes, or raw errors.",
+  });
+
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "GET_QUICKBOOKS_SETUP_STATUS",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C3_FINANCIAL_CONFIDENTIAL",
+      answer,
+      results: [result],
+      citations: [citation],
+      actions: [{
+        type: "OPEN_QUICKBOOKS_SETUP",
+        label: localeText(params, "Open QuickBooks setup", "Abrir configuracion de QuickBooks"),
+        requiresConfirmation: false,
+        payload: { section: "admin-quickbooks" },
+      }],
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "QuickBooks realm and provider identifiers",
+        "QuickBooks company name",
+        "OAuth credentials and scopes",
+        "raw provider errors",
+        "vector RAG retrieval",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "GET_QUICKBOOKS_SETUP_STATUS",
+        resultCount: 1,
+        citationCount: 1,
+        archivePolicy: "Only the active tenant connection is considered; no provider or RAG retrieval occurs.",
+        filters: { managerAccess: true, modelCalled: false, providerCalled: false, ragCalled: false },
       }),
     },
   };
@@ -5207,6 +5377,8 @@ export async function runAiAssistant(
     result = await runJobLookup(prisma, params, generatedAtUtc, tool);
   } else if (tool === "LIST_INVOICES" || tool === "GET_INVOICE_STATUS") {
     result = await runInvoiceLookup(prisma, params, generatedAtUtc, tool);
+  } else if (tool === "GET_QUICKBOOKS_SETUP_STATUS") {
+    result = await runQuickBooksSetupStatus(prisma, params, generatedAtUtc);
   } else if (tool === "SUMMARIZE_PIPELINE") {
     result = await runBusinessInsightTool(prisma, params, generatedAtUtc, "SUMMARIZE_PIPELINE");
   } else if (tool === "RANK_PROFITABLE_JOBS") {

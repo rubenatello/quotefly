@@ -49,6 +49,8 @@ QUICKBOOKS_CLIENT_SECRET=...
 QUICKBOOKS_ENVIRONMENT=production
 QUICKBOOKS_REDIRECT_URI=https://api.quotefly.us/v1/integrations/quickbooks/callback
 QUICKBOOKS_WEBHOOK_VERIFIER=...
+QUICKBOOKS_TOKEN_ENCRYPTION_KEY=...
+QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS=
 ```
 
 ### Getting your OpenAI API key
@@ -70,13 +72,29 @@ QUICKBOOKS_WEBHOOK_VERIFIER=...
 7. Enable the separate index worker only after its deployment, heartbeat, mutation coverage, stale-lease recovery, and rollback evidence are complete.
 
 ### QuickBooks app setup
+
+The hosted-payment work is an engineering candidate, not an available integration. No sandbox or production result is claimed.
+
 1. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every release environment.
-2. Do not complete OAuth consent, subscribe provider webhooks, push invoices, or market direct QuickBooks Online sync for this release.
-3. Inventory any retained provider credentials or connections because rolling back to a pre-containment binary could reopen provider calls.
+2. Do not complete OAuth consent, subscribe provider webhooks, push invoices, retrieve/share hosted links, record provider payments, or market direct QuickBooks Online sync for this release.
+3. Keep taxable publishing blocked until a separate accounting-reviewed tax contract is approved.
 4. Use the QuickBooks-friendly CSV export as the supported handoff.
-5. Current containment runbook: `docs/integrations/quickbooks-owner-setup.md`
-6. Authoritative provider status: `docs/integrations/quickbooks-api-progress.md`
-7. Online/Desktop architecture is long-term context only: `docs/integrations/quickbooks-online-desktop-architecture.md`
+5. Read the acceptance contract: `docs/integrations/quickbooks-hosted-payments-reconciliation.md`.
+6. Use `docs/integrations/quickbooks-owner-setup.md` for containment, credential inventory, monitoring, revocation, and rollback.
+7. Use `docs/integrations/quickbooks-owner-testing-checklist.md` only after explicit authorization for an Intuit sandbox run.
+8. Treat `docs/integrations/quickbooks-api-progress.md` as authoritative provider status; Online/Desktop architecture remains long-term context only.
+
+Before requesting a sandbox authorization, the owner must provide dated, sanitized evidence for:
+
+- the exact candidate SHA and a passing `npm run verify` plus database-backed `npm run verify:launch` on that SHA;
+- a production-like migration rehearsal covering billing-email backfill, index/foreign-key changes, forced RLS, non-owner runtime access, backup restore, and forward-fix compatibility;
+- the Intuit sandbox app, exact HTTPS callback, webhook endpoint/verifier, approved scopes, dedicated test company, and QuickBooks Payments sandbox eligibility;
+- an independent token-encryption key, key rotation procedure, client-secret rotation, token revocation, and `REVOCATION_PENDING` recovery;
+- named alert owners/destinations for webhook queue age/retries/dead letters, uncertain operations, token failures, CDC lag, and provider latency/errors;
+- a sanitized test plan for reviewed mapping, one non-taxable invoice, hosted link, partial/full payment, refund/reversal, void, duplicate/out-of-order webhook, dropped-webhook CDC repair, and timeout/restart recovery;
+- Sentinel review and independent Opera approval of the complete provider/payment candidate.
+
+Sandbox authorization does not authorize production credentials, production migrations, production OAuth, production webhook subscriptions, customer exposure, or marketing. Production additionally requires Intuit app approval, QuickBooks Payments merchant eligibility, fee/settlement ownership, verified backup/restore, support escalation, credential-safe rollback, and a separately authorized limited pilot.
 
 ### AI Models Approved for Production
 
@@ -102,7 +120,7 @@ For staging and production, use checked-in migrations only:
 npm run prisma:migrate:deploy
 ```
 
-Follow `docs/billing-integrity-rollout.md` for the current billing migration. Do not run `migrate dev`, reconciliation, or ad-hoc SQL against production.
+Follow `docs/billing-integrity-rollout.md` for the current billing migration. The hosted-payment candidate additionally requires the coordinated migration rehearsal in `docs/integrations/quickbooks-api-progress.md`; after its forced RLS is active, prefer a forward fix and do not route an older binary unless compatibility is independently proven. Do not run `migrate dev`, reconciliation, or ad-hoc SQL against production.
 
 ## 3. Public Pages and App Fallback
 

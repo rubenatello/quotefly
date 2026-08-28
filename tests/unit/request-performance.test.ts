@@ -6,6 +6,7 @@ import {
   measureRequestPerformance,
   startRequestPerformance,
 } from "../../src/lib/request-performance";
+import { safeRequestLogSerializer } from "../../src/lib/request-logging";
 
 const openApps: Array<ReturnType<typeof Fastify>> = [];
 
@@ -52,4 +53,16 @@ test("server timing can be exposed for local diagnostics without path data", asy
   assert.match(response.headers["x-request-id"] as string, /\S/);
   assert.match(response.headers["server-timing"] as string, /^app;dur=\d+(?:\.\d+)?, db;dur=\d+(?:\.\d+)?, rate_limit;dur=\d+(?:\.\d+)?$/);
   assert.doesNotMatch(response.headers["server-timing"] as string, /secret-customer-id/);
+});
+
+test("request logging strips OAuth credentials and customer PII from query strings", () => {
+  const serialized = safeRequestLogSerializer({
+    method: "GET",
+    url: "/v1/integrations/quickbooks/callback?code=secret-code&state=signed-state&realmId=realm-secret&email=customer%40example.com&phone=5551234567",
+    hostname: "api.quotefly.test",
+    socket: { remoteAddress: "127.0.0.1", remotePort: 443 },
+  });
+  const output = JSON.stringify(serialized);
+  assert.equal(serialized.url, "/v1/integrations/quickbooks/callback");
+  assert.doesNotMatch(output, /secret-code|signed-state|realm-secret|customer|5551234567/);
 });

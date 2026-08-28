@@ -68,6 +68,7 @@ npm run verify:launch
 | `AI_RAG_TENANT_ALLOWLIST` | Required for pilot mode | No | comma-separated tenant ids | Used with `shadow_allowlist` or `allowlist`; never put customer data in this value |
 | `ENABLE_AI_INDEX_WORKER` | Optional | No | `false` | Keep false until all canonical mutation paths have transactional enqueue coverage and staging race tests pass |
 | `AI_INDEX_INLINE_REFRESH` | Optional | No | `true` | Keep true during worker warm-up; set false on the API only after the queue drains and freshness smoke tests pass |
+| `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED` | Required | No | `false` | Global provider kill switch. Keep `false` in every release environment; schema/code presence and configured credentials do not authorize enablement |
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
@@ -145,6 +146,48 @@ When latency is reported:
 5. Compare `/v1/health` and `/v1/ready`; if health is fast but ready is slow, prioritize database/connection tuning.
 6. For Kody, separate retrieval/query time from OpenAI provider time using the request timing fields.
 
+## QuickBooks Hosted-Payment Candidate
+
+The hosted-payment and reconciliation work is an engineering candidate, not an available integration. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false`; do not complete OAuth, subscribe provider webhooks, create an Intuit invoice, retrieve or share an InvoiceLink, or run sandbox mutations without separate owner authorization. Taxable invoice publishing remains blocked.
+
+The authoritative acceptance contract is [docs/integrations/quickbooks-hosted-payments-reconciliation.md](docs/integrations/quickbooks-hosted-payments-reconciliation.md). Current product and API truth is recorded in [docs/integrations/quickbooks-api-progress.md](docs/integrations/quickbooks-api-progress.md).
+
+### Coordinated migration rehearsal
+
+The `20260827120000_add_quickbooks_hosted_payment_reconciliation` migration enables forced RLS on existing QuickBooks tables. It is not backward-compatible with an API binary that queries those tables without setting `app.tenant_id`.
+
+Before any sandbox or production rollout:
+
+- [ ] Restore a recent sanitized production-like backup into an isolated database branch and record its source timestamp.
+- [ ] Record the exact candidate SHA, full ordered migration list, migration start/end time, row counts, lock/availability observations, and result.
+- [ ] Apply migrations only through the isolated job using `DIRECT_DATABASE_URL`; start the API separately with the non-owner pooled `quotefly_runtime` URL.
+- [ ] Measure the Invoice billing-email backfill, InvoicePayment unique-index replacement, QuickBooks foreign-key replacements, realm-binding backfill, new indexes, and forced-RLS activation.
+- [ ] Verify `/v1/health`, `/v1/ready`, auth/session, customer, quote, Job, Invoice, CSV, and paused QuickBooks behavior after migration.
+- [ ] Prove two-tenant runtime-role denial for every tenant-owned QuickBooks table and intended access to the minimal non-secret realm-routing table.
+- [ ] Rehearse backup restore and a forward fix. Do not route an older API binary after the forced-RLS migration unless its compatibility is independently proven.
+
+### Monitoring and recovery gate
+
+Before an authorized sandbox run, assign alert owners, destinations, thresholds, severity, and escalation for:
+
+- oldest eligible webhook age, retry count, lease expiry, and `DEAD` events;
+- invoice operations stuck in `PROCESSING`, `RECONCILING`, or reconciliation-required states;
+- token refresh failures, `REVOCATION_PENDING`, and revocation retry age;
+- CDC cursor lag, CDC failures, and dropped-webhook repair outcome;
+- provider latency, timeout, throttling, `Retry-After`, and sanitized failure-code rate;
+- hosted-link hostname validation and no-log/no-cache boundary violations.
+
+Webhook acknowledgement must follow durable persistence. Webhook, manual refresh, and CDC must invoke the same authoritative reconciliation service. A dead-letter replay or CDC repair must never create another provider invoice or duplicate a payment application.
+
+### QuickBooks provider rollback
+
+1. Set `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` and restart the API.
+2. Preserve provider operations, webhook inbox, CDC cursor, InvoicePayment, and InvoiceEvent history; never delete uncertain state.
+3. Pause or remove Intuit webhook subscriptions if provider ingress must stop.
+4. Attempt token revocation before local cleanup. If revocation cannot be confirmed, keep the connection blocked as `REVOCATION_PENDING`, rotate or revoke credentials externally, and follow the retry/escalation record.
+5. Reconcile every in-flight or uncertain invoice against QuickBooks before re-enabling. Never blindly replay invoice creation.
+6. Prefer a forward fix. A database restore does not undo provider-side invoices or payments, and an older binary must not be used after forced RLS without explicit compatibility evidence.
+
 ## Web Deploy
 
 Vercel settings:
@@ -165,7 +208,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 4. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at staging API.
 5. Rehearse migrations with `npm run prisma:migrate:deploy` and follow any feature-specific rollout document, including `docs/billing-integrity-rollout.md`.
 6. Run staging smoke checks.
-7. Keep Stripe, QuickBooks, Twilio, and OpenAI in test/sandbox modes.
+7. Keep Stripe, Twilio, and OpenAI in test/sandbox modes. Keep QuickBooks provider workflows disabled unless a separate owner-authorized sandbox checklist is active.
 
 ## Production Flow
 
@@ -178,7 +221,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 7. Deploy Vercel production with production `VITE_API_BASE_URL`.
 8. Run `npm run seo:sitemap:live` after the Vercel deployment and confirm Search Console has the stable `https://www.quotefly.us/sitemap.xml` URL submitted.
 9. Run production smoke checks with a beta test account.
-10. Enable only the providers that passed sandbox smoke checks.
+10. Enable only providers that passed their exact-candidate sandbox and operations gates. QuickBooks remains disabled until the hosted-payment acceptance contract, owner checklist, Sentinel review, and independent Opera approval are complete.
 
 ## Smoke Checks
 
@@ -192,7 +235,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 - An active trial can start Stripe Checkout, retains its promised remaining trial, receives the automatic one-time 50% first-paid-month discount, and activates after a signed webhook.
 - A canceled checkout resumes, and past-due billing can open the portal on a mobile viewport.
 - Forgot-password delivers through the verified sender and the single-use reset link succeeds.
-- QuickBooks shows disconnected or configured state without crashing.
+- QuickBooks shows a disconnected/configured-but-paused state without crashing; QuickBooks-friendly CSV export succeeds. This smoke does not authorize a provider call.
 - AI prompt surface shows enabled, limit, or provider-error state clearly.
 - Mobile customer and quote pages render without overlapping controls.
 
@@ -201,11 +244,11 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 - Web rollback: use Vercel deployment rollback.
 - API rollback: normally redeploy the previous Railway/Render release image or commit. After the current billing migration, old billing code is not webhook-safe; pause Stripe webhook ingress and use a forward fix or verified backup restore plan.
 - Database rollback: prefer forward fixes. Do not manually reverse production migrations unless a tested rollback migration and backup restore plan exist.
-- Provider rollback: disable affected provider env vars or feature flags first, then redeploy API.
+- Provider rollback: disable affected provider env vars or feature flags first, then redeploy API. For QuickBooks, also preserve uncertain records, revoke tokens or mark revocation pending, manage the external webhook subscription, and reconcile provider-side state before any re-enable decision.
 
 ## Provider Setup Notes
 
 - Stripe: configure checkout success/cancel URLs, customer portal, and `/v1/billing/webhook`.
-- QuickBooks: configure sandbox app credentials, exact redirect URI, webhook verifier, and realm conflict handling before enabling direct sync.
+- QuickBooks: keep provider workflows false. Credentials, an exact redirect URI, a verifier, and realm conflict handling are prerequisites only; direct sync additionally requires the full hosted-payment contract, production-like migration rehearsal, sandbox evidence, monitoring/recovery evidence, security review, independent approval, and explicit owner authorization.
 - Twilio: production startup rejects `ENABLE_TWILIO_SMS=true` until sender authorization is implemented; keep it false until compliance, authorization, and opt-out behavior are production reviewed.
 - OpenAI: set spend alerts and review AI quality telemetry before expanding beta access.

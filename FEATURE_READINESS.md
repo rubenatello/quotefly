@@ -7,6 +7,7 @@ Target launch stage: controlled beta for blue-collar contractors. The beta goal 
 - `Ready`: Acceptable for controlled beta with automated coverage or a defined smoke check.
 - `Beta`: Usable by selected testers, but needs more hardening, UX polish, or coverage before broader launch.
 - `Provider setup required`: Code path exists, but production credentials, webhooks, sandbox validation, or legal/provider review are still required.
+- `Engineering candidate — unavailable`: Default-off code/schema may be under review, but no customer, sandbox, or production availability is asserted.
 - `Post-launch`: Keep visible only as roadmap, gated, disabled, or internal-only until a later release.
 
 ## Readiness Matrix
@@ -23,7 +24,7 @@ Target launch stage: controlled beta for blue-collar contractors. The beta goal 
 | Branding | Beta | Manual quote/PDF visual smoke | Basic branding works; attribution is gated by plan | Add PDF visual snapshot or manual sign-off checklist |
 | Admin/team | Beta | Manual smoke; API integration coverage exists for protected auth surface | Team management is owner/admin gated and constrained by plan limits | Add E2E for add/update/remove team member |
 | Billing | Provider setup required | Billing webhook integration test; billing-required UI manual smoke | Stripe test mode can be used for beta. Basic is sellable; advanced tiers remain disabled | Production Stripe price IDs, webhook secret, customer portal, tax/account settings |
-| QuickBooks | Provider setup required | Manual smoke; CSV/export path available behind app surfaces | Direct QuickBooks connection remains off-sale for beta unless Intuit sandbox and callback are configured | Intuit app review, sandbox test, production redirect URI, error-state E2E |
+| QuickBooks | Engineering candidate — unavailable | CSV/export is supported; default-off hosted-payment candidate requires exact-SHA automated, migration, sandbox, security, and operations evidence | Direct QuickBooks connection, invoice publishing, InvoiceLink delivery, payment reconciliation, CDC, and webhooks remain unavailable. No sandbox or production evidence is claimed; taxable invoices remain blocked | Complete `docs/integrations/quickbooks-hosted-payments-reconciliation.md`, production-like migration/restore rehearsal, Intuit sandbox checklist, alerts/runbooks, Sentinel review, Opera approval, and separate owner authorization |
 | Twilio/SMS provider | Provider setup required | Manual smoke only; native SMS app is the beta send path | Twilio inbound webhook is disabled unless `ENABLE_TWILIO_SMS=true` | Twilio credentials, webhook validation, compliance copy, opt-out handling |
 | AI quoting/revision | Beta | Parser/assistant/retrieval evals, tenant/RLS retrieval integration, and manual AI prompt smoke | Deterministic customer/catalog/Jobs/dispatch/invoice tools and review-only drafting are available. RAG is production-default-off and limited to a controlled `shadow_allowlist` pilot; users must review every quote before sending | Exact-SHA provider 6/6, OpenAI account/data-control evidence, Neon migration/RLS rehearsal, pilot alerts, signed shadow review, and production-scale FTS/semantic latency evidence before exposure |
 | Legal/privacy | Ready | Playwright page smoke | Privacy, data privacy, terms, and cookie policy pages exist | Legal review before public paid launch |
@@ -56,4 +57,8 @@ Required manual smoke before production handoff:
 
 ## Current Launch Decision
 
-QuoteFly is on track for controlled beta when `npm run verify` passes locally and `npm run verify:launch` passes against a dedicated `TEST_DATABASE_URL`. Kody RAG remains a separate controlled-pilot gate: production `off`, then internal `shadow_allowlist`, then exposed `allowlist` only after the evidence in `OWNER-ACTION-ITEMS.md` is complete. Do not move to broad paid launch until provider-dependent rows are moved out of `Provider setup required` or deliberately moved to `Post-launch`.
+QuoteFly is on track for controlled beta when `npm run verify` passes locally and `npm run verify:launch` passes against a dedicated `TEST_DATABASE_URL`. Kody RAG remains a separate controlled-pilot gate: production `off`, then internal `shadow_allowlist`, then exposed `allowlist` only after the evidence in `OWNER-ACTION-ITEMS.md` is complete.
+
+QuickBooks-friendly CSV may remain in the controlled beta, but the hosted-payment candidate is not part of that availability decision. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false`, keep all live-provider claims out of marketing, and do not infer sandbox readiness from mocked tests or a passing schema migration. A future QuickBooks pilot needs the exact-candidate automated gate, production-like migration/backup/forward-fix rehearsal, Intuit sandbox evidence, payment/refund/CDC recovery evidence, named monitoring and support owners, Sentinel review, independent Opera approval, and explicit owner authorization.
+
+Do not move to broad paid launch until other provider-dependent rows are moved out of `Provider setup required` or deliberately moved to `Post-launch`.

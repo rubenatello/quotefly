@@ -1,16 +1,11 @@
 import { useState } from "react";
 import {
   ArrowRight,
-  BellRing,
-  Bot,
-  BriefcaseBusiness,
-  CalendarDays,
-  ClipboardCheck,
-  ReceiptText,
   ShieldCheck,
-  type LucideIcon,
 } from "lucide-react";
 import { MarketingAction } from "./PublicPageLayout";
+import { MarketingFeatureIcon } from "../Icons";
+import { TablerIcons, type QuoteFlyTablerIcon } from "../icon-system";
 
 interface LandingProductShowcaseProps {
   onOpenAuth: () => void;
@@ -20,7 +15,7 @@ type ProductCapture = {
   key: string;
   label: string;
   alt: string;
-  icon: LucideIcon;
+  icon: QuoteFlyTablerIcon;
 };
 
 type ProductStory = {
@@ -48,13 +43,13 @@ const PRODUCT_STORIES: readonly ProductStory[] = [
         key: "activity-my-day",
         label: "My Day",
         alt: "QuoteFly My Day workspace showing due tasks, quote pipeline, active jobs, and recent customer work.",
-        icon: ClipboardCheck,
+        icon: TablerIcons.marketing.schedule,
       },
       {
         key: "kody-review",
         label: "Kody review",
         alt: "Kody displaying a review of three tenant-scoped appointments with times, jobs, assignees, and statuses.",
-        icon: Bot,
+        icon: TablerIcons.marketing.ai,
       },
     ],
   },
@@ -72,13 +67,13 @@ const PRODUCT_STORIES: readonly ProductStory[] = [
         key: "jobs-schedule",
         label: "Schedule",
         alt: "QuoteFly day schedule showing booked field visits, assigned teammates, times, addresses, and dispatch status.",
-        icon: CalendarDays,
+        icon: TablerIcons.marketing.schedule,
       },
       {
         key: "job-detail",
         label: "Job detail",
         alt: "QuoteFly job detail showing an accepted scope, assignment, access instructions, and a scheduled visit.",
-        icon: BriefcaseBusiness,
+        icon: TablerIcons.marketing.work,
       },
     ],
   },
@@ -96,13 +91,13 @@ const PRODUCT_STORIES: readonly ProductStory[] = [
         key: "internal-invoice",
         label: "Invoice record",
         alt: "QuoteFly internal invoice record showing draft and payment-pending status, customer total, balance, and due date.",
-        icon: ReceiptText,
+        icon: TablerIcons.marketing.invoice,
       },
       {
         key: "notification-center",
         label: "Notifications",
         alt: "QuoteFly notification center showing booked, rescheduled, and dispatched visit updates for fictional jobs.",
-        icon: BellRing,
+        icon: TablerIcons.marketing.customer,
       },
     ],
   },
@@ -200,7 +195,7 @@ function ProductStoryModule({ story }: { story: ProductStory }) {
                       : "border-white/15 bg-white/[0.06] text-slate-200 hover:border-blue-300/60 hover:bg-white/[0.1]"
                   }`}
                 >
-                  <CaptureIcon size={17} aria-hidden="true" />
+                  <MarketingFeatureIcon icon={CaptureIcon} size={18} />
                   {capture.label}
                 </button>
               );

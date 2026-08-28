@@ -9,12 +9,39 @@ const PREVIOUS_KEY = "quickbooks-previous-token-key-00000000001";
 let parseEnv: typeof import("../../src/config/env.js").parseEnv;
 let decryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").decryptQuickBooksSecret;
 let encryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").encryptQuickBooksSecret;
+let fetchQuickBooksCdc: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCdc;
+let fetchQuickBooksCompanyInfo: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCompanyInfo;
+let fetchQuickBooksCustomer: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCustomer;
+let fetchQuickBooksInvoice: typeof import("../../src/services/quickbooks.js").fetchQuickBooksInvoice;
+let fetchQuickBooksItem: typeof import("../../src/services/quickbooks.js").fetchQuickBooksItem;
+let fetchQuickBooksPayment: typeof import("../../src/services/quickbooks.js").fetchQuickBooksPayment;
+let fetchQuickBooksRefundReceipt: typeof import("../../src/services/quickbooks.js").fetchQuickBooksRefundReceipt;
+let QuickBooksProviderError: typeof import("../../src/services/quickbooks.js").QuickBooksProviderError;
+let QUICKBOOKS_INVOICE_LINK_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_INVOICE_LINK_MINOR_VERSION;
+let searchQuickBooksCustomers: typeof import("../../src/services/quickbooks.js").searchQuickBooksCustomers;
+let classifyQuickBooksWorkerFailure: typeof import("../../src/services/quickbooks-worker-failures.js").classifyQuickBooksWorkerFailure;
+let QuickBooksReconciliationError: typeof import("../../src/services/quickbooks-reconciliation.js").QuickBooksReconciliationError;
 
 before(async () => {
   process.env.DATABASE_URL ||= "postgresql://unit:unit@127.0.0.1:1/quotefly_unit";
   process.env.JWT_SECRET ||= JWT_SECRET;
   ({ parseEnv } = await import("../../src/config/env.js"));
-  ({ decryptQuickBooksSecret, encryptQuickBooksSecret } = await import("../../src/services/quickbooks.js"));
+  ({
+    decryptQuickBooksSecret,
+    encryptQuickBooksSecret,
+    fetchQuickBooksCdc,
+    fetchQuickBooksCompanyInfo,
+    fetchQuickBooksCustomer,
+    fetchQuickBooksInvoice,
+    fetchQuickBooksItem,
+    fetchQuickBooksPayment,
+    fetchQuickBooksRefundReceipt,
+    QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
+    QuickBooksProviderError,
+    searchQuickBooksCustomers,
+  } = await import("../../src/services/quickbooks.js"));
+  ({ classifyQuickBooksWorkerFailure } = await import("../../src/services/quickbooks-worker-failures.js"));
+  ({ QuickBooksReconciliationError } = await import("../../src/services/quickbooks-reconciliation.js"));
 });
 
 function runtimeEnv(overrides: Partial<NodeJS.ProcessEnv> = {}) {
@@ -76,5 +103,163 @@ describe("QuickBooks token encryption", () => {
 
     assert.throws(() => decryptQuickBooksSecret(env, tampered), /payload is invalid/i);
     assert.throws(() => decryptQuickBooksSecret(env, "v2.not-valid"), /payload is invalid/i);
+  });
+});
+
+describe("QuickBooks provider response validation", () => {
+  async function rejectsMalformedPayload(
+    payload: unknown,
+    expectedCode: string,
+    operation: () => Promise<unknown>,
+  ) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    try {
+      await assert.rejects(operation, (error: unknown) =>
+        error instanceof QuickBooksProviderError && error.code === expectedCode
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it("fails closed with stable codes for malformed invoice, payment, customer, item, company, CDC, and search payloads", async () => {
+    const env = runtimeEnv();
+    await rejectsMalformedPayload(
+      { Invoice: { Id: 42 } },
+      "QUICKBOOKS_INVOICE_RESPONSE_INVALID",
+      () => fetchQuickBooksInvoice(env, "realm", "token", "invoice"),
+    );
+    await rejectsMalformedPayload(
+      { Payment: { Id: 42 } },
+      "QUICKBOOKS_PAYMENT_RESPONSE_INVALID",
+      () => fetchQuickBooksPayment(env, "realm", "token", "payment"),
+    );
+    await rejectsMalformedPayload(
+      { RefundReceipt: { Id: "refund-without-canonical-evidence" } },
+      "QUICKBOOKS_REFUND_RECEIPT_RESPONSE_INVALID",
+      () => fetchQuickBooksRefundReceipt(env, "realm", "token", "refund-receipt"),
+    );
+    await rejectsMalformedPayload(
+      { Customer: { Id: 42 } },
+      "QUICKBOOKS_CUSTOMER_RESPONSE_INVALID",
+      () => fetchQuickBooksCustomer(env, "realm", "token", "customer"),
+    );
+    await rejectsMalformedPayload(
+      { Item: { Id: 42 } },
+      "QUICKBOOKS_ITEM_RESPONSE_INVALID",
+      () => fetchQuickBooksItem(env, "realm", "token", "item"),
+    );
+    await rejectsMalformedPayload(
+      { CompanyInfo: { Id: 42, CompanyName: "Bad realm" } },
+      "QUICKBOOKS_COMPANY_INFO_RESPONSE_INVALID",
+      () => fetchQuickBooksCompanyInfo(env, "realm", "token"),
+    );
+    await rejectsMalformedPayload(
+      { CDCResponse: "invalid" },
+      "QUICKBOOKS_CDC_RESPONSE_INVALID",
+      () => fetchQuickBooksCdc(env, "realm", "token", new Date("2026-08-27T00:00:00.000Z")),
+    );
+    await rejectsMalformedPayload(
+      { QueryResponse: { Customer: [{ Id: 42 }] } },
+      "QUICKBOOKS_CUSTOMER_QUERY_RESPONSE_INVALID",
+      () => searchQuickBooksCustomers(env, "realm", "token", "customer", 10),
+    );
+  });
+
+  it("reads a canonical RefundReceipt and includes refund transactions in the bounded CDC response", async () => {
+    const env = runtimeEnv();
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      const refundReceipt = {
+        Id: "refund-1",
+        TotalAmt: 40,
+        CustomerRef: { value: "customer-1" },
+        CurrencyRef: { value: "USD" },
+        MetaData: { LastUpdatedTime: "2026-08-27T20:04:00.000Z" },
+        LinkedTxn: [
+          { TxnId: "payment-1", TxnType: "Payment" },
+          { TxnId: "invoice-1", TxnType: "Invoice" },
+        ],
+      };
+      return new Response(JSON.stringify(url.includes("/cdc?")
+        ? {
+            CDCResponse: [{
+              QueryResponse: [{ RefundReceipt: [refundReceipt] }],
+              time: "2026-08-27T20:05:00.000Z",
+            }],
+          }
+        : { RefundReceipt: refundReceipt }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      await assert.doesNotReject(async () => {
+        const refund = await fetchQuickBooksRefundReceipt(env, "realm", "token", "refund-1");
+        assert.equal(refund.Id, "refund-1");
+        const cdc = await fetchQuickBooksCdc(env, "realm", "token", new Date("2026-08-27T20:00:00.000Z"));
+        assert.equal(cdc.refundReceipts.length, 1);
+        assert.equal(cdc.refundReceipts[0]?.Id, "refund-1");
+      });
+      assert.equal(requestedUrls.some((url) => url.includes("/refundreceipt/refund-1")), true);
+      assert.equal(requestedUrls.some((url) => url.includes("entities=Invoice,Payment,RefundReceipt")), true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("pins InvoiceLink retrieval to the reviewed QuickBooks minor-version contract", async () => {
+    const env = runtimeEnv();
+    const originalFetch = globalThis.fetch;
+    let requestedUrl: URL | null = null;
+    globalThis.fetch = async (input) => {
+      requestedUrl = new URL(String(input));
+      return new Response(JSON.stringify({ Invoice: { Id: "invoice/with spaces" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      await fetchQuickBooksInvoice(env, "realm", "token", "invoice/with spaces");
+      assert.ok(requestedUrl);
+      assert.equal(requestedUrl.pathname.endsWith("/invoice/invoice%2Fwith%20spaces"), true);
+      assert.equal(requestedUrl.searchParams.get("include"), "invoiceLink");
+      assert.equal(requestedUrl.searchParams.get("minorversion"), QUICKBOOKS_INVOICE_LINK_MINOR_VERSION);
+      assert.equal(QUICKBOOKS_INVOICE_LINK_MINOR_VERSION, "36");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("QuickBooks reconciliation worker failure policy", () => {
+  it("preserves canonical retryability and sanitizes unknown failures", () => {
+    assert.deepEqual(
+      classifyQuickBooksWorkerFailure(new QuickBooksReconciliationError(
+        "QUICKBOOKS_INVOICE_TOTAL_DRIFT",
+        "Provider detail must never be persisted.",
+        false,
+      )),
+      { code: "QUICKBOOKS_INVOICE_TOTAL_DRIFT", retryable: false },
+    );
+    assert.deepEqual(
+      classifyQuickBooksWorkerFailure(new QuickBooksReconciliationError(
+        "QUICKBOOKS_NOT_CONNECTED",
+        "Reconnect QuickBooks.",
+        true,
+      )),
+      { code: "QUICKBOOKS_NOT_CONNECTED", retryable: true },
+    );
+    assert.deepEqual(
+      classifyQuickBooksWorkerFailure(new Error("customer@example.com should not escape")),
+      { code: "QUICKBOOKS_WORKER_FAILURE", retryable: true },
+    );
   });
 });

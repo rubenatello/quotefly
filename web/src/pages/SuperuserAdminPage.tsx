@@ -97,6 +97,7 @@ export function SuperuserAdminPage() {
   const [tenantOffset, setTenantOffset] = useState(0);
   const [tenantSearch, setTenantSearch] = useState("");
   const [tenantLifecycle, setTenantLifecycle] = useState<"active" | "deleted" | "all">("active");
+  const [tenantQuickBooks, setTenantQuickBooks] = useState<"all" | "connected" | "confirmed" | "attention" | "not_connected">("all");
   const [catalog, setCatalog] = useState<InternalDataCatalog | null>(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [classification, setClassification] = useState<"" | DataClassification>("");
@@ -145,6 +146,7 @@ export function SuperuserAdminPage() {
         offset,
         search: tenantSearch.trim() || undefined,
         lifecycle: tenantLifecycle,
+        quickBooks: tenantQuickBooks,
       });
       setTenants(result.tenants);
       setTenantTotal(result.pagination.total);
@@ -324,10 +326,10 @@ export function SuperuserAdminPage() {
           <Card variant="elevated" padding="lg">
             <CardHeader
               title="Tenant metadata"
-              subtitle="Lifecycle, subscription state, and aggregate record counts only. Customer and provider data are excluded."
+              subtitle="Lifecycle, subscription, and safe QuickBooks readiness metadata only. Customer data, provider IDs, credentials, scopes, and raw errors are excluded."
             />
             <form
-              className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px_auto] sm:items-end"
+              className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_200px_220px_auto] xl:items-end"
               onSubmit={(event) => { event.preventDefault(); void loadTenants(0); }}
             >
               <Input
@@ -345,6 +347,18 @@ export function SuperuserAdminPage() {
                   { value: "active", label: "Active" },
                   { value: "deleted", label: "Deleted" },
                   { value: "all", label: "All" },
+                ]}
+              />
+              <Select
+                label="QuickBooks"
+                value={tenantQuickBooks}
+                onChange={(event) => setTenantQuickBooks(event.target.value as typeof tenantQuickBooks)}
+                options={[
+                  { value: "all", label: "All setup states" },
+                  { value: "connected", label: "Connected" },
+                  { value: "confirmed", label: "Confirmed" },
+                  { value: "attention", label: "Needs attention" },
+                  { value: "not_connected", label: "Not connected" },
                 ]}
               />
               <Button type="submit" loading={sectionLoading}>Apply</Button>
@@ -459,6 +473,9 @@ function OverviewPanel({
         <MetricCard label="Active users" value={summary.totals.activeUsers.toLocaleString()} />
         <MetricCard label="Active customers" value={summary.totals.activeCustomers.toLocaleString()} />
         <MetricCard label="Active quotes" value={summary.totals.activeQuotes.toLocaleString()} />
+        <MetricCard label="QB connected" value={summary.totals.quickBooksConnectedTenants.toLocaleString()} />
+        <MetricCard label="QB confirmed" value={summary.totals.quickBooksConfirmedTenants.toLocaleString()} />
+        <MetricCard label="QB ready" value={summary.totals.quickBooksReadyTenants.toLocaleString()} />
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <Card variant="elevated" padding="lg">
@@ -548,6 +565,13 @@ function OverviewPanel({
 }
 
 function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
+  const quickBooksTone = tenant.quickBooks.setupPhase === "CONFIRMED"
+    ? "emerald" as const
+    : tenant.quickBooks.setupPhase === "UNAVAILABLE"
+      ? "red" as const
+      : tenant.quickBooks.present
+        ? "amber" as const
+        : "slate" as const;
   return (
     <Card variant="elevated" padding="md">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -555,7 +579,10 @@ function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
           <h3 className="break-words text-base font-semibold text-slate-900">{tenant.name}</h3>
           <p className="break-all text-xs text-slate-500">{tenant.slug} · {tenant.id}</p>
         </div>
-        <Badge tone={tenant.deletedAtUtc ? "red" : "emerald"}>{tenant.deletedAtUtc ? "Deleted" : "Active"}</Badge>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={quickBooksTone}>QB {readable(tenant.quickBooks.setupPhase)}</Badge>
+          <Badge tone={tenant.deletedAtUtc ? "red" : "emerald"}>{tenant.deletedAtUtc ? "Deleted" : "Active"}</Badge>
+        </div>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <MetricCompact label="Users" value={tenant._count.users.toLocaleString()} />
@@ -568,6 +595,20 @@ function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
       <div className="mt-3 border-t border-slate-200 pt-3 text-xs text-slate-600">
         <p><span className="font-medium text-slate-700">Subscription:</span> {readable(tenant.subscriptionStatus)} · {tenant.subscriptionPlanCode ?? "No paid plan"}</p>
         <p className="mt-1"><span className="font-medium text-slate-700">Created:</span> {formatDate(tenant.createdAt)}</p>
+      </div>
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-700">QuickBooks setup</p>
+          <span className="text-xs text-slate-500">{tenant.quickBooks.environment ? readable(tenant.quickBooks.environment) : "No environment"}</span>
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <MetricCompact label="Customer maps" value={tenant.quickBooks.counts.customerMaps.toLocaleString()} />
+          <MetricCompact label="Item maps" value={tenant.quickBooks.counts.itemMaps.toLocaleString()} />
+          <MetricCompact label="Invoice syncs" value={tenant.quickBooks.counts.invoiceSyncs.toLocaleString()} />
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Last sync: {formatDate(tenant.quickBooks.lastSyncAtUtc)} · Confirmed: {formatDate(tenant.quickBooks.setupConfirmedAtUtc)}
+        </p>
       </div>
     </Card>
   );

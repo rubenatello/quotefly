@@ -18,6 +18,7 @@ export interface CrmNavLink {
   label: string;
   path: WorkspaceNavigationId;
   icon: ReactNode;
+  activeIcon?: ReactNode;
 }
 
 interface CrmSidebarProps {
@@ -226,7 +227,7 @@ export function CrmSidebar({
                           : "text-[var(--qf-text-muted)] group-hover:text-[var(--qf-link)]",
                       )}
                     >
-                      {link.icon}
+                      {active ? link.activeIcon ?? link.icon : link.icon}
                     </span>
                     <span aria-hidden={collapsed} className="qf-sidebar-nav-label min-w-0 flex-1 text-left">{link.label}</span>
                   </span>

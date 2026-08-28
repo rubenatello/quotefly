@@ -1,6 +1,6 @@
 import { useEffect, useRef, type FormEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, LoaderCircle, Search, Sparkles, UserRound } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, Search, UserRound } from "lucide-react";
 import type {
   AiQuoteSuggestion,
   QuotePreparationCustomerAmbiguous,
@@ -266,7 +266,7 @@ export function QuoteKodyPrepareModal({
               <Button type="button" variant="ghost" onClick={close}>
                 {loading ? t("quoteComponents.aiModal.stop") : t("common.cancel")}
               </Button>
-              <Button type="submit" variant="secondary" loading={loading} icon={<Sparkles size={15} />} disabled={disabled || !prompt.trim()}>
+              <Button type="submit" variant="secondary" loading={loading} icon={<KodySparkIcon size={18} thinking={loading} />} disabled={disabled || !prompt.trim()}>
                 {clarification ? t("quoteBuilder.kodyPrepare.tryAgain") : t("quoteBuilder.kodyPrepare.prepare")}
               </Button>
             </div>

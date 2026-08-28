@@ -118,6 +118,7 @@ export type PresetUnitType =
 export type QuickBooksConnectionStatus =
   | "CONNECTED"
   | "NEEDS_REAUTH"
+  | "REVOCATION_PENDING"
   | "ERROR"
   | "DISCONNECTED";
 
@@ -539,6 +540,18 @@ export interface QuickBooksInvoiceSyncRow {
   deletedAtUtc: UtcDate | null;
 }
 
+export interface QuickBooksConnectionEventRow {
+  id: string;
+  tenantId: string;
+  quickBooksConnectionId: string | null;
+  actorTenantUserId: string | null;
+  requestId: string;
+  action: string;
+  outcome: string;
+  connectionGeneration: number;
+  createdAt: UtcDate;
+}
+
 export interface QuickBooksInvoiceOperationRow {
   id: string;
   tenantId: string;
@@ -601,11 +614,16 @@ export const TABLE_RELATION_MAP = {
       "BillingWebhookEvent",
       "WorkPreset",
       "QuickBooksConnection",
+      "QuickBooksConnectionEvent",
       "QuickBooksCustomerMap",
       "QuickBooksItemMap",
       "QuickBooksInvoiceSync",
       "QuickBooksInvoiceOperation",
       "QuickBooksWebhookEvent",
+      "QuickBooksOAuthState",
+      "QuickBooksOrphanCredentialRevocation",
+      "QuickBooksRealmBinding",
+      "QuickBooksCdcCursor",
       "TenantSequence",
       "Job",
       "JobEvent",
@@ -618,7 +636,7 @@ export const TABLE_RELATION_MAP = {
   },
   TenantUser: {
     belongsTo: ["Tenant", "User"],
-    hasMany: ["Job", "JobEvent", "NotificationOutbox", "QuickBooksInvoiceOperation"],
+    hasMany: ["Job", "JobEvent", "NotificationOutbox", "QuickBooksInvoiceOperation", "QuickBooksConnection", "QuickBooksConnectionEvent"],
   },
   TenantPhoneNumber: {
     belongsTo: ["Tenant"],
@@ -672,8 +690,12 @@ export const TABLE_RELATION_MAP = {
     belongsTo: ["Tenant"],
   },
   QuickBooksConnection: {
-    belongsTo: ["Tenant"],
-    hasMany: ["QuickBooksCustomerMap", "QuickBooksItemMap", "QuickBooksInvoiceSync", "QuickBooksInvoiceOperation", "QuickBooksWebhookEvent"],
+    belongsTo: ["Tenant", "TenantUser"],
+    hasMany: ["QuickBooksCustomerMap", "QuickBooksItemMap", "QuickBooksInvoiceSync", "QuickBooksInvoiceOperation", "QuickBooksWebhookEvent", "QuickBooksOAuthState", "QuickBooksConnectionEvent"],
+    hasOne: ["QuickBooksRealmBinding", "QuickBooksCdcCursor"],
+  },
+  QuickBooksConnectionEvent: {
+    belongsTo: ["Tenant", "QuickBooksConnection", "TenantUser"],
   },
   QuickBooksCustomerMap: {
     belongsTo: ["Tenant", "QuickBooksConnection", "Customer"],
@@ -688,6 +710,18 @@ export const TABLE_RELATION_MAP = {
     belongsTo: ["Tenant", "Invoice", "QuickBooksConnection", "TenantUser"],
   },
   QuickBooksWebhookEvent: {
+    belongsTo: ["Tenant", "QuickBooksConnection"],
+  },
+  QuickBooksOAuthState: {
+    belongsTo: ["Tenant", "QuickBooksConnection", "User"],
+  },
+  QuickBooksOrphanCredentialRevocation: {
+    belongsTo: ["Tenant"],
+  },
+  QuickBooksRealmBinding: {
+    belongsTo: ["Tenant", "QuickBooksConnection"],
+  },
+  QuickBooksCdcCursor: {
     belongsTo: ["Tenant", "QuickBooksConnection"],
   },
   WorkPreset: {

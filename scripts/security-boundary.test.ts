@@ -220,3 +220,14 @@ test("QuickBooks signatures reject malformed or tampered values without throwing
     false,
   );
 });
+
+test("QuickBooks quote preview keeps protected reads inside its tenant RLS transaction", () => {
+  const source = readFileSync(new URL("../src/routes/quickbooks.ts", import.meta.url), "utf8");
+  const contextStart = source.indexOf("async function loadQuickBooksSyncContext");
+  const contextEnd = source.indexOf("async function getAccessToken", contextStart);
+  assert.ok(contextStart >= 0 && contextEnd > contextStart, "QuickBooks sync context helper must remain discoverable");
+
+  const contextSource = source.slice(contextStart, contextEnd);
+  assert.match(contextSource, /const quote = await transaction\.quote\.findFirst\(/);
+  assert.doesNotMatch(contextSource, /app\.prisma\.quote\./);
+});

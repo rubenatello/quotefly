@@ -11,6 +11,7 @@ import Redis from "ioredis";
 import { ZodError } from "zod";
 import { env } from "./config/env";
 import { getJwtClaims, LiveAuthMembershipSelect } from "./lib/auth";
+import { safeRequestLogSerializer } from "./lib/request-logging";
 import { prisma } from "./lib/prisma";
 import { buildTenantEntitlements } from "./lib/subscription";
 import { healthRoutes } from "./routes/health";
@@ -159,6 +160,9 @@ export function buildServer() {
     bodyLimit: 6 * 1024 * 1024,
     trustProxy: env.NODE_ENV === "production",
     logger: {
+      serializers: {
+        req: safeRequestLogSerializer,
+      },
       transport:
         env.NODE_ENV === "development"
           ? {

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, CircleDashed, LoaderCircle, Sparkles, UserRound } from "lucide-react";
+import { CheckCircle2, CircleDashed, LoaderCircle, UserRound } from "lucide-react";
 import type { AiProgressEvent, ServiceType } from "../../lib/api";
+import { KodySparkIcon } from "../ai/KodySparkIcon";
 import { Alert, Badge, Button, Modal, ModalBody, ModalFooter, ModalHeader, ProgressBar, Select, Textarea } from "../ui";
 
 const AI_PROGRESS_STAGES = [
@@ -226,7 +227,7 @@ export function QuoteAiPromptModal({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
                 <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--qf-brand-orange-soft)] text-[var(--qf-brand-orange-text)]">
-                  <Sparkles size={18} />
+                  <KodySparkIcon size={24} />
                 </div>
                 <div className="min-w-0">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-text-muted)]">{t("quoteComponents.aiModal.workspace")}</p>
@@ -438,7 +439,7 @@ export function QuoteAiPromptModal({
             <Button type="button" variant="ghost" onClick={loading && onCancelRequest ? onCancelRequest : onClose}>
               {loading ? t("quoteComponents.aiModal.stop") : t("common.cancel")}
             </Button>
-            <Button type="submit" variant="secondary" loading={loading} icon={<Sparkles size={14} />} disabled={disabled}>
+            <Button type="submit" variant="secondary" loading={loading} icon={<KodySparkIcon size={18} thinking={loading} />} disabled={disabled}>
               {resolvedSubmitLabel}
             </Button>
           </div>

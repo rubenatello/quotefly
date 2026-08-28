@@ -3,22 +3,13 @@ import { Link } from "react-router-dom";
 import {
   AirVent,
   ArrowRight,
-  BriefcaseBusiness,
-  CalendarDays,
   Check,
   CheckCircle2,
-  CircleDollarSign,
-  ClipboardCheck,
   FileCheck2,
   HardHat,
   House,
   Leaf,
-  MessageSquareQuote,
   PanelsTopLeft,
-  ReceiptText,
-  Search,
-  TimerReset,
-  Truck,
   UsersRound,
   Wrench,
   type LucideIcon,
@@ -26,6 +17,8 @@ import {
 import { LandingProductDemo } from "../components/marketing/LandingProductDemo";
 import { LandingKodyShowcase } from "../components/marketing/LandingKodyShowcase";
 import { MarketingAction } from "../components/marketing/PublicPageLayout";
+import { MarketingFeatureIcon } from "../components/Icons";
+import { TablerIcons, type QuoteFlyTablerIcon } from "../components/icon-system";
 import { useMarketingReveal } from "../hooks/useMarketingReveal";
 import { BASIC_PLAN, BASIC_PLAN_PRICING_PATH, basicFirstPaidMonthPriceLabel } from "../lib/plans";
 import { setPublicSEOMetadata } from "../lib/seo";
@@ -52,31 +45,31 @@ type TradeSolution = {
 };
 
 const PAIN_POINTS: Array<{
-  icon: LucideIcon;
+  icon: QuoteFlyTablerIcon;
   problem: string;
   detail: string;
   answer: string;
 }> = [
   {
-    icon: MessageSquareQuote,
+    icon: TablerIcons.marketing.customer,
     problem: "Customer details live everywhere",
     detail: "A name in your phone, a scope in a text, and the job address on a scrap of paper.",
     answer: "Keep contact details, notes, and quote history together in one searchable customer record.",
   },
   {
-    icon: TimerReset,
+    icon: TablerIcons.marketing.quote,
     problem: "The estimate happens after hours",
     detail: "The workday ends, then the real paperwork starts back at the kitchen table.",
     answer: "Build and review the quote from your phone while the job details are still fresh.",
   },
   {
-    icon: CircleDollarSign,
+    icon: TablerIcons.marketing.invoice,
     problem: "Pricing gets rebuilt from memory",
     detail: "Labor, material, and markup drift when every estimate starts from a blank page.",
     answer: "Reuse work names and pricing defaults, then adjust cost and customer price for the job.",
   },
   {
-    icon: ClipboardCheck,
+    icon: TablerIcons.marketing.schedule,
     problem: "Good quotes lose momentum",
     detail: "A professional estimate still goes cold when nobody can see what needs follow-up.",
     answer: "Track quote status and next actions without running a separate sales spreadsheet.",
@@ -223,37 +216,37 @@ const WORKFLOW_STEPS = [
     number: "01",
     title: "Capture and price",
     detail: "Find or add the customer, then build the scope, quantities, and customer price while the details are fresh.",
-    icon: Search,
+    icon: TablerIcons.marketing.customer,
   },
   {
     number: "02",
     title: "Review and share",
     detail: "Check the customer-facing total and branded PDF before you create and share the quote.",
-    icon: FileCheck2,
+    icon: TablerIcons.marketing.quote,
   },
   {
     number: "03",
     title: "Turn yes into a Job",
     detail: "Move an accepted quote into a numbered Job without re-entering its customer or approved scope.",
-    icon: BriefcaseBusiness,
+    icon: TablerIcons.marketing.work,
   },
   {
     number: "04",
     title: "Assign and schedule",
     detail: "Choose an active teammate, then book directly or ask Kody to find an opening without overlapping that teammate’s active QuoteFly bookings. You confirm the visit before it reaches the calendar.",
-    icon: CalendarDays,
+    icon: TablerIcons.marketing.schedule,
   },
   {
     number: "05",
     title: "Dispatch and complete",
     detail: "Move eligible appointments through dispatch, arrival, and completion from the field workspace.",
-    icon: Truck,
+    icon: TablerIcons.marketing.work,
   },
   {
     number: "06",
     title: "Create the internal invoice",
     detail: "Create and review an internal invoice record from an accepted quote or completed Job.",
-    icon: ReceiptText,
+    icon: TablerIcons.marketing.invoice,
   },
 ];
 
@@ -380,7 +373,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                   className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.05)] transition duration-200 hover:-translate-y-1 hover:border-quotefly-blue/20 hover:shadow-[0_18px_42px_rgba(15,23,42,0.09)]"
                 >
                   <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-orange-700">
-                    <PainIcon size={23} aria-hidden="true" />
+                    <MarketingFeatureIcon icon={PainIcon} size={24} />
                   </span>
                   <h3 className="mt-5 text-lg font-bold text-slate-950">{item.problem}</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-500">{item.detail}</p>
@@ -423,7 +416,7 @@ export function SolutionsPage({ onOpenAuth }: SolutionsPageProps) {
                 return (
                   <li key={step.number} className="flex gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
                     <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm">
-                      <StepIcon size={20} aria-hidden="true" />
+                      <MarketingFeatureIcon icon={StepIcon} size={21} />
                     </span>
                     <div>
                       <div className="flex items-center gap-2">

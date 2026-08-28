@@ -187,7 +187,26 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
       QUICKBOOKS_ENVIRONMENT: "sandbox",
-    })).toThrow(/must use QUICKBOOKS_ENVIRONMENT=production/i);
+    })).toThrow(/explicitly approved staging origins/i);
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      APP_URL: "https://staging-app.quotefly.example",
+      API_URL: "https://staging-api.quotefly.example",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://staging-app.quotefly.example,https://staging-api.quotefly.example",
+      QUICKBOOKS_REDIRECT_URI: "https://staging-api.quotefly.example/v1/integrations/quickbooks/callback",
+    })).not.toThrow();
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      APP_URL: "https://www.quotefly.us",
+      API_URL: "https://api.quotefly.us",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://www.quotefly.us,https://api.quotefly.us",
+    })).toThrow(/forbidden on QuoteFly production origins/i);
     expect(() => parseEnv({
       ...quickBooksProductionEnv,
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",

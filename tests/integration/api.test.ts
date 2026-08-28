@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { createHmac } from "crypto";
+import { Prisma } from "@prisma/client";
+import { createHash, createHmac } from "crypto";
 import { readFile } from "node:fs/promises";
 import Stripe from "stripe";
 import twilio from "twilio";
@@ -15,6 +16,7 @@ import {
   resolveSubscriptionItemBilling,
 } from "../../src/lib/subscription";
 import { createSignedQuickBooksState } from "../../src/services/quickbooks";
+import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 import {
   getStandardWorkPresetCatalog,
   standardWorkPresetContentHash,
@@ -33,6 +35,7 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
   createInvoice: vi.fn(),
   fetchInvoice: vi.fn(),
   findInvoiceByDocNumber: vi.fn(),
+  revokeToken: vi.fn(),
 }));
 
 const stripeProviderMocks = vi.hoisted(() => ({
@@ -83,6 +86,7 @@ vi.mock("../../src/services/quickbooks", async () => {
     createQuickBooksInvoice: quickBooksProviderMocks.createInvoice,
     fetchQuickBooksInvoice: quickBooksProviderMocks.fetchInvoice,
     findQuickBooksInvoicesByDocNumber: quickBooksProviderMocks.findInvoiceByDocNumber,
+    revokeQuickBooksToken: quickBooksProviderMocks.revokeToken,
   };
 });
 
@@ -260,6 +264,7 @@ describe("QuoteFly API integration", () => {
     transactionalEmailMocks.isConfigured.mockReset().mockReturnValue(true);
     transactionalEmailMocks.sendPasswordReset.mockReset().mockResolvedValue(undefined);
     transactionalEmailMocks.sendPasswordChanged.mockReset().mockResolvedValue(undefined);
+    quickBooksProviderMocks.revokeToken.mockReset().mockResolvedValue(undefined);
   });
 
   beforeAll(async () => {
@@ -4025,13 +4030,13 @@ describe("QuoteFly API integration", () => {
       payload: { email: memberEmail, password: memberPassword },
     });
     expect(memberSignIn.statusCode).toBe(200);
-    const memberPush = await app.inject({
+    const memberQuickBooksSearch = await app.inject({
       method: "POST",
-      url: "/v1/integrations/quickbooks/quotes/not-a-quote/push-invoice",
+      url: "/v1/integrations/quickbooks/mappings/customers/search",
       headers: authHeaders(extractSessionCookie(memberSignIn)),
-      payload: {},
+      payload: { query: "test" },
     });
-    expect(memberPush.statusCode).toBe(403);
+    expect(memberQuickBooksSearch.statusCode).toBe(403);
 
     const victimOriginalName = victim.user.fullName;
     const addExistingUser = await app.inject({
@@ -4110,7 +4115,19 @@ describe("QuoteFly API integration", () => {
   });
 
   test("routes unauthenticated QuickBooks webhooks through signature verification", async () => {
-    const payload = "[]";
+    const payload = JSON.stringify({
+      eventNotifications: [{
+        realmId: `unknown-webhook-realm-${Date.now()}`,
+        dataChangeEvent: {
+          entities: [{
+            name: "Invoice",
+            id: "unmapped-invoice",
+            operation: "Update",
+            lastUpdated: new Date().toISOString(),
+          }],
+        },
+      }],
+    });
     const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
       .update(payload)
       .digest("base64");
@@ -4125,9 +4142,111 @@ describe("QuoteFly API integration", () => {
       payload,
     });
     expect(validResponse.statusCode).toBe(200);
-    expect(parseJson<{ received: boolean; count: number }>(validResponse)).toEqual({
+    expect(parseJson<{ received: boolean; count: number; persisted: number }>(validResponse)).toEqual({
       received: true,
-      count: 0,
+      count: 1,
+      persisted: 1,
+    });
+    const quarantined = await prisma.quickBooksWebhookEvent.findFirstOrThrow({
+      where: { realmId: JSON.parse(payload).eventNotifications[0].realmId },
+    });
+    expect(quarantined).toMatchObject({
+      tenantId: null,
+      quickBooksConnectionId: null,
+      eventType: "Invoice",
+      entityId: "unmapped-invoice",
+      status: "RECEIVED",
+      lastError: "QUICKBOOKS_REALM_UNBOUND",
+      payload: { quarantined: true },
+    });
+    const runtimeIngressId = `runtime-qb-webhook-${Date.now()}`;
+    const runtimeIngressRealm = `runtime-qb-realm-${Date.now()}`;
+    await expect(prisma.$transaction(async (transaction) => {
+      await transaction.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await transaction.$executeRaw(Prisma.sql`
+        SELECT
+          set_config('app.quickbooks_webhook_realm_id', ${runtimeIngressRealm}, true),
+          set_config('app.quickbooks_webhook_event_id', ${runtimeIngressId}, true)
+      `);
+      return transaction.$executeRaw(Prisma.sql`
+        INSERT INTO "QuickBooksWebhookEvent" (
+          "id", "webhookEventId", "realmId", "eventType", "payload", "lastError"
+        ) VALUES (
+          ${runtimeIngressId}, ${runtimeIngressId}, ${runtimeIngressRealm},
+          'Invoice', jsonb_build_object('quarantined', true), 'QUICKBOOKS_REALM_UNBOUND'
+        )
+      `);
+    })).resolves.toBe(1);
+    await expect(prisma.quickBooksWebhookEvent.findUniqueOrThrow({
+      where: { webhookEventId_realmId: { webhookEventId: runtimeIngressId, realmId: runtimeIngressRealm } },
+    })).resolves.toMatchObject({ tenantId: null, payload: { quarantined: true } });
+    await expect(prisma.$transaction(async (transaction) => {
+      await transaction.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      return transaction.$executeRaw(Prisma.sql`
+        INSERT INTO "QuickBooksWebhookEvent" (
+          "id", "webhookEventId", "realmId", "eventType", "payload", "lastError"
+        ) VALUES (
+          'unauthorized-qb-webhook', 'unauthorized-qb-webhook', 'unauthorized-qb-realm',
+          'Invoice', jsonb_build_object('quarantined', true), 'QUICKBOOKS_REALM_UNBOUND'
+        )
+      `);
+    })).rejects.toThrow();
+
+    const duplicateResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: {
+        "content-type": "application/json",
+        "intuit-signature": signature,
+      },
+      payload,
+    });
+    expect(duplicateResponse.statusCode).toBe(200);
+    expect(parseJson<{ persisted: number }>(duplicateResponse).persisted).toBe(0);
+    await expect(prisma.quickBooksWebhookEvent.count({
+      where: { realmId: quarantined.realmId },
+    })).resolves.toBe(1);
+
+    const quarantineOwner = await signUp("quickbooks-webhook-quarantine-adoption");
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: quarantineOwner.tenant.id,
+        realmId: quarantined.realmId,
+        environment: "sandbox",
+        status: "CONNECTED",
+      },
+    });
+    await prisma.quickBooksRealmBinding.create({
+      data: {
+        tenantId: quarantineOwner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        realmId: quarantined.realmId,
+        active: true,
+      },
+    });
+    const recoveryResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: {
+        "content-type": "application/json",
+        "intuit-signature": signature,
+      },
+      payload,
+    });
+    expect(recoveryResponse.statusCode).toBe(200);
+    expect(parseJson<{ persisted: number }>(recoveryResponse).persisted).toBe(1);
+    await expect(prisma.quickBooksWebhookEvent.findUniqueOrThrow({
+      where: {
+        webhookEventId_realmId: {
+          webhookEventId: quarantined.webhookEventId,
+          realmId: quarantined.realmId,
+        },
+      },
+    })).resolves.toMatchObject({
+      tenantId: quarantineOwner.tenant.id,
+      quickBooksConnectionId: connection.id,
+      lastError: null,
+      status: "RECEIVED",
     });
 
     const invalidResponse = await app.inject({
@@ -4154,6 +4273,55 @@ describe("QuoteFly API integration", () => {
       url: "/v1/integrations/quickbooks/disconnect",
     });
     expect(protectedWorkspaceResponse.statusCode).toBe(401);
+  });
+
+  test("caps QuickBooks webhook entity count and raw body size at the route boundary", async () => {
+    const entity = (id: string) => ({
+      name: "Invoice",
+      id,
+      operation: "Update",
+      lastUpdated: new Date().toISOString(),
+    });
+    const oversizedEntityPayload = JSON.stringify({
+      eventNotifications: Array.from({ length: 6 }, (_, notificationIndex) => ({
+        realmId: `entity-cap-realm-${notificationIndex}`,
+        dataChangeEvent: {
+          entities: Array.from({ length: 100 }, (_, entityIndex) => entity(`invoice-${notificationIndex}-${entityIndex}`)),
+        },
+      })),
+    });
+    const entityCapSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(oversizedEntityPayload)
+      .digest("base64");
+    const entityCapResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": entityCapSignature },
+      payload: oversizedEntityPayload,
+    });
+    expect(entityCapResponse.statusCode).toBe(400);
+
+    const oversizedRawPayload = JSON.stringify({
+      eventNotifications: Array.from({ length: 25 }, (_, notificationIndex) => ({
+        realmId: `body-cap-realm-${notificationIndex}`,
+        dataChangeEvent: {
+          entities: Array.from({ length: 100 }, (_, entityIndex) => entity(
+            `${notificationIndex}-${entityIndex}-${"x".repeat(170)}`,
+          )),
+        },
+      })),
+    });
+    expect(Buffer.byteLength(oversizedRawPayload, "utf8")).toBeGreaterThan(256 * 1024);
+    const bodyCapSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(oversizedRawPayload)
+      .digest("base64");
+    const bodyCapResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": bodyCapSignature },
+      payload: oversizedRawPayload,
+    });
+    expect(bodyCapResponse.statusCode).toBe(413);
   });
 
   test("contains QuickBooks provider workflows by default without calling Intuit", async () => {
@@ -4224,39 +4392,46 @@ describe("QuoteFly API integration", () => {
         method: "GET",
         url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=paused-code&realmId=paused-realm`,
       });
-      expect(callback.statusCode).toBe(503);
-      expect(parseJson<{ error: string }>(callback)).toEqual({
-        error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
-      });
+      expect(callback.statusCode).toBe(302);
+      expect(callback.headers.location).toContain("integrations=quickbooks_invalid_state");
 
-      const push = await app.inject({
+      const publish = await app.inject({
         method: "POST",
-        url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
-        headers: authHeaders(session.cookie),
-        payload: {},
+        url: "/v1/integrations/quickbooks/invoices/not-an-invoice/publish",
+        headers: {
+          ...authHeaders(session.cookie),
+          "idempotency-key": "paused-provider-publish",
+        },
+        payload: { invoiceVersion: 1, reviewBinding: "A".repeat(43) },
       });
-      expect(push.statusCode).toBe(503);
-      expect(parseJson<{ error: string }>(push)).toEqual({
+      expect(publish.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(publish)).toEqual({
         error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
       });
 
-      const invoiceStatus = await app.inject({
-        method: "GET",
-        url: `/v1/integrations/quickbooks/quotes/${quote.id}/invoice-status`,
+      const refresh = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/invoices/not-an-invoice/refresh",
         headers: authHeaders(session.cookie),
       });
-      expect(invoiceStatus.statusCode).toBe(503);
-      expect(parseJson<{ error: string }>(invoiceStatus)).toEqual({
+      expect(refresh.statusCode).toBe(503);
+      expect(parseJson<{ error: string }>(refresh)).toEqual({
         error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE",
       });
 
-      const payload = JSON.stringify([{
-        id: `paused-webhook-${Date.now()}`,
-        type: "com.intuit.quickbooks.accounting.invoice.updated",
-        intuitaccountid: connection.realmId,
-        intuitentityid: "paused-invoice-id",
-        time: new Date().toISOString(),
-      }]);
+      const payload = JSON.stringify({
+        eventNotifications: [{
+          realmId: connection.realmId,
+          dataChangeEvent: {
+            entities: [{
+              name: "Invoice",
+              id: "paused-invoice-id",
+              operation: "Update",
+              lastUpdated: new Date().toISOString(),
+            }],
+          },
+        }],
+      });
       const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
         .update(payload)
         .digest("base64");
@@ -4295,7 +4470,18 @@ describe("QuoteFly API integration", () => {
       headers: authHeaders(owner.cookie),
     });
     expect(ownerStatus.statusCode).toBe(200);
-    expect(parseJson<{ connection: { realmId: string } | null }>(ownerStatus).connection?.realmId).toMatch(/^realm-private-/);
+    expect(ownerStatus.headers["cache-control"]).toBe("private, no-store");
+    const safeStatus = parseJson<{
+      connection: Record<string, unknown> | null;
+      setup: { phase: string };
+    }>(ownerStatus);
+    expect(safeStatus.connection?.companyName).toBe("Private Provider Company");
+    expect(safeStatus.connection).not.toHaveProperty("realmId");
+    expect(safeStatus.connection).not.toHaveProperty("scopes");
+    expect(safeStatus.connection).not.toHaveProperty("accessTokenEncrypted");
+    expect(safeStatus.connection).not.toHaveProperty("refreshTokenEncrypted");
+    expect(safeStatus.connection).not.toHaveProperty("lastError");
+    expect(safeStatus.setup.phase).toBe("ACTION_REQUIRED");
 
     const memberEmail = `quickbooks-private-member-${Date.now()}@example.com`;
     const memberPassword = "MemberPassword123!";
@@ -4322,10 +4508,14 @@ describe("QuoteFly API integration", () => {
     for (const request of [
       { method: "GET" as const, url: "/v1/integrations/quickbooks/status" },
       { method: "GET" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/sync-preview" },
-      { method: "GET" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/invoice-status" },
-      { method: "POST" as const, url: "/v1/integrations/quickbooks/quotes/not-a-quote/push-invoice" },
+      { method: "POST" as const, url: "/v1/integrations/quickbooks/mappings/customers/search", payload: { query: "test" } },
+      { method: "POST" as const, url: "/v1/integrations/quickbooks/invoices/not-an-invoice/refresh" },
     ]) {
-      const response = await app.inject({ ...request, headers: memberHeaders, payload: request.method === "POST" ? {} : undefined });
+      const response = await app.inject({
+        ...request,
+        headers: memberHeaders,
+        payload: request.method === "POST" ? ("payload" in request ? request.payload : {}) : undefined,
+      });
       expect(response.statusCode).toBe(403);
       expect(parseJson<{ error: string }>(response)).toEqual({ error: "Only owners or admins can manage QuickBooks." });
       expect(response.body).not.toContain("realm-private-");
@@ -4370,27 +4560,218 @@ describe("QuoteFly API integration", () => {
       },
     });
 
-    const response = await app.inject({
+    const invoiceResponse = await app.inject({
       method: "POST",
-      url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
-      headers: authHeaders(session.cookie),
-      payload: { force: true },
+      url: "/v1/invoices",
+      headers: {
+        ...authHeaders(session.cookie),
+        "idempotency-key": `taxable-invoice-${Date.now()}`,
+      },
+      payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
     });
-    expect(response.statusCode).toBe(410);
-    expect(parseJson<{ code: string }>(response)).toMatchObject({
-      code: "QUICKBOOKS_LEGACY_QUOTE_PUSH_RETIRED",
-    });
-
-    const taxableResponse = await app.inject({
+    expect(invoiceResponse.statusCode).toBe(201);
+    const invoiceId = parseJson<{ invoice: { id: string } }>(invoiceResponse).invoice.id;
+    const previewResponse = await app.inject({
       method: "POST",
-      url: `/v1/integrations/quickbooks/quotes/${quote.id}/push-invoice`,
+      url: `/v1/integrations/quickbooks/invoices/${invoiceId}/sync-preview`,
       headers: authHeaders(session.cookie),
       payload: {},
     });
-    expect(taxableResponse.statusCode).toBe(410);
-    expect(parseJson<{ code: string }>(taxableResponse)).toMatchObject({
-      code: "QUICKBOOKS_LEGACY_QUOTE_PUSH_RETIRED",
+    expect(previewResponse.statusCode).toBe(200);
+    expect(parseJson<{ preview: { ready: boolean; blockers: string[] } }>(previewResponse)).toMatchObject({
+      preview: {
+        ready: false,
+        blockers: expect.arrayContaining(["QUICKBOOKS_TAX_SYNC_UNSUPPORTED"]),
+      },
     });
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+  });
+
+  test("confirms a complete QuickBooks setup idempotently with the live tenant actor", async () => {
+    const owner = await signUp("quickbooks-setup-confirmation");
+    const membership = await prisma.tenantUser.findUniqueOrThrow({
+      where: { tenantId_userId: { tenantId: owner.tenant.id, userId: owner.user.id } },
+      select: { id: true },
+    });
+    const realmId = `realm-confirm-${Date.now()}`;
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId,
+        environment: "sandbox",
+        companyName: "Confirmed Setup Company",
+        status: "CONNECTED",
+        scopes: ["com.intuit.quickbooks.accounting"],
+        accessTokenEncrypted: "opaque-access-token",
+        refreshTokenEncrypted: "opaque-refresh-token",
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000),
+        realmBinding: {
+          create: { realmId, active: true },
+        },
+        cdcCursor: {
+          create: { changedSinceUtc: new Date() },
+        },
+      },
+    });
+
+    const before = await app.inject({
+      method: "GET",
+      url: "/v1/integrations/quickbooks/status",
+      headers: authHeaders(owner.cookie),
+    });
+    expect(before.statusCode).toBe(200);
+    expect(parseJson<{ setup: { phase: string } }>(before).setup.phase).toBe("READY_FOR_CONFIRMATION");
+
+    const payload = {
+      checklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+      companyConfirmed: true as const,
+      reviewResponsibilityConfirmed: true as const,
+    };
+    const memberEmail = `quickbooks-confirm-member-${Date.now()}@example.com`;
+    const memberPassword = "MemberPassword123!";
+    const memberCreated = await app.inject({
+      method: "POST",
+      url: "/v1/org/users",
+      headers: authHeaders(owner.cookie),
+      payload: { email: memberEmail, fullName: "QuickBooks Confirm Member", password: memberPassword, role: "member" },
+    });
+    expect(memberCreated.statusCode).toBe(201);
+    const memberSignIn = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signin",
+      payload: { email: memberEmail, password: memberPassword },
+    });
+    expect(memberSignIn.statusCode).toBe(200);
+    const memberConfirmation = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/setup-confirmation",
+      headers: authHeaders(extractSessionCookie(memberSignIn)),
+      payload,
+    });
+    expect(memberConfirmation.statusCode).toBe(403);
+    expect((await prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } })).setupConfirmedAtUtc).toBeNull();
+
+    const confirmed = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/setup-confirmation",
+      headers: authHeaders(owner.cookie),
+      payload,
+    });
+    expect(confirmed.statusCode).toBe(200);
+    expect(parseJson<{ confirmed: boolean; idempotent: boolean; setup: { phase: string } }>(confirmed)).toMatchObject({
+      confirmed: true,
+      idempotent: false,
+      setup: { phase: "CONFIRMED" },
+    });
+
+    const saved = await prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } });
+    expect(saved.setupConfirmedByTenantUserId).toBe(membership.id);
+    expect(saved.setupChecklistVersion).toBe(QUICKBOOKS_SETUP_CHECKLIST_VERSION);
+    expect(saved.setupConfirmedAtUtc).not.toBeNull();
+
+    const repeated = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/setup-confirmation",
+      headers: authHeaders(owner.cookie),
+      payload,
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(parseJson<{ idempotent: boolean }>(repeated).idempotent).toBe(true);
+
+    const setupEvents = await prisma.quickBooksConnectionEvent.findMany({
+      where: { tenantId: owner.tenant.id, quickBooksConnectionId: connection.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(setupEvents).toHaveLength(1);
+    expect(setupEvents[0]).toMatchObject({
+      actorTenantUserId: membership.id,
+      action: "SETUP_CONFIRMED",
+      outcome: "SUCCEEDED",
+      connectionGeneration: 1,
+    });
+    expect(setupEvents[0]?.requestId).toBeTruthy();
+
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: { accessTokenEncrypted: null, refreshTokenEncrypted: null },
+    });
+    const disconnected = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/disconnect",
+      headers: authHeaders(owner.cookie),
+    });
+    expect(disconnected.statusCode).toBe(200);
+    expect(parseJson<{ disconnected: boolean }>(disconnected).disconnected).toBe(true);
+    const lifecycleEvents = await prisma.quickBooksConnectionEvent.findMany({
+      where: { tenantId: owner.tenant.id, quickBooksConnectionId: connection.id },
+      orderBy: { createdAt: "asc" },
+      select: {
+        actorTenantUserId: true,
+        requestId: true,
+        action: true,
+        outcome: true,
+        connectionGeneration: true,
+      },
+    });
+    expect(lifecycleEvents.map((event) => event.action)).toEqual([
+      "SETUP_CONFIRMED",
+      "DISCONNECT_REQUESTED",
+      "DISCONNECTED",
+    ]);
+    expect(lifecycleEvents.every((event) => event.actorTenantUserId === membership.id)).toBe(true);
+    expect(lifecycleEvents.every((event) => event.requestId.length > 0)).toBe(true);
+    expect(lifecycleEvents.every((event) => event.connectionGeneration === 1)).toBe(true);
+  });
+
+  test("consumes QuickBooks OAuth state on denial so it cannot be replayed", async () => {
+    const owner = await signUp("quickbooks-denied-state");
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+
+    const connect = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/connect",
+      headers: authHeaders(owner.cookie),
+    });
+    expect(connect.statusCode).toBe(200);
+    const authorizationUrl = new URL(parseJson<{ authorizationUrl: string }>(connect).authorizationUrl);
+    const state = authorizationUrl.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state!)}&error=access_denied`,
+    });
+    expect(denied.statusCode).toBe(302);
+    expect(denied.headers.location).toContain("integrations=quickbooks_denied");
+
+    const replay = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state!)}&code=replay-code&realmId=replay-realm`,
+    });
+    expect(replay.statusCode).toBe(302);
+    expect(replay.headers.location).toContain("integrations=quickbooks_invalid_state");
+    expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
+    expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
+    expect(await prisma.quickBooksConnection.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
+    const membership = await prisma.tenantUser.findUniqueOrThrow({
+      where: { tenantId_userId: { tenantId: owner.tenant.id, userId: owner.user.id } },
+      select: { id: true },
+    });
+    await expect(prisma.quickBooksConnectionEvent.findMany({
+      where: { tenantId: owner.tenant.id },
+      select: {
+        actorTenantUserId: true,
+        action: true,
+        outcome: true,
+        connectionGeneration: true,
+      },
+    })).resolves.toEqual([{
+      actorTenantUserId: membership.id,
+      action: "CONNECT_STARTED",
+      outcome: "PENDING",
+      connectionGeneration: 1,
+    }]);
   });
 
   test("rejects stale QuickBooks OAuth state before provider exchange or credential writes", async () => {
@@ -4460,7 +4841,7 @@ describe("QuoteFly API integration", () => {
       });
 
       expect(response.statusCode).toBe(302);
-      expect(response.headers.location).toContain("integrations=quickbooks_error");
+      expect(response.headers.location).toContain("integrations=quickbooks_invalid_state");
       expect(response.body).not.toContain("one-time-code");
       expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
       expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
@@ -4491,6 +4872,15 @@ describe("QuoteFly API integration", () => {
         userId: session.user.id,
         role,
       });
+      const realmId = `realm-active-${role}`;
+      await prisma.quickBooksOAuthState.create({
+        data: {
+          tenantId: session.tenant.id,
+          userId: session.user.id,
+          stateHash: createHash("sha256").update(state).digest("hex"),
+          expiresAtUtc: new Date(Date.now() + 60_000),
+        },
+      });
       const accessToken = `sandbox-access-${role}`;
       const refreshToken = `sandbox-refresh-${role}`;
       quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
@@ -4502,12 +4892,13 @@ describe("QuoteFly API integration", () => {
         expires_in: 3600,
       });
       quickBooksProviderMocks.fetchCompanyInfo.mockResolvedValue({
+        realmId,
         companyName: `Sandbox ${role} Company`,
       });
 
       const response = await app.inject({
         method: "GET",
-        url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=active-${role}-code&realmId=realm-active-${role}`,
+        url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=active-${role}-code&realmId=${realmId}`,
       });
 
       expect(response.statusCode).toBe(302);
@@ -4526,7 +4917,7 @@ describe("QuoteFly API integration", () => {
       });
       expect(connection).toMatchObject({
         status: "CONNECTED",
-        realmId: `realm-active-${role}`,
+        realmId,
       });
       expect(connection.accessTokenEncrypted).not.toBe(accessToken);
       expect(connection.refreshTokenEncrypted).not.toBe(refreshToken);
@@ -4540,8 +4931,20 @@ describe("QuoteFly API integration", () => {
       userId: session.user.id,
       role: "owner",
     });
+    const realmId = "realm-revocation-race";
+    await prisma.quickBooksOAuthState.create({
+      data: {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        stateHash: createHash("sha256").update(state).digest("hex"),
+        expiresAtUtc: new Date(Date.now() + 60_000),
+      },
+    });
     quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
     quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+    const orphanAccessToken = "revoked-during-exchange-access";
+    const orphanRefreshToken = "revoked-during-exchange-refresh";
+    quickBooksProviderMocks.revokeToken.mockRejectedValue(new Error("synthetic revocation timeout"));
     quickBooksProviderMocks.exchangeAuthorizationCode.mockImplementation(async () => {
       await prisma.tenantUser.update({
         where: {
@@ -4553,28 +4956,48 @@ describe("QuoteFly API integration", () => {
         data: { role: "member" },
       });
       return {
-        access_token: "revoked-during-exchange-access",
-        refresh_token: "revoked-during-exchange-refresh",
+        access_token: orphanAccessToken,
+        refresh_token: orphanRefreshToken,
         token_type: "bearer",
         expires_in: 3600,
       };
     });
     quickBooksProviderMocks.fetchCompanyInfo.mockResolvedValue({
+      realmId,
       companyName: "Revoked During Exchange Company",
     });
 
     const response = await app.inject({
       method: "GET",
-      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=revocation-race-code&realmId=realm-revocation-race`,
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=revocation-race-code&realmId=${realmId}`,
     });
 
     expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toContain("integrations=quickbooks_error");
+    expect(response.headers.location).toContain(
+      "integrations=quickbooks_disconnect_pending",
+    );
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
     expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+    expect(quickBooksProviderMocks.revokeToken).toHaveBeenCalledOnce();
     await expect(
       prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
     ).resolves.toBe(0);
+    const orphan = await prisma.quickBooksOrphanCredentialRevocation.findFirstOrThrow({
+      where: { tenantId: session.tenant.id },
+    });
+    expect(orphan).toMatchObject({
+      tenantId: session.tenant.id,
+      status: "PENDING",
+      attemptCount: 1,
+      claimTokenHash: null,
+      claimExpiresAtUtc: null,
+      lastErrorCode: "QUICKBOOKS_ORPHAN_TOKEN_REVOCATION_FAILED",
+    });
+    expect(orphan.refreshTokenEncrypted).not.toBe(orphanRefreshToken);
+    expect(JSON.stringify(orphan)).not.toContain(orphanRefreshToken);
+    expect(JSON.stringify(orphan)).not.toContain(orphanAccessToken);
+    expect(response.body).not.toContain(orphanRefreshToken);
+    expect(response.headers.location).not.toContain(orphanRefreshToken);
   });
 
   test("keeps QuickBooks provider failures out of the OAuth redirect", async () => {
@@ -4583,6 +5006,14 @@ describe("QuoteFly API integration", () => {
       tenantId: session.tenant.id,
       userId: session.user.id,
       role: "owner",
+    });
+    await prisma.quickBooksOAuthState.create({
+      data: {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        stateHash: createHash("sha256").update(state).digest("hex"),
+        expiresAtUtc: new Date(Date.now() + 60_000),
+      },
     });
     const sensitiveProviderMessage = "provider rejected secret-access-token";
     quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();

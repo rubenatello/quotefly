@@ -16,10 +16,19 @@ import {
   type Invoice,
   type InvoicePaymentStatus,
   type InvoiceStatus,
+  type QuickBooksCustomerCandidate,
   type QuickBooksInvoiceOperationStatus,
+  type QuickBooksInvoiceReviewOptions,
   type QuickBooksInvoiceSyncPreview,
+  type QuickBooksItemCandidate,
 } from "../../lib/api";
 import { localizedApiError } from "../../lib/localized-api-error";
+import {
+  isCurrentQuickBooksRequestContext,
+  isQuickBooksPreviewCurrentForPublish,
+  isValidQuickBooksBillingEmail,
+  safeQuickBooksHostedPaymentUrl,
+} from "../../lib/quickbooks-payment-link";
 import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../../lib/tenant-time";
 
 type InvoicePanelProps = {
@@ -101,7 +110,23 @@ export function InvoicePanel({
   const [quickBooksEnabled, setQuickBooksEnabled] = useState(false);
   const [quickBooksLoading, setQuickBooksLoading] = useState(false);
   const [quickBooksSaving, setQuickBooksSaving] = useState(false);
+  const [quickBooksMappingSaving, setQuickBooksMappingSaving] = useState<string | null>(null);
   const [quickBooksError, setQuickBooksError] = useState<string | null>(null);
+  const [quickBooksBillingEmail, setQuickBooksBillingEmail] = useState("");
+  const [quickBooksAllowAch, setQuickBooksAllowAch] = useState(false);
+  const [quickBooksAllowCard, setQuickBooksAllowCard] = useState(false);
+  const [quickBooksReviewDirty, setQuickBooksReviewDirty] = useState(false);
+  const [quickBooksCustomerId, setQuickBooksCustomerId] = useState("");
+  const [quickBooksItemIds, setQuickBooksItemIds] = useState<Record<string, string>>({});
+  const [quickBooksCustomerSearch, setQuickBooksCustomerSearch] = useState("");
+  const [quickBooksCustomerCandidates, setQuickBooksCustomerCandidates] = useState<QuickBooksCustomerCandidate[]>([]);
+  const [quickBooksItemSearches, setQuickBooksItemSearches] = useState<Record<string, string>>({});
+  const [quickBooksItemCandidates, setQuickBooksItemCandidates] = useState<Record<string, QuickBooksItemCandidate[]>>({});
+  const [quickBooksSearchLoading, setQuickBooksSearchLoading] = useState<string | null>(null);
+  const [quickBooksSearchErrors, setQuickBooksSearchErrors] = useState<Record<string, string>>({});
+  const [quickBooksSearchCompleted, setQuickBooksSearchCompleted] = useState<Record<string, boolean>>({});
+  const [quickBooksPaymentLink, setQuickBooksPaymentLink] = useState<string | null>(null);
+  const [quickBooksPaymentLinkLoading, setQuickBooksPaymentLinkLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; tone: "success" | "warning" } | null>(null);
   const [dueDate, setDueDate] = useState(() => defaultDueDate(timeZone));
@@ -110,12 +135,20 @@ export function InvoicePanel({
   const operationGenerationRef = useRef(0);
   const quickBooksGenerationRef = useRef(0);
   const quickBooksOperationGenerationRef = useRef(0);
+  const quickBooksMappingMutationGenerationRef = useRef(0);
+  const quickBooksLookupGenerationRef = useRef(0);
+  const quickBooksPaymentLinkGenerationRef = useRef(0);
+  const activeInvoiceRef = useRef<Invoice | null>(invoice);
+  activeInvoiceRef.current = invoice;
   const quickBooksCommandRef = useRef<{ fingerprint: string; key: string } | null>(null);
   if (sourceRef.current !== sourceKey) {
     sourceRef.current = sourceKey;
     operationGenerationRef.current += 1;
     quickBooksGenerationRef.current += 1;
     quickBooksOperationGenerationRef.current += 1;
+    quickBooksMappingMutationGenerationRef.current += 1;
+    quickBooksLookupGenerationRef.current += 1;
+    quickBooksPaymentLinkGenerationRef.current += 1;
   }
 
   const operationIsCurrent = useCallback(
@@ -127,6 +160,53 @@ export function InvoicePanel({
   const quickBooksOperationIsCurrent = useCallback(
     (operationSource: string, generation: number) =>
       sourceRef.current === operationSource && quickBooksOperationGenerationRef.current === generation,
+    [],
+  );
+
+  const quickBooksLookupIsCurrent = useCallback(
+    (operationSource: string, generation: number) =>
+      isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksLookupGenerationRef.current,
+      }),
+    [],
+  );
+
+  const quickBooksMappingMutationIsCurrent = useCallback(
+    (
+      operationSource: string,
+      generation: number,
+      requestedInvoiceId: string,
+      requestedInvoiceVersion?: number,
+    ) =>
+      isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksMappingMutationGenerationRef.current,
+        requestedInvoiceId,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+        ...(requestedInvoiceVersion === undefined ? {} : {
+          requestedInvoiceVersion,
+          currentInvoiceVersion: activeInvoiceRef.current?.version ?? null,
+        }),
+      }),
+    [],
+  );
+
+  const quickBooksPaymentLinkIsCurrent = useCallback(
+    (operationSource: string, generation: number, requestedInvoiceId?: string, responseInvoiceId?: string) =>
+      isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksPaymentLinkGenerationRef.current,
+        requestedInvoiceId,
+        responseInvoiceId,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      }),
     [],
   );
 
@@ -163,22 +243,66 @@ export function InvoicePanel({
 
   const loadQuickBooksPreview = useCallback(async (
     currentInvoice: Invoice,
-    options: { clearError?: boolean } = {},
+    options: {
+      clearError?: boolean;
+      preservePreviewOnError?: boolean;
+      reviewOptions?: QuickBooksInvoiceReviewOptions;
+    } = {},
   ) => {
+    const operationSource = sourceRef.current;
+    const requestedInvoiceId = currentInvoice.id;
     const generation = ++quickBooksGenerationRef.current;
     setQuickBooksLoading(true);
     if (options.clearError !== false) setQuickBooksError(null);
     try {
-      const response = await api.integrations.quickbooks.invoiceSyncPreview(currentInvoice.id);
-      if (generation !== quickBooksGenerationRef.current) return;
+      const response = await api.integrations.quickbooks.invoiceSyncPreview(currentInvoice.id, options.reviewOptions);
+      if (!isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksGenerationRef.current,
+        requestedInvoiceId,
+        responseInvoiceId: response.preview.invoice.id,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      })) return;
       setQuickBooksEnabled(response.providerWorkflowsEnabled);
       setQuickBooksPreview(response.preview);
+      setInvoice((current) => current?.id === response.preview.invoice.id
+        && current.version !== response.preview.invoice.version
+        ? { ...current, version: response.preview.invoice.version }
+        : current);
+      setQuickBooksBillingEmail(response.preview.billingEmail ?? "");
+      setQuickBooksAllowAch(response.preview.paymentMethods?.ach ?? false);
+      setQuickBooksAllowCard(response.preview.paymentMethods?.card ?? false);
+      setQuickBooksCustomerId(response.preview.customerMapping?.quickBooksCustomerId ?? "");
+      setQuickBooksItemIds(Object.fromEntries(response.preview.lineItems.map((line) => [line.itemKey ?? line.description, line.quickBooksItemId ?? ""])));
+      setQuickBooksCustomerSearch(response.preview.invoice.customerName);
+      setQuickBooksCustomerCandidates([]);
+      setQuickBooksItemSearches(Object.fromEntries(response.preview.lineItems.map((line) => [line.itemKey ?? line.description, line.description])));
+      setQuickBooksItemCandidates({});
+      setQuickBooksSearchErrors({});
+      setQuickBooksSearchCompleted({});
+      setQuickBooksReviewDirty(false);
     } catch (err) {
-      if (generation !== quickBooksGenerationRef.current) return;
-      setQuickBooksPreview(null);
+      if (!isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksGenerationRef.current,
+        requestedInvoiceId,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      })) return;
+      if (!options.preservePreviewOnError) setQuickBooksPreview(null);
       setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.loadError" }));
     } finally {
-      if (generation === quickBooksGenerationRef.current) setQuickBooksLoading(false);
+      if (isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksGenerationRef.current,
+        requestedInvoiceId,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      })) setQuickBooksLoading(false);
     }
   }, [t]);
 
@@ -193,10 +317,27 @@ export function InvoicePanel({
     setQuickBooksPreview(null);
     setQuickBooksError(null);
     setQuickBooksSaving(false);
+    setQuickBooksMappingSaving(null);
+    setQuickBooksBillingEmail("");
+    setQuickBooksAllowAch(false);
+    setQuickBooksAllowCard(false);
+    setQuickBooksReviewDirty(false);
+    setQuickBooksCustomerId("");
+    setQuickBooksItemIds({});
+    setQuickBooksCustomerSearch("");
+    setQuickBooksCustomerCandidates([]);
+    setQuickBooksItemSearches({});
+    setQuickBooksItemCandidates({});
+    setQuickBooksSearchLoading(null);
+    setQuickBooksSearchErrors({});
+    setQuickBooksSearchCompleted({});
+    setQuickBooksPaymentLink(null);
+    setQuickBooksPaymentLinkLoading(false);
     commandRef.current = null;
     quickBooksCommandRef.current = null;
     quickBooksGenerationRef.current += 1;
     quickBooksOperationGenerationRef.current += 1;
+    quickBooksMappingMutationGenerationRef.current += 1;
     void loadInvoice();
     return () => {
       operationGenerationRef.current += 1;
@@ -232,6 +373,25 @@ export function InvoicePanel({
     () => dueDate ? tenantWallTimeToIso(`${dueDate}T12:00`, timeZone) : null,
     [dueDate, timeZone],
   );
+
+  const quickBooksReviewOptions = useMemo<QuickBooksInvoiceReviewOptions>(() => ({
+    billingEmail: quickBooksBillingEmail.trim() || null,
+    allowOnlineAchPayment: quickBooksAllowAch,
+    allowOnlineCardPayment: quickBooksAllowCard,
+  }), [quickBooksAllowAch, quickBooksAllowCard, quickBooksBillingEmail]);
+  const quickBooksBillingEmailInvalid = Boolean(
+    quickBooksBillingEmail.trim()
+    && !isValidQuickBooksBillingEmail(quickBooksBillingEmail),
+  ) || Boolean(
+    (quickBooksAllowAch || quickBooksAllowCard)
+    && !isValidQuickBooksBillingEmail(quickBooksBillingEmail),
+  );
+  const quickBooksPreviewMatchesInvoice = isQuickBooksPreviewCurrentForPublish({
+    activeInvoiceId: invoice?.id,
+    activeInvoiceVersion: invoice?.version,
+    previewInvoiceId: quickBooksPreview?.invoice.id,
+    previewInvoiceVersion: quickBooksPreview?.invoice.version,
+  });
 
   const handleCreate = async () => {
     if (saving || !canCreate || createBlockedReason || (!jobId && !sourceQuoteId)) return;
@@ -282,6 +442,17 @@ export function InvoicePanel({
       || quickBooksSaving
     ) return;
     const reviewedPreview = quickBooksPreview;
+    if (!isQuickBooksPreviewCurrentForPublish({
+      activeInvoiceId: invoice.id,
+      activeInvoiceVersion: invoice.version,
+      previewInvoiceId: reviewedPreview.invoice.id,
+      previewInvoiceVersion: reviewedPreview.invoice.version,
+    })) {
+      setQuickBooksConfirmOpen(false);
+      setQuickBooksError(t("invoices.quickBooks.reviewStale"));
+      void loadQuickBooksPreview(invoice);
+      return;
+    }
     const reviewBinding = reviewedPreview.reviewBinding;
     if (!reviewBinding) return;
     const fingerprint = `${reviewedPreview.invoice.id}:${reviewedPreview.invoice.version}:${reviewBinding}`;
@@ -302,12 +473,16 @@ export function InvoicePanel({
         {
           invoiceVersion: reviewedPreview.invoice.version,
           reviewBinding,
+          billingEmail: reviewedPreview.billingEmail,
+          allowOnlineAchPayment: reviewedPreview.paymentMethods?.ach ?? false,
+          allowOnlineCardPayment: reviewedPreview.paymentMethods?.card ?? false,
         },
         quickBooksCommandRef.current.key,
       );
       if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
       setQuickBooksPreview((current) => current ? { ...current, operation: response.operation } : current);
       setQuickBooksConfirmOpen(false);
+      await loadQuickBooksPreview(invoice, { clearError: false, preservePreviewOnError: true });
     } catch (err) {
       if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
       const message = localizedApiError(err, t, {
@@ -325,6 +500,205 @@ export function InvoicePanel({
     }
   };
 
+  const handleQuickBooksReviewOptions = async () => {
+    if (!invoice || quickBooksLoading || quickBooksSaving || quickBooksBillingEmailInvalid) {
+      if (quickBooksBillingEmailInvalid) setQuickBooksError(t("invoices.quickBooks.invalidBillingEmail"));
+      return;
+    }
+    setQuickBooksPaymentLink(null);
+    await loadQuickBooksPreview(invoice, { reviewOptions: quickBooksReviewOptions });
+  };
+
+  const handleQuickBooksCustomerSearch = async () => {
+    const query = quickBooksCustomerSearch.trim();
+    if (query.length < 2) {
+      setQuickBooksSearchErrors((current) => ({ ...current, customer: t("invoices.quickBooks.searchMinimum") }));
+      return;
+    }
+    const operationSource = sourceKey;
+    const generation = ++quickBooksLookupGenerationRef.current;
+    setQuickBooksSearchLoading("customer");
+    setQuickBooksSearchErrors((current) => ({ ...current, customer: "" }));
+    setQuickBooksSearchCompleted((current) => ({ ...current, customer: false }));
+    try {
+      const response = await api.integrations.quickbooks.searchCustomerMappings(query);
+      if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
+      setQuickBooksCustomerCandidates(response.candidates ?? []);
+      setQuickBooksSearchCompleted((current) => ({ ...current, customer: true }));
+    } catch (err) {
+      if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
+      setQuickBooksCustomerCandidates([]);
+      setQuickBooksSearchErrors((current) => ({
+        ...current,
+        customer: localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.searchError" }),
+      }));
+    } finally {
+      if (quickBooksLookupIsCurrent(operationSource, generation)) setQuickBooksSearchLoading(null);
+    }
+  };
+
+  const handleQuickBooksItemSearch = async (itemKey: string) => {
+    const query = quickBooksItemSearches[itemKey]?.trim() ?? "";
+    if (query.length < 2) {
+      setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: t("invoices.quickBooks.searchMinimum") }));
+      return;
+    }
+    const operationSource = sourceKey;
+    const generation = ++quickBooksLookupGenerationRef.current;
+    setQuickBooksSearchLoading(itemKey);
+    setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: "" }));
+    setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: false }));
+    try {
+      const response = await api.integrations.quickbooks.searchItemMappings(query);
+      if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
+      setQuickBooksItemCandidates((current) => ({ ...current, [itemKey]: response.candidates ?? [] }));
+      setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: true }));
+    } catch (err) {
+      if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
+      setQuickBooksItemCandidates((current) => ({ ...current, [itemKey]: [] }));
+      setQuickBooksSearchErrors((current) => ({
+        ...current,
+        [itemKey]: localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.searchError" }),
+      }));
+    } finally {
+      if (quickBooksLookupIsCurrent(operationSource, generation)) setQuickBooksSearchLoading(null);
+    }
+  };
+
+  const handleQuickBooksCustomerMappingReview = async () => {
+    const providerCustomerId = quickBooksCustomerId.trim();
+    if (!invoice || !providerCustomerId || quickBooksMappingSaving) {
+      if (!providerCustomerId) setQuickBooksError(t("invoices.quickBooks.customerIdRequired"));
+      return;
+    }
+    const operationSource = sourceKey;
+    const requestedInvoice = invoice;
+    const generation = ++quickBooksMappingMutationGenerationRef.current;
+    setQuickBooksMappingSaving("customer");
+    setQuickBooksError(null);
+    try {
+      await api.integrations.quickbooks.reviewInvoiceCustomerMapping({
+        customerId: requestedInvoice.customerId,
+        quickBooksCustomerId: providerCustomerId,
+      });
+      if (!quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+        requestedInvoice.version,
+      )) return;
+      await loadQuickBooksPreview(requestedInvoice, { clearError: false, reviewOptions: quickBooksReviewOptions });
+    } catch (err) {
+      if (!quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+        requestedInvoice.version,
+      )) return;
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.mappingReviewError" }));
+    } finally {
+      if (quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+      )) setQuickBooksMappingSaving(null);
+    }
+  };
+
+  const handleQuickBooksItemMappingReview = async (line: QuickBooksInvoiceSyncPreview["lineItems"][number]) => {
+    const itemKey = line.itemKey ?? line.description;
+    const providerItemId = quickBooksItemIds[itemKey]?.trim();
+    if (!invoice || !providerItemId || quickBooksMappingSaving) {
+      if (!providerItemId) setQuickBooksError(t("invoices.quickBooks.itemIdRequired"));
+      return;
+    }
+    const operationSource = sourceKey;
+    const requestedInvoice = invoice;
+    const generation = ++quickBooksMappingMutationGenerationRef.current;
+    setQuickBooksMappingSaving(itemKey);
+    setQuickBooksError(null);
+    try {
+      await api.integrations.quickbooks.reviewInvoiceItemMapping({ itemKey, quickBooksItemId: providerItemId });
+      if (!quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+        requestedInvoice.version,
+      )) return;
+      await loadQuickBooksPreview(requestedInvoice, { clearError: false, reviewOptions: quickBooksReviewOptions });
+    } catch (err) {
+      if (!quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+        requestedInvoice.version,
+      )) return;
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.mappingReviewError" }));
+    } finally {
+      if (quickBooksMappingMutationIsCurrent(
+        operationSource,
+        generation,
+        requestedInvoice.id,
+      )) setQuickBooksMappingSaving(null);
+    }
+  };
+
+  const handleQuickBooksRefresh = async () => {
+    if (!invoice || quickBooksSaving) return;
+    const operationSource = sourceKey;
+    const generation = ++quickBooksOperationGenerationRef.current;
+    setQuickBooksSaving(true);
+    setQuickBooksError(null);
+    setQuickBooksPaymentLink(null);
+    try {
+      await api.integrations.quickbooks.refreshQuoteFlyInvoice(invoice.id);
+      if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
+      await loadInvoice();
+    } catch (err) {
+      if (quickBooksOperationIsCurrent(operationSource, generation)) {
+        setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.refreshError" }));
+      }
+    } finally {
+      if (quickBooksOperationIsCurrent(operationSource, generation)) setQuickBooksSaving(false);
+    }
+  };
+
+  const handleQuickBooksPaymentLink = async () => {
+    if (!invoice || quickBooksPaymentLinkLoading) return;
+    const operationSource = sourceKey;
+    const requestedInvoiceId = invoice.id;
+    const generation = ++quickBooksPaymentLinkGenerationRef.current;
+    setQuickBooksPaymentLinkLoading(true);
+    setQuickBooksError(null);
+    try {
+      const response = await api.integrations.quickbooks.invoicePaymentLink(requestedInvoiceId);
+      if (
+        !quickBooksPaymentLinkIsCurrent(
+          operationSource,
+          generation,
+          requestedInvoiceId,
+          response.invoiceId,
+        )
+      ) return;
+      const safeUrl = safeQuickBooksHostedPaymentUrl(response.hostedPaymentUrl);
+      if (!safeUrl) {
+        setQuickBooksPaymentLink(null);
+        setQuickBooksError(t("invoices.quickBooks.paymentLinkUnsafe"));
+        return;
+      }
+      setQuickBooksPaymentLink(safeUrl);
+      setInvoice((current) => current?.id === response.invoiceId
+        ? { ...current, paymentStatus: response.paymentStatus, balanceDue: response.balanceDue }
+        : current);
+    } catch (err) {
+      if (!quickBooksPaymentLinkIsCurrent(operationSource, generation)) return;
+      setQuickBooksPaymentLink(null);
+      setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.paymentLinkError" }));
+    } finally {
+      if (quickBooksPaymentLinkIsCurrent(operationSource, generation)) setQuickBooksPaymentLinkLoading(false);
+    }
+  };
+
   const handleQuickBooksReconcile = async () => {
     if (!invoice || quickBooksSaving) return;
     const operationSource = sourceKey;
@@ -336,6 +710,7 @@ export function InvoicePanel({
       const response = await api.integrations.quickbooks.reconcileQuoteFlyInvoice(invoice.id);
       if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
       setQuickBooksPreview((current) => current ? { ...current, operation: response.operation } : current);
+      await loadQuickBooksPreview(invoice, { clearError: false, preservePreviewOnError: true });
     } catch (err) {
       if (!quickBooksOperationIsCurrent(operationSource, generation)) return;
       const message = localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.reconcileError" });
@@ -422,7 +797,11 @@ export function InvoicePanel({
             </div>
           </div>
           <div className="flex flex-col gap-3 border-t border-[var(--qf-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.providerBoundary")}</p>
+            <p className="text-xs leading-5 text-[var(--qf-text-muted)]">
+              {quickBooksPreview?.operation?.status === "SUCCEEDED"
+                ? t("invoices.quickBooks.providerBoundary")
+                : t("invoices.providerBoundary")}
+            </p>
             <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
               {!jobId ? (
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => navigate(`/app/jobs/${invoice.job.id}`)}>
@@ -475,6 +854,319 @@ export function InvoicePanel({
               ) : quickBooksPreview ? (
                 <div className="mt-3 space-y-3">
                   {!quickBooksEnabled ? <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert> : null}
+                  {!quickBooksPreview.operation && quickBooksPreview.connection ? (
+                    <div className="space-y-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 sm:p-4" data-testid="quickbooks-review-controls">
+                      <div>
+                        <p className="text-sm font-semibold text-[var(--qf-text)]">{t("invoices.quickBooks.reviewSetupTitle")}</p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.reviewSetupDescription")}</p>
+                      </div>
+
+                      <div className="space-y-2 border-t border-[var(--qf-border)] pt-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.customerMapping")}</p>
+                          <Badge tone={quickBooksPreview.customerMapping?.reviewedAtUtc ? "emerald" : "amber"}>
+                            {quickBooksPreview.customerMapping?.reviewedAtUtc
+                              ? t("invoices.quickBooks.reviewed")
+                              : t("invoices.quickBooks.needsReview")}
+                          </Badge>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                          <Input
+                            label={t("invoices.quickBooks.searchCustomers")}
+                            value={quickBooksCustomerSearch}
+                            autoComplete="off"
+                            onChange={(event) => {
+                              setQuickBooksCustomerSearch(event.target.value);
+                              setQuickBooksSearchCompleted((current) => ({ ...current, customer: false }));
+                              setQuickBooksSearchErrors((current) => ({ ...current, customer: "" }));
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void handleQuickBooksCustomerSearch();
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11"
+                            loading={quickBooksSearchLoading === "customer"}
+                            disabled={quickBooksCustomerSearch.trim().length < 2 || Boolean(quickBooksSearchLoading) || !quickBooksEnabled}
+                            onClick={() => void handleQuickBooksCustomerSearch()}
+                          >
+                            {t("invoices.quickBooks.search")}
+                          </Button>
+                        </div>
+                        <p className="sr-only" aria-live="polite">
+                          {quickBooksSearchLoading === "customer"
+                            ? t("invoices.quickBooks.searching")
+                            : quickBooksSearchErrors.customer
+                              ? quickBooksSearchErrors.customer
+                              : quickBooksSearchCompleted.customer
+                                ? quickBooksCustomerCandidates.length
+                                  ? `${t("invoices.quickBooks.customerResults")}: ${quickBooksCustomerCandidates.length}`
+                                  : t("invoices.quickBooks.noCustomerMatches")
+                                : ""}
+                        </p>
+                        {quickBooksSearchErrors.customer ? <p role="alert" className="text-xs text-[var(--qf-danger-text)]">{quickBooksSearchErrors.customer}</p> : null}
+                        {quickBooksSearchCompleted.customer && !quickBooksCustomerCandidates.length ? (
+                          <p className="rounded-lg bg-[var(--qf-panel-muted)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.noCustomerMatches")}</p>
+                        ) : null}
+                        {quickBooksCustomerCandidates.length ? (
+                          <ul aria-label={t("invoices.quickBooks.customerResults")} className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-1">
+                            {quickBooksCustomerCandidates.map((candidate) => {
+                              const selected = candidate.quickBooksCustomerId === quickBooksCustomerId;
+                              return (
+                                <li key={candidate.quickBooksCustomerId}>
+                                  <button
+                                    type="button"
+                                    aria-pressed={selected}
+                                    onClick={() => {
+                                      setQuickBooksCustomerId(candidate.quickBooksCustomerId);
+                                      setQuickBooksReviewDirty(true);
+                                      setQuickBooksError(null);
+                                    }}
+                                    className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] ${selected ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)]" : "border-transparent bg-[var(--qf-panel)] hover:border-[var(--qf-border-strong)]"}`}
+                                  >
+                                    <span className="min-w-0">
+                                      <span className="block truncate font-semibold text-[var(--qf-text)]">{candidate.displayName}</span>
+                                      {candidate.email ? <span className="block truncate text-xs text-[var(--qf-text-muted)]">{candidate.email}</span> : null}
+                                    </span>
+                                    <span className="shrink-0 text-xs text-[var(--qf-text-muted)]">{selected ? t("invoices.quickBooks.selected") : t("invoices.quickBooks.select")}</span>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : null}
+                        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                          <details className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
+                            <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-semibold text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+                              {t("invoices.quickBooks.rawIdFallback")}
+                            </summary>
+                            <div className="border-t border-[var(--qf-border)] p-3">
+                              <Input
+                                label={t("invoices.quickBooks.customerProviderId")}
+                                value={quickBooksCustomerId}
+                                autoComplete="off"
+                                onChange={(event) => {
+                                  setQuickBooksCustomerId(event.target.value);
+                                  setQuickBooksReviewDirty(true);
+                                  setQuickBooksError(null);
+                                }}
+                              />
+                            </div>
+                          </details>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11"
+                            loading={quickBooksMappingSaving === "customer"}
+                            disabled={!quickBooksCustomerId.trim() || Boolean(quickBooksMappingSaving) || !quickBooksEnabled}
+                            onClick={() => void handleQuickBooksCustomerMappingReview()}
+                          >
+                            {t("invoices.quickBooks.reviewMapping")}
+                          </Button>
+                        </div>
+                        {quickBooksPreview.customerMapping?.quickBooksDisplayName ? (
+                          <p className="text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.mapsTo", { target: quickBooksPreview.customerMapping.quickBooksDisplayName })}</p>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-3 border-t border-[var(--qf-border)] pt-3">
+                        <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.itemMappings")}</p>
+                        {quickBooksPreview.lineItems.map((line, index) => {
+                          const itemKey = line.itemKey ?? line.description;
+                          return (
+                            <details key={`${itemKey}:${index}`} open={!line.reviewedAtUtc} className="group rounded-lg bg-[var(--qf-panel-muted)]">
+                              <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-lg p-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] [&::-webkit-details-marker]:hidden">
+                                <span className="min-w-0 flex-1 break-words text-xs font-medium text-[var(--qf-text)] [overflow-wrap:anywhere]">{line.description}</span>
+                                <Badge tone={line.reviewedAtUtc ? "emerald" : "amber"}>
+                                  {line.reviewedAtUtc ? t("invoices.quickBooks.reviewed") : t("invoices.quickBooks.needsReview")}
+                                </Badge>
+                              </summary>
+                              <div className="border-t border-[var(--qf-border)] px-3 pb-3">
+                              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                                <Input
+                                  label={t("invoices.quickBooks.searchItems")}
+                                  value={quickBooksItemSearches[itemKey] ?? ""}
+                                  autoComplete="off"
+                                  onChange={(event) => {
+                                    setQuickBooksItemSearches((current) => ({ ...current, [itemKey]: event.target.value }));
+                                    setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: false }));
+                                    setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: "" }));
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      void handleQuickBooksItemSearch(itemKey);
+                                    }
+                                  }}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="min-h-11"
+                                  aria-label={t("invoices.quickBooks.searchItemsFor", { description: line.description })}
+                                  loading={quickBooksSearchLoading === itemKey}
+                                  disabled={(quickBooksItemSearches[itemKey]?.trim().length ?? 0) < 2 || Boolean(quickBooksSearchLoading) || !quickBooksEnabled}
+                                  onClick={() => void handleQuickBooksItemSearch(itemKey)}
+                                >
+                                  {t("invoices.quickBooks.search")}
+                                </Button>
+                              </div>
+                              <p className="sr-only" aria-live="polite">
+                                {quickBooksSearchLoading === itemKey
+                                  ? t("invoices.quickBooks.searching")
+                                  : quickBooksSearchErrors[itemKey]
+                                    ? quickBooksSearchErrors[itemKey]
+                                    : quickBooksSearchCompleted[itemKey]
+                                      ? quickBooksItemCandidates[itemKey]?.length
+                                        ? `${t("invoices.quickBooks.itemResults", { description: line.description })}: ${quickBooksItemCandidates[itemKey].length}`
+                                        : t("invoices.quickBooks.noItemMatches")
+                                      : ""}
+                              </p>
+                              {quickBooksSearchErrors[itemKey] ? <p role="alert" className="mt-2 text-xs text-[var(--qf-danger-text)]">{quickBooksSearchErrors[itemKey]}</p> : null}
+                              {quickBooksSearchCompleted[itemKey] && !(quickBooksItemCandidates[itemKey]?.length) ? (
+                                <p className="mt-2 rounded-lg bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.noItemMatches")}</p>
+                              ) : null}
+                              {quickBooksItemCandidates[itemKey]?.length ? (
+                                <ul aria-label={t("invoices.quickBooks.itemResults", { description: line.description })} className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1">
+                                  {quickBooksItemCandidates[itemKey].map((candidate) => {
+                                    const selected = candidate.quickBooksItemId === quickBooksItemIds[itemKey];
+                                    return (
+                                      <li key={candidate.quickBooksItemId}>
+                                        <button
+                                          type="button"
+                                          aria-pressed={selected}
+                                          onClick={() => {
+                                            setQuickBooksItemIds((current) => ({ ...current, [itemKey]: candidate.quickBooksItemId }));
+                                            setQuickBooksReviewDirty(true);
+                                            setQuickBooksError(null);
+                                          }}
+                                          className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] ${selected ? "border-[var(--qf-info-border)] bg-[var(--qf-selected)]" : "border-transparent bg-[var(--qf-panel-muted)] hover:border-[var(--qf-border-strong)]"}`}
+                                        >
+                                          <span className="min-w-0">
+                                            <span className="block truncate font-semibold text-[var(--qf-text)]">{candidate.name}</span>
+                                            {candidate.type ? <span className="block truncate text-xs text-[var(--qf-text-muted)]">{candidate.type}</span> : null}
+                                          </span>
+                                          <span className="shrink-0 text-xs text-[var(--qf-text-muted)]">{selected ? t("invoices.quickBooks.selected") : t("invoices.quickBooks.select")}</span>
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              ) : null}
+                              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                                <details className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)]">
+                                  <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-semibold text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+                                    {t("invoices.quickBooks.rawIdFallback")}
+                                  </summary>
+                                  <div className="border-t border-[var(--qf-border)] p-3">
+                                    <Input
+                                      label={t("invoices.quickBooks.itemProviderId")}
+                                      value={quickBooksItemIds[itemKey] ?? ""}
+                                      autoComplete="off"
+                                      onChange={(event) => {
+                                        setQuickBooksItemIds((current) => ({ ...current, [itemKey]: event.target.value }));
+                                        setQuickBooksReviewDirty(true);
+                                        setQuickBooksError(null);
+                                      }}
+                                    />
+                                  </div>
+                                </details>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="min-h-11"
+                                  aria-label={t("invoices.quickBooks.reviewItemMapping", { description: line.description })}
+                                  loading={quickBooksMappingSaving === itemKey}
+                                  disabled={!quickBooksItemIds[itemKey]?.trim() || Boolean(quickBooksMappingSaving) || !quickBooksEnabled}
+                                  onClick={() => void handleQuickBooksItemMappingReview(line)}
+                                >
+                                  {t("invoices.quickBooks.reviewMapping")}
+                                </Button>
+                              </div>
+                              {line.quickBooksItemName ? (
+                                <p className="mt-2 text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.mapsTo", { target: line.quickBooksItemName })}</p>
+                              ) : null}
+                              </div>
+                            </details>
+                          );
+                        })}
+                      </div>
+
+                      <fieldset className="space-y-3 border-t border-[var(--qf-border)] pt-3">
+                        <legend className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.paymentChoices")}</legend>
+                        <Input
+                          type="email"
+                          inputMode="email"
+                          label={t("invoices.quickBooks.billingEmail")}
+                          value={quickBooksBillingEmail}
+                          error={quickBooksBillingEmailInvalid ? t("invoices.quickBooks.invalidBillingEmail") : undefined}
+                          autoComplete="email"
+                          onChange={(event) => {
+                            setQuickBooksBillingEmail(event.target.value);
+                            setQuickBooksReviewDirty(true);
+                            setQuickBooksPaymentLink(null);
+                            setQuickBooksError(null);
+                          }}
+                        />
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-medium text-[var(--qf-text-soft)] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--qf-focus)]">
+                            <input
+                              type="checkbox"
+                              className="h-5 w-5 accent-[var(--qf-action-primary)]"
+                              checked={quickBooksAllowAch}
+                              onChange={(event) => {
+                                setQuickBooksAllowAch(event.target.checked);
+                                setQuickBooksReviewDirty(true);
+                                setQuickBooksPaymentLink(null);
+                              }}
+                            />
+                            {t("invoices.quickBooks.allowAch")}
+                          </label>
+                          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2 text-sm font-medium text-[var(--qf-text-soft)] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--qf-focus)]">
+                            <input
+                              type="checkbox"
+                              className="h-5 w-5 accent-[var(--qf-action-primary)]"
+                              checked={quickBooksAllowCard}
+                              onChange={(event) => {
+                                setQuickBooksAllowCard(event.target.checked);
+                                setQuickBooksReviewDirty(true);
+                                setQuickBooksPaymentLink(null);
+                              }}
+                            />
+                            {t("invoices.quickBooks.allowCard")}
+                          </label>
+                        </div>
+                        <p className="text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.paymentChoicesHelp")}</p>
+                        <div className="grid gap-2 sm:flex sm:flex-wrap">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11"
+                            disabled={!quickBooksReviewDirty || quickBooksBillingEmailInvalid || !quickBooksEnabled}
+                            loading={quickBooksLoading}
+                            onClick={() => void handleQuickBooksReviewOptions()}
+                          >
+                            {t("invoices.quickBooks.reviewPaymentChoices")}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="min-h-11"
+                            disabled={!quickBooksReviewDirty}
+                            onClick={() => invoice && void loadQuickBooksPreview(invoice)}
+                          >
+                            {t("invoices.quickBooks.resetReviewChanges")}
+                          </Button>
+                        </div>
+                      </fieldset>
+                      {quickBooksReviewDirty ? <Alert tone="warning">{t("invoices.quickBooks.unsavedReviewChanges")}</Alert> : null}
+                    </div>
+                  ) : null}
                   {quickBooksPreview.operation?.status === "SUCCEEDED" ? (
                     <Alert tone="success">{t("invoices.quickBooks.success", { number: quickBooksPreview.providerDocNumber })}</Alert>
                   ) : quickBooksPreview.operation?.status === "RECONCILIATION_REQUIRED" ? (
@@ -486,9 +1178,9 @@ export function InvoicePanel({
                   ) : quickBooksPreview.blockers.length ? (
                     <div>
                       <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.setupNeeded")}</p>
-                      <ul className="mt-2 space-y-1 text-xs text-[var(--qf-text-muted)]">
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-[var(--qf-text-muted)]">
                         {quickBooksPreview.blockers.map((blocker) => (
-                          <li key={blocker}>• {t(`invoices.quickBooks.blockers.${blocker}`)}</li>
+                          <li key={blocker}>{t(`invoices.quickBooks.blockers.${blocker}`)}</li>
                         ))}
                       </ul>
                       <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => navigate("/app/settings")}>
@@ -504,12 +1196,37 @@ export function InvoicePanel({
                     </p>
                   )}
 
-                  {quickBooksEnabled && quickBooksPreview.operation?.reconciliationAvailable ? (
+                  {quickBooksEnabled && quickBooksPreview.operation?.status === "SUCCEEDED" ? (
+                    <div className="grid gap-2 sm:flex sm:flex-wrap">
+                      <Button type="button" variant="outline" className="min-h-11" loading={quickBooksSaving} onClick={() => void handleQuickBooksRefresh()}>
+                        <RefreshCw size={16} aria-hidden="true" />
+                        {t("invoices.quickBooks.refreshInvoice")}
+                      </Button>
+                      {quickBooksPreview.operation.paymentLinkAvailable
+                      || quickBooksPreview.operation.paymentMethods?.ach
+                      || quickBooksPreview.operation.paymentMethods?.card ? quickBooksPaymentLink ? (
+                        <a
+                          href={quickBooksPaymentLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[var(--qf-action-primary)] bg-[var(--qf-action-primary)] px-4 py-2 text-sm font-semibold text-[var(--qf-action-primary-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]"
+                        >
+                          <ExternalLink size={16} aria-hidden="true" />
+                          {t("invoices.quickBooks.openPaymentPage")}
+                        </a>
+                      ) : (
+                        <Button type="button" className="min-h-11" loading={quickBooksPaymentLinkLoading} onClick={() => void handleQuickBooksPaymentLink()}>
+                          <ExternalLink size={16} aria-hidden="true" />
+                          {t("invoices.quickBooks.loadPaymentPage")}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : quickBooksEnabled && quickBooksPreview.operation?.reconciliationAvailable ? (
                     <Button type="button" variant="outline" className="min-h-11" loading={quickBooksSaving} onClick={() => void handleQuickBooksReconcile()}>
                       <RefreshCw size={16} aria-hidden="true" />
                       {t("invoices.quickBooks.reconcile")}
                     </Button>
-                  ) : quickBooksEnabled && quickBooksPreview.ready && !quickBooksPreview.operation ? (
+                  ) : quickBooksEnabled && quickBooksPreview.ready && quickBooksPreviewMatchesInvoice && !quickBooksPreview.operation && !quickBooksReviewDirty && !quickBooksBillingEmailInvalid ? (
                     <Button type="button" variant="outline" className="min-h-11" onClick={() => setQuickBooksConfirmOpen(true)}>
                       <FileCheck2 size={16} aria-hidden="true" />
                       {t("invoices.quickBooks.review")}
@@ -612,6 +1329,21 @@ export function InvoicePanel({
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
               <span className="text-[var(--qf-text-muted)]">{t("invoices.quickBooks.documentNumber")}</span>
               <span className="font-semibold text-[var(--qf-text)]">{quickBooksPreview.providerDocNumber}</span>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.quickBooks.billingEmail")}</span>
+              <span className="break-words text-right font-semibold text-[var(--qf-text)] [overflow-wrap:anywhere]">
+                {quickBooksPreview.billingEmail || t("invoices.quickBooks.noOnlinePayment")}
+              </span>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-3">
+              <span className="text-[var(--qf-text-muted)]">{t("invoices.quickBooks.paymentMethods")}</span>
+              <span className="text-right font-semibold text-[var(--qf-text)]">
+                {[
+                  quickBooksPreview.paymentMethods?.ach ? "ACH" : null,
+                  quickBooksPreview.paymentMethods?.card ? t("invoices.quickBooks.allowCard") : null,
+                ].filter(Boolean).join(" + ") || t("invoices.quickBooks.noOnlinePayment")}
+              </span>
             </div>
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
               <span className="text-[var(--qf-text-muted)]">{t("invoices.due")}</span>

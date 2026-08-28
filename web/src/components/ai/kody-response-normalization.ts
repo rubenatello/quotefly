@@ -35,6 +35,7 @@ const ASSISTANT_TOOLS: AiAssistantTool[] = [
   "GET_JOB_STATUS",
   "LIST_INVOICES",
   "GET_INVOICE_STATUS",
+  "GET_QUICKBOOKS_SETUP_STATUS",
   "SUMMARIZE_PIPELINE",
   "RANK_PROFITABLE_JOBS",
   "DRAFT_CUSTOMER",
@@ -93,6 +94,7 @@ function isAssistantActionType(value: unknown): value is AiAssistantAction["type
     value === "OPEN_DISPATCH_REVIEW" ||
     value === "OPEN_ANALYTICS" ||
     value === "OPEN_WORKSPACE_PAGE" ||
+    value === "OPEN_QUICKBOOKS_SETUP" ||
     value === "REQUEST_ADMIN_ACCESS"
   );
 }
@@ -352,6 +354,8 @@ function normalizeActionPayload(type: AiAssistantAction["type"], value: unknown)
     copyString(payload, value, "invoiceId", 200);
     copyNumber(payload, value, "jobNumber");
     copyNumber(payload, value, "invoiceNumber");
+  } else if (type === "OPEN_QUICKBOOKS_SETUP") {
+    copyString(payload, value, "section", 80);
   } else if (type === "REQUEST_ADMIN_ACCESS") {
     copyString(payload, value, "capability", 80);
     const capabilities = sanitizeStringList(value.capabilities, 8, 80);

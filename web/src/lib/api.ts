@@ -1,4 +1,5 @@
 import { trackEvent } from "./analytics";
+import { normalizeQuickBooksInvoiceReviewOptions } from "./quickbooks-payment-link";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? "http://localhost:4000";
 const SLOW_API_REQUEST_MS = 1_500;
@@ -467,6 +468,9 @@ export type InternalControlPlaneSummary = {
     activeUsers: number;
     activeCustomers: number;
     activeQuotes: number;
+    quickBooksConnectedTenants: number;
+    quickBooksConfirmedTenants: number;
+    quickBooksReadyTenants: number;
     aiRuns: number;
     aiTokens: number;
     aiSpendUsd: number;
@@ -505,6 +509,17 @@ export type InternalTenantMetadata = {
     quotes: number;
     workPresets: number;
     aiUsageEvents: number;
+  };
+  quickBooks: {
+    present: boolean;
+    status: QuickBooksConnectionStatus | null;
+    setupPhase: QuickBooksSetupPhase;
+    setupConfirmedAtUtc?: string | null;
+    environment?: string | null;
+    connectedAtUtc?: string | null;
+    lastSyncAtUtc?: string | null;
+    lastWebhookAtUtc?: string | null;
+    counts: { customerMaps: number; itemMaps: number; invoiceSyncs: number };
   };
 };
 
@@ -654,6 +669,7 @@ export type AiAssistantRequestedTool =
   | "GET_JOB_STATUS"
   | "LIST_INVOICES"
   | "GET_INVOICE_STATUS"
+  | "GET_QUICKBOOKS_SETUP_STATUS"
   | "SUMMARIZE_PIPELINE"
   | "RANK_PROFITABLE_JOBS"
   | "DRAFT_CUSTOMER"
@@ -696,7 +712,7 @@ export type AiAssistantContext = {
 };
 
 export type AiAssistantAction = {
-  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ACTIVITY_DRAFT" | "OPEN_SCHEDULE" | "OPEN_BOOKING_REVIEW" | "OPEN_DISPATCH_REVIEW" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "REQUEST_ADMIN_ACCESS";
+  type: "OPEN_CUSTOMER" | "OPEN_CUSTOMER_DRAFT" | "OPEN_PRODUCT_DRAFT" | "OPEN_QUOTE_DRAFT" | "OPEN_QUOTE_SEND" | "OPEN_ACTIVITY_DRAFT" | "OPEN_SCHEDULE" | "OPEN_BOOKING_REVIEW" | "OPEN_DISPATCH_REVIEW" | "OPEN_ANALYTICS" | "OPEN_WORKSPACE_PAGE" | "OPEN_QUICKBOOKS_SETUP" | "REQUEST_ADMIN_ACCESS";
   label: string;
   requiresConfirmation: boolean;
   payload: Record<string, unknown>;
@@ -1799,6 +1815,10 @@ export type QuickBooksInvoiceOperation = {
   status: QuickBooksInvoiceOperationStatus;
   providerDocNumber: string;
   reconciliationAvailable: boolean;
+  paymentMethods?: { ach: boolean; card: boolean };
+  providerBalance?: number | null;
+  providerInvoiceStatus?: string | null;
+  paymentLinkAvailable?: boolean;
 };
 
 export type QuickBooksInvoiceSyncPreview = {
@@ -1818,6 +1838,16 @@ export type QuickBooksInvoiceSyncPreview = {
     companyName: string | null;
     status: QuickBooksConnectionStatus;
   };
+  billingEmail: string | null;
+  paymentMethods: {
+    ach: boolean;
+    card: boolean;
+  };
+  customerMapping: null | {
+    quickBooksCustomerId: string;
+    quickBooksDisplayName: string | null;
+    reviewedAtUtc: string | null;
+  };
   quickBooksCustomerName: string | null;
   providerDocNumber: string;
   lineItems: Array<{
@@ -1825,8 +1855,11 @@ export type QuickBooksInvoiceSyncPreview = {
     quantity: number;
     unitPrice: number;
     amount: number;
+    itemKey: string;
     mapped: boolean;
+    quickBooksItemId: string | null;
     quickBooksItemName: string | null;
+    reviewedAtUtc: string | null;
   }>;
   blockers: string[];
   ready: boolean;
@@ -1839,6 +1872,49 @@ export type QuickBooksInvoiceOperationResponse = {
   reconciliationRequired?: boolean;
   found?: boolean;
   operation: QuickBooksInvoiceOperation;
+};
+
+export type QuickBooksInvoiceReviewOptions = {
+  billingEmail: string | null;
+  allowOnlineAchPayment: boolean;
+  allowOnlineCardPayment: boolean;
+};
+
+export type QuickBooksHostedPaymentLink = {
+  invoiceId: string;
+  provider: "QUICKBOOKS";
+  hostedPaymentUrl: string;
+  paymentStatus: InvoicePaymentStatus;
+  balanceDue: number;
+};
+
+export type QuickBooksCustomerCandidate = {
+  quickBooksCustomerId: string;
+  displayName: string;
+  email: string | null;
+};
+
+export type QuickBooksItemCandidate = {
+  quickBooksItemId: string;
+  name: string;
+  type: string | null;
+};
+
+export type QuickBooksReviewedCustomerMapping = {
+  customerId: string;
+  quickBooksCustomerId: string;
+  quickBooksDisplayName: string | null;
+  reviewedAtUtc: string;
+  reviewVersion: number;
+};
+
+export type QuickBooksReviewedItemMapping = {
+  itemKey: string;
+  quickBooksItemId: string;
+  quickBooksItemName: string;
+  workPresetId: string | null;
+  reviewedAtUtc: string;
+  reviewVersion: number;
 };
 
 export type QuoteAcceptedJobSummary = {
@@ -1872,7 +1948,41 @@ export type BillingPortalSession = {
   url: string;
 };
 
-export type QuickBooksConnectionStatus = "CONNECTED" | "NEEDS_REAUTH" | "ERROR" | "DISCONNECTED";
+export type QuickBooksConnectionStatus =
+  | "CONNECTED"
+  | "NEEDS_REAUTH"
+  | "REVOCATION_PENDING"
+  | "ERROR"
+  | "DISCONNECTED";
+
+export type QuickBooksSetupPhase =
+  | "UNAVAILABLE"
+  | "NOT_CONNECTED"
+  | "ACTION_REQUIRED"
+  | "READY_FOR_CONFIRMATION"
+  | "CONFIRMED";
+
+export type QuickBooksSetupCheckKey =
+  | "PROVIDER_CONFIGURED"
+  | "PROVIDER_WORKFLOWS_ENABLED"
+  | "WEBHOOK_CONFIGURED"
+  | "CONNECTION_ACTIVE"
+  | "ENVIRONMENT_MATCHES"
+  | "ACCOUNTING_SCOPE_GRANTED"
+  | "CREDENTIALS_AVAILABLE"
+  | "REALM_BINDING_ACTIVE"
+  | "CDC_CURSOR_INITIALIZED"
+  | "SETUP_CONFIRMED";
+
+export type QuickBooksSetupReadiness = {
+  phase: QuickBooksSetupPhase;
+  ready: boolean;
+  confirmed: boolean;
+  checklistVersion: string;
+  confirmedAtUtc?: string | null;
+  checks: Array<{ key: QuickBooksSetupCheckKey; passed: boolean; managedBy: "QUOTEFLY" | "WORKSPACE" }>;
+  capabilities: { canConnect: boolean; canReconnect: boolean; canConfirm: boolean; canDisconnect: boolean };
+};
 
 export type QuickBooksStatusPayload = {
   enabled: boolean;
@@ -1881,21 +1991,16 @@ export type QuickBooksStatusPayload = {
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";
-  redirectUri: string;
-  webhookUrl: string;
+  setup: QuickBooksSetupReadiness;
   connection: null | {
-    id: string;
-    realmId: string;
     environment: string;
     companyName?: string | null;
     status: QuickBooksConnectionStatus;
-    scopes: string[];
     connectedAtUtc: string;
     disconnectedAtUtc?: string | null;
     lastTokenRefreshAtUtc?: string | null;
     lastSyncAtUtc?: string | null;
     lastWebhookAtUtc?: string | null;
-    lastError?: string | null;
     counts: {
       customerMaps: number;
       itemMaps: number;
@@ -2226,6 +2331,7 @@ export const api = {
         offset?: number;
         search?: string;
         lifecycle?: "active" | "deleted" | "all";
+        quickBooks?: "all" | "connected" | "confirmed" | "attention" | "not_connected";
       }) => request<{
         tenants: InternalTenantMetadata[];
         pagination: { limit: number; offset: number; total: number };
@@ -2235,6 +2341,7 @@ export const api = {
         offset: query?.offset,
         search: query?.search,
         lifecycle: query?.lifecycle,
+        quickBooks: query?.quickBooks,
       })}`),
       dataCatalog: (query?: {
         search?: string;
@@ -2322,9 +2429,18 @@ export const api = {
         }),
 
       disconnect: () =>
-        request<{ disconnected: boolean }>(`/v1/integrations/quickbooks/disconnect`, {
+        request<{ disconnected: boolean; revocationPending?: boolean }>(`/v1/integrations/quickbooks/disconnect`, {
           method: "POST",
         }),
+
+      confirmSetup: (body: {
+        checklistVersion: string;
+        companyConfirmed: true;
+        reviewResponsibilityConfirmed: true;
+      }) => request<{ confirmed: true; idempotent: boolean; setup: QuickBooksSetupReadiness }>(
+        `/v1/integrations/quickbooks/setup-confirmation`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
 
       syncPreview: (quoteId: string) =>
         request<QuickBooksSyncPreview>(`/v1/integrations/quickbooks/quotes/${quoteId}/sync-preview`),
@@ -2344,22 +2460,52 @@ export const api = {
           invoice: QuickBooksInvoiceStatusPayload;
         }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
 
-      invoiceSyncPreview: (invoiceId: string) =>
+      invoiceSyncPreview: (invoiceId: string, options?: QuickBooksInvoiceReviewOptions) =>
         request<{
           providerWorkflowsEnabled: boolean;
           preview: QuickBooksInvoiceSyncPreview;
-        }>(`/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/sync-preview`),
+        }>(`/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/sync-preview`, {
+          method: "POST",
+          body: JSON.stringify(options ? normalizeQuickBooksInvoiceReviewOptions(options) : {}),
+        }),
+
+      reviewInvoiceCustomerMapping: (body: { customerId: string; quickBooksCustomerId: string }) =>
+        request<{ mapping: QuickBooksReviewedCustomerMapping }>(`/v1/integrations/quickbooks/mappings/customer/review`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+
+      reviewInvoiceItemMapping: (body: { itemKey: string; quickBooksItemId: string; workPresetId?: string }) =>
+        request<{ mapping: QuickBooksReviewedItemMapping }>(`/v1/integrations/quickbooks/mappings/item/review`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+
+      searchCustomerMappings: (query: string, limit = 10) =>
+        request<{ candidates: QuickBooksCustomerCandidate[] }>(
+          "/v1/integrations/quickbooks/mappings/customers/search",
+          { method: "POST", body: JSON.stringify({ query, limit }) },
+        ),
+
+      searchItemMappings: (query: string, limit = 10) =>
+        request<{ candidates: QuickBooksItemCandidate[] }>(
+          "/v1/integrations/quickbooks/mappings/items/search",
+          { method: "POST", body: JSON.stringify({ query, limit }) },
+        ),
 
       publishQuoteFlyInvoice: (
         invoiceId: string,
-        body: { invoiceVersion: number; reviewBinding: string },
+        body: { invoiceVersion: number; reviewBinding: string } & QuickBooksInvoiceReviewOptions,
         idempotencyKey: string,
       ) => request<QuickBooksInvoiceOperationResponse>(
         `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/publish`,
         {
           method: "POST",
           headers: { "Idempotency-Key": idempotencyKey },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            ...body,
+            ...normalizeQuickBooksInvoiceReviewOptions(body),
+          }),
         },
       ),
 
@@ -2367,6 +2513,17 @@ export const api = {
         request<QuickBooksInvoiceOperationResponse>(
           `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/reconcile`,
           { method: "POST" },
+        ),
+
+      refreshQuoteFlyInvoice: (invoiceId: string) =>
+        request<QuickBooksInvoiceOperationResponse>(
+          `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/refresh`,
+          { method: "POST" },
+        ),
+
+      invoicePaymentLink: (invoiceId: string) =>
+        request<QuickBooksHostedPaymentLink>(
+          `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/payment-link`,
         ),
     },
   },

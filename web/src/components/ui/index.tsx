@@ -105,9 +105,11 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, icon, className = "", id, ...rest }, ref) => {
+  ({ label, error, icon, className = "", id, "aria-describedby": ariaDescribedBy, "aria-invalid": ariaInvalid, ...rest }, ref) => {
     const generatedId = useId();
     const inputId = id ?? generatedId;
+    const errorId = `${inputId}-error`;
+    const describedBy = [ariaDescribedBy, error ? errorId : null].filter(Boolean).join(" ") || undefined;
     return (
       <div className="space-y-1">
         {label && (
@@ -124,6 +126,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
+            aria-describedby={describedBy}
+            aria-invalid={error ? true : ariaInvalid}
             className={cn(
               "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] placeholder:text-[var(--qf-text-muted)] transition-all hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:ring-4 focus:ring-[var(--qf-focus-ring)] focus:outline-none disabled:cursor-not-allowed disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] sm:min-h-[38px]",
               icon && "pl-10",
@@ -133,7 +137,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             {...rest}
           />
         </div>
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p id={errorId} className="text-xs text-red-600">{error}</p>}
       </div>
     );
   },

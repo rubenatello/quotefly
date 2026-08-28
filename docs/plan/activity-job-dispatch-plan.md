@@ -1,8 +1,8 @@
 # Activity Center, Jobs, and Dispatch Plan
 
-Status: Phases 0 through 4A, the Job-authority cleanup, calendar, in-app notifications and retention, Kody schedule and quote-review tools, atomic paid-AI ledger, public product story, and default-off QuickBooks containment are committed on `main` at `b72ec1b`; production deployment is not asserted. The current uncommitted workspace adds a provider-safe Phase 4B QuickBooks Invoice foundation plus a focused live-provider Kody evaluation repair. The exact local launch gate and backend, security, UX, and independent Opera reviews pass; external email, SMS, payment, provider enablement, the exact-SHA live-provider rerun, and production rollout remain gated.
+Status: Phases 0 through 4A, the Job-authority cleanup, calendar, in-app notifications and retention, Kody schedule and quote-review tools, atomic paid-AI ledger, public product story, and default-off QuickBooks containment are committed; production deployment is not asserted. Historical Phase 4B invoice-publish evidence remains recorded below. The current uncommitted workspace adds a hosted-payment/reconciliation engineering candidate, but no current exact-SHA launch, Intuit sandbox, QuickBooks Payments, migration-rehearsal, production, or customer-availability evidence is asserted. Provider workflows remain disabled.
 
-Last updated: 2026-08-24
+Last updated: 2026-08-27
 
 Owners: Product, Engineering, Security, Operations
 
@@ -183,15 +183,15 @@ Current candidate extension — Kody opening discovery:
 
 ## Phase 4 — Invoicing and payments
 
-Status: Partial accounting export exists; Phase 4A invoice/payment ledger, internal API, and responsive Quote/Job workflow are committed and release-verified on `main`. A bounded Phase 4B provider-safe creation/reconciliation foundation is implemented in the current uncommitted workspace and has fresh-schema, concurrency, RLS, API, responsive UI, exact local launch-gate, backend, security, UX, and independent Opera approval. Provider workflows remain default-off; production enablement is not asserted.
+Status: QuickBooks-friendly CSV and the internal Phase 4A Invoice ledger are supported. Historical Phase 4B evidence covers a bounded, default-off invoice-publish foundation. The current workspace extends that foundation toward QuickBooks-hosted payment and authoritative reconciliation, but it remains an unverified engineering candidate. No sandbox, production, or customer availability is asserted; taxable invoice publishing remains blocked.
 
 - [x] QuickBooks CSV export and QuickBooks Online connection/sync foundation.
 - [x] Add tenant-scoped QuoteFly `Invoice`, `InvoicePayment`, and immutable `InvoiceEvent` ledger tables with forced RLS, provider-safe identifiers, and governance classification.
 - [x] Add Invoice API/service creation from completed jobs or accepted quotes, including tenant-local invoice numbering, idempotency, member read scope, and immutable event writes.
 - [x] Add responsive English/Spanish invoice panels to accepted Quote and completed Job detail, with tenant-local due dates, explicit confirmation, assigned-member read scope, and a clear no-provider/no-charge boundary.
-- [x] Add an Invoice-owned durable `PROCESSING` claim, stable Intuit request ID, provider-result quarantine, and explicit reconciliation before exposing QuickBooks invoice creation. Implemented in the current uncommitted Phase 4B candidate; remains default-off and release-gated.
-- [ ] Keep provider payment handling in Stripe/Square/QuickBooks; QuoteFly stores only provider-safe identifiers and status.
-- [ ] Add webhook idempotency, refunds/disputes policy, tenant permissions, and reconciliation tests.
+- [x] Add an Invoice-owned durable `PROCESSING` claim, stable Intuit request ID, provider-result quarantine, and explicit reconciliation foundation. It remains default-off and release-gated.
+- [ ] Verify the hosted-payment candidate keeps processing and settlement in QuickBooks while QuoteFly stores only a restricted link and provider-safe ledger projection.
+- [ ] Verify persist-before-ack webhooks, lease/retry/dead-letter, refund/reversal/void policy, manual refresh, CDC recovery, tenant permissions, monitoring, and reconciliation tests on one exact candidate.
 
 Current containment and Phase 4B candidate:
 
@@ -199,16 +199,25 @@ Current containment and Phase 4B candidate:
 - QuickBooks status, preview, disconnect, and provider-capable routes require a current owner/admin membership; disconnect remains available for local credential cleanup.
 - The legacy Quote-to-QuickBooks write route is retired with `410 QUICKBOOKS_LEGACY_QUOTE_PUSH_RETIRED` whenever provider workflows are enabled. The new bounded path starts from an existing QuoteFly `Invoice`, never auto-creates provider customers/items, and blocks unsupported tax/currency or missing mappings before a provider call.
 - Focused containment evidence passes `60/60` API/security integration tests, and the exact candidate database-backed gate passes `213/213` integration tests with 113/113 inventoried routes.
-- This candidate does not complete Phase 4 payments or authorize provider rollout. Stripe/Square/payment state, refunds/disputes, provider webhooks, provider mapping management, staging evidence, and production enablement remain separate reviewed slices.
+- Historical Phase 4B evidence does not approve the current hosted-payment extension. Payment projection, refunds/reversals, durable provider webhooks, CDC recovery, hosted-link delivery, monitoring, migration rehearsal, sandbox evidence, and production enablement remain separately gated.
 
 Phase 4B workspace evidence:
 
 - Additive migration `20260824220000_add_quickbooks_invoice_operations` applies from a fresh database with forced tenant RLS, composite tenant foreign keys, least-privileged runtime grants, state CHECK constraints, and no runtime delete/truncate privilege.
-- `GET .../invoices/:invoiceId/sync-preview` is read-only and omits tenant, provider customer/item, realm, token, hash, and internal-cost data. Owners/admins see exact QuoteFly lines, mapping readiness, and provider document number; members and cross-tenant guesses fail closed.
+- `POST .../invoices/:invoiceId/sync-preview` is read-only at the data layer; reviewed billing/payment options travel in the request body so email never enters browser history or request URLs. The response omits tenant, provider customer/item, realm, token, hash, and internal-cost data. Owners/admins see exact QuoteFly lines, mapping readiness, and provider document number; members and cross-tenant guesses fail closed.
 - `POST .../publish` takes a versioned, idempotency-keyed durable claim before the one provider write. A stable Intuit `requestid` is reused by that operation; concurrent commands produce one claim and one provider call.
 - Ambiguous network, timeout, throttling, server, or local-commit outcomes become `RECONCILIATION_REQUIRED`; a later publish is blocked, and `POST .../reconcile` queries the existing provider request by provider invoice ID or deterministic document number without another write.
 - The responsive English/Spanish Invoice panel keeps the workflow review-first, shows setup blockers and paused-provider truth, requires line-by-line confirmation before publishing, and offers reconciliation instead of retry when provider state is uncertain.
 - Focused migrated-PostgreSQL coverage passes 18/18 Invoice integration cases, including successful replay, concurrent serialization, immutable provider-realm and exact-payload review binding, expired-claim recovery without another create, unknown-result quarantine, exact-fingerprint reconciliation, disconnect-during-refresh containment, cross-Invoice idempotency rejection, manager/tenant boundaries, and runtime-role RLS. QuickBooks responsive browser coverage passes at 320px with safe mapped targets, stale-version recovery, localized Spanish blockers, 44px actions, and no horizontal overflow. The exact local `verify:launch` gate applies all 58 migrations and passes with 116 inventoried routes, zero unmatched declarations, 240/240 integration tests, 92 executed browser scenarios plus one intentional opt-in capture skip, parser evaluation 17/17, assistant evaluation 83/83, retrieval evaluation 12/12, and clean dependency audits. The additive `20260824233000_add_invoice_create_replayed_event` migration repairs already-migrated databases whose PostgreSQL enum predates the idempotent replay state. Goldface, Renford, and Sentinel approve the final UX, backend-integrity, and security candidate; Opera independently approved the Phase 4B provider-invoice slice with no unresolved Critical, High, or release-blocking Medium findings.
+
+Hosted-payment/reconciliation candidate gate:
+
+- The acceptance contract is `docs/integrations/quickbooks-hosted-payments-reconciliation.md`; current availability and evidence are tracked in `docs/integrations/quickbooks-api-progress.md`.
+- `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` is mandatory while the candidate is being implemented and reviewed. Schema/code presence does not authorize OAuth, webhooks, provider mutations, hosted-link delivery, payment mirroring, or marketing.
+- Migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is a coordinated forward migration: it backfills Invoice billing email, changes payment-application uniqueness, adds provider/CDC/webhook state, and forces RLS on existing QuickBooks tables. A production-like upgrade, lock measurement, non-owner runtime smoke, backup restore, and forward-fix rehearsal are required; do not route an older non-RLS-aware binary afterward.
+- Exact-candidate automation must cover two-tenant RLS, one-time OAuth, reviewed payment-method/link binding, safe hosted-link delivery, persist-before-ack webhook ingestion, worker retry/dead-letter/replay, canonical partial/paid/refund/reversal/void projection, CDC repair, refresh/revocation races, timeouts/throttling, and content-free telemetry.
+- An owner-authorized sandbox run must prove one sanitized non-taxable workflow plus duplicate/out-of-order webhooks, dropped-webhook CDC repair, timeout/restart reconciliation, and token revocation without a duplicate provider invoice or ledger entry.
+- Production additionally requires Intuit app approval, QuickBooks Payments merchant eligibility, fee/settlement ownership, alert/support owners, credential and webhook inventories, Sentinel review, independent Opera approval, and separately authorized migration/provider/pilot actions.
 
 Phase 4A release evidence:
 

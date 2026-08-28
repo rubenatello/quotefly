@@ -8,10 +8,12 @@ export interface WorkspaceLink {
 }
 
 export function jumpToWorkspaceSection(id: string) {
-  document.getElementById(id)?.scrollIntoView({
+  const section = document.getElementById(id);
+  section?.scrollIntoView({
     behavior: "smooth",
     block: "start",
   });
+  section?.focus({ preventScroll: true });
 }
 
 export function WorkspaceJumpBar({
@@ -61,7 +63,7 @@ export function WorkspaceSection({
   className?: string;
 }) {
   return (
-    <section id={id} className={cn("scroll-mt-28 space-y-2.5", className)}>
+    <section id={id} tabIndex={-1} className={cn("scroll-mt-28 space-y-2.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--qf-focus)]", className)}>
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--qf-link)]">

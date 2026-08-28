@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { env } from "../config/env";
@@ -14,13 +14,20 @@ import {
   requireSuperuserAccess,
 } from "../lib/superuser-access";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import {
+  deriveQuickBooksSetupReadiness,
+  QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+} from "../services/quickbooks-setup";
+import { isQuickBooksConfigured, isQuickBooksWebhookConfigured } from "../services/quickbooks";
 
 const TenantLifecycleSchema = z.enum(["active", "deleted", "all"]);
+const TenantQuickBooksSchema = z.enum(["all", "connected", "confirmed", "attention", "not_connected"]);
 const TenantListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
   offset: z.coerce.number().int().min(0).max(100_000).default(0),
   search: z.string().trim().min(1).max(120).optional(),
   lifecycle: TenantLifecycleSchema.default("active"),
+  quickBooks: TenantQuickBooksSchema.default("all"),
 });
 
 const CatalogQuerySchema = z.object({
@@ -66,10 +73,115 @@ function tenantLifecycleWhere(lifecycle: z.infer<typeof TenantLifecycleSchema>) 
   return {};
 }
 
+type QuickBooksControlPlaneRow = Readonly<{
+  tenantId: string;
+  status: string;
+  environment: string;
+  setupConfirmedAtUtc: Date | null;
+  setupConfirmedByTenantUserId: string | null;
+  setupChecklistVersion: string | null;
+  connectedAtUtc: Date;
+  lastSyncAtUtc: Date | null;
+  lastWebhookAtUtc: Date | null;
+  accountingScopeGranted: boolean;
+  credentialsAvailable: boolean;
+  realmBindingActive: boolean;
+  cdcCursorInitialized: boolean;
+  customerMaps: number;
+  itemMaps: number;
+  invoiceSyncs: number;
+}>;
+
+const ControlPlaneTenantSelect = Prisma.validator<Prisma.TenantSelect>()({
+  id: true,
+  name: true,
+  slug: true,
+  primaryTrade: true,
+  subscriptionStatus: true,
+  subscriptionPlanCode: true,
+  onboardingCompletedAtUtc: true,
+  trialEndsAtUtc: true,
+  subscriptionCurrentPeriodStartUtc: true,
+  subscriptionCurrentPeriodEndUtc: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAtUtc: true,
+  _count: {
+    select: {
+      users: { where: { deletedAtUtc: null, user: { deletedAtUtc: null } } },
+      customers: { where: { deletedAtUtc: null } },
+      quotes: { where: { deletedAtUtc: null } },
+      workPresets: { where: { deletedAtUtc: null } },
+      aiUsageEvents: { where: { deletedAtUtc: null } },
+    },
+  },
+});
+
+async function loadQuickBooksControlPlaneRow(
+  prisma: PrismaClient,
+  tenantId: string,
+): Promise<QuickBooksControlPlaneRow | null> {
+  const rows = await withTenantRlsContext(prisma, tenantId, (transaction) =>
+    transaction.$queryRaw<QuickBooksControlPlaneRow[]>(Prisma.sql`
+      SELECT
+        connection."tenantId",
+        connection."status"::text AS "status",
+        connection."environment",
+        connection."setupConfirmedAtUtc",
+        connection."setupConfirmedByTenantUserId",
+        connection."setupChecklistVersion",
+        connection."connectedAtUtc",
+        connection."lastSyncAtUtc",
+        connection."lastWebhookAtUtc",
+        (${"com.intuit.quickbooks.accounting"} = ANY(connection."scopes")) AS "accountingScopeGranted",
+        (
+          connection."accessTokenEncrypted" IS NOT NULL
+          AND connection."refreshTokenEncrypted" IS NOT NULL
+          AND connection."accessTokenExpiresAtUtc" IS NOT NULL
+        ) AS "credentialsAvailable",
+        EXISTS (
+          SELECT 1 FROM "QuickBooksRealmBinding" binding
+          WHERE binding."tenantId" = connection."tenantId"
+            AND binding."quickBooksConnectionId" = connection."id"
+            AND binding."active" = true
+        ) AS "realmBindingActive",
+        EXISTS (
+          SELECT 1 FROM "QuickBooksCdcCursor" cursor
+          WHERE cursor."tenantId" = connection."tenantId"
+            AND cursor."quickBooksConnectionId" = connection."id"
+        ) AS "cdcCursorInitialized",
+        (
+          SELECT count(*)::int FROM "QuickBooksCustomerMap" customer_map
+          WHERE customer_map."tenantId" = connection."tenantId"
+            AND customer_map."quickBooksConnectionId" = connection."id"
+            AND customer_map."deletedAtUtc" IS NULL
+        ) AS "customerMaps",
+        (
+          SELECT count(*)::int FROM "QuickBooksItemMap" item_map
+          WHERE item_map."tenantId" = connection."tenantId"
+            AND item_map."quickBooksConnectionId" = connection."id"
+            AND item_map."deletedAtUtc" IS NULL
+        ) AS "itemMaps",
+        (
+          SELECT count(*)::int FROM "QuickBooksInvoiceSync" invoice_sync
+          WHERE invoice_sync."tenantId" = connection."tenantId"
+            AND invoice_sync."quickBooksConnectionId" = connection."id"
+            AND invoice_sync."deletedAtUtc" IS NULL
+        ) AS "invoiceSyncs"
+      FROM "QuickBooksConnection" connection
+      WHERE connection."tenantId" = ${tenantId}
+        AND connection."deletedAtUtc" IS NULL
+      LIMIT 1
+    `),
+  );
+  return rows[0] ?? null;
+}
+
 export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
   app.get("/internal/control-plane/summary", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;
+    reply.header("Cache-Control", "private, no-store");
 
     const [
       activeTenants,
@@ -77,6 +189,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       activeUsers,
       activeCustomers,
       activeQuotes,
+      activeTenantRows,
       aiAggregate,
       observedModels,
       latestValidation,
@@ -86,6 +199,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.user.count({ where: { deletedAtUtc: null } }),
       app.prisma.customer.count({ where: { deletedAtUtc: null } }),
       app.prisma.quote.count({ where: { deletedAtUtc: null } }),
+      app.prisma.tenant.findMany({ where: { deletedAtUtc: null }, select: { id: true } }),
       app.prisma.aiUsageEvent.aggregate({
         where: { deletedAtUtc: null },
         _count: { _all: true },
@@ -112,6 +226,39 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
         },
       }),
     ]);
+    const quickBooksRuntime = {
+      providerConfigured: isQuickBooksConfigured(app.env),
+      providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+      webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+      environment: app.env.QUICKBOOKS_ENVIRONMENT,
+    } as const;
+    const quickBooksRows = await mapWithConcurrency(
+      activeTenantRows,
+      4,
+      ({ id }) => loadQuickBooksControlPlaneRow(app.prisma, id),
+    );
+    const quickBooksSetups = quickBooksRows.map((connection) => connection
+      ? deriveQuickBooksSetupReadiness(quickBooksRuntime, {
+          status: connection.status,
+          environment: connection.environment,
+          scopes: [],
+          accessTokenEncrypted: null,
+          refreshTokenEncrypted: null,
+          accessTokenExpiresAtUtc: null,
+          setupConfirmedAtUtc: connection.setupConfirmedAtUtc,
+          setupConfirmedByTenantUserId: connection.setupConfirmedByTenantUserId,
+          setupChecklistVersion: connection.setupChecklistVersion,
+          realmBinding: null,
+          cdcCursor: null,
+          accountingScopeGranted: connection.accountingScopeGranted,
+          credentialsAvailable: connection.credentialsAvailable,
+          realmBindingActive: connection.realmBindingActive,
+          cdcCursorInitialized: connection.cdcCursorInitialized,
+        })
+      : deriveQuickBooksSetupReadiness(quickBooksRuntime, null));
+    const quickBooksConnectedTenants = quickBooksRows.filter((row) => row?.status === "CONNECTED").length;
+    const quickBooksConfirmedTenants = quickBooksSetups.filter((setup) => setup.confirmed).length;
+    const quickBooksReadyTenants = quickBooksSetups.filter((setup) => setup.ready).length;
     const liveValidation = validateDataGovernanceSchema();
 
     await recordSuperuserAuditEvent(app.prisma, {
@@ -132,6 +279,9 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
         activeUsers,
         activeCustomers,
         activeQuotes,
+        quickBooksConnectedTenants,
+        quickBooksConfirmedTenants,
+        quickBooksReadyTenants,
         aiRuns: aiAggregate._count._all ?? 0,
         aiTokens: aiAggregate._sum.totalTokens ?? 0,
         aiSpendUsd: Number(aiAggregate._sum.estimatedCostUsd ?? 0),
@@ -152,52 +302,88 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
   app.get("/internal/control-plane/tenants", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;
+    reply.header("Cache-Control", "private, no-store");
     const query = TenantListQuerySchema.parse(request.query);
     const where: Prisma.TenantWhereInput = {
-      ...tenantLifecycleWhere(query.lifecycle),
-      ...(query.search
-        ? {
+      AND: [
+        tenantLifecycleWhere(query.lifecycle),
+        query.search
+          ? {
             OR: [
               { name: { contains: query.search, mode: "insensitive" } },
               { slug: { contains: query.search, mode: "insensitive" } },
             ],
           }
-        : {}),
+          : {},
+      ],
     };
-
-    const [tenants, total] = await app.prisma.$transaction([
-      app.prisma.tenant.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: query.limit,
-        skip: query.offset,
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          primaryTrade: true,
-          subscriptionStatus: true,
-          subscriptionPlanCode: true,
-          onboardingCompletedAtUtc: true,
-          trialEndsAtUtc: true,
-          subscriptionCurrentPeriodStartUtc: true,
-          subscriptionCurrentPeriodEndUtc: true,
-          createdAt: true,
-          updatedAt: true,
-          deletedAtUtc: true,
-          _count: {
-            select: {
-              users: { where: { deletedAtUtc: null, user: { deletedAtUtc: null } } },
-              customers: { where: { deletedAtUtc: null } },
-              quotes: { where: { deletedAtUtc: null } },
-              workPresets: { where: { deletedAtUtc: null } },
-              aiUsageEvents: { where: { deletedAtUtc: null } },
-            },
-          },
-        },
-      }),
-      app.prisma.tenant.count({ where }),
-    ]);
+    const baseTotal = await app.prisma.tenant.count({ where });
+    if (query.quickBooks !== "all" && baseTotal > 5_000) {
+      return reply.code(422).send({
+        error: "Refine the tenant search before filtering QuickBooks setup state.",
+        code: "TENANT_FILTER_SCOPE_TOO_BROAD",
+      });
+    }
+    const candidateTenants = query.quickBooks === "all"
+      ? await app.prisma.tenant.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: query.limit,
+          skip: query.offset,
+          select: ControlPlaneTenantSelect,
+        })
+      : await app.prisma.tenant.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 5_000,
+          select: ControlPlaneTenantSelect,
+        });
+    const quickBooksRuntime = {
+      providerConfigured: isQuickBooksConfigured(app.env),
+      providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+      webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+      environment: app.env.QUICKBOOKS_ENVIRONMENT,
+    } as const;
+    const candidateQuickBooksRows = await mapWithConcurrency(
+      candidateTenants,
+      4,
+      (tenant) => loadQuickBooksControlPlaneRow(app.prisma, tenant.id),
+    );
+    const projectedCandidates = candidateTenants.map((tenant, index) => {
+      const connection = candidateQuickBooksRows[index] ?? null;
+      const setup = deriveQuickBooksSetupReadiness(quickBooksRuntime, connection ? {
+        status: connection.status,
+        environment: connection.environment,
+        scopes: [],
+        accessTokenEncrypted: null,
+        refreshTokenEncrypted: null,
+        accessTokenExpiresAtUtc: null,
+        setupConfirmedAtUtc: connection.setupConfirmedAtUtc,
+        setupConfirmedByTenantUserId: connection.setupConfirmedByTenantUserId,
+        setupChecklistVersion: connection.setupChecklistVersion,
+        realmBinding: null,
+        cdcCursor: null,
+        accountingScopeGranted: connection.accountingScopeGranted,
+        credentialsAvailable: connection.credentialsAvailable,
+        realmBindingActive: connection.realmBindingActive,
+        cdcCursorInitialized: connection.cdcCursorInitialized,
+      } : null);
+      return { tenant, connection, setup };
+    });
+    const filteredCandidates = query.quickBooks === "all"
+      ? projectedCandidates
+      : projectedCandidates.filter(({ connection, setup }) => {
+          if (query.quickBooks === "connected") return connection?.status === "CONNECTED";
+          if (query.quickBooks === "confirmed") return setup.confirmed;
+          if (query.quickBooks === "attention") {
+            return Boolean(connection) && setup.phase !== "CONFIRMED";
+          }
+          return !connection || connection.status === "DISCONNECTED";
+        });
+    const selectedCandidates = query.quickBooks === "all"
+      ? filteredCandidates
+      : filteredCandidates.slice(query.offset, query.offset + query.limit);
+    const total = query.quickBooks === "all" ? baseTotal : filteredCandidates.length;
 
     await recordSuperuserAuditEvent(app.prisma, {
       actorUserId: claims.userId,
@@ -206,15 +392,35 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       targetType: "Tenant",
       metadata: {
         lifecycle: query.lifecycle,
+        quickBooks: query.quickBooks,
         searchApplied: Boolean(query.search),
         limit: query.limit,
         offset: query.offset,
-        resultCount: tenants.length,
+        resultCount: selectedCandidates.length,
       },
     });
 
     return {
-      tenants,
+      tenants: selectedCandidates.map(({ tenant, connection, setup }) => {
+        return {
+          ...tenant,
+          quickBooks: {
+            present: Boolean(connection),
+            status: connection?.status ?? null,
+            setupPhase: setup.phase,
+            setupConfirmedAtUtc: setup.confirmedAtUtc,
+            environment: connection?.environment ?? null,
+            connectedAtUtc: connection?.connectedAtUtc ?? null,
+            lastSyncAtUtc: connection?.lastSyncAtUtc ?? null,
+            lastWebhookAtUtc: connection?.lastWebhookAtUtc ?? null,
+            counts: {
+              customerMaps: connection?.customerMaps ?? 0,
+              itemMaps: connection?.itemMaps ?? 0,
+              invoiceSyncs: connection?.invoiceSyncs ?? 0,
+            },
+          },
+        };
+      }),
       pagination: {
         limit: query.limit,
         offset: query.offset,
@@ -224,6 +430,8 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
         "owner emails",
         "customer records",
         "provider identifiers",
+        "company names",
+        "provider scopes and raw errors",
         "credentials",
         "raw prompts",
       ],

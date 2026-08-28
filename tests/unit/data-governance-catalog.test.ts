@@ -59,6 +59,7 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     "BillingWebhookEvent.payload",
     "QuickBooksConnection.accessTokenEncrypted",
     "QuickBooksConnection.refreshTokenEncrypted",
+    "QuickBooksInvoiceOperation.providerInvoiceLink",
   ]) {
     assert.equal(fields.get(fieldName)?.classification, "C4_RESTRICTED", fieldName);
     assert.equal(fields.get(fieldName)?.ragStatus, "EXCLUDED", fieldName);

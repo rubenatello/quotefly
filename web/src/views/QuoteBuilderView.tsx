@@ -2,7 +2,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, Plus, Trash2, X } from "lucide-react";
 import { formatDateTime, useDashboard, money } from "../components/dashboard/DashboardContext";
 import { AiPaidPauseNotice } from "../components/ai/KodyFieldAssistButton";
 import { KodySparkIcon } from "../components/ai/KodySparkIcon";
@@ -2901,11 +2901,11 @@ function KodyDraftHandoffBanner({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="blue" icon={<Sparkles size={12} />}>{t("quoteBuilder.handoff.prepared")}</Badge>
+            <Badge tone="blue" icon={<KodySparkIcon size={12} />}>{t("quoteBuilder.handoff.prepared")}</Badge>
             <Badge tone="slate">{t("quoteBuilder.handoff.notSaved")}</Badge>
             <Badge tone="slate">{t("quoteBuilder.handoff.notSent")}</Badge>
             {handoff.useWorkspaceContext ? (
-              <Badge tone="blue" icon={<Sparkles size={12} />}>
+              <Badge tone="blue" icon={<KodySparkIcon size={12} />}>
                 {t("quoteBuilder.handoff.sources", { count: handoff.retrievedSourceCount })}
               </Badge>
             ) : null}

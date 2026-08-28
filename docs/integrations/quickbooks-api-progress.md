@@ -1,8 +1,10 @@
 # QuickBooks API Progress
 
-Last updated: 2026-08-23
+Last updated: 2026-08-27
 
-Status: Provider foundation present but production workflows paused and unmarketed.
+Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
+
+The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). That contract defines the authoritative workflow, security boundary, state projection, recovery behavior, and evidence required before enablement.
 
 ## Current supported accounting workflow
 
@@ -10,48 +12,93 @@ Status: Provider foundation present but production workflows paused and unmarket
 - Export accounting data through the QuickBooks-friendly CSV workflow.
 - Allow current owners/admins to inspect local QuickBooks configuration state or disconnect locally stored credentials.
 
-QuoteFly does not currently offer production QuickBooks Online connection, invoice creation, invoice-status refresh, payment reconciliation, tax sync, or webhook automation.
+QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. No Intuit sandbox result, QuickBooks Payments eligibility, production app approval, or production provider operation is claimed.
 
-## Paused provider foundation
+## Engineering candidate
 
-The repository contains legacy foundations for OAuth, encrypted token storage, customer/item mapping, Quote-based invoice push, remote status refresh, webhook signature verification, and webhook event records. These paths are not safe enough to enable or market yet.
+The repository contains a default-off candidate for:
 
-`QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` is the required release posture:
+- OAuth connection state and encrypted token storage;
+- explicit customer and item mappings;
+- an Invoice-owned durable publish claim with deterministic provider request identity;
+- unknown-result quarantine and read-only reconciliation;
+- restricted hosted invoice-link storage;
+- a durable webhook inbox state machine, CDC cursor, realm-routing record, and revocation-pending state;
+- tenant-composite relationships and forced RLS for tenant-owned QuickBooks records;
+- projection into QuoteFly's internal Invoice and InvoicePayment ledger.
 
-- provider-capable connect/callback/push/refresh paths fail with stable `503` before provider activity;
-- signed webhooks are validated and return retryable `503` without acknowledgement or provider refresh;
-- when the legacy provider flag is explicitly enabled in a controlled test, taxable pushes fail with stable `422`; while the release flag is false, push requests return provider-unavailable `503` first;
-- current owner/admin membership is required for connection metadata, local preview, disconnect, or provider-capable actions.
+Presence in the schema or code is not availability. The candidate must pass the exact automated, migration, sandbox, security, operational, and independent-review evidence below before the provider flag may be changed.
 
-## API surface while paused
+The current worktree includes automated provider-shaped coverage for bounded
+`RefundReceipt` reads, webhook and CDC recognition, partial/full ledger
+projection, idempotent replay, and fail-closed ambiguous linkage. This is local
+test evidence only: it does not prove how a live Intuit sandbox company links a
+refund receipt, payment, and invoice, and it does not satisfy the owner-managed
+sandbox refund/reversal checkbox below.
 
-- `GET /v1/integrations/quickbooks/status` — owner/admin local configuration state.
-- `GET /v1/integrations/quickbooks/quotes/:quoteId/sync-preview` — owner/admin local preview only.
-- `POST /v1/integrations/quickbooks/disconnect` — owner/admin local credential cleanup.
-- `POST /v1/integrations/quickbooks/connect` — stable provider-unavailable `503`.
-- `GET /v1/integrations/quickbooks/callback` — stable provider-unavailable `503` before token exchange.
-- `POST /v1/integrations/quickbooks/quotes/:quoteId/push-invoice` — stable provider-unavailable `503`; taxable legacy requests remain blocked until the tax contract is approved.
-- `GET /v1/integrations/quickbooks/quotes/:quoteId/invoice-status` — stable provider-unavailable `503` before refresh/fetch.
-- `POST /v1/integrations/quickbooks/webhook` — signature/body validation followed by retryable provider-unavailable `503`.
+`QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` remains the required release posture:
 
-## Database foundation and remaining isolation work
+- provider-capable connect, callback, publish, refresh, reconciliation, and webhook-processing paths must make no Intuit call while paused;
+- taxable invoice publishing remains blocked until a separate tax-mapping contract is approved;
+- the legacy Quote-based invoice-write route remains retired;
+- current owner/admin membership is required for provider configuration or mutations;
+- QuickBooks-friendly CSV remains the supported external accounting handoff.
 
-Existing records include `QuickBooksConnection`, `QuickBooksCustomerMap`, `QuickBooksItemMap`, `QuickBooksInvoiceSync`, and `QuickBooksWebhookEvent`. Before enablement, the provider release must add forced RLS, composite tenant integrity, and two-tenant runtime-role denial coverage for every table and relation.
+## Enablement gates
 
-## Launch blockers for provider enablement
+### Automated candidate evidence
 
-1. Replace the legacy Quote push with a durable Invoice-based `PROCESSING` claim.
-2. Reconcile timeout/crash/unknown provider results without replaying invoice creation.
-3. Persist webhooks durably before acknowledgement and process them through a leased retry worker.
-4. Add approved tax mapping; do not downgrade tax failure to a warning.
-5. Add explicit customer/item mapping review and duplicate protection.
-6. Add provider reconciliation, replay, process-restart, concurrent request, role-removal, and tenant-isolation tests.
-7. Produce provider inventory, alerts, rollback, credential rotation, and sandbox-to-production evidence.
+- [ ] Fresh-schema migration, Prisma validation, `npm run verify`, and database-backed `npm run verify:launch` pass on one exact committed SHA.
+- [ ] Two-tenant runtime-role denial covers every tenant-owned QuickBooks table, relationship, route, worker, and replay path.
+- [ ] Invoice publish, deterministic replay, timeout/crash quarantine, exact-fingerprint reconciliation, and concurrent serialization create no duplicate provider invoice.
+- [ ] A signed webhook is committed before acknowledgement, then processed through lease, retry/backoff, dead-letter, and idempotent replay behavior.
+- [ ] Webhook, manual refresh, and CDC call the same authoritative reconciliation service.
+- [ ] Unpaid, partial, paid, refund, reversal, payment deletion, multi-invoice payment, void, duplicate, delayed, and out-of-order provider changes project correctly.
+- [ ] Hosted invoice links pass approved-host validation and never enter logs, analytics, AI prompts, public quote payloads, or cacheable responses.
+- [ ] OAuth state replay, callback realm mismatch, refresh-token race, disconnect, token revocation, and `REVOCATION_PENDING` recovery fail closed.
+- [ ] Provider request timeouts, bounded read retries, `Retry-After`, queue limits, and content-free telemetry are covered.
+- [ ] Sentinel reviews the complete provider/payment boundary and Opera independently approves the exact candidate.
 
-These are Phase 4 provider-sync requirements, not post-launch enhancements. QuickBooks Desktop remains a separate integration architecture.
+### Migration rehearsal evidence
+
+- [ ] Restore a recent sanitized production-like backup into an isolated branch and record source snapshot time, candidate SHA, migration start/end time, row counts, and outcome.
+- [ ] Apply every checked-in migration through the isolated migration job using `DIRECT_DATABASE_URL`; never give that credential to the API runtime.
+- [ ] Measure the Invoice billing-email backfill and QuickBooks index/foreign-key/RLS changes for lock duration and table impact.
+- [ ] Start the candidate API with the non-owner `quotefly_runtime` role and verify health, readiness, auth, customer, quote, Job, Invoice, CSV, QuickBooks-paused behavior, and two-tenant denial.
+- [ ] Prove the candidate API sets tenant RLS context for every QuickBooks path before routing traffic.
+- [ ] Record a verified backup restore and forward-fix rehearsal. Do not roll the API back behind this migration after forced RLS is active.
+
+### Owner-managed sandbox evidence
+
+- [ ] Intuit sandbox app, exact HTTPS callback, webhook verifier, dedicated sandbox company, and QuickBooks Payments test eligibility are recorded without storing secrets in Git.
+- [ ] One sanitized, explicitly approved internal tenant completes OAuth and one-time callback behavior.
+- [ ] Reviewed customer/item mapping and one non-taxable invoice complete without blind customer/item creation.
+- [ ] The hosted invoice link is retrieved and presented safely, then partial payment, full payment, refund/reversal, and void states reconcile.
+- [ ] Duplicate and out-of-order webhooks, worker restart, dropped webhook repaired by CDC, and provider timeout produce one durable outcome.
+- [ ] Disconnect revokes tokens, a simulated revocation failure becomes `REVOCATION_PENDING`, and reconnect cannot cross company/realm boundaries.
+- [ ] Queue age, retries, dead letters, reconciliation-required records, token failures, CDC lag, and provider latency are visible to named alert owners.
+
+### Production operations evidence
+
+- [ ] Intuit production app approval, QuickBooks Payments merchant eligibility, fee ownership, supported payment methods, and contractor bank settlement are owner-confirmed.
+- [ ] Credential, connection, realm, webhook subscription, and token-encryption-key inventories are current.
+- [ ] Alert destinations, support owner, incident severity, replay authority, and reconciliation escalation are named.
+- [ ] A credential-safe kill switch, token revocation, webhook disablement, forward-fix, and backup restore procedure is rehearsed.
+- [ ] Public and in-product wording remains unavailable/coming soon until an explicitly authorized production pilot succeeds.
+
+## Migration risks to carry into review
+
+The uncommitted migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is additive but coordinated:
+
+- it enables and forces RLS on existing QuickBooks tables, so a binary that does not set `app.tenant_id` for those paths cannot safely run after migration;
+- it backfills `Invoice.billingEmailSnapshot`, changes the InvoicePayment provider-application uniqueness rule, and adds indexes/foreign keys that require production-like lock and data-shape rehearsal;
+- `QuickBooksRealmBinding` is intentionally a minimal non-secret routing table with forced tenant RLS plus a transaction-local, realm-exact webhook lookup policy; it must never accumulate tokens, company names, customer data, or public API exposure;
+- stored hosted invoice links are restricted provider data and require no-log, no-cache, retention, backup, and incident handling evidence;
+- webhook lease/state invariants and OAuth user/membership binding must be proven at the service and database-backed test layers before enablement.
 
 ## Official references
 
 - [QuickBooks Online OAuth 2.0](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0)
 - [QuickBooks Online invoice workflow](https://developer.intuit.com/app/developer/qbo/docs/workflows/create-an-invoice)
 - [QuickBooks Online webhooks](https://developer.intuit.com/app/developer/qbo/docs/develop/webhooks)
+- [Intuit RefundReceipt entity reference](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippphpdevkitv3/entities/files/IPPRefundReceipt.html)

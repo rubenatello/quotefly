@@ -292,6 +292,7 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
     if (tool === "SEARCH_PRODUCTS") return t("kody.loading.products");
     if (tool === "SEARCH_JOBS" || tool === "GET_JOB_STATUS") return t("kody.loadingExtensions.jobs");
     if (tool === "LIST_INVOICES" || tool === "GET_INVOICE_STATUS") return t("kody.loadingExtensions.invoices");
+    if (tool === "GET_QUICKBOOKS_SETUP_STATUS") return t("kody.loadingExtensions.quickBooks");
     if (tool === "NAVIGATE_WORKSPACE") return t("kody.loading.navigation");
     if (tool === "FOLLOW_UP_QUEUE") return t("kody.loading.followUps");
     if (tool === "LIST_SCHEDULE") return t("kody.loading.schedule");
@@ -338,6 +339,7 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
     DRAFT_PRODUCT: t("kody.tools.draftProduct"), SEARCH_PRODUCTS: t("kody.tools.searchProducts"),
     SEARCH_JOBS: t("kody.toolExtensions.searchJobs"), GET_JOB_STATUS: t("kody.toolExtensions.jobStatus"),
     LIST_INVOICES: t("kody.toolExtensions.listInvoices"), GET_INVOICE_STATUS: t("kody.toolExtensions.invoiceStatus"),
+    GET_QUICKBOOKS_SETUP_STATUS: t("kody.toolExtensions.quickBooksStatus"),
     LIST_SCHEDULE: t("kody.tools.listSchedule"), PREPARE_BOOKING: t("kody.tools.prepareBooking"),
     PREPARE_DISPATCH: t("kody.tools.prepareDispatch"),
     LIST_MY_ACTIVITIES: t("kody.tools.listActivities"), PRIORITIZE_MY_DAY: t("kody.tools.prioritizeDay"),
@@ -367,7 +369,7 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
     OPEN_SCHEDULE: t("kody.actions.openSchedule"), OPEN_BOOKING_REVIEW: t("kody.actions.reviewBooking"),
     OPEN_DISPATCH_REVIEW: t("kody.actions.reviewDispatch"),
     OPEN_ANALYTICS: t("kody.actions.openAnalytics"),
-    OPEN_WORKSPACE_PAGE: t("kody.actions.openPage"), REQUEST_ADMIN_ACCESS: t("kody.actions.requestAccess"),
+    OPEN_WORKSPACE_PAGE: t("kody.actions.openPage"), OPEN_QUICKBOOKS_SETUP: t("kody.actions.openQuickBooks"), REQUEST_ADMIN_ACCESS: t("kody.actions.requestAccess"),
   };
   return labels[action.type];
 }
@@ -1771,6 +1773,12 @@ export function KodyAssistant({
     if (boundAction.requiresConfirmation) {
       setPendingAction(boundAction);
       track("kody_action_confirmation_requested", { type: boundAction.type });
+      return;
+    }
+
+    if (action.type === "OPEN_QUICKBOOKS_SETUP") {
+      collapseForMobileHandoff(action.type);
+      navigate("/app/settings#admin-quickbooks");
       return;
     }
     executeAction(boundAction, "direct");

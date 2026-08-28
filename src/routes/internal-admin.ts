@@ -22,6 +22,7 @@ import {
   normalizeAiIdempotencyHeader,
   runWithAiUsageOperation,
 } from "../services/ai-usage-ledger";
+import { isQuickBooksConfigured, isQuickBooksWebhookConfigured } from "../services/quickbooks";
 
 const AiQualitySummaryQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(180).default(30),
@@ -119,6 +120,12 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         context,
         conversation,
         usageSnapshot: snapshot,
+        quickBooksRuntime: {
+          providerConfigured: isQuickBooksConfigured(app.env),
+          providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+          webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+          environment: app.env.QUICKBOOKS_ENVIRONMENT,
+        },
       });
       result = await measureRequestPerformance(request, "ai", () => consumesBudget
         ? runWithAiUsageOperation(app.prisma, {

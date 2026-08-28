@@ -4,9 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   ArrowRight,
-  BriefcaseBusiness,
   CheckCircle2,
-  CircleDollarSign,
   Clock3,
   FileCheck2,
   FileClock,
@@ -17,6 +15,8 @@ import {
   UsersRound,
 } from "lucide-react";
 import { KodyButton } from "../components/ai/KodyButton";
+import { MarketingFeatureIcon } from "../components/Icons";
+import { TablerIcons } from "../components/icon-system";
 import { useDashboard } from "../components/dashboard/DashboardContext";
 import { Alert, Badge, Button, EmptyState, LoadingState } from "../components/ui";
 import { api, type QuoteStatus, type WorkspaceAttentionReason, type WorkspaceOverview } from "../lib/api";
@@ -285,7 +285,7 @@ export function WorkspaceHomePage() {
               label={t("home.unquotedLeads")}
               value={String(overview.metrics.unquotedLeads)}
               hint={t("home.activeCustomers", { count: overview.metrics.activeCustomers })}
-              icon={<UsersRound size={19} />}
+              icon={<MarketingFeatureIcon icon={TablerIcons.marketing.customer} size={20} />}
               tone="blue"
               onClick={() => navigate("/app/customers")}
             />
@@ -295,7 +295,7 @@ export function WorkspaceHomePage() {
               hint={activitySummary
                 ? t("home.upcomingTasks", { count: activitySummary.counts.upcoming })
                 : t("home.afterSaleDue", { count: overview.metrics.afterSaleDue })}
-              icon={<Clock3 size={19} />}
+              icon={<MarketingFeatureIcon icon={TablerIcons.marketing.schedule} size={20} />}
               tone="orange"
               onClick={() => navigate("/app/follow-up")}
             />
@@ -303,7 +303,7 @@ export function WorkspaceHomePage() {
               label={t("home.openPipeline")}
               value={formatMoney(overview.metrics.openPipelineRevenue, locale)}
               hint={t("home.activeQuotes", { count: pipelineTotal })}
-              icon={<CircleDollarSign size={19} />}
+              icon={<MarketingFeatureIcon icon={TablerIcons.marketing.quote} size={20} />}
               tone="slate"
               onClick={() => navigate("/app/quotes")}
             />
@@ -311,7 +311,7 @@ export function WorkspaceHomePage() {
               label={t("home.wonRevenue")}
               value={formatMoney(overview.metrics.acceptedRevenue, locale)}
               hint={t("home.activeJobs", { count: overview.metrics.activeJobs })}
-              icon={<BriefcaseBusiness size={19} />}
+              icon={<MarketingFeatureIcon icon={TablerIcons.marketing.work} size={20} />}
               tone="emerald"
               onClick={() => navigate("/app/jobs")}
             />

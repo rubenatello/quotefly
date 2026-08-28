@@ -73,6 +73,7 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("What is the status of job #12?"), "GET_JOB_STATUS");
   assert.equal(resolveAssistantTool("List my invoices"), "LIST_INVOICES");
   assert.equal(resolveAssistantTool("Is invoice #42 paid?"), "GET_INVOICE_STATUS");
+  assert.equal(resolveAssistantTool("Is QuickBooks connected and ready?"), "GET_QUICKBOOKS_SETUP_STATUS");
   assert.equal(resolveAssistantTool("Which customers do not have a quote?"), "CUSTOMERS_WITHOUT_QUOTES");
   assert.equal(resolveAssistantTool("If we close 30% of open quotes, what is the revenue boost?"), "PIPELINE_SCENARIO");
   assert.equal(resolveAssistantTool("Forecast my open quote revenue this month"), "SUMMARIZE_PIPELINE");
@@ -233,6 +234,7 @@ test("routes neutral Spanish QuoteFly workflows without changing canonical tool 
   assert.equal(resolveAssistantTool("¿Cuál es el estado del trabajo #12?"), "GET_JOB_STATUS");
   assert.equal(resolveAssistantTool("Lista mis facturas"), "LIST_INVOICES");
   assert.equal(resolveAssistantTool("¿La factura #42 está pagada?"), "GET_INVOICE_STATUS");
+  assert.equal(resolveAssistantTool("¿QuickBooks está conectado y listo?"), "GET_QUICKBOOKS_SETUP_STATUS");
 
   assert.equal(resolveAssistantTool("Busca al cliente José Ramírez"), "SEARCH_CUSTOMERS");
   assert.equal(resolveAssistantTool("Agrega un cliente nuevo llamado María López"), "DRAFT_CUSTOMER");
@@ -295,6 +297,7 @@ test("deterministic operational tools do not consume the external AI budget", as
     "GET_JOB_STATUS",
     "LIST_INVOICES",
     "GET_INVOICE_STATUS",
+    "GET_QUICKBOOKS_SETUP_STATUS",
     "ASSISTANT_HELP",
     "OUT_OF_SCOPE",
   ] as const) {

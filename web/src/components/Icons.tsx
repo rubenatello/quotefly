@@ -21,6 +21,32 @@ import {
 } from "lucide-react";
 import type { LucideProps } from "lucide-react";
 import { forwardRef } from "react";
+import {
+  TablerIcons,
+  type QuoteFlyTablerIcon,
+  type QuoteFlyTablerIconProps,
+  type WorkspaceIconName,
+} from "./icon-system";
+
+export type { QuoteFlyTablerIcon, QuoteFlyTablerIconProps, WorkspaceIconName } from "./icon-system";
+
+export function WorkspaceNavigationIcon({
+  name,
+  active = false,
+  size = 18,
+  ...props
+}: QuoteFlyTablerIconProps & { name: WorkspaceIconName; active?: boolean }) {
+  const Icon = active ? TablerIcons.workspace[name].filled : TablerIcons.workspace[name].outline;
+  return <Icon size={size} stroke={active ? 1.6 : 1.9} aria-hidden="true" {...props} />;
+}
+
+export function MarketingFeatureIcon({
+  icon: Icon,
+  size = 22,
+  ...props
+}: QuoteFlyTablerIconProps & { icon: QuoteFlyTablerIcon }) {
+  return <Icon size={size} stroke={1.7} aria-hidden="true" {...props} />;
+}
 
 export const QuoteIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
   <Quote ref={ref} {...props} />

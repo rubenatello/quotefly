@@ -31,6 +31,16 @@ export const FORCED_TENANT_RLS_TABLES = [
   "InvoicePayment",
   "InvoiceEvent",
   "QuickBooksInvoiceOperation",
+  "QuickBooksConnection",
+  "QuickBooksConnectionEvent",
+  "QuickBooksCustomerMap",
+  "QuickBooksItemMap",
+  "QuickBooksInvoiceSync",
+  "QuickBooksWebhookEvent",
+  "QuickBooksOAuthState",
+  "QuickBooksOrphanCredentialRevocation",
+  "QuickBooksRealmBinding",
+  "QuickBooksCdcCursor",
 ] as const;
 
 // Backward-compatible export for existing AI worker/readiness imports. The

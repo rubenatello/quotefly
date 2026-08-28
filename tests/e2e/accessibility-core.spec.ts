@@ -83,9 +83,9 @@ test("dashboard Kody action stays singular, legible, and visually prominent", as
   await expect(dashboardAction).toHaveCSS("background-color", "rgb(11, 18, 32)");
   await expect(dashboardAction).toHaveCSS("color", "rgb(248, 250, 252)");
 
-  const actionMascot = dashboardAction.locator('img[src="/images/kody/kody-ai.png"]');
-  await expect(actionMascot).toBeVisible();
-  expect((await actionMascot.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(22);
+  const actionIcon = dashboardAction.locator(".qf-kody-spark-icon");
+  await expect(actionIcon).toBeVisible();
+  expect((await actionIcon.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(22);
 
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
 });

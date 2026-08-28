@@ -4,6 +4,7 @@ import type { AccessContext } from "../lib/access-policy";
 import { hasCapability } from "../lib/access-policy";
 import { setTenantRlsContext } from "../lib/tenant-rls";
 import { quickBooksInvoiceFingerprint } from "./quickbooks";
+import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -26,7 +27,17 @@ export const QuickBooksInvoiceOperationPublicSelect = {
   quickBooksConnectionId: true,
   providerRealmId: true,
   status: true,
+  payloadHash: true,
+  providerInvoiceId: true,
   providerDocNumber: true,
+  providerInvoiceStatus: true,
+  providerBalance: true,
+  providerInvoiceLink: true,
+  providerSyncToken: true,
+  providerUpdatedAtUtc: true,
+  invoiceLinkFetchedAtUtc: true,
+  allowOnlineAchPayment: true,
+  allowOnlineCardPayment: true,
   attemptCount: true,
   reconciliationCount: true,
   processingStartedAtUtc: true,
@@ -52,7 +63,14 @@ type ProviderLine = {
   itemKey: string;
   quickBooksItemId: string | null;
   quickBooksItemName: string | null;
+  reviewedAtUtc: Date | null;
 };
+
+export type QuickBooksHostedPaymentReview = Readonly<{
+  billingEmail?: string | null;
+  allowOnlineAchPayment?: boolean;
+  allowOnlineCardPayment?: boolean;
+}>;
 
 function roundProviderMoney(value: number) {
   return Number(value.toFixed(2));
@@ -86,6 +104,7 @@ type SyncContext = {
     customerId: string;
     sourceQuoteId: string;
     customerName: string;
+    billingEmail: string | null;
   };
   connection: null | {
     id: string;
@@ -103,6 +122,16 @@ type SyncContext = {
   providerPayload: Record<string, unknown> | null;
   payloadHash: string | null;
   blockers: string[];
+  paymentReview: {
+    billingEmail: string | null;
+    allowOnlineAchPayment: boolean;
+    allowOnlineCardPayment: boolean;
+  };
+  customerMapping: {
+    quickBooksCustomerId: string;
+    quickBooksDisplayName: string | null;
+    reviewedAtUtc: Date;
+  } | null;
 };
 
 export type QuickBooksInvoiceSyncPreview = {
@@ -123,6 +152,9 @@ export type QuickBooksInvoiceSyncPreview = {
     status: string;
   };
   quickBooksCustomerName: string | null;
+  customerMapping: SyncContext["customerMapping"];
+  billingEmail: string | null;
+  paymentMethods: { ach: boolean; card: boolean };
   providerDocNumber: string;
   lineItems: Array<{
     description: string;
@@ -131,6 +163,9 @@ export type QuickBooksInvoiceSyncPreview = {
     amount: number;
     mapped: boolean;
     quickBooksItemName: string | null;
+    itemKey: string;
+    quickBooksItemId: string | null;
+    reviewedAtUtc: Date | null;
   }>;
   blockers: string[];
   ready: boolean;
@@ -141,7 +176,7 @@ export type QuickBooksInvoiceSyncPreview = {
 export type QuickBooksInvoicePublishClaim =
   | {
       duplicate: true;
-      requiresReconciliation: false;
+      requiresReconciliation: boolean;
       claimToken: null;
       operation: QuickBooksInvoiceOperationPublic;
     }
@@ -238,6 +273,13 @@ function dateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
+function normalizeBillingEmail(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) && normalized.length <= 320
+    ? normalized
+    : null;
+}
+
 function requireManager(access: AccessContext) {
   if (!hasCapability(access, "manageIntegrations")) {
     throw new QuickBooksInvoiceOperationError(
@@ -278,11 +320,52 @@ function toPublicOperation(
   return operation;
 }
 
+/**
+ * Canonical reconciliation is the proof that the provider identity,
+ * immutable invoice fingerprint, and provider generation were reviewed as
+ * one snapshot. A publish completion alone must never satisfy this gate.
+ */
+export function quickBooksInvoiceHasCanonicalReconciliation(
+  operation: QuickBooksInvoiceOperationPublic,
+): boolean {
+  const hasProviderGeneration = Boolean(
+    operation.providerSyncToken
+    && /^(0|[1-9][0-9]*)$/.test(operation.providerSyncToken)
+    && operation.providerUpdatedAtUtc
+    && Number.isFinite(operation.providerUpdatedAtUtc.getTime()),
+  );
+  return operation.status === "SUCCEEDED"
+    && Boolean(operation.providerInvoiceId)
+    && /^[0-9a-f]{64}$/.test(operation.payloadHash)
+    && Boolean(operation.lastReconciledAtUtc)
+    && hasProviderGeneration;
+}
+
+export function quickBooksInvoiceLinkAvailable(
+  operation: QuickBooksInvoiceOperationPublic,
+): boolean {
+  if (
+    !quickBooksInvoiceHasCanonicalReconciliation(operation)
+    || !operation.providerInvoiceLink
+    || !operation.invoiceLinkFetchedAtUtc
+    || !operation.lastReconciledAtUtc
+  ) return false;
+
+  // Both timestamps are written from the same `now` value in the atomic
+  // reconciliation projection. Inequality means the link belongs to a stale
+  // or only partially persisted provider generation.
+  return operation.invoiceLinkFetchedAtUtc.getTime()
+    === operation.lastReconciledAtUtc.getTime();
+}
+
 export function quickBooksInvoiceReconciliationAvailable(
   operation: QuickBooksInvoiceOperationPublic,
   nowMs = Date.now(),
 ): boolean {
   if (operation.status === "RECONCILIATION_REQUIRED") return true;
+  if (operation.status === "SUCCEEDED") {
+    return !quickBooksInvoiceHasCanonicalReconciliation(operation);
+  }
   return (operation.status === "PROCESSING" || operation.status === "RECONCILING")
     && Boolean(operation.claimExpiresAtUtc && operation.claimExpiresAtUtc.getTime() <= nowMs);
 }
@@ -291,6 +374,7 @@ async function loadSyncContext(
   transaction: Transaction,
   access: AccessContext,
   invoiceId: string,
+  paymentReview: QuickBooksHostedPaymentReview = {},
 ): Promise<SyncContext> {
   const invoice = await transaction.invoice.findFirst({
     where: {
@@ -309,6 +393,7 @@ async function loadSyncContext(
       status: true,
       titleSnapshot: true,
       scopeSnapshot: true,
+      billingEmailSnapshot: true,
       currency: true,
       subtotalAmount: true,
       taxAmount: true,
@@ -317,7 +402,7 @@ async function loadSyncContext(
       dueAtUtc: true,
       customerId: true,
       sourceQuoteId: true,
-      customer: { select: { fullName: true } },
+      customer: { select: { fullName: true, email: true } },
       lineItems: {
         where: { sectionType: "INCLUDED" },
         orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -346,6 +431,9 @@ async function loadSyncContext(
         tenantId: access.tenantId,
         deletedAtUtc: null,
         status: "CONNECTED",
+        setupConfirmedAtUtc: { not: null },
+        setupConfirmedByTenantUserId: { not: null },
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
       },
       select: {
         id: true,
@@ -356,6 +444,8 @@ async function loadSyncContext(
         accessTokenEncrypted: true,
         refreshTokenEncrypted: true,
         accessTokenExpiresAtUtc: true,
+        allowOnlineAchPayment: true,
+        allowOnlineCardPayment: true,
       },
     }),
     transaction.quickBooksInvoiceOperation.findFirst({
@@ -389,7 +479,7 @@ async function loadSyncContext(
             customerId: invoice.customerId,
             deletedAtUtc: null,
           },
-          select: { quickBooksCustomerId: true, quickBooksDisplayName: true },
+          select: { quickBooksCustomerId: true, quickBooksDisplayName: true, reviewedAtUtc: true },
         }),
         transaction.quickBooksItemMap.findMany({
           where: {
@@ -398,7 +488,7 @@ async function loadSyncContext(
             itemKey: { in: itemKeys },
             deletedAtUtc: null,
           },
-          select: { itemKey: true, quickBooksItemId: true, quickBooksItemName: true },
+          select: { itemKey: true, quickBooksItemId: true, quickBooksItemName: true, reviewedAtUtc: true },
         }),
         transaction.quickBooksInvoiceSync.findFirst({
           where: {
@@ -422,6 +512,7 @@ async function loadSyncContext(
       itemKey,
       quickBooksItemId: mapped?.quickBooksItemId ?? null,
       quickBooksItemName: mapped?.quickBooksItemName ?? null,
+      reviewedAtUtc: mapped?.reviewedAtUtc ?? null,
     };
   });
 
@@ -433,13 +524,30 @@ async function loadSyncContext(
   if (Number(invoice.taxAmount) > 0) blockers.push("QUICKBOOKS_TAX_SYNC_UNSUPPORTED");
   if (!invoice.dueAtUtc) blockers.push("INVOICE_DUE_DATE_REQUIRED");
   if (connection && !customerMap) blockers.push("QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED");
+  if (connection && customerMap && !customerMap.reviewedAtUtc) blockers.push("QUICKBOOKS_CUSTOMER_MAPPING_REVIEW_REQUIRED");
   if (connection && lineItems.some((line) => !line.quickBooksItemId)) {
     blockers.push("QUICKBOOKS_ITEM_MAPPING_REQUIRED");
+  }
+  if (connection && lineItems.some((line) => line.quickBooksItemId && !line.reviewedAtUtc)) {
+    blockers.push("QUICKBOOKS_ITEM_MAPPING_REVIEW_REQUIRED");
   }
   if (legacySync?.quickBooksInvoiceId) blockers.push("LEGACY_QUICKBOOKS_INVOICE_EXISTS");
 
   const lineSubtotal = Number(lineItems.reduce((sum, line) => sum + line.amount, 0).toFixed(2));
   if (lineSubtotal !== Number(invoice.subtotalAmount)) blockers.push("INVOICE_LINE_TOTAL_MISMATCH");
+
+  const billingEmail = normalizeBillingEmail(
+    paymentReview.billingEmail ?? invoice.billingEmailSnapshot ?? invoice.customer.email,
+  );
+  const allowOnlineAchPayment = paymentReview.allowOnlineAchPayment
+    ?? connection?.allowOnlineAchPayment
+    ?? false;
+  const allowOnlineCardPayment = paymentReview.allowOnlineCardPayment
+    ?? connection?.allowOnlineCardPayment
+    ?? false;
+  if ((allowOnlineAchPayment || allowOnlineCardPayment) && !billingEmail) {
+    blockers.push("QUICKBOOKS_BILLING_EMAIL_REQUIRED");
+  }
 
   const providerPayload = connection && customerMap && blockers.length === 0
     ? {
@@ -451,6 +559,10 @@ async function loadSyncContext(
           value: customerMap.quickBooksCustomerId,
           name: customerMap.quickBooksDisplayName ?? invoice.customer.fullName,
         },
+        ...(billingEmail ? { BillEmail: { Address: billingEmail } } : {}),
+        AllowOnlinePayment: allowOnlineAchPayment || allowOnlineCardPayment,
+        AllowOnlineACHPayment: allowOnlineAchPayment,
+        AllowOnlineCreditCardPayment: allowOnlineCardPayment,
         Line: lineItems.map((line) => {
           const providerPricing = providerQuantityAndUnitPrice(line);
           return {
@@ -487,6 +599,7 @@ async function loadSyncContext(
       customerId: invoice.customerId,
       sourceQuoteId: invoice.sourceQuoteId,
       customerName: invoice.customer.fullName,
+      billingEmail,
     },
     connection,
     operation: operation ? toPublicOperation(operation) : null,
@@ -495,6 +608,14 @@ async function loadSyncContext(
     providerPayload,
     payloadHash: providerPayload ? quickBooksInvoiceFingerprint(providerPayload) : null,
     blockers,
+    paymentReview: { billingEmail, allowOnlineAchPayment, allowOnlineCardPayment },
+    customerMapping: customerMap?.reviewedAtUtc
+      ? {
+          quickBooksCustomerId: customerMap.quickBooksCustomerId,
+          quickBooksDisplayName: customerMap.quickBooksDisplayName,
+          reviewedAtUtc: customerMap.reviewedAtUtc,
+        }
+      : null,
   };
 }
 
@@ -522,6 +643,12 @@ function previewFromContext(
     quickBooksCustomerName: context.providerPayload
       ? ((context.providerPayload.CustomerRef as { name?: string | null }).name ?? null)
       : null,
+    customerMapping: context.customerMapping,
+    billingEmail: context.paymentReview.billingEmail,
+    paymentMethods: {
+      ach: context.paymentReview.allowOnlineAchPayment,
+      card: context.paymentReview.allowOnlineCardPayment,
+    },
     providerDocNumber: context.providerDocNumber,
     lineItems: context.lineItems.map((line) => ({
       description: line.description,
@@ -530,6 +657,9 @@ function previewFromContext(
       amount: line.amount,
       mapped: Boolean(line.quickBooksItemId),
       quickBooksItemName: line.quickBooksItemName,
+      itemKey: line.itemKey,
+      quickBooksItemId: line.quickBooksItemId,
+      reviewedAtUtc: line.reviewedAtUtc,
     })),
     blockers: context.blockers,
     ready: context.blockers.length === 0 && Boolean(context.providerPayload),
@@ -543,11 +673,12 @@ export async function getQuickBooksInvoiceSyncPreview(
   access: AccessContext,
   invoiceId: string,
   reviewSecret: string,
+  paymentReview: QuickBooksHostedPaymentReview = {},
 ): Promise<QuickBooksInvoiceSyncPreview> {
   requireManager(access);
   await setTenantRlsContext(transaction, access.tenantId);
   return previewFromContext(
-    await loadSyncContext(transaction, access, invoiceId),
+    await loadSyncContext(transaction, access, invoiceId, paymentReview),
     access.tenantId,
     reviewSecret,
   );
@@ -562,6 +693,7 @@ export async function claimQuickBooksInvoicePublish(
     idempotencyKey: string;
     reviewBinding: string;
     reviewSecret: string;
+    paymentReview?: QuickBooksHostedPaymentReview;
   },
 ): Promise<QuickBooksInvoicePublishClaim> {
   requireManager(access);
@@ -569,7 +701,7 @@ export async function claimQuickBooksInvoicePublish(
   const commandKeyHash = sha256(`quickbooks-invoice:${access.tenantId}:${params.idempotencyKey}`);
   await lockCommandKey(transaction, access, commandKeyHash);
   await lockInvoiceOperation(transaction, access, params.invoiceId);
-  const context = await loadSyncContext(transaction, access, params.invoiceId);
+  const context = await loadSyncContext(transaction, access, params.invoiceId, params.paymentReview);
 
   const reusedCommand = await transaction.invoiceEvent.findFirst({
     where: { tenantId: access.tenantId, commandKeyHash },
@@ -583,20 +715,11 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
-  if (context.invoice.version !== params.invoiceVersion) {
-    throw new QuickBooksInvoiceOperationError(
-      409,
-      "INVOICE_VERSION_CONFLICT",
-      "The invoice changed. Review the current invoice before publishing.",
-      { currentVersion: context.invoice.version },
-    );
-  }
-
   if (context.operation) {
     if (context.operation.status === "SUCCEEDED") {
       return {
         duplicate: true,
-        requiresReconciliation: false,
+        requiresReconciliation: !quickBooksInvoiceHasCanonicalReconciliation(context.operation),
         claimToken: null,
         operation: context.operation,
       };
@@ -655,6 +778,15 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
+  if (context.invoice.version !== params.invoiceVersion) {
+    throw new QuickBooksInvoiceOperationError(
+      409,
+      "INVOICE_VERSION_CONFLICT",
+      "The invoice changed. Review the current invoice before publishing.",
+      { currentVersion: context.invoice.version },
+    );
+  }
+
   const expectedReviewBinding = reviewBindingForContext(params.reviewSecret, access.tenantId, context);
   if (!expectedReviewBinding || !reviewBindingsEqual(expectedReviewBinding, params.reviewBinding)) {
     throw new QuickBooksInvoiceOperationError(
@@ -690,6 +822,8 @@ export async function claimQuickBooksInvoicePublish(
       claimTokenHash: sha256(claimToken),
       providerRequestId,
       providerDocNumber: context.providerDocNumber,
+      allowOnlineAchPayment: context.paymentReview.allowOnlineAchPayment,
+      allowOnlineCardPayment: context.paymentReview.allowOnlineCardPayment,
       attemptCount: 1,
       reconciliationCount: 0,
       processingStartedAtUtc: now,
@@ -709,6 +843,10 @@ export async function claimQuickBooksInvoicePublish(
       commandKeyHash,
       commandPayloadHash: context.payloadHash,
     },
+  });
+  await transaction.invoice.update({
+    where: { id: context.invoice.id },
+    data: { billingEmailSnapshot: context.paymentReview.billingEmail },
   });
 
   return {
@@ -731,6 +869,11 @@ async function finishOperation(
     expectedStatus: "PROCESSING" | "RECONCILING";
     nextStatus: "SUCCEEDED" | "FAILED" | "RECONCILIATION_REQUIRED";
     providerInvoiceId?: string;
+    providerInvoiceLink?: string | null;
+    providerSyncToken?: string | null;
+    providerInvoiceStatus?: string | null;
+    providerBalance?: number | null;
+    providerUpdatedAtUtc?: Date | null;
     failureCode?: string;
     eventType:
       | "PROVIDER_SYNC_SUCCEEDED"
@@ -769,6 +912,14 @@ async function finishOperation(
       claimTokenHash: null,
       claimExpiresAtUtc: null,
       ...(params.providerInvoiceId ? { providerInvoiceId: params.providerInvoiceId } : {}),
+      ...(params.providerInvoiceLink !== undefined ? {
+        providerInvoiceLink: params.providerInvoiceLink,
+        invoiceLinkFetchedAtUtc: params.providerInvoiceLink ? now : null,
+      } : {}),
+      ...(params.providerSyncToken !== undefined ? { providerSyncToken: params.providerSyncToken } : {}),
+      ...(params.providerInvoiceStatus !== undefined ? { providerInvoiceStatus: params.providerInvoiceStatus } : {}),
+      ...(params.providerBalance !== undefined ? { providerBalance: params.providerBalance } : {}),
+      ...(params.providerUpdatedAtUtc !== undefined ? { providerUpdatedAtUtc: params.providerUpdatedAtUtc } : {}),
       succeededAtUtc: succeeded ? now : null,
       failedAtUtc: failed ? now : null,
       lastFailureCode: failed ? (params.failureCode ?? "QUICKBOOKS_PROVIDER_ERROR").slice(0, 191) : null,
@@ -785,20 +936,114 @@ async function finishOperation(
       requestId: current.providerRequestId.slice(0, 191),
     },
   });
+  if (succeeded && params.eventType === "PROVIDER_SYNC_SUCCEEDED") {
+    await transaction.invoice.update({
+      where: { id: params.invoiceId },
+      data: {
+        status: "OPEN",
+        issuedAtUtc: now,
+        version: { increment: 1 },
+      },
+    });
+  }
   return operation;
 }
 
 export function completeQuickBooksInvoicePublish(
   transaction: Transaction,
   access: AccessContext,
-  params: { invoiceId: string; claimToken: string; providerInvoiceId: string },
+  params: {
+    invoiceId: string;
+    claimToken: string;
+    providerInvoiceId: string;
+    providerSyncToken: string | null;
+    providerInvoiceStatus: string | null;
+    providerBalance: number;
+    providerUpdatedAtUtc: Date | null;
+  },
 ) {
   return finishOperation(transaction, access, {
     ...params,
+    // A capability URL becomes durable only inside the canonical
+    // reconciliation projection, alongside its verified fingerprint and
+    // provider generation.
+    providerInvoiceLink: null,
     expectedStatus: "PROCESSING",
     nextStatus: "SUCCEEDED",
     eventType: "PROVIDER_SYNC_SUCCEEDED",
   });
+}
+
+export async function markQuickBooksInitialReconciliationRequired(
+  transaction: Transaction,
+  access: AccessContext,
+  params: {
+    invoiceId: string;
+    providerInvoiceId: string;
+    payloadHash: string;
+    failureCode: string;
+  },
+): Promise<QuickBooksInvoiceOperationPublic> {
+  await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, params.invoiceId);
+  const current = await transaction.quickBooksInvoiceOperation.findFirst({
+    where: {
+      tenantId: access.tenantId,
+      invoiceId: params.invoiceId,
+      archivedAtUtc: null,
+    },
+    select: QuickBooksInvoiceOperationPublicSelect,
+  });
+  if (!current) {
+    throw new QuickBooksInvoiceOperationError(
+      404,
+      "QUICKBOOKS_OPERATION_NOT_FOUND",
+      "No QuickBooks invoice operation exists for this invoice.",
+    );
+  }
+  if (
+    current.providerInvoiceId !== params.providerInvoiceId
+    || current.payloadHash !== params.payloadHash
+  ) {
+    throw new QuickBooksInvoiceOperationError(
+      409,
+      "QUICKBOOKS_OPERATION_STALE",
+      "A newer QuickBooks invoice operation replaced this reconciliation result.",
+    );
+  }
+  if (current.status === "RECONCILIATION_REQUIRED") return current;
+  if (quickBooksInvoiceHasCanonicalReconciliation(current)) return current;
+  if (current.status !== "SUCCEEDED") {
+    throw new QuickBooksInvoiceOperationError(
+      409,
+      "QUICKBOOKS_OPERATION_STALE",
+      "The QuickBooks publish operation is no longer awaiting initial reconciliation.",
+    );
+  }
+
+  const now = new Date();
+  const operation = await transaction.quickBooksInvoiceOperation.update({
+    where: { id: current.id },
+    data: {
+      status: "RECONCILIATION_REQUIRED",
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      succeededAtUtc: null,
+      failedAtUtc: now,
+      lastFailureCode: params.failureCode.slice(0, 191),
+    },
+    select: QuickBooksInvoiceOperationPublicSelect,
+  });
+  await transaction.invoiceEvent.create({
+    data: {
+      tenantId: access.tenantId,
+      invoiceId: params.invoiceId,
+      actorTenantUserId: access.tenantUserId,
+      type: "PROVIDER_RECONCILIATION_REQUIRED",
+      requestId: current.id.slice(0, 191),
+    },
+  });
+  return operation;
 }
 
 export function failQuickBooksInvoicePublish(
@@ -826,7 +1071,10 @@ export async function claimQuickBooksInvoiceReconciliation(
   if (!context.operation) {
     throw new QuickBooksInvoiceOperationError(404, "QUICKBOOKS_OPERATION_NOT_FOUND", "No QuickBooks invoice operation exists for this invoice.");
   }
-  if (context.operation.status === "SUCCEEDED") {
+  if (
+    context.operation.status === "SUCCEEDED"
+    && quickBooksInvoiceHasCanonicalReconciliation(context.operation)
+  ) {
     return {
       duplicate: true,
       claimToken: null,
@@ -856,6 +1104,10 @@ export async function claimQuickBooksInvoiceReconciliation(
   );
   const reconcilable = context.operation.status === "RECONCILIATION_REQUIRED"
     || (
+      context.operation.status === "SUCCEEDED"
+      && !quickBooksInvoiceHasCanonicalReconciliation(context.operation)
+    )
+    || (
       (context.operation.status === "PROCESSING" || context.operation.status === "RECONCILING")
       && activeClaimExpired
     );
@@ -873,7 +1125,10 @@ export async function claimQuickBooksInvoiceReconciliation(
   });
   const now = new Date();
   const claimToken = randomBytes(32).toString("hex");
-  if (context.operation.status === "PROCESSING") {
+  if (
+    context.operation.status === "PROCESSING"
+    || context.operation.status === "SUCCEEDED"
+  ) {
     await transaction.invoiceEvent.create({
       data: {
         tenantId: access.tenantId,
@@ -891,7 +1146,6 @@ export async function claimQuickBooksInvoiceReconciliation(
       claimTokenHash: sha256(claimToken),
       processingStartedAtUtc: now,
       claimExpiresAtUtc: new Date(now.getTime() + CLAIM_TTL_MS),
-      lastReconciledAtUtc: now,
       reconciliationCount: { increment: 1 },
       failedAtUtc: null,
       lastFailureCode: null,
@@ -910,16 +1164,45 @@ export async function claimQuickBooksInvoiceReconciliation(
   };
 }
 
-export function completeQuickBooksInvoiceReconciliation(
+export async function bindQuickBooksInvoiceReconciliationIdentity(
   transaction: Transaction,
   access: AccessContext,
-  params: { invoiceId: string; claimToken: string; providerInvoiceId: string },
+  params: {
+    invoiceId: string;
+    claimToken: string;
+    providerInvoiceId: string;
+  },
 ) {
-  return finishOperation(transaction, access, {
-    ...params,
-    expectedStatus: "RECONCILING",
-    nextStatus: "SUCCEEDED",
-    eventType: "PROVIDER_RECONCILED",
+  await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, params.invoiceId);
+  const current = await transaction.quickBooksInvoiceOperation.findFirst({
+    where: {
+      tenantId: access.tenantId,
+      invoiceId: params.invoiceId,
+      status: "RECONCILING",
+      claimTokenHash: sha256(params.claimToken),
+      archivedAtUtc: null,
+    },
+    select: { id: true, providerInvoiceId: true },
+  });
+  if (!current) {
+    throw new QuickBooksInvoiceOperationError(
+      409,
+      "QUICKBOOKS_OPERATION_STALE",
+      "The QuickBooks reconciliation claim is no longer current.",
+    );
+  }
+  if (current.providerInvoiceId && current.providerInvoiceId !== params.providerInvoiceId) {
+    throw new QuickBooksInvoiceOperationError(
+      409,
+      "QUICKBOOKS_INVOICE_ID_MISMATCH",
+      "The QuickBooks invoice identity no longer matches this reconciliation.",
+    );
+  }
+  return transaction.quickBooksInvoiceOperation.update({
+    where: { id: current.id },
+    data: { providerInvoiceId: params.providerInvoiceId },
+    select: QuickBooksInvoiceOperationPublicSelect,
   });
 }
 
