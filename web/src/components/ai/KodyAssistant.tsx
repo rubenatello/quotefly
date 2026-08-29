@@ -362,6 +362,7 @@ function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
     if (invoiceNumber !== null) return t("kody.actions.openInvoice", { number: invoiceNumber });
     const jobNumber = getFiniteNumber(action.payload.jobNumber);
     if (jobNumber !== null) return t("kody.actions.openJob", { number: jobNumber });
+    if (getString(action.payload.page) === "follow-up") return t("kody.actions.openFollowUp");
   }
   const labels: Record<AiAssistantAction["type"], string> = {
     OPEN_CUSTOMER: t("kody.actions.openCustomer"), OPEN_CUSTOMER_DRAFT: t("kody.actions.reviewCustomer"),
