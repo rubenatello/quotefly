@@ -735,7 +735,7 @@ export async function reconcileQuickBooksInvoice(params: {
     );
   }
   const onlinePaymentsExpected = context.operation.allowOnlineAchPayment || context.operation.allowOnlineCardPayment;
-  const hostedPaymentUrl = onlinePaymentsExpected
+  const hostedPaymentUrl = onlinePaymentsExpected && !voided && balance > 0
     ? validateQuickBooksInvoiceLink(providerInvoice.InvoiceLink)
     : null;
   const paymentLinkUnavailable = onlinePaymentsExpected && !hostedPaymentUrl && !voided && balance > 0;

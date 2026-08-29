@@ -34,6 +34,7 @@ process.env.QUICKBOOKS_ENVIRONMENT ||= "sandbox";
 // production-safe default-off behavior.
 process.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED ||= "true";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER ||= "quotefly-integration-webhook-verifier";
+process.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED ||= "true";
 process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY ||= "quickbooks-integration-encryption-key-v2";
 process.env.ENABLE_TWILIO_SMS = "true";
 process.env.TWILIO_WEBHOOK_AUTH_TOKEN ||= "twilio-integration-webhook-auth-token";

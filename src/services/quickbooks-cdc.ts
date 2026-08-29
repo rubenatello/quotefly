@@ -15,6 +15,7 @@ type RuntimeEnv = typeof env;
 
 const CDC_OVERLAP_MS = 2 * 60 * 1000;
 const CDC_INTERVAL_MS = 5 * 60 * 1000;
+export const QUICKBOOKS_CDC_MAX_ATTEMPTS = 8;
 export const QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM = 10;
 const QUICKBOOKS_PROVIDER_ENTITY_LIMIT = 1_000;
 const CDC_INBOX_INSERT_CHUNK_SIZE = 100;
@@ -141,6 +142,7 @@ export async function claimQuickBooksCdcCursor(params: {
     const cursor = await transaction.quickBooksCdcCursor.findFirst({
       where: {
         tenantId: params.tenantId,
+        terminalAtUtc: null,
         OR: [{ nextAttemptAtUtc: null }, { nextAttemptAtUtc: { lte: now } }],
         connection: {
           status: "CONNECTED",
@@ -219,6 +221,7 @@ export async function completeQuickBooksCdcClaimSuccess(params: {
         nextAttemptAtUtc: new Date(now.getTime() + CDC_INTERVAL_MS),
         attemptCount: 0,
         lastErrorCode: null,
+        terminalAtUtc: null,
       },
     });
     if (completed.count !== 1) return false;
@@ -255,17 +258,21 @@ export async function completeQuickBooksCdcClaimFailure(params: {
 }): Promise<boolean> {
   const now = params.now ?? new Date();
   return withTenantRlsContext(params.prisma, params.claim.tenantId, async (transaction) => {
+    const terminal = params.claim.claimAttemptCount >= QUICKBOOKS_CDC_MAX_ATTEMPTS;
     const completed = await transaction.quickBooksCdcCursor.updateMany({
       where: activeQuickBooksCdcClaimWhere(params.claim),
       data: {
-        nextAttemptAtUtc: new Date(
-          now.getTime()
-          + Math.min(
-            60 * 60 * 1000,
-            30_000 * (2 ** Math.max(0, params.claim.claimAttemptCount - 1)),
-          ),
-        ),
+        nextAttemptAtUtc: terminal
+          ? null
+          : new Date(
+              now.getTime()
+              + Math.min(
+                60 * 60 * 1000,
+                30_000 * (2 ** Math.max(0, params.claim.claimAttemptCount - 1)),
+              ),
+            ),
         lastErrorCode: params.errorCode.slice(0, 191),
+        terminalAtUtc: terminal ? now : null,
       },
     });
     return completed.count === 1;

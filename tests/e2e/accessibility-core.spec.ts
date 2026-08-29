@@ -23,7 +23,10 @@ async function expectNoSeriousAccessibilityViolations(page: Page, label: string)
 }
 
 test("core workspace routes have no serious accessibility violations", async ({ context, page, request }) => {
-  test.setTimeout(120_000);
+  // Axe runs across ten authenticated workspace routes in this single serial test.
+  // Keep enough headroom for cold Windows/CI navigation without cutting off the
+  // final quote-desk assertion before its own bounded readiness timeout expires.
+  test.setTimeout(180_000);
   const account = await signUpViaApi(request, "accessibility-core");
   const customer = await createCustomerViaApi(request, account, { fullName: "Accessible Customer" });
   const quote = await createQuoteViaApi(request, account, customer.id, { title: "Accessible Quote" });

@@ -18,7 +18,7 @@ type PipelineLead = WorkspaceFollowUpItem;
 type QueueTab = "new" | "quoted" | "closed" | "afterSale" | "recent";
 type ActivitySurface = "mine" | "team" | "leads";
 
-const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON", "LOST"];
+const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = ["NEEDS_FOLLOW_UP", "FOLLOWED_UP", "WON"];
 const AFTER_SALE_STATUSES: AfterSaleFollowUpStatus[] = ["NOT_READY", "DUE", "COMPLETED"];
 
 const ACTIVITY_TYPE_VALUES = new Set(["FOLLOW_UP", "PREPARE_QUOTE", "SEND_QUOTE", "CHECK_IN", "CUSTOM"]);
@@ -265,6 +265,7 @@ function QueueActions({
   const followUpOptions = FOLLOW_UP_STATUSES.map((status) => ({ value: status, label: followUpLabel(status, t) }));
   const afterSaleOptions = AFTER_SALE_STATUSES.map((status) => ({ value: status, label: afterSaleLabel(status, t) }));
   const job = actionKind === "job" ? lead.job : undefined;
+  const lostWithoutQuote = lead.followUpStatus === "LOST" && !lead.quoteId;
 
   return (
     <div className={mobile ? "grid grid-cols-1 gap-2 min-[420px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "mt-2 flex flex-col gap-2 sm:flex-row sm:items-center xl:mt-0 xl:flex-col xl:items-end"}>
@@ -273,7 +274,8 @@ function QueueActions({
           size="sm"
           variant={job ? "primary" : lead.quoteId ? "outline" : "primary"}
           className="min-h-11 w-full sm:w-auto"
-          disabled={actionKind === "job" && !lead.job}
+          disabled={(actionKind === "job" && !lead.job) || lostWithoutQuote}
+          title={lostWithoutQuote ? t("customers.lifecycle.reopenBeforeQuote") : undefined}
           aria-label={job
             ? t("activity.openJobLabel", { number: job.jobNumber })
             : undefined}
@@ -288,14 +290,20 @@ function QueueActions({
       ) : null}
 
       {actionKind === "follow_up" ? (
-        <Select
-          aria-label={t("activity.updateFollowUp", { name: lead.customerName })}
-          value={lead.followUpStatus}
-          disabled={saving}
-          onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
-          options={followUpOptions}
-          className={selectClassName}
-        />
+        lead.followUpStatus === "LOST" ? (
+          <p className="max-w-[220px] text-xs font-medium leading-5 text-[var(--qf-danger-strong)]">
+            {t("customers.lifecycle.reopenBeforeStatusChange")}
+          </p>
+        ) : (
+          <Select
+            aria-label={t("activity.updateFollowUp", { name: lead.customerName })}
+            value={lead.followUpStatus}
+            disabled={saving}
+            onChange={(event) => onUpdateFollowUp?.(lead.customerId, event.target.value as LeadFollowUpStatus)}
+            options={followUpOptions}
+            className={selectClassName}
+          />
+        )
       ) : actionKind === "after_sale" ? (
         <Select
           aria-label={t("activity.updateAfterSale", { name: lead.customerName })}
@@ -346,6 +354,7 @@ function QueueRow({
   const timingLabel = lead.afterSaleFollowUpDueAtUtc
     ? t("activity.dueAt", { date: compactDateTime(lead.afterSaleFollowUpDueAtUtc, t, locale, timeZone) })
     : t(activityKind === "ADDED" ? "activity.addedAt" : "activity.updatedAt", { date: compactDateTime(activityAtUtc, t, locale, timeZone) });
+  const lostWithoutQuote = lead.followUpStatus === "LOST" && !lead.quoteId;
   const renderStatusPills = () => (
     <>
       <FollowUpPill status={lead.followUpStatus} compact />
@@ -410,7 +419,8 @@ function QueueRow({
             size="sm"
             variant={actionKind === "job" && lead.job ? "primary" : lead.quoteId ? "outline" : "primary"}
             className="min-h-11 min-w-0 flex-1"
-            disabled={actionKind === "job" && !lead.job}
+            disabled={(actionKind === "job" && !lead.job) || lostWithoutQuote}
+            title={lostWithoutQuote ? t("customers.lifecycle.reopenBeforeQuote") : undefined}
             aria-label={actionKind === "job" && lead.job
               ? t("activity.openJobLabel", { number: lead.job.jobNumber })
               : actionKind === "job"
@@ -857,14 +867,20 @@ export function PipelineView() {
                     key={`${lead.customerId}-${lead.quoteId ?? "recent"}`}
                     type="button"
                     onClick={() => (lead.quoteId ? navigateToQuote(lead.quoteId) : navigateToBuilder(lead.customerId))}
-                    className="flex w-full items-start gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 text-left transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)]"
+                    disabled={lead.followUpStatus === "LOST" && !lead.quoteId}
+                    title={lead.followUpStatus === "LOST" && !lead.quoteId ? t("customers.lifecycle.reopenBeforeQuote") : undefined}
+                    className="flex w-full items-start gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-3 py-3 text-left transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--qf-panel-muted)] text-sm font-semibold text-[var(--qf-text-soft)]">
                       {customerInitials(lead.customerName)}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold text-[var(--qf-text)]">{lead.customerName}</span>
-                      <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">{lead.quoteTitle ?? t("activity.noQuoteYet")}</span>
+                      <span className="mt-1 block text-xs text-[var(--qf-text-muted)]">
+                        {lead.followUpStatus === "LOST" && !lead.quoteId
+                          ? t("customers.lifecycle.reopenBeforeQuote")
+                          : lead.quoteTitle ?? t("activity.noQuoteYet")}
+                      </span>
                     </span>
                   </button>
                 ))

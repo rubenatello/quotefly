@@ -117,6 +117,28 @@ enum ActivityTaskEventType {
   DELETED
 }
 
+enum ActivityActorKind {
+  USER
+  SYSTEM
+}
+
+enum ActivityTaskOrigin {
+  MANUAL
+  AUTOMATED_CUSTOMER_FOLLOW_UP
+}
+
+enum FollowUpOutcome {
+  CONTACTED
+  NO_RESPONSE
+  SKIPPED
+}
+
+enum CustomerFollowUpSequenceStatus {
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
 enum SmsMessageDirection {
   INBOUND
   OUTBOUND
@@ -141,6 +163,16 @@ enum LeadFollowUpStatus {
   FOLLOWED_UP
   WON
   LOST
+}
+
+enum CustomerLostReason {
+  PRICE
+  NO_RESPONSE
+  COMPETITOR
+  TIMING
+  NOT_A_FIT
+  CUSTOMER_CANCELED
+  OTHER
 }
 
 enum QuoteOutboundChannel {
@@ -403,6 +435,9 @@ model Tenant {
   quickBooksConnectionEvents            QuickBooksConnectionEvent[]
   activityTasks                         ActivityTask[]
   activityTaskEvents                    ActivityTaskEvent[]
+  followUpTemplates                     FollowUpTemplate[]
+  followUpTemplateSteps                 FollowUpTemplateStep[]
+  customerFollowUpSequences             CustomerFollowUpSequence[]
   customerActivityEvents                CustomerActivityEvent[]
   aiUsageEvents                         AiUsageEvent[]
   aiUsagePeriods                        AiUsagePeriod[]
@@ -538,6 +573,7 @@ model TenantUser {
   createdActivityTasks           ActivityTask[]               @relation("ActivityTaskCreator")
   completedActivityTasks         ActivityTask[]               @relation("ActivityTaskCompleter")
   activityTaskEvents             ActivityTaskEvent[]
+  markedLostCustomers            Customer[]                   @relation("CustomerLostActor")
   quoteDrafts                    QuoteDraftRecovery[]
   aiUsageReservations            AiUsageReservation[]
 
@@ -562,32 +598,42 @@ model TenantPhoneNumber {
 }
 
 model Customer {
-  id                     String                  @id @default(cuid())
-  tenantId               String
-  fullName               String
-  email                  String?
-  phone                  String
-  phoneDigits            String?
-  notes                  String?
-  preferredLocale        String?                 @db.VarChar(5)
-  followUpStatus         LeadFollowUpStatus      @default(NEEDS_FOLLOW_UP)
-  followUpUpdatedAtUtc   DateTime?               @db.Timestamptz(3)
-  assignedTenantUserId   String?
-  createdAt              DateTime                @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime                @updatedAt @db.Timestamptz(3)
-  archivedAtUtc          DateTime?               @db.Timestamptz(3)
-  deletedAtUtc           DateTime?               @db.Timestamptz(3)
-  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  assignedTenantUser     TenantUser?             @relation("CustomerAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
-  quotes                 Quote[]
-  jobs                   Job[]
-  invoices               Invoice[]
-  activityTasks          ActivityTask[]
-  activityEvents         CustomerActivityEvent[]
-  revisions              QuoteRevision[]
-  quoteOutboundEvents    QuoteOutboundEvent[]
-  aiUsageEvents          AiUsageEvent[]
-  quickBooksCustomerMaps QuickBooksCustomerMap[]
+  id                         String                     @id @default(cuid())
+  tenantId                   String
+  fullName                   String
+  email                      String?
+  phone                      String
+  phoneDigits                String?
+  notes                      String?
+  preferredLocale            String?                    @db.VarChar(5)
+  followUpStatus             LeadFollowUpStatus         @default(NEEDS_FOLLOW_UP)
+  followUpUpdatedAtUtc       DateTime?                  @db.Timestamptz(3)
+  lastFollowUpAttemptAtUtc   DateTime?                  @db.Timestamptz(3)
+  lastSuccessfulContactAtUtc DateTime?                  @db.Timestamptz(3)
+  lifecycleVersion           Int                        @default(1)
+  lostReason                 CustomerLostReason?
+  lostReasonNotes            String?                    @db.VarChar(1000)
+  lostAtUtc                  DateTime?                  @db.Timestamptz(3)
+  lostByTenantUserId         String?
+  reopenedAtUtc              DateTime?                  @db.Timestamptz(3)
+  assignedTenantUserId       String?
+  createdAt                  DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime                   @updatedAt @db.Timestamptz(3)
+  archivedAtUtc              DateTime?                  @db.Timestamptz(3)
+  deletedAtUtc               DateTime?                  @db.Timestamptz(3)
+  tenant                     Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTenantUser         TenantUser?                @relation("CustomerAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  lostByTenantUser           TenantUser?                @relation("CustomerLostActor", fields: [lostByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  quotes                     Quote[]
+  jobs                       Job[]
+  invoices                   Invoice[]
+  activityTasks              ActivityTask[]
+  followUpSequences          CustomerFollowUpSequence[]
+  activityEvents             CustomerActivityEvent[]
+  revisions                  QuoteRevision[]
+  quoteOutboundEvents        QuoteOutboundEvent[]
+  aiUsageEvents              AiUsageEvent[]
+  quickBooksCustomerMaps     QuickBooksCustomerMap[]
 
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
@@ -598,8 +644,69 @@ model Customer {
   @@index([tenantId, phoneDigits, archivedAtUtc, deletedAtUtc])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, assignedTenantUserId, archivedAtUtc, deletedAtUtc], map: "Customer_tenantId_assignee_lifecycle_idx")
+  @@index([tenantId, followUpStatus, lostAtUtc(sort: Desc)], map: "Customer_tenantId_status_lostAt_idx")
   @@index([tenantId, updatedAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, archivedAtUtc, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Customer_tenantId_archived_deleted_updated_id_idx")
+}
+
+model FollowUpTemplate {
+  id           String                     @id @default(cuid())
+  tenantId     String
+  version      Int
+  enabled      Boolean                    @default(true)
+  isDefault    Boolean                    @default(true)
+  createdAt    DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime                   @updatedAt @db.Timestamptz(3)
+  retiredAtUtc DateTime?                  @db.Timestamptz(3)
+  tenant       Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  steps        FollowUpTemplateStep[]
+  sequences    CustomerFollowUpSequence[]
+
+  @@unique([id, tenantId])
+  @@unique([id, tenantId, version])
+  @@unique([tenantId, version])
+  @@index([tenantId, isDefault, enabled, retiredAtUtc], map: "FollowUpTemplate_default_idx")
+}
+
+model FollowUpTemplateStep {
+  id           String               @id @default(cuid())
+  tenantId     String
+  templateId   String
+  stepNumber   Int
+  delayMinutes Int
+  title        String               @db.VarChar(160)
+  notes        String?              @db.VarChar(2000)
+  priority     ActivityTaskPriority @default(NORMAL)
+  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template     FollowUpTemplate     @relation(fields: [templateId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@unique([templateId, stepNumber])
+  @@unique([id, tenantId])
+  @@index([tenantId, templateId, stepNumber], map: "FollowUpTemplateStep_template_idx")
+}
+
+model CustomerFollowUpSequence {
+  id                 String                         @id @default(cuid())
+  tenantId           String
+  customerId         String
+  templateId         String
+  templateVersion    Int
+  status             CustomerFollowUpSequenceStatus @default(ACTIVE)
+  startedAtUtc       DateTime                       @db.Timestamptz(3)
+  completedAtUtc     DateTime?                      @db.Timestamptz(3)
+  canceledAtUtc      DateTime?                      @db.Timestamptz(3)
+  cancellationReason String?                        @db.VarChar(64)
+  createdAt          DateTime                       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                       @updatedAt @db.Timestamptz(3)
+  tenant             Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer                       @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  template           FollowUpTemplate               @relation(fields: [templateId, tenantId, templateVersion], references: [id, tenantId, version], onDelete: Restrict)
+  tasks              ActivityTask[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, customerId, status], map: "CustomerFollowUpSequence_customer_status_idx")
+  @@index([tenantId, status, startedAtUtc], map: "CustomerFollowUpSequence_status_started_idx")
 }
 
 model PricingProfile {
@@ -1430,39 +1537,46 @@ model CustomerActivityEvent {
 }
 
 model ActivityTask {
-  id                      String               @id @default(cuid())
+  id                      String                    @id @default(cuid())
   tenantId                String
   customerId              String
   quoteId                 String?
   assignedTenantUserId    String
-  createdByTenantUserId   String
+  createdByTenantUserId   String?
   completedByTenantUserId String?
   type                    ActivityTaskType
-  status                  ActivityTaskStatus   @default(OPEN)
-  priority                ActivityTaskPriority @default(NORMAL)
-  title                   String               @db.VarChar(160)
-  notes                   String?              @db.VarChar(2000)
-  dueAtUtc                DateTime             @db.Timestamptz(3)
-  completedAtUtc          DateTime?            @db.Timestamptz(3)
-  canceledAtUtc           DateTime?            @db.Timestamptz(3)
-  sourceKey               String?              @db.VarChar(191)
-  version                 Int                  @default(1)
-  createdAt               DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt               DateTime             @updatedAt @db.Timestamptz(3)
-  deletedAtUtc            DateTime?            @db.Timestamptz(3)
-  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer                Customer             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  quote                   Quote?               @relation(fields: [quoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Cascade, map: "ActivityTask_quoteId_tenantId_fkey")
-  assignedTenantUser      TenantUser           @relation("ActivityTaskAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
-  createdByTenantUser     TenantUser           @relation("ActivityTaskCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
-  completedByTenantUser   TenantUser?          @relation("ActivityTaskCompleter", fields: [completedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  status                  ActivityTaskStatus        @default(OPEN)
+  priority                ActivityTaskPriority      @default(NORMAL)
+  origin                  ActivityTaskOrigin        @default(MANUAL)
+  followUpOutcome         FollowUpOutcome?
+  followUpSequenceId      String?
+  followUpStepNumber      Int?
+  title                   String                    @db.VarChar(160)
+  notes                   String?                   @db.VarChar(2000)
+  dueAtUtc                DateTime                  @db.Timestamptz(3)
+  completedAtUtc          DateTime?                 @db.Timestamptz(3)
+  canceledAtUtc           DateTime?                 @db.Timestamptz(3)
+  sourceKey               String?                   @db.VarChar(191)
+  version                 Int                       @default(1)
+  createdAt               DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime                  @updatedAt @db.Timestamptz(3)
+  deletedAtUtc            DateTime?                 @db.Timestamptz(3)
+  tenant                  Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer                Customer                  @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  quote                   Quote?                    @relation(fields: [quoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Cascade, map: "ActivityTask_quoteId_tenantId_fkey")
+  assignedTenantUser      TenantUser                @relation("ActivityTaskAssignee", fields: [assignedTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  createdByTenantUser     TenantUser?               @relation("ActivityTaskCreator", fields: [createdByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  completedByTenantUser   TenantUser?               @relation("ActivityTaskCompleter", fields: [completedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   events                  ActivityTaskEvent[]
+  followUpSequence        CustomerFollowUpSequence? @relation(fields: [followUpSequenceId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@unique([id, tenantId])
   @@unique([tenantId, sourceKey])
+  @@unique([tenantId, followUpSequenceId, followUpStepNumber])
   @@index([tenantId, assignedTenantUserId, deletedAtUtc, status, dueAtUtc, id], map: "ActivityTask_assignee_status_due_idx")
   @@index([tenantId, deletedAtUtc, status, dueAtUtc, id], map: "ActivityTask_status_due_idx")
   @@index([tenantId, customerId, deletedAtUtc], map: "ActivityTask_customer_lifecycle_idx")
+  @@index([tenantId, origin, status, dueAtUtc, id], map: "ActivityTask_follow_up_agenda_idx")
   @@index([tenantId, quoteId, deletedAtUtc], map: "ActivityTask_quote_lifecycle_idx")
   @@index([tenantId, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "ActivityTask_lifecycle_updated_idx")
 }
@@ -1471,7 +1585,8 @@ model ActivityTaskEvent {
   id                 String                @id @default(cuid())
   tenantId           String
   activityTaskId     String
-  actorTenantUserId  String
+  actorTenantUserId  String?
+  actorKind          ActivityActorKind
   type               ActivityTaskEventType
   fromStatus         ActivityTaskStatus?
   toStatus           ActivityTaskStatus?
@@ -1481,7 +1596,7 @@ model ActivityTaskEvent {
   createdAt          DateTime              @default(now()) @db.Timestamptz(3)
   tenant             Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   activityTask       ActivityTask          @relation(fields: [activityTaskId, tenantId], references: [id, tenantId], onDelete: Cascade)
-  actorTenantUser    TenantUser            @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  actorTenantUser    TenantUser?           @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@unique([tenantId, commandKeyHash])
   @@index([tenantId, activityTaskId, createdAt, id], map: "ActivityTaskEvent_task_created_idx")
@@ -1784,6 +1899,7 @@ model QuickBooksCdcCursor {
   nextAttemptAtUtc       DateTime?            @db.Timestamptz(3)
   attemptCount           Int                  @default(0)
   lastErrorCode          String?              @db.VarChar(191)
+  terminalAtUtc          DateTime?            @db.Timestamptz(3)
   createdAt              DateTime             @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime             @updatedAt @db.Timestamptz(3)
   tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1791,7 +1907,21 @@ model QuickBooksCdcCursor {
 
   @@unique([id, tenantId])
   @@unique([quickBooksConnectionId, tenantId])
-  @@index([tenantId, nextAttemptAtUtc, updatedAt])
+  @@index([tenantId, terminalAtUtc, nextAttemptAtUtc, updatedAt], map: "QuickBooksCdcCursor_tenant_terminal_due_idx")
+}
+
+model WorkerHeartbeat {
+  workerKey           String   @id @db.VarChar(64)
+  instanceRefHash     String   @db.VarChar(64)
+  status              String   @db.VarChar(24)
+  startedAtUtc        DateTime @db.Timestamptz(3)
+  cycleStartedAtUtc   DateTime @db.Timestamptz(3)
+  heartbeatAtUtc      DateTime @db.Timestamptz(3)
+  lastCycleDurationMs Int?
+  metrics             Json
+  updatedAt           DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([heartbeatAtUtc], map: "WorkerHeartbeat_heartbeat_idx")
 }
 
 model QuoteOutboundEvent {

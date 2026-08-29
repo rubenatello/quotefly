@@ -5,6 +5,7 @@ import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { withTransactionConflictRetry } from "../lib/transaction-retry";
 import {
   createInvoice,
   getInvoice,
@@ -156,19 +157,21 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const result = await measureRequestPerformance(request, "db", () =>
-        withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
-          createInvoice(transaction, access, {
-            jobId: payload.jobId,
-            sourceQuoteId: payload.sourceQuoteId,
-            dueAtUtc: payload.dueAtUtc ?? null,
-            actorTenantUserId: access.tenantUserId,
-            requestId: request.id,
-            idempotencyKey: idempotencyKey(request),
-          }), {
-            maxWait: 5_000,
-            timeout: 15_000,
-            isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-          }),
+        withTransactionConflictRetry(() =>
+          withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
+            createInvoice(transaction, access, {
+              jobId: payload.jobId,
+              sourceQuoteId: payload.sourceQuoteId,
+              dueAtUtc: payload.dueAtUtc ?? null,
+              actorTenantUserId: access.tenantUserId,
+              requestId: request.id,
+              idempotencyKey: idempotencyKey(request),
+            }), {
+              maxWait: 5_000,
+              timeout: 15_000,
+              isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+            }),
+        ),
       );
       reply.header("Cache-Control", "private, no-store");
       return reply.code(result.duplicate ? 200 : 201).send({

@@ -33,6 +33,7 @@ import {
 import {
   disconnectQuickBooksConnection,
   getSerializedQuickBooksAccessToken,
+  invalidateQuickBooksHostedPaymentLinks,
 } from "../services/quickbooks-credentials";
 import {
   QuickBooksOrphanCredentialPersistenceError,
@@ -78,6 +79,11 @@ import {
   nextQuickBooksConnectionGeneration,
   recordQuickBooksConnectionEvent,
 } from "../services/quickbooks-connection-events";
+import {
+  loadWorkerHeartbeat,
+  QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+  serializeWorkerHeartbeat,
+} from "../services/worker-heartbeats";
 
 const QuickBooksCallbackQuerySchema = z.object({
   state: z.string().min(1).optional(),
@@ -149,7 +155,7 @@ const QuickBooksWebhookEntitySchema = z.object({
   lastUpdated: z.string().datetime({ offset: true }),
 }).strict();
 
-const QuickBooksWebhookBodySchema = z.object({
+const QuickBooksLegacyWebhookBodySchema = z.object({
   eventNotifications: z.array(z.object({
     realmId: z.string().trim().min(1).max(191),
     dataChangeEvent: z.object({
@@ -169,6 +175,89 @@ const QuickBooksWebhookBodySchema = z.object({
     });
   }
 });
+
+const QuickBooksCloudEventSchema = z.object({
+  specversion: z.literal("1.0"),
+  id: z.string().trim().min(1).max(191),
+  source: z.string().trim().min(1).max(1_024),
+  type: z.string().trim().regex(
+    /^qbo\.(invoice|payment|refundreceipt)\.([a-z][a-z0-9-]{0,63})\.v1$/i,
+  ),
+  time: z.string().datetime({ offset: true }),
+  intuitentityid: z.string().trim().min(1).max(191),
+  intuitaccountid: z.string().trim().min(1).max(191),
+  datacontenttype: z.string().trim().max(191).optional(),
+  data: z.unknown().optional(),
+}).passthrough();
+
+const QuickBooksCloudEventsBodySchema = z.array(QuickBooksCloudEventSchema).min(1).max(500);
+const QuickBooksWebhookBodySchema = z.union([
+  QuickBooksLegacyWebhookBodySchema,
+  QuickBooksCloudEventsBodySchema,
+]);
+
+const QUICKBOOKS_SUPPORTED_WEBHOOK_OPERATIONS: Readonly<Record<string, "Create" | "Update" | "Void">> = {
+  create: "Create",
+  created: "Create",
+  update: "Update",
+  updated: "Update",
+  void: "Void",
+  voided: "Void",
+};
+
+function normalizeQuickBooksWebhookOperation(operation: string): {
+  operation: string;
+  supported: boolean;
+} {
+  const key = operation.trim().toLowerCase();
+  const normalized = QUICKBOOKS_SUPPORTED_WEBHOOK_OPERATIONS[key];
+  return normalized
+    ? { operation: normalized, supported: true }
+    : {
+        operation: key ? `${key.charAt(0).toUpperCase()}${key.slice(1)}` : "Unknown",
+        supported: false,
+      };
+}
+
+function normalizeQuickBooksWebhookNotifications(
+  payload: z.infer<typeof QuickBooksWebhookBodySchema>,
+): QuickBooksWebhookEntityNotification[] {
+  if (!Array.isArray(payload)) {
+    return payload.eventNotifications.flatMap(
+      (notification) => notification.dataChangeEvent.entities.map((entity) => {
+        const normalizedOperation = normalizeQuickBooksWebhookOperation(entity.operation);
+        return {
+          realmId: notification.realmId,
+          name: entity.name,
+          id: entity.id,
+          ...normalizedOperation,
+          lastUpdated: entity.lastUpdated,
+        };
+      }),
+    );
+  }
+
+  const entityNames = {
+    invoice: "Invoice",
+    payment: "Payment",
+    refundreceipt: "RefundReceipt",
+  } as const;
+  return payload.map((event) => {
+    const match = /^qbo\.(invoice|payment|refundreceipt)\.([a-z][a-z0-9-]{0,63})\.v1$/i.exec(event.type);
+    if (!match) throw new Error("QuickBooks CloudEvent type passed validation without a supported entity.");
+    const entityKey = match[1].toLowerCase() as keyof typeof entityNames;
+    const normalizedOperation = normalizeQuickBooksWebhookOperation(match[2]);
+    return {
+      providerEventId: event.id,
+      providerEventSource: event.source,
+      realmId: event.intuitaccountid,
+      name: entityNames[entityKey],
+      id: event.intuitentityid,
+      ...normalizedOperation,
+      lastUpdated: event.time,
+    };
+  });
+}
 
 const QUICKBOOKS_WEBHOOK_BODY_LIMIT_BYTES = 256 * 1024;
 
@@ -287,10 +376,14 @@ function sendQuickBooksInvoiceOperationError(reply: FastifyReply, error: unknown
 }
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
-  const quickBooksSetupRuntime = () => ({
+  const quickBooksSetupRuntime = (reconciliationWorkerHealthy = false) => ({
     providerConfigured: isQuickBooksConfigured(app.env),
     providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
     webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+    hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
+    reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
+    reconciliationWorkerHealthy,
+    cdcWorkerEnabled: app.env.QUICKBOOKS_CDC_WORKER_ENABLED,
     environment: app.env.QUICKBOOKS_ENVIRONMENT,
   } as const);
 
@@ -320,6 +413,30 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
   function providerWorkflowsUnavailable(reply: FastifyReply) {
     return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
+  }
+
+  function reconciliationRuntimeAvailable(): boolean {
+    return app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
+      && app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
+      && isQuickBooksWebhookConfigured(app.env);
+  }
+
+  function hostedPaymentsRuntimeAvailable(): boolean {
+    return reconciliationRuntimeAvailable() && app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED;
+  }
+
+  function reconciliationRuntimeUnavailable(reply: FastifyReply) {
+    return reply.code(503).send({
+      error: "QuickBooks reconciliation is not enabled for this environment.",
+      code: "QUICKBOOKS_RECONCILIATION_UNAVAILABLE",
+    });
+  }
+
+  function hostedPaymentsRuntimeUnavailable(reply: FastifyReply) {
+    return reply.code(503).send({
+      error: "QuickBooks hosted payments are not enabled for this environment.",
+      code: "QUICKBOOKS_HOSTED_PAYMENTS_UNAVAILABLE",
+    });
   }
 
   async function loadQuickBooksSyncContext(tenantId: string, quoteId: string, dueInDays = 14) {
@@ -540,9 +657,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(401).send({ error: "Invalid QuickBooks webhook signature." });
       }
 
-      let webhookBody: z.infer<typeof QuickBooksWebhookBodySchema>;
+      let notifications: QuickBooksWebhookEntityNotification[];
       try {
-        webhookBody = QuickBooksWebhookBodySchema.parse(JSON.parse(rawBody));
+        const webhookBody = QuickBooksWebhookBodySchema.parse(JSON.parse(rawBody));
+        notifications = normalizeQuickBooksWebhookNotifications(webhookBody);
       } catch {
         return reply.code(400).send({ error: "Invalid QuickBooks webhook payload." });
       }
@@ -552,15 +670,6 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // change that may need a later refresh after workflows are re-enabled.
       if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
 
-      const notifications: QuickBooksWebhookEntityNotification[] = webhookBody.eventNotifications.flatMap(
-        (notification) => notification.dataChangeEvent.entities.map((entity) => ({
-          realmId: notification.realmId,
-          name: entity.name,
-          id: entity.id,
-          operation: entity.operation,
-          lastUpdated: entity.lastUpdated,
-        })),
-      );
       const persisted = await persistQuickBooksWebhookNotifications(app.prisma, notifications);
       request.log.info(
         {
@@ -584,16 +693,22 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       reply.header("Cache-Control", "private, no-store");
 
-      const connection = await withTenantRlsContext(app.prisma, claims.tenantId, (transaction) =>
-        transaction.quickBooksConnection.findFirst({
-          where: {
-            tenantId: claims.tenantId,
-            deletedAtUtc: null,
-          },
-          select: QuickBooksSetupConnectionSelect,
-        }),
+      const [connection, workerHeartbeat] = await Promise.all([
+        withTenantRlsContext(app.prisma, claims.tenantId, (transaction) =>
+          transaction.quickBooksConnection.findFirst({
+            where: {
+              tenantId: claims.tenantId,
+              deletedAtUtc: null,
+            },
+            select: QuickBooksSetupConnectionSelect,
+          }),
+        ),
+        loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY),
+      ]);
+      const setup = deriveQuickBooksSetupReadiness(
+        quickBooksSetupRuntime(workerHeartbeat?.fresh ?? false),
+        connection,
       );
-      const setup = deriveQuickBooksSetupReadiness(quickBooksSetupRuntime(), connection);
 
       return {
         enabled: isQuickBooksConfigured(app.env) && app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
@@ -602,6 +717,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         webhookConfigured: isQuickBooksWebhookConfigured(app.env),
         canManage: true,
         environment: app.env.QUICKBOOKS_ENVIRONMENT,
+        reconciliationWorker: serializeWorkerHeartbeat(workerHeartbeat),
         setup,
         connection: connection
           ? {
@@ -656,6 +772,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         });
         if (
           connection?.status === "REVOCATION_PENDING"
+          || connection?.status === "ERROR"
           || connection?.disconnectRequestedAtUtc
           || connection?.tokenRefreshClaimHash
         ) return true;
@@ -791,6 +908,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
        if (
          (stateConsumed.quickBooksConnectionId ?? null) !== (existingTenantConnection?.id ?? null)
          || existingTenantConnection?.status === "REVOCATION_PENDING"
+         || existingTenantConnection?.status === "ERROR"
          || existingTenantConnection?.disconnectRequestedAtUtc
          || existingTenantConnection?.tokenRefreshClaimHash
        ) {
@@ -838,22 +956,32 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
              tokenRefreshClaimHash: true,
            },
          });
-         const actor = await transaction.tenantUser.findUnique({
-           where: {
-             tenantId_userId: {
-               tenantId: verifiedState.tenantId,
-               userId: verifiedState.userId,
-             },
-           },
-           select: { id: true, deletedAtUtc: true },
-         });
-         if (!actor || actor.deletedAtUtc) throw new QuickBooksCredentialLifecycleBlockedError();
+         // Lock the exact selected-tenant actor, user, and tenant rows before
+         // persisting credentials. A concurrent demotion/deletion must either
+         // commit first and be observed here, or wait until this authorization
+         // decision and credential write have committed atomically.
+         const [actor] = await transaction.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
+           SELECT membership."id", membership."role"
+           FROM "TenantUser" membership
+           INNER JOIN "User" account ON account."id" = membership."userId"
+           INNER JOIN "Tenant" selected_tenant ON selected_tenant."id" = membership."tenantId"
+           WHERE membership."tenantId" = ${verifiedState.tenantId}
+             AND membership."userId" = ${verifiedState.userId}
+             AND membership."deletedAtUtc" IS NULL
+             AND account."deletedAtUtc" IS NULL
+             AND selected_tenant."deletedAtUtc" IS NULL
+           FOR UPDATE OF membership, account, selected_tenant
+         `);
+         if (!actor || !canManageQuickBooks(actor.role)) {
+           throw new QuickBooksCredentialLifecycleBlockedError();
+         }
         if (currentConnection && currentConnection.realmId !== callbackRealmId) {
            throw new QuickBooksRealmChangeBlockedError();
          }
          if (
            (stateConsumed.quickBooksConnectionId ?? null) !== (currentConnection?.id ?? null)
            || currentConnection?.status === "REVOCATION_PENDING"
+           || currentConnection?.status === "ERROR"
            || currentConnection?.disconnectRequestedAtUtc
            || currentConnection?.tokenRefreshClaimHash
          ) {
@@ -908,6 +1036,14 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
            if (updated.count !== 1) throw new QuickBooksCredentialLifecycleBlockedError();
            savedConnection = { id: currentConnection.id };
          }
+        if (currentConnection) {
+          await invalidateQuickBooksHostedPaymentLinks(
+            transaction,
+            verifiedState.tenantId,
+            savedConnection.id,
+            now,
+          );
+        }
         await transaction.quickBooksRealmBinding.upsert({
           where: { quickBooksConnectionId: savedConnection.id },
           create: {
@@ -930,7 +1066,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             quickBooksConnectionId: savedConnection.id,
             changedSinceUtc: new Date(Date.now() - 5 * 60 * 1000),
           },
-          update: { nextAttemptAtUtc: null, attemptCount: 0, lastErrorCode: null },
+          update: {
+            nextAttemptAtUtc: null,
+            attemptCount: 0,
+            lastErrorCode: null,
+            terminalAtUtc: null,
+          },
         });
         await recordQuickBooksConnectionEvent(transaction, {
           tenantId: verifiedState.tenantId,
@@ -1285,12 +1426,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const paymentReview = QuickBooksInvoicePreviewBodySchema.parse(request.body ?? {});
       if (
         (paymentReview.allowOnlineAchPayment || paymentReview.allowOnlineCardPayment)
-        && !app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
+        && !hostedPaymentsRuntimeAvailable()
       ) {
-        return reply.code(503).send({
-          error: "QuickBooks hosted payments are not enabled for this environment.",
-          code: "QUICKBOOKS_HOSTED_PAYMENTS_UNAVAILABLE",
-        });
+        return hostedPaymentsRuntimeUnavailable(reply);
       }
       try {
         const preview = await withTenantRlsContext(
@@ -1326,14 +1464,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const body = QuickBooksInvoicePublishBodySchema.parse(request.body);
       const key = quickBooksIdempotencyKey(request);
       if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!reconciliationRuntimeAvailable()) return reconciliationRuntimeUnavailable(reply);
       if (
         (body.allowOnlineAchPayment || body.allowOnlineCardPayment)
-        && !app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
+        && !hostedPaymentsRuntimeAvailable()
       ) {
-        return reply.code(503).send({
-          error: "QuickBooks hosted payments are not enabled for this environment.",
-          code: "QUICKBOOKS_HOSTED_PAYMENTS_UNAVAILABLE",
-        });
+        return hostedPaymentsRuntimeUnavailable(reply);
       }
       if (!isQuickBooksConfigured(app.env)) {
         return reply.code(503).send({
@@ -1787,13 +1923,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       if (
-        !app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
-        || !app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
+        !hostedPaymentsRuntimeAvailable()
       ) {
-        return reply.code(503).send({
-          error: "QuickBooks hosted payments are not enabled for this environment.",
-          code: "QUICKBOOKS_HOSTED_PAYMENTS_UNAVAILABLE",
-        });
+        return hostedPaymentsRuntimeUnavailable(reply);
       }
       const record = await withTenantRlsContext(app.prisma, access.tenantId, async (transaction) => {
         const operation = await transaction.quickBooksInvoiceOperation.findFirst({
@@ -1824,7 +1956,15 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           },
         });
         const invoice = await transaction.invoice.findFirst({
-          where: { id: invoiceId, tenantId: access.tenantId, deletedAtUtc: null },
+          where: {
+            id: invoiceId,
+            tenantId: access.tenantId,
+            deletedAtUtc: null,
+            status: "OPEN",
+            paymentStatus: { in: ["PENDING", "PARTIALLY_PAID", "REFUNDED", "PARTIALLY_REFUNDED"] },
+            balanceDue: { gt: 0 },
+            voidedAtUtc: null,
+          },
           select: { paymentStatus: true, balanceDue: true },
         });
         if (!operation || !invoice) return null;

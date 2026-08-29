@@ -106,6 +106,46 @@ describe("QuickBooks token encryption", () => {
   });
 });
 
+describe("QuickBooks runtime feature dependencies", () => {
+  const providerBase = {
+    QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+    QUICKBOOKS_CLIENT_ID: "unit-quickbooks-client",
+    QUICKBOOKS_CLIENT_SECRET: "unit-quickbooks-secret",
+    QUICKBOOKS_WEBHOOK_VERIFIER: "unit-quickbooks-webhook-verifier",
+  } satisfies Partial<NodeJS.ProcessEnv>;
+
+  it("rejects hosted payments without the reconciliation worker", () => {
+    assert.throws(
+      () => runtimeEnv({
+        ...providerBase,
+        QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+        QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      }),
+      /hosted payments require the reconciliation worker/i,
+    );
+  });
+
+  it("rejects CDC recovery without the reconciliation worker", () => {
+    assert.throws(
+      () => runtimeEnv({
+        ...providerBase,
+        QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+        QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      }),
+      /CDC recovery requires the reconciliation worker/i,
+    );
+  });
+
+  it("accepts the complete provider, reconciliation, hosted-payment, and CDC dependency chain", () => {
+    assert.doesNotThrow(() => runtimeEnv({
+      ...providerBase,
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    }));
+  });
+});
+
 describe("QuickBooks provider response validation", () => {
   async function rejectsMalformedPayload(
     payload: unknown,

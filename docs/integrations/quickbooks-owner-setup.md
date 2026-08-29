@@ -6,6 +6,7 @@ Authoritative references:
 
 - [Hosted payments and reconciliation acceptance contract](quickbooks-hosted-payments-reconciliation.md)
 - [Current API progress and release evidence](quickbooks-api-progress.md)
+- [Sandbox setup runbook](quickbooks-sandbox-setup.md)
 - [Owner testing checklist](quickbooks-owner-testing-checklist.md)
 
 ## Current production boundary

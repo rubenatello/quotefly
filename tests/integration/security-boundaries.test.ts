@@ -19,6 +19,9 @@ describe("security boundary helpers", () => {
   const productionDatabaseEnv = {
     DATABASE_URL: "postgresql://quotefly_runtime:test@example.invalid/quotefly",
     QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "false",
+    QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+    QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+    QUICKBOOKS_CDC_WORKER_ENABLED: "false",
   } as const;
 
   it("keeps browser and API legal acceptance versions synchronized", () => {

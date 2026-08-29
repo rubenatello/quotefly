@@ -55,7 +55,6 @@ const FOLLOW_UP_STATUSES: LeadFollowUpStatus[] = [
   "NEEDS_FOLLOW_UP",
   "FOLLOWED_UP",
   "WON",
-  "LOST",
 ];
 
 function statusClass(status: QuoteStatus): string {
@@ -435,22 +434,28 @@ export function PipelineColumn({
                   ) : null}
                 </div>
                 {lead.quoteId ? (
-                  <select
-                    aria-label={t("quoteComponents.dashboard.updateFollowUp", { name: lead.customerName })}
-                    value={lead.followUpStatus}
-                    disabled={saving}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) =>
-                      onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
-                    }
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800"
-                  >
-                    {FOLLOW_UP_STATUSES.map((status) => (
-                      <option key={`${lead.customerId}-${status}`} value={status}>
-                        {t(`quoteComponents.followUp.${status}`)}
-                      </option>
-                    ))}
-                  </select>
+                  lead.followUpStatus === "LOST" ? (
+                    <p className="text-xs font-medium leading-5 text-[var(--qf-danger-strong)]">
+                      {t("customers.lifecycle.reopenBeforeStatusChange")}
+                    </p>
+                  ) : (
+                    <select
+                      aria-label={t("quoteComponents.dashboard.updateFollowUp", { name: lead.customerName })}
+                      value={lead.followUpStatus}
+                      disabled={saving}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) =>
+                        onUpdateFollowUp(lead.customerId, event.target.value as LeadFollowUpStatus)
+                      }
+                      className="min-h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800"
+                    >
+                      {FOLLOW_UP_STATUSES.map((status) => (
+                        <option key={`${lead.customerId}-${status}`} value={status}>
+                          {t(`quoteComponents.followUp.${status}`)}
+                        </option>
+                      ))}
+                    </select>
+                  )
                 ) : null}
               </div>
               {!lead.quoteId && <p className="mt-1 text-[11px] text-slate-500">{t("quoteComponents.dashboard.noQuote")}</p>}

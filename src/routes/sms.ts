@@ -5,6 +5,14 @@ import { parseInboundJobText } from "../services/sms-parser";
 import { generateDraftFromSms } from "../services/quote-generator";
 import { normalizeCustomerPhone, normalizePhoneSearchDigits } from "../lib/phone";
 import { enqueueAiIndexJob, enqueueQuoteAiIndexJobs } from "../lib/ai-index-jobs";
+import { withTenantRlsContext } from "../lib/tenant-rls";
+import { withTransactionConflictRetry } from "../lib/transaction-retry";
+import { seedCustomerFollowUpSchedule } from "../services/customer-follow-up";
+import {
+  applyQuoteCustomerLifecycle,
+  CustomerLifecycleError,
+  lockCustomerForQuoteAdmission,
+} from "../services/customer-lifecycle";
 
 const SEND_REPLY = "1";
 const REVISE_REPLY = "2";
@@ -22,6 +30,22 @@ function toFormStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, String(entry ?? "")]),
   );
+}
+
+async function lockActiveSmsQuote(
+  transaction: Prisma.TransactionClient,
+  input: { tenantId: string; quoteId: string },
+) {
+  const [quote] = await transaction.$queryRaw<Array<{ id: string; customerId: string }>>(Prisma.sql`
+    SELECT quote."id", quote."customerId"
+    FROM "Quote" quote
+    WHERE quote."id" = ${input.quoteId}
+      AND quote."tenantId" = ${input.tenantId}
+      AND quote."archivedAtUtc" IS NULL
+      AND quote."deletedAtUtc" IS NULL
+    FOR UPDATE OF quote
+  `);
+  return quote ?? null;
 }
 
 export const smsRoutes: FastifyPluginAsync = async (app) => {
@@ -83,7 +107,8 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
     const customerPhoneDigits = normalizePhoneSearchDigits(customerPhone);
 
     try {
-      return await app.prisma.$transaction(async (tx) => {
+      return await withTransactionConflictRetry(() =>
+        withTenantRlsContext(app.prisma, tenantPhone.tenantId, async (tx) => {
         await tx.smsMessage.create({
           data: {
             tenantId: tenantPhone.tenantId,
@@ -104,13 +129,44 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
               deletedAtUtc: null,
             },
             orderBy: { updatedAt: "desc" },
+            select: { id: true, quoteId: true },
           });
 
           if (!pendingSession) {
             return { acknowledged: true };
           }
 
+          const lockedQuote = await lockActiveSmsQuote(tx, {
+            tenantId: tenantPhone.tenantId,
+            quoteId: pendingSession.quoteId,
+          });
+          if (!lockedQuote) {
+            return { acknowledged: true };
+          }
+
           const approve = cleanedBody === SEND_REPLY;
+          if (approve) {
+            try {
+              await lockCustomerForQuoteAdmission(tx, {
+                tenantId: tenantPhone.tenantId,
+                customerId: lockedQuote.customerId,
+              });
+            } catch (error) {
+              if (!(error instanceof CustomerLifecycleError) || error.code !== "CUSTOMER_REOPEN_REQUIRED") {
+                throw error;
+              }
+              await tx.smsMessage.create({
+                data: {
+                  tenantId: tenantPhone.tenantId,
+                  direction: "OUTBOUND",
+                  fromNumber: to,
+                  toNumber: from,
+                  body: "This customer is marked lost. Reopen the customer in QuoteFly before sending the quote.",
+                },
+              });
+              return { acknowledged: true, blocked: "CUSTOMER_REOPEN_REQUIRED" };
+            }
+          }
           const quote = await tx.quote.update({
             where: {
               id_tenantId: { id: pendingSession.quoteId, tenantId: tenantPhone.tenantId },
@@ -124,6 +180,13 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
             where: { id: pendingSession.id },
             data: { status: approve ? "APPROVED" : "REVISION_REQUESTED" },
           });
+          if (approve) {
+            await applyQuoteCustomerLifecycle(tx, {
+              tenantId: tenantPhone.tenantId,
+              customerId: lockedQuote.customerId,
+              quoteStatus: "SENT_TO_CUSTOMER",
+            });
+          }
           await enqueueQuoteAiIndexJobs(tx, {
             tenantId: tenantPhone.tenantId,
             quoteId: quote.id,
@@ -146,7 +209,7 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
           return { acknowledged: true };
         }
 
-        const existingCustomer = await tx.customer.findFirst({
+        let existingCustomer = await tx.customer.findFirst({
           where: {
             tenantId: tenantPhone.tenantId,
             OR: [
@@ -155,8 +218,35 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
             ],
           },
           orderBy: { createdAt: "desc" },
-          select: { id: true, fullName: true, email: true },
+          select: { id: true, fullName: true, email: true, followUpStatus: true },
         });
+        if (existingCustomer) {
+          try {
+            await lockCustomerForQuoteAdmission(tx, {
+              tenantId: tenantPhone.tenantId,
+              customerId: existingCustomer.id,
+              includeRetained: true,
+            });
+          } catch (error) {
+            if (!(error instanceof CustomerLifecycleError) || error.code !== "CUSTOMER_REOPEN_REQUIRED") {
+              throw error;
+            }
+            await tx.smsMessage.create({
+              data: {
+                tenantId: tenantPhone.tenantId,
+                direction: "OUTBOUND",
+                fromNumber: to,
+                toNumber: from,
+                body: "This customer is marked lost. Reopen the customer in QuoteFly before creating another quote.",
+              },
+            });
+            return { acknowledged: true, blocked: "CUSTOMER_REOPEN_REQUIRED" };
+          }
+          existingCustomer = await tx.customer.findUniqueOrThrow({
+            where: { id_tenantId: { id: existingCustomer.id, tenantId: tenantPhone.tenantId } },
+            select: { id: true, fullName: true, email: true, followUpStatus: true },
+          });
+        }
         const customer = existingCustomer
           ? await tx.customer.update({
               where: { id_tenantId: { id: existingCustomer.id, tenantId: tenantPhone.tenantId } },
@@ -178,6 +268,15 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
                 email: parsed.customerEmail,
               },
             });
+        if (!existingCustomer) {
+          await seedCustomerFollowUpSchedule(tx, {
+            tenantId: tenantPhone.tenantId,
+            customerId: customer.id,
+            assignedTenantUserId: customer.assignedTenantUserId,
+            createdByTenantUserId: null,
+            startedAtUtc: customer.createdAt,
+          });
+        }
         await enqueueAiIndexJob(tx, {
           tenantId: tenantPhone.tenantId,
           sourceType: "Customer",
@@ -238,7 +337,7 @@ export const smsRoutes: FastifyPluginAsync = async (app) => {
         });
 
         return { acknowledged: true };
-      });
+      }));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const duplicate = await app.prisma.smsMessage.findUnique({

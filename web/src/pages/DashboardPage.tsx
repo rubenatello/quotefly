@@ -164,7 +164,6 @@ function followUpLabel(status: LeadFollowUpStatus): string {
 
 function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadFollowUpStatus {
   if (latestQuote?.status === "ACCEPTED") return "WON";
-  if (latestQuote?.status === "REJECTED") return "LOST";
   return customer.followUpStatus;
 }
 
@@ -791,6 +790,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
   }
 
   async function updateLeadFollowUpStatus(customerId: string, followUpStatus: LeadFollowUpStatus) {
+    if (followUpStatus === "LOST") return;
     setSaving(true);
     setError(null);
     try {

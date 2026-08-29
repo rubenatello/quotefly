@@ -131,7 +131,7 @@ describe("superuser data-governance control plane", () => {
       select: { id: true },
     });
     const quickBooksRealm = "realm-superuser-must-not-render";
-    await prisma.quickBooksConnection.create({
+    const quickBooksConnection = await prisma.quickBooksConnection.create({
       data: {
         tenantId: other.tenant.id,
         realmId: quickBooksRealm,
@@ -147,6 +147,94 @@ describe("superuser data-governance control plane", () => {
         setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
         realmBinding: { create: { realmId: quickBooksRealm, active: true } },
         cdcCursor: { create: { changedSinceUtc: new Date() } },
+      },
+    });
+    const operationalNow = new Date();
+    await prisma.quickBooksCdcCursor.update({
+      where: { quickBooksConnectionId: quickBooksConnection.id },
+      data: {
+        changedSinceUtc: new Date(operationalNow.getTime() - 90_000),
+        nextAttemptAtUtc: new Date(operationalNow.getTime() - 30_000),
+      },
+    });
+    await prisma.quickBooksWebhookEvent.createMany({
+      data: [
+        {
+          tenantId: other.tenant.id,
+          quickBooksConnectionId: quickBooksConnection.id,
+          webhookEventId: "control-plane-outstanding",
+          realmId: quickBooksRealm,
+          eventType: "Invoice",
+          entityId: "invoice-outstanding",
+          operation: "Update",
+          payload: { safe: true },
+          status: "FAILED",
+          nextAttemptAtUtc: new Date(operationalNow.getTime() - 10_000),
+          receivedAtUtc: new Date(operationalNow.getTime() - 60_000),
+        },
+        {
+          tenantId: other.tenant.id,
+          quickBooksConnectionId: quickBooksConnection.id,
+          webhookEventId: "control-plane-dead",
+          realmId: quickBooksRealm,
+          eventType: "Invoice",
+          entityId: "invoice-dead",
+          operation: "Update",
+          payload: { safe: true },
+          status: "DEAD",
+          deadAtUtc: operationalNow,
+          receivedAtUtc: new Date(operationalNow.getTime() - 120_000),
+        },
+      ],
+    });
+    await prisma.quickBooksOrphanCredentialRevocation.createMany({
+      data: [
+        {
+          tenantId: other.tenant.id,
+          dedupeKeyHash: "a".repeat(64),
+          refreshTokenEncrypted: "encrypted-orphan-pending",
+          status: "PENDING",
+          nextAttemptAtUtc: new Date(operationalNow.getTime() - 10_000),
+          createdAt: new Date(operationalNow.getTime() - 45_000),
+        },
+        {
+          tenantId: other.tenant.id,
+          dedupeKeyHash: "b".repeat(64),
+          refreshTokenEncrypted: "encrypted-orphan-dead",
+          status: "DEAD",
+          nextAttemptAtUtc: null,
+          deadAtUtc: operationalNow,
+        },
+      ],
+    });
+    const pendingRevocationTenant = await signUp(
+      "quickbooks-pending-revocation@example.com",
+      "Pending Revocation",
+    );
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: pendingRevocationTenant.tenant.id,
+        realmId: "realm-control-plane-pending-revocation",
+        environment: "sandbox",
+        status: "REVOCATION_PENDING",
+        refreshTokenEncrypted: "encrypted-connection-pending",
+        revocationPendingAtUtc: new Date(operationalNow.getTime() - 75_000),
+        revocationNextAttemptAtUtc: new Date(operationalNow.getTime() - 10_000),
+        lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
+      },
+    });
+    const deadRevocationTenant = await signUp(
+      "quickbooks-dead-revocation@example.com",
+      "Dead Revocation",
+    );
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: deadRevocationTenant.tenant.id,
+        realmId: "realm-control-plane-dead-revocation",
+        environment: "sandbox",
+        status: "ERROR",
+        refreshTokenEncrypted: "encrypted-connection-dead",
+        lastError: "QUICKBOOKS_TOKEN_REVOCATION_DEAD",
       },
     });
 
@@ -190,7 +278,32 @@ describe("superuser data-governance control plane", () => {
     expect(summaryResponse.headers["cache-control"]).toBe("private, no-store");
     expect(summaryResponse.json()).toMatchObject({
       totals: { quickBooksConnectedTenants: 1, quickBooksConfirmedTenants: 1, quickBooksReadyTenants: 1 },
+      workers: {
+        quickBooksOperations: {
+          webhookOutstandingCount: 1,
+          webhookDeadCount: 1,
+          reconciliationRequiredCount: 0,
+          cdcCursorCount: 1,
+          cdcTerminalCount: 0,
+          cdcOverdueCount: 1,
+          connectionRevocationPendingCount: 1,
+          connectionRevocationDeadCount: 1,
+          orphanRevocationPendingCount: 1,
+          orphanRevocationDeadCount: 1,
+        },
+      },
     });
+    const operations = (summaryResponse.json() as {
+      workers: { quickBooksOperations: Record<string, number | null> };
+    }).workers.quickBooksOperations;
+    expect(operations.oldestWebhookOutstandingAgeMs).toBeGreaterThanOrEqual(60_000);
+    expect(operations.maximumCdcLagMs).toBeGreaterThanOrEqual(90_000);
+    expect(operations.oldestConnectionRevocationPendingAgeMs).toBeGreaterThanOrEqual(75_000);
+    expect(operations.oldestOrphanRevocationPendingAgeMs).toBeGreaterThanOrEqual(45_000);
+    expect(summaryResponse.body).not.toContain("encrypted-orphan-pending");
+    expect(summaryResponse.body).not.toContain("encrypted-orphan-dead");
+    expect(summaryResponse.body).not.toContain("encrypted-connection-pending");
+    expect(summaryResponse.body).not.toContain("encrypted-connection-dead");
 
     const catalogResponse = await app.inject({
       method: "GET",
@@ -454,8 +567,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 53,
-      fieldCount: 828,
+      modelCount: 57,
+      fieldCount: 880,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

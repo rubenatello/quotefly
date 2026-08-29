@@ -1534,6 +1534,36 @@ describe("invoice ledger API", () => {
     })).resolves.toBe(2);
   });
 
+  test("refuses invoice publishing when the authoritative reconciliation worker is unavailable", async () => {
+    const owner = await signUp("invoice-qb-reconciliation-dependency");
+    const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(
+      owner,
+      "reconciliation-dependency",
+    );
+    const reconciliationWorkerFlag = app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED;
+    app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED = false;
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: {
+          cookie: owner.cookie,
+          "idempotency-key": `qb-reconciliation-dependency-${Date.now()}`,
+        },
+        payload: { invoiceVersion: invoice.version, reviewBinding },
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_UNAVAILABLE" });
+      expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+      await expect(prisma.quickBooksInvoiceOperation.count({
+        where: { tenantId: owner.tenant.id, invoiceId: invoice.id },
+      })).resolves.toBe(0);
+    } finally {
+      app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED = reconciliationWorkerFlag;
+    }
+  });
+
   test("binds reviewed hosted-payment choices, snapshots edited billing email, and exposes the validated link", async () => {
     const hostedPaymentsFlag = app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED;
     const providerWorkflowsFlag = app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED;
@@ -2448,10 +2478,29 @@ describe("invoice ledger API", () => {
     await prisma.quickBooksConnection.update({
       where: { id: connection.id },
       data: {
+        status: "ERROR",
+        disconnectRequestedAtUtc: null,
+        revocationPendingAtUtc: null,
+        revocationNextAttemptAtUtc: null,
+        lastError: "QUICKBOOKS_TOKEN_REVOCATION_DEAD",
+      },
+    });
+    const terminalBlockedConnect = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/connect",
+      headers: { cookie: owner.cookie },
+    });
+    expect(terminalBlockedConnect.statusCode).toBe(409);
+    expect(terminalBlockedConnect.json()).toMatchObject({ code: "QUICKBOOKS_CREDENTIAL_LIFECYCLE_BUSY" });
+
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: {
         status: "CONNECTED",
         disconnectRequestedAtUtc: null,
         revocationPendingAtUtc: null,
         revocationNextAttemptAtUtc: null,
+        lastError: null,
       },
     });
     const state = createSignedQuickBooksState(env, {
@@ -3454,6 +3503,186 @@ describe("invoice ledger API", () => {
       expect(available.json()).toMatchObject({ hostedPaymentUrl: providerInvoiceLink });
       expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
       expect(quickBooksProviderMocks.fetchInvoice).toHaveBeenCalledTimes(4);
+    } finally {
+      app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = hostedPaymentsFlag;
+    }
+  });
+
+  test("invalidates hosted payment links across disconnect and requires a fresh post-reconnect reconciliation", async () => {
+    const hostedPaymentsFlag = app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED;
+    app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = true;
+    try {
+      const owner = await signUp("invoice-qb-link-disconnect-fence");
+      const fixture = await createQuickBooksReconciliationFixture(owner, "link-disconnect-fence");
+      const providerInvoiceLink = "https://app.qbo.intuit.com/app/invoice?txnId=link-disconnect-fence";
+      await prisma.quickBooksInvoiceOperation.update({
+        where: { id: fixture.operation.id },
+        data: { allowOnlineAchPayment: true, allowOnlineCardPayment: true },
+      });
+      const providerSnapshot = {
+        ...fixture.providerPayload,
+        Balance: 150,
+        InvoiceLink: providerInvoiceLink,
+        SyncToken: "1",
+        MetaData: { LastUpdatedTime: "2026-08-28T18:00:00.000Z" },
+        LinkedTxn: [],
+        AllowOnlinePayment: true,
+        AllowOnlineACHPayment: true,
+        AllowOnlineCreditCardPayment: true,
+      };
+      quickBooksProviderMocks.fetchInvoice.mockResolvedValue(providerSnapshot);
+      await expect(reconcileQuickBooksInvoice({
+        prisma,
+        runtimeEnv: env,
+        tenantId: owner.tenant.id,
+        invoiceId: fixture.invoice.id,
+        trigger: "MANUAL",
+        getAccessToken: async () => "test-access-token",
+      })).resolves.toMatchObject({ hostedPaymentUrlAvailable: true });
+
+      const beforeDisconnect = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/payment-link`,
+        headers: { cookie: owner.cookie },
+      });
+      expect(beforeDisconnect.statusCode).toBe(200);
+
+      const disconnect = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/disconnect",
+        headers: { cookie: owner.cookie },
+      });
+      expect(disconnect.statusCode).toBe(200);
+      await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+        where: { id: fixture.operation.id },
+      })).resolves.toMatchObject({
+        status: "RECONCILIATION_REQUIRED",
+        providerInvoiceLink: null,
+        invoiceLinkFetchedAtUtc: null,
+        providerSyncToken: null,
+        providerUpdatedAtUtc: null,
+        lastReconciledAtUtc: null,
+        lastFailureCode: "QUICKBOOKS_CONNECTION_REAUTH_RECONCILIATION_REQUIRED",
+      });
+
+      const reviewer = await prisma.tenantUser.findFirstOrThrow({
+        where: { tenantId: owner.tenant.id, userId: owner.user.id },
+        select: { id: true },
+      });
+      await prisma.quickBooksConnection.update({
+        where: { id: fixture.connection.id },
+        data: {
+          status: "CONNECTED",
+          accessTokenEncrypted: encryptQuickBooksSecret(env, "reconnected-access"),
+          refreshTokenEncrypted: encryptQuickBooksSecret(env, "reconnected-refresh"),
+          accessTokenExpiresAtUtc: new Date(Date.now() + 3_600_000),
+          setupConfirmedAtUtc: new Date(),
+          setupConfirmedByTenantUserId: reviewer.id,
+          setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+        },
+      });
+      await prisma.quickBooksRealmBinding.update({
+        where: { quickBooksConnectionId: fixture.connection.id },
+        data: { active: true },
+      });
+
+      const staleAfterReconnect = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/payment-link`,
+        headers: { cookie: owner.cookie },
+      });
+      expect(staleAfterReconnect.statusCode).toBe(404);
+      expect(staleAfterReconnect.body).not.toContain(providerInvoiceLink);
+
+      await expect(reconcileQuickBooksInvoice({
+        prisma,
+        runtimeEnv: env,
+        tenantId: owner.tenant.id,
+        invoiceId: fixture.invoice.id,
+        trigger: "MANUAL",
+        getAccessToken: async () => "test-access-token",
+      })).resolves.toMatchObject({ hostedPaymentUrlAvailable: true });
+      const refreshed = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/payment-link`,
+        headers: { cookie: owner.cookie },
+      });
+      expect(refreshed.statusCode).toBe(200);
+      expect(refreshed.json()).toMatchObject({ hostedPaymentUrl: providerInvoiceLink });
+    } finally {
+      app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = hostedPaymentsFlag;
+    }
+  });
+
+  test("clears hosted payment links when canonical reconciliation voids an invoice", async () => {
+    const hostedPaymentsFlag = app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED;
+    app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = true;
+    try {
+      const owner = await signUp("invoice-qb-link-terminal-fence");
+      const fixture = await createQuickBooksReconciliationFixture(owner, "link-terminal-fence");
+      const providerInvoiceLink = "https://app.qbo.intuit.com/app/invoice?txnId=link-terminal-fence";
+      await prisma.quickBooksInvoiceOperation.update({
+        where: { id: fixture.operation.id },
+        data: { allowOnlineAchPayment: true },
+      });
+      quickBooksProviderMocks.fetchInvoice.mockResolvedValueOnce({
+        ...fixture.providerPayload,
+        Balance: 150,
+        InvoiceLink: providerInvoiceLink,
+        SyncToken: "1",
+        MetaData: { LastUpdatedTime: "2026-08-28T18:10:00.000Z" },
+        LinkedTxn: [],
+        AllowOnlinePayment: true,
+        AllowOnlineACHPayment: true,
+      });
+      await reconcileQuickBooksInvoice({
+        prisma,
+        runtimeEnv: env,
+        tenantId: owner.tenant.id,
+        invoiceId: fixture.invoice.id,
+        trigger: "MANUAL",
+        getAccessToken: async () => "test-access-token",
+      });
+      await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+        where: { id: fixture.operation.id },
+      })).resolves.toMatchObject({ providerInvoiceLink });
+
+      quickBooksProviderMocks.fetchInvoice.mockResolvedValueOnce({
+        ...fixture.providerPayload,
+        Balance: 0,
+        InvoiceLink: providerInvoiceLink,
+        TxnStatus: "Voided",
+        SyncToken: "2",
+        MetaData: { LastUpdatedTime: "2026-08-28T18:11:00.000Z" },
+        LinkedTxn: [],
+        AllowOnlinePayment: true,
+        AllowOnlineACHPayment: true,
+      });
+      await expect(reconcileQuickBooksInvoice({
+        prisma,
+        runtimeEnv: env,
+        tenantId: owner.tenant.id,
+        invoiceId: fixture.invoice.id,
+        trigger: "MANUAL",
+        getAccessToken: async () => "test-access-token",
+      })).resolves.toMatchObject({
+        invoiceStatus: "VOID",
+        paymentStatus: "CANCELED",
+        hostedPaymentUrlAvailable: false,
+      });
+      await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+        where: { id: fixture.operation.id },
+      })).resolves.toMatchObject({
+        providerInvoiceLink: null,
+        invoiceLinkFetchedAtUtc: null,
+      });
+      const unavailable = await app.inject({
+        method: "GET",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/payment-link`,
+        headers: { cookie: owner.cookie },
+      });
+      expect(unavailable.statusCode).toBe(404);
+      expect(unavailable.body).not.toContain(providerInvoiceLink);
     } finally {
       app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = hostedPaymentsFlag;
     }

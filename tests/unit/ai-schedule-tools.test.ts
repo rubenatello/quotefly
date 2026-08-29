@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AccessContext } from "../../src/lib/access-policy";
 import { capabilitiesForRole } from "../../src/lib/access-policy";
-import { prepareAssistantBooking } from "../../src/services/ai-schedule-tools";
+import { assessAssistantScheduleCapacity, prepareAssistantBooking } from "../../src/services/ai-schedule-tools";
 import type { JobTransaction } from "../../src/services/jobs";
 
 process.env.NODE_ENV = "test";
@@ -146,4 +146,190 @@ test("Kody asks for missing availability details and denies members without assi
   });
   assert.equal(forbidden.outcome, "FORBIDDEN");
   assert.deepEqual(forbidden.options, []);
+});
+
+function capacityTransaction(options?: {
+  job?: typeof assignedJob | null;
+  quote?: Record<string, unknown> | null;
+  members?: Array<{ id: string; user: { fullName: string } }>;
+  appointments?: Array<{ id: string; assignedTenantUserId: string; startsAtUtc: Date; endsAtUtc: Date }>;
+  onAppointmentQuery?: (query: AppointmentQuery) => void;
+}) {
+  const job = options?.job === undefined ? assignedJob : options.job;
+  return {
+    job: {
+      findFirst: async () => job,
+      findMany: async () => job ? [job] : [],
+    },
+    quote: {
+      findFirst: async () => options?.quote ?? null,
+      findMany: async () => options?.quote ? [options.quote] : [],
+    },
+    customer: { findMany: async () => [] },
+    tenantUser: {
+      findMany: async () => options?.members ?? [{ id: "field-member-1", user: { fullName: "Alex Installer" } }],
+    },
+    jobAppointment: {
+      findMany: async (query: AppointmentQuery) => {
+        options?.onAppointmentQuery?.(query);
+        return options?.appointments ?? [];
+      },
+    },
+  } as unknown as JobTransaction;
+}
+
+test("Kody schedule-fit clarification lists work candidates without guessing the target", async () => {
+  const assessment = await assessAssistantScheduleCapacity(capacityTransaction(), ownerAccess, {
+    message: "Can I fit in a job today somehow?",
+    now: new Date("2026-08-27T14:00:00.000Z"),
+    timeZone: "America/Los_Angeles",
+  });
+
+  assert.equal(assessment.outcome, "MISSING_TARGET");
+  assert.equal(assessment.mode, "JOB_FIT");
+  assert.equal(assessment.targets[0]?.jobId, assignedJob.id);
+  assert.equal(assessment.durationMinutes, null);
+  assert.deepEqual(assessment.options, []);
+});
+
+test("Kody schedule-fit openings enforce a 25-minute buffer around active jobs", async () => {
+  const assessment = await assessAssistantScheduleCapacity(capacityTransaction({
+    appointments: [{
+      id: "existing-visit",
+      assignedTenantUserId: "field-member-1",
+      startsAtUtc: new Date("2026-08-27T17:00:00.000Z"),
+      endsAtUtc: new Date("2026-08-27T18:00:00.000Z"),
+    }],
+  }), ownerAccess, {
+    message: "Can we fit this 2-hour work today between 8 AM and 5 PM?",
+    now: new Date("2026-08-27T14:00:00.000Z"),
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+
+  assert.equal(assessment.outcome, "READY");
+  assert.equal(assessment.durationMinutes, 120);
+  assert.equal(assessment.durationSource, "PROMPT");
+  assert.equal(assessment.travelBufferMinutes, 25);
+  assert.equal(assessment.options[0]?.startsAtUtc, "2026-08-27T18:30:00.000Z");
+  assert.equal(assessment.options[0]?.endsAtUtc, "2026-08-27T20:30:00.000Z");
+});
+
+test("Kody loads and enforces travel buffers on both sides of the planning window", async () => {
+  const now = new Date("2026-08-27T14:00:00.000Z");
+  const preceding = await assessAssistantScheduleCapacity(capacityTransaction({
+    appointments: [{
+      id: "preceding-visit",
+      assignedTenantUserId: "field-member-1",
+      startsAtUtc: new Date("2026-08-27T13:50:00.000Z"),
+      endsAtUtc: new Date("2026-08-27T14:50:00.000Z"),
+    }],
+  }), ownerAccess, {
+    message: "Fit this 1-hour work today between 8 AM and 5 PM",
+    now,
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+  assert.equal(preceding.outcome, "READY");
+  assert.equal(preceding.options[0]?.startsAtUtc, "2026-08-27T15:30:00.000Z");
+
+  const precedingEquality = await assessAssistantScheduleCapacity(capacityTransaction({
+    appointments: [{
+      id: "preceding-equality",
+      assignedTenantUserId: "field-member-1",
+      startsAtUtc: new Date("2026-08-27T13:00:00.000Z"),
+      endsAtUtc: new Date("2026-08-27T14:35:00.000Z"),
+    }],
+  }), ownerAccess, {
+    message: "Fit this 1-hour work today between 8 AM and 5 PM",
+    now,
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+  assert.equal(precedingEquality.options[0]?.startsAtUtc, "2026-08-27T15:00:00.000Z");
+
+  const following = await assessAssistantScheduleCapacity(capacityTransaction({
+    appointments: [{
+      id: "following-visit",
+      assignedTenantUserId: "field-member-1",
+      startsAtUtc: new Date("2026-08-28T00:10:00.000Z"),
+      endsAtUtc: new Date("2026-08-28T01:00:00.000Z"),
+    }],
+  }), ownerAccess, {
+    message: "Fit this 9-hour work today between 8 AM and 5 PM",
+    now,
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+  assert.equal(following.outcome, "NO_OPEN_SLOT");
+
+  const appointmentQueries: AppointmentQuery[] = [];
+  const followingEquality = await assessAssistantScheduleCapacity(capacityTransaction({
+    appointments: [{
+      id: "following-equality",
+      assignedTenantUserId: "field-member-1",
+      startsAtUtc: new Date("2026-08-28T00:25:00.000Z"),
+      endsAtUtc: new Date("2026-08-28T01:00:00.000Z"),
+    }],
+    onAppointmentQuery: (query) => appointmentQueries.push(query),
+  }), ownerAccess, {
+    message: "Fit this 9-hour work today between 8 AM and 5 PM",
+    now,
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+  assert.equal(followingEquality.outcome, "READY");
+  assert.equal(followingEquality.options[0]?.startsAtUtc, "2026-08-27T15:00:00.000Z");
+  assert.deepEqual(appointmentQueries[0]?.where?.startsAtUtc, { lt: new Date("2026-08-28T00:25:00.000Z") });
+  assert.deepEqual(appointmentQueries[0]?.where?.endsAtUtc, { gt: new Date("2026-08-27T14:35:00.000Z") });
+});
+
+test("Kody team inspection capacity is manager-only and asks for the missing duration", async () => {
+  const memberAccess: AccessContext = {
+    ...ownerAccess,
+    tenantUserId: "member-membership",
+    userId: "member-user",
+    role: "member",
+    capabilities: capabilitiesForRole("member"),
+  };
+  const message = "Which teammate can inspect Robert California today to finalize the quote?";
+  const denied = await assessAssistantScheduleCapacity(capacityTransaction(), memberAccess, {
+    message,
+    now: new Date("2026-08-27T14:00:00.000Z"),
+    timeZone: "America/Los_Angeles",
+  });
+  assert.equal(denied.outcome, "FORBIDDEN");
+
+  const quote = {
+    id: "quote-1",
+    title: "Dining table quote",
+    status: "SENT_TO_CUSTOMER",
+    assignedTenantUserId: null,
+    customer: { id: "customer-1", fullName: "Robert California" },
+    assignedTenantUser: null,
+  };
+  const owner = await assessAssistantScheduleCapacity(capacityTransaction({ job: null, quote }), ownerAccess, {
+    message,
+    now: new Date("2026-08-27T14:00:00.000Z"),
+    timeZone: "America/Los_Angeles",
+    quoteId: quote.id,
+  });
+  assert.equal(owner.outcome, "MISSING_DURATION");
+  assert.equal(owner.mode, "TEAM_INSPECTION");
+  assert.equal(owner.target?.quoteId, quote.id);
+});
+
+test("Kody fails closed instead of silently truncating a team larger than the bounded capacity search", async () => {
+  const members = Array.from({ length: 33 }, (_, index) => ({
+    id: `member-${index + 1}`,
+    user: { fullName: `Team Member ${index + 1}` },
+  }));
+  const assessment = await assessAssistantScheduleCapacity(capacityTransaction({ members }), ownerAccess, {
+    message: "Which teammate can inspect Robert California today for 1 hour?",
+    now: new Date("2026-08-27T14:00:00.000Z"),
+    timeZone: "America/Los_Angeles",
+    jobId: assignedJob.id,
+  });
+  assert.equal(assessment.outcome, "SCHEDULE_LIMIT_REACHED");
+  assert.deepEqual(assessment.options, []);
 });

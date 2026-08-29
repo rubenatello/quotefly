@@ -38,6 +38,27 @@ function requireManager(access: AccessContext) {
   }
 }
 
+async function lockMappingIdentities(transaction: Transaction, identities: readonly string[]) {
+  // Mapping review can be submitted from two browser tabs at once. Lock both
+  // sides of the mapping in a stable order so the collision check and upsert
+  // are one serialized decision instead of leaking a Prisma P2002/500 race.
+  for (const identity of [...new Set(identities)].sort()) {
+    await transaction.$queryRaw(Prisma.sql`
+      SELECT 1::int AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 0))
+      ) acquired
+    `);
+  }
+}
+
+function mappingCollision(error: unknown, code: string, message: string): never {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    throw new QuickBooksMappingError(409, code, message);
+  }
+  throw error;
+}
+
 export function normalizeQuickBooksItemKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 120);
 }
@@ -54,6 +75,10 @@ export async function reviewQuickBooksCustomerMapping(
 ) {
   requireManager(access);
   await setTenantRlsContext(transaction, access.tenantId);
+  await lockMappingIdentities(transaction, [
+    `quickbooks-customer-map:local:${params.connectionId}:${params.customerId}`,
+    `quickbooks-customer-map:provider:${params.connectionId}:${params.quickBooksCustomerId}`,
+  ]);
   const [connection, customer, collision] = await Promise.all([
     transaction.quickBooksConnection.findFirst({
       where: { id: params.connectionId, tenantId: access.tenantId, status: "CONNECTED", deletedAtUtc: null },
@@ -79,33 +104,41 @@ export async function reviewQuickBooksCustomerMapping(
   if (collision) throw new QuickBooksMappingError(409, "QUICKBOOKS_CUSTOMER_ALREADY_MAPPED", "That QuickBooks customer is already mapped to another QuoteFly customer.");
 
   const now = new Date();
-  return transaction.quickBooksCustomerMap.upsert({
-    where: {
-      quickBooksConnectionId_customerId: {
+  try {
+    return await transaction.quickBooksCustomerMap.upsert({
+      where: {
+        quickBooksConnectionId_customerId: {
+          quickBooksConnectionId: params.connectionId,
+          customerId: params.customerId,
+        },
+      },
+      create: {
+        tenantId: access.tenantId,
         quickBooksConnectionId: params.connectionId,
         customerId: params.customerId,
+        quickBooksCustomerId: params.quickBooksCustomerId,
+        quickBooksDisplayName: params.quickBooksDisplayName,
+        reviewedByTenantUserId: access.tenantUserId,
+        reviewedAtUtc: now,
+        reviewVersion: 1,
       },
-    },
-    create: {
-      tenantId: access.tenantId,
-      quickBooksConnectionId: params.connectionId,
-      customerId: params.customerId,
-      quickBooksCustomerId: params.quickBooksCustomerId,
-      quickBooksDisplayName: params.quickBooksDisplayName,
-      reviewedByTenantUserId: access.tenantUserId,
-      reviewedAtUtc: now,
-      reviewVersion: 1,
-    },
-    update: {
-      quickBooksCustomerId: params.quickBooksCustomerId,
-      quickBooksDisplayName: params.quickBooksDisplayName,
-      reviewedByTenantUserId: access.tenantUserId,
-      reviewedAtUtc: now,
-      reviewVersion: { increment: 1 },
-      deletedAtUtc: null,
-    },
-    select: CustomerMappingSelect,
-  });
+      update: {
+        quickBooksCustomerId: params.quickBooksCustomerId,
+        quickBooksDisplayName: params.quickBooksDisplayName,
+        reviewedByTenantUserId: access.tenantUserId,
+        reviewedAtUtc: now,
+        reviewVersion: { increment: 1 },
+        deletedAtUtc: null,
+      },
+      select: CustomerMappingSelect,
+    });
+  } catch (error) {
+    mappingCollision(
+      error,
+      "QUICKBOOKS_CUSTOMER_ALREADY_MAPPED",
+      "That QuickBooks customer is already mapped to another QuoteFly customer.",
+    );
+  }
 }
 
 export async function reviewQuickBooksItemMapping(
@@ -123,6 +156,10 @@ export async function reviewQuickBooksItemMapping(
   await setTenantRlsContext(transaction, access.tenantId);
   const itemKey = normalizeQuickBooksItemKey(params.itemKey);
   if (!itemKey) throw new QuickBooksMappingError(400, "QUICKBOOKS_ITEM_KEY_REQUIRED", "A line-item key is required.");
+  await lockMappingIdentities(transaction, [
+    `quickbooks-item-map:local:${params.connectionId}:${itemKey}`,
+    `quickbooks-item-map:provider:${params.connectionId}:${params.quickBooksItemId}`,
+  ]);
   const [connection, preset, collision] = await Promise.all([
     transaction.quickBooksConnection.findFirst({
       where: { id: params.connectionId, tenantId: access.tenantId, status: "CONNECTED", deletedAtUtc: null },
@@ -150,35 +187,43 @@ export async function reviewQuickBooksItemMapping(
   if (collision) throw new QuickBooksMappingError(409, "QUICKBOOKS_ITEM_ALREADY_MAPPED", "That QuickBooks item is already mapped to another line-item key.");
 
   const now = new Date();
-  return transaction.quickBooksItemMap.upsert({
-    where: {
-      quickBooksConnectionId_itemKey: {
+  try {
+    return await transaction.quickBooksItemMap.upsert({
+      where: {
+        quickBooksConnectionId_itemKey: {
+          quickBooksConnectionId: params.connectionId,
+          itemKey,
+        },
+      },
+      create: {
+        tenantId: access.tenantId,
         quickBooksConnectionId: params.connectionId,
         itemKey,
+        quickBooksItemId: params.quickBooksItemId,
+        quickBooksItemName: params.quickBooksItemName,
+        workPresetId: params.workPresetId ?? null,
+        sourceType: params.workPresetId ? "work_preset" : "line_description",
+        reviewedByTenantUserId: access.tenantUserId,
+        reviewedAtUtc: now,
+        reviewVersion: 1,
       },
-    },
-    create: {
-      tenantId: access.tenantId,
-      quickBooksConnectionId: params.connectionId,
-      itemKey,
-      quickBooksItemId: params.quickBooksItemId,
-      quickBooksItemName: params.quickBooksItemName,
-      workPresetId: params.workPresetId ?? null,
-      sourceType: params.workPresetId ? "work_preset" : "line_description",
-      reviewedByTenantUserId: access.tenantUserId,
-      reviewedAtUtc: now,
-      reviewVersion: 1,
-    },
-    update: {
-      quickBooksItemId: params.quickBooksItemId,
-      quickBooksItemName: params.quickBooksItemName,
-      workPresetId: params.workPresetId ?? null,
-      sourceType: params.workPresetId ? "work_preset" : "line_description",
-      reviewedByTenantUserId: access.tenantUserId,
-      reviewedAtUtc: now,
-      reviewVersion: { increment: 1 },
-      deletedAtUtc: null,
-    },
-    select: ItemMappingSelect,
-  });
+      update: {
+        quickBooksItemId: params.quickBooksItemId,
+        quickBooksItemName: params.quickBooksItemName,
+        workPresetId: params.workPresetId ?? null,
+        sourceType: params.workPresetId ? "work_preset" : "line_description",
+        reviewedByTenantUserId: access.tenantUserId,
+        reviewedAtUtc: now,
+        reviewVersion: { increment: 1 },
+        deletedAtUtc: null,
+      },
+      select: ItemMappingSelect,
+    });
+  } catch (error) {
+    mappingCollision(
+      error,
+      "QUICKBOOKS_ITEM_ALREADY_MAPPED",
+      "That QuickBooks item is already mapped to another line-item key.",
+    );
+  }
 }

@@ -16,6 +16,10 @@ const runtime: QuickBooksSetupRuntime = {
   providerConfigured: true,
   providerWorkflowsEnabled: true,
   webhookConfigured: true,
+  hostedPaymentsEnabled: true,
+  reconciliationWorkerEnabled: true,
+  reconciliationWorkerHealthy: true,
+  cdcWorkerEnabled: true,
   environment: "sandbox",
 };
 
@@ -50,6 +54,66 @@ describe("QuickBooks setup readiness", () => {
     }));
     assert.equal(confirmed.phase, "CONFIRMED");
     assert.equal(confirmed.ready, true);
+    assert.deepEqual(confirmed.operations, {
+      coreConnectionReady: true,
+      hostedPaymentsReady: true,
+      reconciliationReady: true,
+      cdcRecoveryReady: true,
+      allAccountingWorkflowsReady: true,
+    });
+  });
+
+  it("keeps core confirmation separate from optional payment and recovery operations", () => {
+    const confirmedConnection = connection({
+      setupConfirmedAtUtc: new Date(),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    });
+    const coreOnly = deriveQuickBooksSetupReadiness({
+      ...runtime,
+      webhookConfigured: false,
+      hostedPaymentsEnabled: false,
+      reconciliationWorkerEnabled: false,
+      cdcWorkerEnabled: false,
+    }, confirmedConnection);
+    assert.equal(coreOnly.phase, "CONFIRMED");
+    assert.equal(coreOnly.ready, true);
+    assert.deepEqual(coreOnly.operations, {
+      coreConnectionReady: true,
+      hostedPaymentsReady: false,
+      reconciliationReady: false,
+      cdcRecoveryReady: false,
+      allAccountingWorkflowsReady: false,
+    });
+
+    const reconciliationOnly = deriveQuickBooksSetupReadiness({
+      ...runtime,
+      hostedPaymentsEnabled: false,
+      cdcWorkerEnabled: false,
+    }, confirmedConnection);
+    assert.equal(reconciliationOnly.operations.reconciliationReady, true);
+    assert.equal(reconciliationOnly.operations.hostedPaymentsReady, false);
+    assert.equal(reconciliationOnly.operations.cdcRecoveryReady, false);
+  });
+
+  it("does not report reconciliation or hosted payments ready when the worker heartbeat is stale", () => {
+    const result = deriveQuickBooksSetupReadiness({
+      ...runtime,
+      reconciliationWorkerHealthy: false,
+    }, connection({
+      setupConfirmedAtUtc: new Date(),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    }));
+
+    assert.equal(result.ready, true);
+    assert.equal(result.operations.reconciliationReady, false);
+    assert.equal(result.operations.hostedPaymentsReady, false);
+    assert.equal(result.operations.cdcRecoveryReady, false);
+    assert.equal(
+      result.checks.find((check) => check.key === "RECONCILIATION_WORKER_HEALTHY")?.passed,
+      false,
+    );
   });
 
   it("invalidates confirmation when the checklist version changes", () => {
@@ -90,6 +154,13 @@ describe("QuickBooks Settings status normalization", () => {
       confirmedAtUtc: null,
       checks: [{ key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" }],
       capabilities: { canConnect: false, canReconnect: false, canConfirm: true, canDisconnect: true },
+      operations: {
+        coreConnectionReady: false,
+        hostedPaymentsReady: false,
+        reconciliationReady: false,
+        cdcRecoveryReady: false,
+        allAccountingWorkflowsReady: false,
+      },
     },
     connection: null,
   };

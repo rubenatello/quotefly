@@ -4,6 +4,7 @@ import { env } from "../../src/config/env";
 import { prisma } from "../../src/lib/prisma";
 import { withTenantRlsContext } from "../../src/lib/tenant-rls";
 import {
+  QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS,
   disconnectQuickBooksConnection,
   getSerializedQuickBooksAccessToken,
   retryQuickBooksRevocation,
@@ -117,6 +118,37 @@ describe("QuickBooks credential-operation claim", () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+  });
+
+  test("fails closed before token refresh or revocation when the stored provider environment differs", async () => {
+    const { tenant, connection } = await createConnection("environment-fence", {
+      environment: env.QUICKBOOKS_ENVIRONMENT === "sandbox" ? "production" : "sandbox",
+    });
+
+    await expect(getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: connection.id,
+        tenantId: tenant.id,
+        realmId: connection.realmId,
+      },
+    })).rejects.toThrow("QUICKBOOKS_CONNECTION_ENVIRONMENT_MISMATCH");
+
+    await expect(disconnectQuickBooksConnection({
+      prisma,
+      runtimeEnv: env,
+      tenantId: tenant.id,
+    })).rejects.toThrow("QUICKBOOKS_CONNECTION_ENVIRONMENT_MISMATCH");
+
+    expect(providerMocks.refreshToken).not.toHaveBeenCalled();
+    expect(providerMocks.revokeToken).not.toHaveBeenCalled();
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "CONNECTED",
+        disconnectRequestedAtUtc: null,
+        tokenRefreshClaimHash: null,
+      });
   });
 
   test("retains a rotated token for revocation when disconnect arrives during refresh", async () => {
@@ -263,6 +295,53 @@ describe("QuickBooks credential-operation claim", () => {
       lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
     });
     expect(pending.revocationNextAttemptAtUtc?.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  test("dead-letters direct connection revocation after the bounded retry budget", async () => {
+    const { tenant, connection } = await createConnection("revocation-dead-letter", {
+      status: "REVOCATION_PENDING",
+      disconnectRequestedAtUtc: new Date(),
+      revocationPendingAtUtc: new Date(),
+      revocationAttemptCount: QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS - 1,
+      revocationNextAttemptAtUtc: new Date(Date.now() - 1_000),
+    });
+    providerMocks.revokeToken.mockRejectedValue(new Error("synthetic terminal revoke outage"));
+
+    await expect(retryQuickBooksRevocation({
+      prisma,
+      runtimeEnv: env,
+      tenantId: tenant.id,
+    })).resolves.toBe("dead");
+
+    expect(providerMocks.revokeToken).toHaveBeenCalledTimes(1);
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "ERROR",
+        refreshTokenEncrypted: connection.refreshTokenEncrypted,
+        revocationAttemptCount: QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS,
+        revocationNextAttemptAtUtc: null,
+        tokenRefreshClaimHash: null,
+        tokenRefreshClaimExpiresAtUtc: null,
+        lastError: "QUICKBOOKS_TOKEN_REVOCATION_DEAD",
+      });
+    await expect(prisma.quickBooksRealmBinding.findUniqueOrThrow({
+      where: { quickBooksConnectionId: connection.id },
+    })).resolves.toMatchObject({ active: false });
+    await expect(prisma.quickBooksConnectionEvent.findFirst({
+      where: {
+        tenantId: tenant.id,
+        quickBooksConnectionId: connection.id,
+        action: "DISCONNECTED",
+        outcome: "FAILED",
+      },
+    })).resolves.toBeTruthy();
+
+    await expect(retryQuickBooksRevocation({
+      prisma,
+      runtimeEnv: env,
+      tenantId: tenant.id,
+    })).resolves.toBe("idle");
+    expect(providerMocks.revokeToken).toHaveBeenCalledTimes(1);
   });
 
   test("attributes a post-reconnect disconnect to the current generation and actor", async () => {

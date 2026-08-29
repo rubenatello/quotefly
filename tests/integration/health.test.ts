@@ -7,6 +7,9 @@ const openApps: Array<ReturnType<typeof Fastify>> = [];
 const FORCED_RLS_ROWS = [
   { tableName: "ActivityTask", enabled: true, forced: true },
   { tableName: "ActivityTaskEvent", enabled: true, forced: true },
+  { tableName: "CustomerFollowUpSequence", enabled: true, forced: true },
+  { tableName: "FollowUpTemplate", enabled: true, forced: true },
+  { tableName: "FollowUpTemplateStep", enabled: true, forced: true },
   { tableName: "AiIndexJob", enabled: true, forced: true },
   { tableName: "AiRetrievalAuditEvent", enabled: true, forced: true },
   { tableName: "AiRetrievalChunk", enabled: true, forced: true },

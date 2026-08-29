@@ -31,6 +31,7 @@ import {
 import { measureRequestPerformance } from "../lib/request-performance";
 import { authenticatedAiRateLimit } from "../lib/ai-rate-limit";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { withTransactionConflictRetry } from "../lib/transaction-retry";
 import {
   WorkspaceAssigneeSelect,
   assignedRecordScope,
@@ -50,6 +51,14 @@ import {
   getAiQuoteRuntimeInfo,
 } from "../services/ai-quote";
 import { prepareQuoteReview, type QuotePreparationResult } from "../services/quote-preparation";
+import {
+  seedCustomerFollowUpSchedule,
+} from "../services/customer-follow-up";
+import {
+  applyQuoteCustomerLifecycle,
+  CustomerLifecycleError,
+  lockCustomerForQuoteAdmission,
+} from "../services/customer-lifecycle";
 import {
   generateQuotePdfBuffer,
   type QuoteComponentColors,
@@ -548,11 +557,10 @@ function safeFileLabel(value: string): string {
     .slice(0, 60);
 }
 
-function mapQuoteStatusToFollowUpStatus(status?: z.infer<typeof QuoteStatusSchema>): LeadFollowUpStatus | undefined {
-  if (status === "SENT_TO_CUSTOMER") return "NEEDS_FOLLOW_UP";
-  if (status === "ACCEPTED") return "WON";
-  if (status === "REJECTED") return "LOST";
-  return undefined;
+function quoteStatusAffectsCustomerLifecycle(
+  status?: z.infer<typeof QuoteStatusSchema>,
+): status is "SENT_TO_CUSTOMER" | "ACCEPTED" | "REJECTED" {
+  return status === "SENT_TO_CUSTOMER" || status === "ACCEPTED" || status === "REJECTED";
 }
 
 async function getActiveQuoteForTenant(
@@ -1100,6 +1108,14 @@ async function restoreQuoteRevision(
   });
 
   if (!customer) return { status: "customer_missing" as const };
+
+  if (quoteStatusAffectsCustomerLifecycle(snapshot.quote.status)) {
+    await applyQuoteCustomerLifecycle(tx, {
+      tenantId: params.tenantId,
+      customerId: snapshot.customer.id,
+      quoteStatus: snapshot.quote.status,
+    });
+  }
 
   const now = new Date();
   const sentAt =
@@ -3666,6 +3682,7 @@ async function lockActiveCustomerForQuoteCreate(
       id: true,
       assignedTenantUserId: true,
       preferredLocale: true,
+      followUpStatus: true,
       tenant: { select: { defaultCustomerLocale: true } },
     },
   });
@@ -3679,8 +3696,10 @@ const QuoteCreateCustomerSelect = {
   notes: true,
   assignedTenantUserId: true,
   preferredLocale: true,
+  followUpStatus: true,
   archivedAtUtc: true,
   deletedAtUtc: true,
+  createdAt: true,
   updatedAt: true,
   tenant: { select: { defaultCustomerLocale: true } },
 } satisfies Prisma.CustomerSelect;
@@ -4012,6 +4031,13 @@ async function resolveQuoteCreateCustomerDraft(
       assignedTenantUserId: draftAssignee.assignedTenantUserId,
     },
     select: QuoteCreateCustomerSelect,
+  });
+  await seedCustomerFollowUpSchedule(transaction, {
+    tenantId,
+    customerId: customer.id,
+    assignedTenantUserId: customer.assignedTenantUserId,
+    createdByTenantUserId: input.access.tenantUserId,
+    startedAtUtc: customer.createdAt,
   });
   await createCustomerActivityEvent(transaction, {
     tenantId,
@@ -4906,6 +4932,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               };
             })();
         const customer = customerResolution.customer;
+        if (customer.followUpStatus === "LOST") {
+          throw new QuoteCreateError(
+            409,
+            "CUSTOMER_REOPEN_REQUIRED",
+            "Reopen this customer before starting a new quote.",
+          );
+        }
 
         const assignee = await resolveRequestedQuoteAssignee(
           tx,
@@ -5585,7 +5618,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
       let result: Awaited<ReturnType<typeof restoreQuoteRevision>>;
       try {
-        result = await app.prisma.$transaction((tx) =>
+        result = await withTransactionConflictRetry(() => app.prisma.$transaction((tx) =>
           restoreQuoteRevision(tx, {
             tenantId: claims.tenantId,
             quoteId,
@@ -5594,9 +5627,12 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             requestId: request.id,
             actor,
           }),
-        );
+        ));
       } catch (error) {
         if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
+        if (error instanceof CustomerLifecycleError) {
           return reply.code(error.statusCode).send({ code: error.code, error: error.message });
         }
         throw error;
@@ -5880,7 +5916,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     const payload = SaveQuoteSheetSchema.parse(request.body);
 
     try {
-      const result = await app.prisma.$transaction(async (tx) => {
+      const result = await withTransactionConflictRetry(() =>
+        withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
         const existingQuote = await lockActiveQuoteForMutation(tx, {
           quoteId,
           tenantId: claims.tenantId,
@@ -5905,7 +5942,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
 
         const lifecycleUpdate = resolveLifecycleUpdate(existingQuote, payload.quote);
-        const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.quote.status);
+        const shouldApplyCustomerLifecycle = payload.quote.status !== existingQuote.status
+          && quoteStatusAffectsCustomerLifecycle(payload.quote.status);
         const updatedQuote = await tx.quote.update({
           where: { id: existingQuote.id },
           data: {
@@ -5979,6 +6017,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
                 "totalAmount",
               ]
             : ["totalAmount"];
+        if (shouldApplyCustomerLifecycle) {
+          await applyQuoteCustomerLifecycle(tx, {
+            tenantId: claims.tenantId,
+            customerId: recalculatedQuote.customerId,
+            quoteStatus: recalculatedQuote.status as "SENT_TO_CUSTOMER" | "ACCEPTED" | "REJECTED",
+          });
+        }
+
         await createQuoteRevision(tx, {
           tenantId: claims.tenantId,
           quoteId: recalculatedQuote.id,
@@ -5999,19 +6045,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
             ]),
           ),
         });
-
-        if (followUpStatusUpdate) {
-          await tx.customer.updateMany({
-            where: {
-              id: recalculatedQuote.customerId,
-              ...tenantActiveCustomerScope(claims.tenantId),
-            },
-            data: {
-              followUpStatus: followUpStatusUpdate,
-              followUpUpdatedAtUtc: new Date(),
-            },
-          });
-        }
 
         await markQuoteAiRetrievalSourcesDeleted(tx, {
           tenantId: claims.tenantId,
@@ -6044,7 +6077,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quote,
           job: serializeAcceptedJobSummary(acceptedJob),
         };
-      });
+      }),
+      );
 
       if (!result?.quote) {
         return reply.code(404).send({ error: "Quote not found for tenant." });
@@ -6062,6 +6096,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      if (error instanceof CustomerLifecycleError) {
         return reply.code(error.statusCode).send({ code: error.code, error: error.message });
       }
       throw error;
@@ -6094,21 +6131,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Quote not found for tenant." });
     }
 
-    if (payload.customerId) {
-      const customer = await app.prisma.customer.findFirst({
-        where: {
-          id: payload.customerId,
-          ...tenantActiveCustomerScope(claims.tenantId),
-          ...assignedRecordScope(access),
-        },
-        select: { id: true },
-      });
-
-      if (!customer) {
-        return reply.code(404).send({ error: "Customer not found for tenant." });
-      }
-    }
-
     if (
       payload.documentLocale !== undefined &&
       payload.documentLocale !== existingQuote.documentLocale &&
@@ -6135,7 +6157,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
     let result: { quote: typeof existingQuote; job: AcceptedJobSummary | null } | null;
     let inactiveAssignee = false;
     try {
-      result = await app.prisma.$transaction(async (tx) => {
+      result = await withTransactionConflictRetry(() =>
+        withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
         if (
           assignee?.assignedTenantUserId
           && !await lockActiveTenantAssignee(tx, {
@@ -6153,6 +6176,17 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
         });
         if (!lockedQuote) return null;
+
+        const customerChanged = Boolean(
+          payload.customerId && payload.customerId !== lockedQuote.customerId,
+        );
+        if (customerChanged) {
+          await lockCustomerForQuoteAdmission(tx, {
+            tenantId: claims.tenantId,
+            customerId: payload.customerId!,
+            assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+          });
+        }
 
         if (
           payload.documentLocale !== undefined &&
@@ -6187,7 +6221,10 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           payload.status !== undefined || payload.afterSaleFollowUpStatus !== undefined
             ? "STATUS_CHANGED"
             : "UPDATED";
-        const followUpStatusUpdate = mapQuoteStatusToFollowUpStatus(payload.status);
+        const resultingStatus = payload.status ?? lockedQuote.status;
+        const shouldApplyCustomerLifecycle = (
+          payload.status !== lockedQuote.status || customerChanged
+        ) && quoteStatusAffectsCustomerLifecycle(resultingStatus);
 
         const updateData: Prisma.QuoteUncheckedUpdateInput = {
           ...(payload.customerId ? { customerId: payload.customerId } : {}),
@@ -6223,6 +6260,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           data: updateData,
         });
 
+        if (shouldApplyCustomerLifecycle) {
+          await applyQuoteCustomerLifecycle(tx, {
+            tenantId: claims.tenantId,
+            customerId: updatedQuote.customerId,
+            quoteStatus: updatedQuote.status as "SENT_TO_CUSTOMER" | "ACCEPTED" | "REJECTED",
+          });
+        }
+
         await createQuoteRevision(tx, {
           tenantId: claims.tenantId,
           quoteId: updatedQuote.id,
@@ -6230,19 +6275,6 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           actor,
           changedFields: Array.from(new Set(revisionChangedFields)),
         });
-
-        if (followUpStatusUpdate) {
-          await tx.customer.updateMany({
-            where: {
-              id: updatedQuote.customerId,
-              ...tenantActiveCustomerScope(claims.tenantId),
-            },
-            data: {
-              followUpStatus: followUpStatusUpdate,
-              followUpUpdatedAtUtc: new Date(),
-            },
-          });
-        }
 
         await markQuoteAiRetrievalSourcesDeleted(tx, {
           tenantId: claims.tenantId,
@@ -6262,7 +6294,8 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quote: updatedQuote,
           job: serializeAcceptedJobSummary(acceptedJob),
         };
-      });
+      }),
+      );
     } catch (error) {
       if (error instanceof QuoteDocumentLocaleLockedError) {
         return reply.code(409).send({
@@ -6271,6 +6304,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      if (error instanceof CustomerLifecycleError) {
         return reply.code(error.statusCode).send({ code: error.code, error: error.message });
       }
       throw error;
@@ -6512,7 +6548,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
 
     let quote: Awaited<ReturnType<typeof getActiveQuoteForTenant>>;
     try {
-      quote = await app.prisma.$transaction(async (tx) => {
+      quote = await withTransactionConflictRetry(() => app.prisma.$transaction(async (tx) => {
       const existingQuote = await lockActiveQuoteForMutation(tx, {
         quoteId,
         tenantId: claims.tenantId,
@@ -6543,6 +6579,14 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
+      if (decision === "send" && existingQuote.status !== status) {
+        await applyQuoteCustomerLifecycle(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedQuote.customerId,
+          quoteStatus: "SENT_TO_CUSTOMER",
+        });
+      }
+
       await createQuoteRevision(tx, {
         tenantId: claims.tenantId,
         quoteId: updatedQuote.id,
@@ -6551,23 +6595,13 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         changedFields: ["status", "sentAt", "decisionSession.status"],
       });
 
-      if (decision === "send") {
-        await tx.customer.updateMany({
-          where: {
-            id: updatedQuote.customerId,
-            ...tenantActiveCustomerScope(claims.tenantId),
-          },
-          data: {
-            followUpStatus: "NEEDS_FOLLOW_UP",
-            followUpUpdatedAtUtc: new Date(),
-          },
-        });
-      }
-
       return updatedQuote;
-      });
+      }));
     } catch (error) {
       if (error instanceof JobServiceError) {
+        return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+      }
+      if (error instanceof CustomerLifecycleError) {
         return reply.code(error.statusCode).send({ code: error.code, error: error.message });
       }
       throw error;
@@ -6670,7 +6704,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         });
 
       try {
-        const result = await app.prisma.$transaction(async (tx) => {
+        const result = await withTransactionConflictRetry(() => app.prisma.$transaction(async (tx) => {
           const existingEvent = await tx.quoteOutboundEvent.findFirst({
             where: {
               tenantId: claims.tenantId,
@@ -6736,23 +6770,18 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
               data: { status: "APPROVED" },
             });
 
+            await applyQuoteCustomerLifecycle(tx, {
+              tenantId: claims.tenantId,
+              customerId: quote.customerId,
+              quoteStatus: "SENT_TO_CUSTOMER",
+            });
+
             await createQuoteRevision(tx, {
               tenantId: claims.tenantId,
               quoteId: quote.id,
               eventType: "DECISION",
               actor,
               changedFields: ["status", "sentAt", "decisionSession.status"],
-            });
-
-            await tx.customer.updateMany({
-              where: {
-                id: quote.customerId,
-                ...tenantActiveCustomerScope(claims.tenantId),
-              },
-              data: {
-                followUpStatus: "NEEDS_FOLLOW_UP",
-                followUpUpdatedAtUtc: new Date(),
-              },
             });
           }
 
@@ -6781,7 +6810,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           });
 
           return { quote, event, duplicate: false as const };
-        });
+        }));
 
         if (!result) {
           return reply.code(404).send({ error: "Quote not found for tenant." });
@@ -6794,6 +6823,9 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(result);
       } catch (error) {
         if (error instanceof JobServiceError) {
+          return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+        }
+        if (error instanceof CustomerLifecycleError) {
           return reply.code(error.statusCode).send({ code: error.code, error: error.message });
         }
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {

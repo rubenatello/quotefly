@@ -52,8 +52,10 @@ import { withTenantRlsContext } from "./tenant-rls";
 import {
   summarizeAssistantActivityAgenda,
   type AssistantActivityTaskProjection,
+  visibleActivityTaskWhere,
 } from "../services/activity-tasks";
 import {
+  assessAssistantScheduleCapacity,
   listAssistantSchedule,
   prepareAssistantBooking,
   prepareAssistantDispatch,
@@ -234,6 +236,9 @@ const PREPARE_DISPATCH_INTENT_PATTERN =
   /(?:\b(?:dispatch|send\s+out|despachar|despacha|enviar\s+al\s+trabajo)\b.{0,96}\b(?:job|crew|technician|appointment|visit|trabajo|equipo|tecnico|cita|visita)\b)|(?:\b(?:job|appointment|visit|trabajo|cita|visita)\b.{0,96}\b(?:dispatch|despachar|despacha)\b)/i;
 const PREPARE_BOOKING_INTENT_PATTERN =
   /(?:\b(?:book|schedule|reschedule|set\s+up|agendar|agenda|programar|programa|reagendar|reagenda)\b.{0,96}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,96}\b(?:book|schedule|reschedule|agendar|agenda|programar|programa|reagendar|reagenda)\b)|(?:\b(?:find|show|check|what|when|buscar|busca|mostrar|muestra|revisar|revisa|que|cuando|can\b.{0,24}\bfind|puede\b.{0,24}\bencontrar)\b.{0,128}\b(?:openings?|availability|available\s+(?:time|slot|opening)|free|gaps?|slots?|fit|espacios?|disponibilidad|disponible\s+(?:hora|espacio)|libre|huecos?|cabe)\b.{0,128}\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b)|(?:\b(?:find|can\b.{0,24}\bfind)\s+(?:an?\s+)?time\s+for\b.{0,96}\b(?:job|work|appointment|visit)\b)|(?:\b(?:buscar|busca|puede\b.{0,24}\bencontrar)\s+(?:una?\s+)?hora\s+para\b.{0,96}\b(?:trabajo|obra|cita|visita)\b)|(?:\b(?:job|work|appointment|visit|trabajo|obra|cita|visita)\b.{0,128}\b(?:openings?|availability|available\s+(?:time|slot|opening)|free|gaps?|slots?|fit|espacios?|disponibilidad|disponible\s+(?:hora|espacio)|libre|huecos?|cabe)\b)/i;
+const SCHEDULE_FIT_INTENT_PATTERN =
+  /(?:\b(?:can|could)\s+(?:i|we)\b.{0,72}\b(?:fit|squeeze|work)\b.{0,72}\b(?:job|work|visit|inspection)\b)|(?:\b(?:fit|squeeze)\b.{0,72}\b(?:job|work|visit|inspection)\b.{0,48}\b(?:today|tomorrow|schedule|calendar)\b)|(?:\b(?:which|what|who)\b.{0,72}\b(?:teammates?|members?|workers?|crew|technicians?)\b.{0,96}\b(?:time|available|availability|free|gap|fit)\b.{0,96}\b(?:inspection|inspect|visit|job|quote)\b)|(?:\b(?:inspection|inspect|visit)\b.{0,96}\b(?:which|what|who|teammates?|members?|workers?|crew|technicians?)\b.{0,96}\b(?:time|available|availability|free|gap|fit)\b)|(?:\b(?:puedo|podemos)\b.{0,72}\b(?:encajar|meter|agregar)\b.{0,72}\b(?:trabajo|visita|inspeccion)\b)|(?:\b(?:quien|cual)\b.{0,72}\b(?:equipo|miembros?|trabajadores?|tecnicos?)\b.{0,96}\b(?:tiempo|disponible|disponibilidad|libre|hueco)\b.{0,96}\b(?:inspeccion|visita|trabajo|cotizacion)\b)/i;
+const SPECIFIC_JOB_REFERENCE_PATTERN = /\b(?:job|trabajo)\s*(?:number|numero|no\.?|#)?\s*#?\s*\d{1,9}\b/i;
 const LIST_SCHEDULE_INTENT_PATTERN =
   /\b(?:my\s+schedule|our\s+schedule|team\s+schedule|today(?:'s)?\s+(?:schedule|appointments?|bookings?)|tomorrow(?:'s)?\s+(?:schedule|appointments?|bookings?)|schedule\s+(?:today|tomorrow|this\s+week|for\s+the\s+week)|appointments?\s+(?:today|tomorrow|this\s+week)|what(?:'s|\s+is)\s+(?:on\s+)?(?:my|our|the|today(?:'s)?|tomorrow(?:'s)?)?\s*schedule|mi\s+agenda|nuestro\s+calendario|agenda\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|citas?\s+(?:de\s+)?(?:hoy|manana|esta\s+semana)|que\s+(?:tengo|tenemos|hay)\s+(?:en\s+)?(?:mi|nuestra|la)?\s*(?:agenda|calendario))\b/i;
 const ACTIVITY_TODAY_INTENT_PATTERN = /\b(?:today|this\s+morning|this\s+afternoon|tonight|hoy|esta\s+ma(?:n|ñ)ana|esta\s+tarde|esta\s+noche)\b/i;
@@ -318,7 +323,7 @@ function assistantTopic(tool: AiAssistantTool): AssistantTopic {
   ].includes(tool)) return "CRM";
   if (tool === "DRAFT_QUOTE") return "QUOTING";
   if (tool === "PREPARE_QUOTE_SEND") return "SENDING";
-  if (tool === "LIST_SCHEDULE" || tool === "PREPARE_BOOKING" || tool === "PREPARE_DISPATCH") return "SCHEDULING";
+  if (tool === "LIST_SCHEDULE" || tool === "ASSESS_SCHEDULE_FIT" || tool === "PREPARE_BOOKING" || tool === "PREPARE_DISPATCH") return "SCHEDULING";
   if (tool === "DRAFT_PRODUCT" || tool === "SEARCH_PRODUCTS") return "PRODUCTS";
   if (tool === "NAVIGATE_WORKSPACE") return "NAVIGATION";
   return "INSIGHTS";
@@ -943,11 +948,13 @@ export function resolveAssistantTool(
   // selection. This also protects older clients that opened Kody from a
   // customer-specific button and then replaced the suggested prompt.
   if (PRODUCT_DRAFT_INTENT_PATTERN.test(routingMessage)) return "DRAFT_PRODUCT";
+  if (SCHEDULE_FIT_INTENT_PATTERN.test(routingMessage) && !SPECIFIC_JOB_REFERENCE_PATTERN.test(routingMessage)) return "ASSESS_SCHEDULE_FIT";
   if (PREPARE_ACTIVITY_INTENT_PATTERN.test(routingMessage)) return "PREPARE_ACTIVITY";
   if (PREPARE_DISPATCH_INTENT_PATTERN.test(routingMessage)) return "PREPARE_DISPATCH";
   if (PREPARE_BOOKING_INTENT_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(routingMessage)) return "LIST_SCHEDULE";
   if (previousTool === "PREPARE_BOOKING" && BOOKING_FOLLOW_UP_PATTERN.test(routingMessage)) return "PREPARE_BOOKING";
+  if (previousTool === "ASSESS_SCHEDULE_FIT" && (BOOKING_FOLLOW_UP_PATTERN.test(routingMessage) || CONTEXTUAL_ENTITY_QUERY_PATTERN.test(routingMessage))) return "ASSESS_SCHEDULE_FIT";
   const autoSelectOperationalLookup = !requestedTool || requestedTool === "AUTO";
   if (QUICKBOOKS_SETUP_INTENT_PATTERN.test(routingMessage)) return "GET_QUICKBOOKS_SETUP_STATUS";
   if (autoSelectOperationalLookup && INVOICE_STATUS_INTENT_PATTERN.test(routingMessage)) return "GET_INVOICE_STATUS";
@@ -991,6 +998,7 @@ export function resolveAssistantTool(
       PIPELINE_SCENARIO_PATTERN.test(lower)
       || PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)
       || PREPARE_DISPATCH_INTENT_PATTERN.test(lower)
+      || SCHEDULE_FIT_INTENT_PATTERN.test(lower)
       || PREPARE_BOOKING_INTENT_PATTERN.test(lower)
       || LIST_SCHEDULE_INTENT_PATTERN.test(lower)
       || INVOICE_STATUS_INTENT_PATTERN.test(lower)
@@ -1018,6 +1026,7 @@ export function resolveAssistantTool(
   if (PIPELINE_SCENARIO_PATTERN.test(lower)) return "PIPELINE_SCENARIO";
   if (PREPARE_ACTIVITY_INTENT_PATTERN.test(lower)) return "PREPARE_ACTIVITY";
   if (PREPARE_DISPATCH_INTENT_PATTERN.test(lower)) return "PREPARE_DISPATCH";
+  if (SCHEDULE_FIT_INTENT_PATTERN.test(lower) && !SPECIFIC_JOB_REFERENCE_PATTERN.test(lower)) return "ASSESS_SCHEDULE_FIT";
   if (PREPARE_BOOKING_INTENT_PATTERN.test(lower)) return "PREPARE_BOOKING";
   if (LIST_SCHEDULE_INTENT_PATTERN.test(lower)) return "LIST_SCHEDULE";
   if (INVOICE_STATUS_INTENT_PATTERN.test(lower)) return "GET_INVOICE_STATUS";
@@ -1095,6 +1104,7 @@ export function assistantToolConsumesAiBudget(tool: AiAssistantTool) {
     "DRAFT_PRODUCT",
     "PREPARE_ACTIVITY",
     "LIST_SCHEDULE",
+    "ASSESS_SCHEDULE_FIT",
     "SEARCH_JOBS",
     "GET_JOB_STATUS",
     "LIST_INVOICES",
@@ -1440,6 +1450,10 @@ async function runCustomerSearch(
       email: true,
       phone: true,
       followUpStatus: true,
+      lostReason: true,
+      lostReasonNotes: true,
+      lostAtUtc: true,
+      lostByTenantUser: { select: { user: { select: { fullName: true } } } },
       updatedAt: true,
       _count: {
         select: {
@@ -1483,6 +1497,10 @@ async function runCustomerSearch(
       email: customer.email ?? null,
       phone: customer.phone,
       followUpStatus: customer.followUpStatus,
+      lostReason: customer.lostReason,
+      lostReasonNotes: customer.lostReasonNotes,
+      lostAtUtc: customer.lostAtUtc?.toISOString() ?? null,
+      lostByName: customer.lostByTenantUser?.user.fullName ?? null,
       quoteCount: customer._count.quotes,
       latestQuoteTitle: latestQuote?.title ?? null,
       latestQuoteStatus: latestQuote?.status ?? null,
@@ -2182,10 +2200,19 @@ async function runQuickBooksSetupStatus(
     providerConfigured: false,
     providerWorkflowsEnabled: false,
     webhookConfigured: false,
+    hostedPaymentsEnabled: false,
+    reconciliationWorkerEnabled: false,
+    cdcWorkerEnabled: false,
     environment: env.QUICKBOOKS_ENVIRONMENT,
   }, connection);
-  const answer = setup.phase === "CONFIRMED"
-    ? localeText(params, "QuickBooks setup is confirmed and ready for reviewed invoice sync.", "La configuracion de QuickBooks esta confirmada y lista para sincronizar facturas revisadas.")
+  const answer = setup.phase === "CONFIRMED" && setup.operations.allAccountingWorkflowsReady
+    ? localeText(
+      params,
+      "The QuickBooks company connection is confirmed and the reviewed accounting workflows are configured. Configuration alone does not prove worker health, signed webhook delivery, QuickBooks Payments eligibility, or an end-to-end sandbox test; review the evidence in Settings before relying on them.",
+      "La conexion de la empresa de QuickBooks esta confirmada y los flujos contables revisados estan configurados. La configuracion por si sola no demuestra la salud del proceso, la entrega firmada de webhooks, la elegibilidad de QuickBooks Payments ni una prueba completa en sandbox; revisa la evidencia en Configuracion antes de depender de ellos.",
+    )
+    : setup.phase === "CONFIRMED"
+      ? localeText(params, "The QuickBooks company connection is confirmed. Open Settings to review which invoice, payment, and recovery capabilities are enabled before using them.", "La conexion de la empresa de QuickBooks esta confirmada. Abre Configuracion para revisar que funciones de facturas, pagos y recuperacion estan activadas antes de usarlas.")
     : setup.phase === "READY_FOR_CONFIRMATION"
       ? localeText(params, "QuickBooks is connected and ready for an owner or admin to confirm the setup checklist in Settings.", "QuickBooks esta conectado y listo para que un propietario o administrador confirme la lista de configuracion.")
       : setup.phase === "NOT_CONNECTED"
@@ -2201,10 +2228,15 @@ async function runQuickBooksSetupStatus(
     connectionStatus: connection?.status ?? null,
     setupConfirmedAtUtc: setup.confirmedAtUtc?.toISOString() ?? null,
     failedCheckCount: setup.checks.filter((check) => !check.passed).length,
+    coreConnectionReady: setup.operations.coreConnectionReady,
+    hostedPaymentsConfigured: setup.operations.hostedPaymentsReady,
+    reconciliationConfigured: setup.operations.reconciliationReady,
+    cdcRecoveryConfigured: setup.operations.cdcRecoveryReady,
+    allAccountingWorkflowsConfigured: setup.operations.allAccountingWorkflowsReady,
   };
   const citation: AiAssistantCitation = {
     key: "Q1",
-    label: localeText(params, "Authorized QuickBooks setup readiness", "Estado autorizado de configuracion de QuickBooks"),
+    label: localeText(params, "Authorized QuickBooks setup configuration", "Configuracion autorizada de QuickBooks"),
     sourceType: "QuickBooksSetupReadiness",
     classification: "C3_FINANCIAL_CONFIDENTIAL",
   };
@@ -2215,11 +2247,11 @@ async function runQuickBooksSetupStatus(
     answer,
     classification: "C3_FINANCIAL_CONFIDENTIAL",
     sourceTypes: ["QuickBooksConnection", "QuickBooksRealmBinding", "QuickBooksCdcCursor"],
-    sourceLabels: ["Authorized deterministic QuickBooks setup readiness"],
+    sourceLabels: ["Authorized deterministic QuickBooks setup configuration"],
     creditsConsumed: 0,
     telemetry: ZERO_AI_TELEMETRY,
     confidenceLevel: "high",
-    confidenceLabel: "Deterministic setup readiness",
+    confidenceLabel: "Deterministic setup configuration",
     riskNote: "Tenant-scoped setup metadata was projected without provider calls, vector retrieval, credentials, realm identifiers, company names, scopes, or raw errors.",
   });
 
@@ -2882,7 +2914,7 @@ async function createDeniedCustomerToolResult(
   prisma: PrismaClient,
   params: AiAssistantInput,
   generatedAtUtc: Date,
-  tool: "FOLLOW_UP_QUEUE" | "CUSTOMERS_WITHOUT_QUOTES",
+  tool: "FOLLOW_UP_QUEUE" | "CUSTOMERS_WITHOUT_QUOTES" | "ASSESS_SCHEDULE_FIT",
 ): Promise<AiAssistantRunResult> {
   const answer = localeText(params, "This request requires permission to view customer and quote details.", "Esta solicitud requiere permiso para ver los detalles de clientes y cotizaciones.");
   const event = await createAssistantUsageEvent(prisma, {
@@ -3438,6 +3470,184 @@ async function runScheduleList(
   };
 }
 
+async function runScheduleFitAssessment(
+  prisma: PrismaClient,
+  params: AiAssistantInput,
+  generatedAtUtc: Date,
+): Promise<AiAssistantRunResult> {
+  if (!hasCapability(params.access, "viewCustomerPii")) {
+    return createDeniedCustomerToolResult(prisma, params, generatedAtUtc, "ASSESS_SCHEDULE_FIT");
+  }
+  const assessmentMessage = [
+    ...(params.conversation ?? [])
+      .filter((turn) => turn.resolvedTool === "ASSESS_SCHEDULE_FIT")
+      .slice(-3)
+      .map((turn) => turn.message),
+    params.message,
+  ].join(" ");
+  const assessment = await withTenantRlsContext(prisma, params.access.tenantId, async (transaction) => {
+    const tenant = await transaction.tenant.findFirst({
+      where: { id: params.access.tenantId, deletedAtUtc: null },
+      select: { timezone: true },
+    });
+    return assessAssistantScheduleCapacity(transaction, params.access, {
+      message: assessmentMessage,
+      now: generatedAtUtc,
+      timeZone: tenant?.timezone ?? "UTC",
+      jobId: params.context?.jobId,
+      quoteId: params.context?.quoteId,
+      search: params.context?.search,
+    });
+  }, { maxWait: 5_000, timeout: 15_000 });
+  const target = assessment.target;
+  const answer = assessment.outcome === "FORBIDDEN"
+    ? localeText(params, "Only an owner or admin can compare teammates' calendars. I did not expose team availability or change anything.", "Solo un propietario o administrador puede comparar los calendarios del equipo. No mostré disponibilidad del equipo ni cambié nada.")
+    : assessment.outcome === "MISSING_TARGET"
+      ? localeText(params, "Which active job, open quote, or customer are you trying to fit in? Give me the job number, quote/customer name, or open it and ask again. I will also need the expected duration.", "¿Qué trabajo activo, cotización abierta o cliente quieres acomodar? Dame el número del trabajo, el nombre de la cotización o cliente, o ábrelo e inténtalo de nuevo. También necesitaré la duración estimada.")
+      : assessment.outcome === "TARGET_AMBIGUOUS"
+        ? localeText(params, `I found ${assessment.targets.length} possible jobs, quotes, or customers. Add the job number or a more specific customer/quote name so I assess the right work.`, `Encontré ${assessment.targets.length} trabajos, cotizaciones o clientes posibles. Agrega el número del trabajo o un nombre más específico para evaluar el trabajo correcto.`)
+        : assessment.outcome === "MISSING_DATE"
+          ? localeText(params, `Tell me which day to check for ${target!.customerName}, such as today, tomorrow, or an exact date.`, `Dime qué día debo revisar para ${target!.customerName}, por ejemplo hoy, mañana o una fecha exacta.`)
+          : assessment.outcome === "MISSING_DURATION"
+            ? localeText(params, `How long should the ${assessment.mode === "TEAM_INSPECTION" ? "inspection" : "work"} for ${target!.customerName} take? Give me hours or minutes so I can include the travel buffer safely.`, `¿Cuánto debe durar ${assessment.mode === "TEAM_INSPECTION" ? "la inspección" : "el trabajo"} para ${target!.customerName}? Dame horas o minutos para incluir el tiempo de traslado de forma segura.`)
+            : assessment.outcome === "INVALID_LOCAL_TIME"
+              ? localeText(params, "That day or time window is not valid in the workspace timezone. Choose another date or explicit time window.", "Ese día u horario no es válido en la zona horaria del espacio de trabajo. Elige otra fecha u horario explícito.")
+              : assessment.outcome === "SCHEDULE_LIMIT_REACHED"
+                ? localeText(params, "The calendar is too dense for a bounded Kody assessment. Open Schedule and review the day directly; nothing changed.", "El calendario está demasiado lleno para una evaluación limitada de Kody. Abre Agenda y revisa el día directamente; no cambió nada.")
+                : assessment.outcome === "NO_OPEN_SLOT"
+                  ? localeText(params, `I found no ${assessment.durationMinutes}-minute opening for ${target!.customerName} with a ${assessment.travelBufferMinutes}-minute travel buffer in the checked window.${assessment.planningWindowAssumed ? " The check used a temporary 8 AM–5 PM planning assumption because workspace hours are not configured." : ""} This checks active QuoteFly bookings only; external calendars and real driving routes are not included.`, `No encontré un espacio de ${assessment.durationMinutes} minutos para ${target!.customerName} con ${assessment.travelBufferMinutes} minutos de traslado en el horario revisado.${assessment.planningWindowAssumed ? " La revisión usó temporalmente un horario de 8 a. m. a 5 p. m. porque el espacio de trabajo no tiene horario configurado." : ""} Esto solo revisa citas activas de QuoteFly; no incluye calendarios externos ni rutas reales.`)
+                  : localeText(
+                      params,
+                      `${assessment.mode === "TEAM_INSPECTION" ? `I found ${assessment.options.length} team ${assessment.options.length === 1 ? "option" : "options"} for the inspection` : `I found ${assessment.options.length} way${assessment.options.length === 1 ? "" : "s"} to fit the work`} for ${target!.customerName}. Each option leaves a ${assessment.travelBufferMinutes}-minute buffer around active QuoteFly bookings${assessment.planningWindowAssumed ? " and uses a temporary 8 AM–5 PM planning assumption because workspace hours are not configured" : ""}. This is a review, not a reservation, and it does not include external calendars or route-specific drive time.`,
+                      `${assessment.mode === "TEAM_INSPECTION" ? `Encontré ${assessment.options.length} ${assessment.options.length === 1 ? "opción" : "opciones"} del equipo para la inspección` : `Encontré ${assessment.options.length} ${assessment.options.length === 1 ? "forma" : "formas"} de acomodar el trabajo`} para ${target!.customerName}. Cada opción deja ${assessment.travelBufferMinutes} minutos alrededor de citas activas de QuoteFly${assessment.planningWindowAssumed ? " y usa temporalmente un horario de 8 a. m. a 5 p. m. porque el espacio de trabajo no tiene horario configurado" : ""}. Es una revisión, no una reserva, y no incluye calendarios externos ni tiempo de manejo según la ruta.`,
+                    );
+  const results = assessment.outcome === "READY"
+    ? assessment.options.map((option, index) => ({
+        option: index + 1,
+        capacityType: assessment.mode,
+        targetType: option.target.targetType,
+        targetTitle: option.target.title,
+        customerId: option.target.customerId,
+        customerName: option.target.customerName,
+        quoteId: option.target.quoteId,
+        jobId: option.target.jobId,
+        jobNumber: option.target.jobNumber,
+        assignedTenantUserId: option.assignedTenantUserId,
+        assigneeName: option.assigneeName,
+        startsAtUtc: option.startsAtUtc,
+        endsAtUtc: option.endsAtUtc,
+        timeZone: option.timeZone,
+        durationMinutes: option.durationMinutes,
+        travelBufferMinutes: option.travelBufferMinutes,
+        fitReason: "NO_ACTIVE_QUOTEFLY_OVERLAP_WITH_TRAVEL_BUFFER",
+        scheduleOpening: true,
+      }))
+    : assessment.targets.map((candidate) => ({
+        targetType: candidate.targetType,
+        targetTitle: candidate.title,
+        customerId: candidate.customerId,
+        customerName: candidate.customerName,
+        quoteId: candidate.quoteId,
+        jobId: candidate.jobId,
+        jobNumber: candidate.jobNumber,
+      }));
+  const firstOption = assessment.options[0] ?? null;
+  const actions: AiAssistantAction[] = assessment.outcome === "FORBIDDEN"
+    ? [{
+        type: "REQUEST_ADMIN_ACCESS",
+        label: localeText(params, "Ask an admin to compare team availability", "Pedir a un administrador que compare la disponibilidad"),
+        requiresConfirmation: true,
+        payload: { capabilities: ["manageAssignments", "viewAllWorkspaceRecords"] },
+      }]
+    : assessment.outcome === "READY" && firstOption
+      ? [{
+          type: "OPEN_SCHEDULE",
+          label: localeText(params, `Open ${assessment.date} schedule`, `Abrir agenda del ${assessment.date}`),
+          requiresConfirmation: false,
+          payload: { range: "day", date: assessment.date, mine: !hasCapability(params.access, "viewAllWorkspaceRecords") },
+        }]
+      : [];
+  const citations: AiAssistantCitation[] = assessment.targets.length
+    ? [{
+        key: "C1",
+        label: localeText(params, "Visible work target and active team calendar", "Objetivo de trabajo visible y calendario activo del equipo"),
+        sourceType: "JobAppointment + Job + Quote + Customer + TenantUser",
+        classification: "C2_CUSTOMER_CONFIDENTIAL",
+      }]
+    : [];
+  const event = await createAssistantUsageEvent(prisma, {
+    access: params.access,
+    actor: params.actor,
+    message: params.message,
+    answer,
+    auditSummary: `Deterministic schedule-capacity assessment completed with outcome ${assessment.outcome}.`,
+    classification: "C2_CUSTOMER_CONFIDENTIAL",
+    sourceTypes: ["JobAppointment", "Job", "Quote", "Customer", "TenantUser"],
+    sourceLabels: ["Visible active schedule capacity"],
+    customerId: target?.customerId ?? null,
+    quoteId: target?.quoteId ?? null,
+    creditsConsumed: 0,
+    telemetry: ZERO_AI_TELEMETRY,
+    confidenceLevel: assessment.outcome === "READY" ? "high" : "medium",
+    confidenceLabel: "Deterministic tenant-scoped capacity assessment",
+    insightReasons: [
+      `capacity outcome=${assessment.outcome}`,
+      `travel buffer minutes=${assessment.travelBufferMinutes}`,
+      `duration source=${assessment.durationSource ?? "missing"}`,
+      "no business write",
+    ],
+    riskNote: "Availability is based on active QuoteFly appointments only. No appointment, assignment, task, or event was created; external calendars and route-specific travel time were not queried.",
+  });
+  return {
+    consumedCredits: 0,
+    consumedSpendUsd: 0,
+    assistant: {
+      tool: "ASSESS_SCHEDULE_FIT",
+      generatedAtUtc,
+      policyVersion: AI_DATA_POLICY_VERSION,
+      maxClassification: "C2_CUSTOMER_CONFIDENTIAL",
+      answer,
+      results,
+      citations,
+      actions,
+      auditEventId: event.id,
+      fieldsExcluded: [
+        ...defaultExcludedFields(false),
+        "customer contact details",
+        "service addresses",
+        "job scope",
+        "appointment instructions",
+        "teammate email addresses",
+        "raw quote prompts",
+        "route-specific travel estimates",
+        "external calendars",
+      ],
+      diagnostics: diagnostics({
+        input: params,
+        resolvedTool: "ASSESS_SCHEDULE_FIT",
+        resultCount: results.length,
+        citationCount: citations.length,
+        emptyReason: assessment.outcome === "READY" ? null : `Capacity assessment stopped with outcome ${assessment.outcome}.`,
+        archivePolicy: "Only active tenant members, visible active work, and active QuoteFly appointments are considered.",
+        filters: {
+          outcome: assessment.outcome,
+          mode: assessment.mode,
+          targetCount: assessment.targets.length,
+          targetType: assessment.target?.targetType ?? null,
+          date: assessment.date,
+          timeZone: assessment.timeZone,
+          durationMinutes: assessment.durationMinutes,
+          durationSource: assessment.durationSource,
+          travelBufferMinutes: assessment.travelBufferMinutes,
+          planningWindowAssumed: assessment.planningWindowAssumed,
+          optionCount: assessment.options.length,
+          writesPerformed: false,
+        },
+      }),
+    },
+  };
+}
+
 async function runBookingPreview(
   prisma: PrismaClient,
   params: AiAssistantInput,
@@ -3760,6 +3970,7 @@ async function runCustomersWithoutQuotes(
   const where: Prisma.CustomerWhereInput = {
     ...tenantActiveCustomerScope(params.access.tenantId),
     ...assignedCustomerScope(params.access),
+    followUpStatus: { notIn: ["WON", "LOST"] },
     quotes: { none: { ...tenantActiveQuoteScope(params.access.tenantId), ...assignedQuoteScope(params.access) } },
   };
   const [total, customers] = await Promise.all([
@@ -3859,35 +4070,58 @@ async function runFollowUpQueue(
   const limit = clampLimit(params.context?.limit, MAX_CUSTOMER_LIMIT, DEFAULT_CUSTOMER_LIMIT);
   const normalizedFollowUpMessage = normalizeAssistantRoutingText(params.message);
   const quoteOnly = /\b(?:quotes?|estimates?|proposals?|cotizaci(?:on|ones)|presupuestos?|estimados?|propuestas?)\b/i.test(normalizedFollowUpMessage) &&
-    /\b(?:not|never|haven't|havent|hasn't|hasnt|without|need|needs|due|pending|no|nunca|sin|necesita|necesitan|vencida|vencidas|pendiente|pendientes)\b/i.test(normalizedFollowUpMessage);
+    /\b(?:follow\s*up|following\s*up|seguimiento|not|never|haven't|havent|hasn't|hasnt|without|need|needs|due|pending|no|nunca|sin|necesita|necesitan|vencida|vencidas|pendiente|pendientes)\b/i.test(normalizedFollowUpMessage);
   const tenantId = params.access.tenantId;
-  const activeCustomer = tenantActiveCustomerScope(tenantId);
+  const activeCustomer: Prisma.CustomerWhereInput = {
+    ...tenantActiveCustomerScope(tenantId),
+    followUpStatus: { notIn: ["WON", "LOST"] },
+  };
   const activeQuote = tenantActiveQuoteScope(tenantId);
   const memberCustomer = assignedCustomerScope(params.access);
   const memberQuote = assignedQuoteScope(params.access);
+  const overdueOnly = /\b(?:overdue|past due|late|vencid[oa]s?|atrasad[oa]s?)\b/i.test(normalizedFollowUpMessage);
+  const todayOnly = /\b(?:today|hoy)\b/i.test(normalizedFollowUpMessage);
+  const urgentOnly = /\b(?:urgent|urgently|critical|urgente|critico|critica)\b/i.test(normalizedFollowUpMessage);
+  const neverAttemptedOnly = /\b(?:never (?:attempted|called|contacted|followed up)|(?:have|has) not been followed up(?: with)?|(?:haven't|hasn't|havent|hasnt) been followed up(?: with)?|sin intento|nunca (?:llamado|contactado))\b/i.test(normalizedFollowUpMessage);
+  const notSuccessfullyContactedOnly = /\b(?:not (?:successfully )?contacted|haven't reached|havent reached|no contactado|sin contacto exitoso)\b/i.test(normalizedFollowUpMessage);
+  // Quote-specific wording (for example, "quotes that haven't been followed up on")
+  // must continue to use the sent-quote queue. The same phrase can resemble a
+  // task-history filter, but there are intentionally no scheduled customer tasks
+  // in a quote-only result.
+  const scheduledFilterActive = !quoteOnly && (
+    overdueOnly || todayOnly || urgentOnly || neverAttemptedOnly || notSuccessfullyContactedOnly
+  );
 
-  const [sentQuotes, afterSaleQuotes] = await Promise.all([
-    prisma.quote.findMany({
+  const { sentQuotes, afterSaleQuotes, nextQuoteTasks, completedQuoteTasks, quoteIdsWithNotes } = await withTenantRlsContext(prisma, tenantId, async (transaction) => {
+    const [sentQuotes, afterSaleQuotes] = await Promise.all([
+    scheduledFilterActive ? Promise.resolve([]) : transaction.quote.findMany({
       where: {
         ...activeQuote,
         ...memberQuote,
         status: "SENT_TO_CUSTOMER",
-        customer: { is: { ...activeCustomer, ...memberCustomer, followUpStatus: "NEEDS_FOLLOW_UP" } },
+        closedAtUtc: null,
+        customer: { is: { ...activeCustomer, ...memberCustomer } },
       },
       orderBy: [{ sentAt: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
-      take: limit,
+      take: Math.min(limit * 3, 24),
       select: {
         id: true,
         title: true,
         totalAmount: true,
         sentAt: true,
         updatedAt: true,
-        customer: { select: { id: true, fullName: true, followUpStatus: true } },
+        customer: { select: { id: true, fullName: true } },
+        outboundEvents: {
+          where: { deletedAtUtc: null },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 8,
+          select: { channel: true, createdAt: true },
+        },
       },
     }),
-    quoteOnly
+    quoteOnly || scheduledFilterActive
       ? Promise.resolve([])
-      : prisma.quote.findMany({
+      : transaction.quote.findMany({
           where: {
             ...activeQuote,
             ...memberQuote,
@@ -3906,36 +4140,165 @@ async function runFollowUpQueue(
             customer: { select: { id: true, fullName: true } },
           },
         }),
-  ]);
-  const remaining = Math.max(limit - sentQuotes.length - afterSaleQuotes.length, 0);
-  const otherCustomers = quoteOnly || remaining === 0
-    ? []
-    : await prisma.customer.findMany({
-        where: {
-          ...activeCustomer,
-          ...memberCustomer,
-          followUpStatus: "NEEDS_FOLLOW_UP",
-          quotes: {
-            none: { ...activeQuote, ...memberQuote, status: { in: ["SENT_TO_CUSTOMER", "ACCEPTED"] } },
+    ]);
+    const quoteIds = sentQuotes.map((quote) => quote.id);
+    const [nextQuoteTasks, completedQuoteTasks, noteQuoteRows] = quoteIds.length
+      ? await Promise.all([
+          transaction.activityTask.findMany({
+            where: {
+              ...visibleActivityTaskWhere(params.access),
+              quoteId: { in: quoteIds },
+              type: "FOLLOW_UP",
+              status: { in: ["OPEN", "IN_PROGRESS"] },
+            },
+            orderBy: [{ quoteId: "asc" }, { dueAtUtc: "asc" }, { id: "asc" }],
+            distinct: ["quoteId"],
+            take: quoteIds.length,
+            select: { quoteId: true, title: true, dueAtUtc: true },
+          }),
+          transaction.activityTask.findMany({
+            where: {
+              ...visibleActivityTaskWhere(params.access),
+              quoteId: { in: quoteIds },
+              type: "FOLLOW_UP",
+              status: "COMPLETED",
+              completedAtUtc: { not: null },
+            },
+            orderBy: [{ quoteId: "asc" }, { completedAtUtc: "desc" }, { id: "desc" }],
+            distinct: ["quoteId"],
+            take: quoteIds.length,
+            select: { quoteId: true, completedAtUtc: true, followUpOutcome: true },
+          }),
+          transaction.activityTask.findMany({
+            where: {
+              ...visibleActivityTaskWhere(params.access),
+              quoteId: { in: quoteIds },
+              type: "FOLLOW_UP",
+              notes: { not: null },
+            },
+            orderBy: [{ quoteId: "asc" }, { id: "asc" }],
+            distinct: ["quoteId"],
+            take: quoteIds.length,
+            select: { quoteId: true },
+          }),
+        ])
+      : [[], [], []] as const;
+    return {
+      sentQuotes,
+      afterSaleQuotes,
+      nextQuoteTasks,
+      completedQuoteTasks,
+      quoteIdsWithNotes: new Set(noteQuoteRows.map((row) => row.quoteId).filter((quoteId): quoteId is string => Boolean(quoteId))),
+    };
+  });
+  const scheduledFollowUps = quoteOnly
+    ? { tasks: [], windows: tenantActivityWindows(generatedAtUtc, "UTC") }
+    : await withTenantRlsContext(prisma, tenantId, async (transaction) => {
+        const tenant = await transaction.tenant.findFirst({
+          where: { id: tenantId, deletedAtUtc: null },
+          select: { timezone: true },
+        });
+        const windows = tenantActivityWindows(generatedAtUtc, tenant?.timezone ?? "UTC");
+        const taskWhere: Prisma.ActivityTaskWhereInput = {
+          ...visibleActivityTaskWhere(params.access),
+          customer: {
+            is: {
+              ...activeCustomer,
+              ...memberCustomer,
+              ...(neverAttemptedOnly ? { lastFollowUpAttemptAtUtc: null } : {}),
+              ...(notSuccessfullyContactedOnly ? { lastSuccessfulContactAtUtc: null } : {}),
+            },
           },
-        },
-        orderBy: [{ followUpUpdatedAtUtc: "asc" }, { updatedAt: "asc" }, { id: "asc" }],
-        take: remaining,
-        select: {
-          id: true,
-          fullName: true,
-          followUpStatus: true,
-          updatedAt: true,
-          quotes: {
-            where: { ...activeQuote, ...memberQuote },
-            orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-            take: 1,
-            select: { id: true, title: true, status: true, totalAmount: true },
+          origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+          type: "FOLLOW_UP",
+          status: { in: ["OPEN", "IN_PROGRESS"] },
+          ...(overdueOnly ? { dueAtUtc: { lt: windows.todayStartUtc } } : {}),
+          ...(todayOnly ? { dueAtUtc: { gte: windows.todayStartUtc, lt: windows.tomorrowStartUtc } } : {}),
+          ...(urgentOnly ? {
+            OR: [
+              { dueAtUtc: { lt: new Date(generatedAtUtc.getTime() - 24 * 60 * 60 * 1_000) } },
+              { priority: "URGENT" },
+            ],
+          } : {}),
+        };
+        const earliestByCustomer = await transaction.activityTask.groupBy({
+          by: ["customerId"],
+          where: taskWhere,
+          _min: { dueAtUtc: true },
+          orderBy: { _min: { dueAtUtc: "asc" } },
+          take: limit,
+        });
+        const tasks = earliestByCustomer.length === 0 ? [] : await transaction.activityTask.findMany({
+          where: {
+            AND: [
+              taskWhere,
+              {
+                OR: earliestByCustomer.flatMap((entry) => entry._min.dueAtUtc
+                  ? [{ customerId: entry.customerId, dueAtUtc: entry._min.dueAtUtc }]
+                  : []),
+              },
+            ],
           },
-        },
+          orderBy: [{ dueAtUtc: "asc" }, { priority: "desc" }, { id: "asc" }],
+          select: {
+            id: true,
+            version: true,
+            priority: true,
+            dueAtUtc: true,
+            followUpStepNumber: true,
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                lastFollowUpAttemptAtUtc: true,
+                lastSuccessfulContactAtUtc: true,
+              },
+            },
+          },
+        });
+        return {
+          windows,
+          tasks: [...new Map(tasks.map((task) => [task.customer.id, task])).values()].slice(0, limit),
+        };
       });
 
-  const sentResults = sentQuotes.map((quote) => ({
+  const sentResults = sentQuotes.map((quote) => {
+    const sentAt = quote.sentAt ?? quote.updatedAt;
+    // QuoteOutboundEvent does not yet carry an INITIAL_SEND/FOLLOW_UP purpose.
+    // Surface later events as post-send activity, but never claim they prove a
+    // completed follow-up. ActivityTask is the authoritative current signal.
+    const postSendOutboundActivity = quote.outboundEvents.find((event) => event.createdAt.getTime() > sentAt.getTime() + 60_000) ?? null;
+    const lastCompletedTask = completedQuoteTasks.find((task) => task.quoteId === quote.id && task.completedAtUtc && task.completedAtUtc > sentAt) ?? null;
+    const lastTouchAtUtc = lastCompletedTask?.completedAtUtc ?? null;
+    const lastTouchType = lastCompletedTask
+      ? lastCompletedTask.followUpOutcome ?? "TASK_COMPLETED"
+      : null;
+    const nextTask = nextQuoteTasks.find((task) => task.quoteId === quote.id) ?? null;
+    const staleThresholdUtc = new Date(generatedAtUtc.getTime() - 3 * 24 * 60 * 60 * 1_000);
+    const attentionReason = nextTask && nextTask.dueAtUtc <= generatedAtUtc
+      ? "TASK_OVERDUE"
+      : !lastTouchAtUtc
+        ? "NO_RECORDED_FOLLOW_UP"
+        : lastTouchAtUtc <= staleThresholdUtc
+          ? "FOLLOW_UP_STALE"
+          : nextTask
+            ? "NEXT_TASK_SCHEDULED"
+            : "RECENT_FOLLOW_UP_REVIEW";
+    const recommendedAction = attentionReason === "TASK_OVERDUE"
+      ? `Complete overdue task: ${nextTask!.title}`
+      : attentionReason === "NO_RECORDED_FOLLOW_UP"
+        ? "Contact the customer and record the outcome"
+        : attentionReason === "FOLLOW_UP_STALE"
+          ? "Follow up again and set the next due date"
+          : attentionReason === "NEXT_TASK_SCHEDULED"
+            ? `Use scheduled task: ${nextTask!.title}`
+            : "Review the latest context and set the next follow-up";
+    const attentionRank = attentionReason === "TASK_OVERDUE" ? 0
+      : attentionReason === "NO_RECORDED_FOLLOW_UP" ? 1
+        : attentionReason === "FOLLOW_UP_STALE" ? 2
+          : attentionReason === "NEXT_TASK_SCHEDULED" ? 3
+            : 4;
+    return {
       followUpType: "SENT_QUOTE",
       customerId: quote.customer.id,
       fullName: quote.customer.fullName,
@@ -3943,21 +4306,46 @@ async function runFollowUpQueue(
       quoteTitle: quote.title,
       quoteStatus: "SENT_TO_CUSTOMER",
       quoteAmount: currency(quote.totalAmount),
-      dueSinceUtc: (quote.sentAt ?? quote.updatedAt).toISOString(),
-    }));
-  const otherSalesResults = otherCustomers.map((customer) => {
-      const quote = customer.quotes[0] ?? null;
-      return {
-        followUpType: quote ? "OPEN_QUOTE" : "NEW_CUSTOMER",
-        customerId: customer.id,
-        fullName: customer.fullName,
-        quoteId: quote?.id ?? null,
-        quoteTitle: quote?.title ?? null,
-        quoteStatus: quote?.status ?? null,
-        quoteAmount: currency(quote?.totalAmount),
-        dueSinceUtc: customer.updatedAt.toISOString(),
-      };
-    });
+      sentAtUtc: sentAt.toISOString(),
+      lastRecordedFollowUpAtUtc: lastTouchAtUtc?.toISOString() ?? null,
+      lastRecordedFollowUpType: lastTouchType,
+      lastPostSendOutboundActivityAtUtc: postSendOutboundActivity?.createdAt.toISOString() ?? null,
+      lastPostSendOutboundActivityType: postSendOutboundActivity ? `POST_SEND_${postSendOutboundActivity.channel}_ACTIVITY` : null,
+      openFollowUpTaskTitle: nextTask?.title ?? null,
+      openFollowUpTaskDueAtUtc: nextTask?.dueAtUtc.toISOString() ?? null,
+      hasFollowUpNotes: quoteIdsWithNotes.has(quote.id),
+      attentionReason,
+      recommendedAction,
+      dueSinceUtc: (nextTask?.dueAtUtc ?? lastTouchAtUtc ?? sentAt).toISOString(),
+      attentionRank,
+    };
+  }).sort((left, right) => left.attentionRank - right.attentionRank || left.dueSinceUtc.localeCompare(right.dueSinceUtc));
+  const scheduledResults = scheduledFollowUps.tasks.map((task) => ({
+    followUpType: "SCHEDULED_CUSTOMER",
+    activityTaskId: task.id,
+    activityTaskVersion: task.version,
+    followUpStepNumber: task.followUpStepNumber,
+    customerId: task.customer.id,
+    fullName: task.customer.fullName,
+    quoteId: null,
+    quoteTitle: null,
+    quoteStatus: null,
+    quoteAmount: null,
+    priority: task.priority,
+    dueBucket: activityDueBucket(task, scheduledFollowUps.windows),
+    neverAttempted: task.customer.lastFollowUpAttemptAtUtc === null,
+    notSuccessfullyContacted: task.customer.lastSuccessfulContactAtUtc === null,
+    attentionReason: task.dueAtUtc < scheduledFollowUps.windows.todayStartUtc
+      ? "OVERDUE"
+      : task.priority === "URGENT"
+        ? "URGENT_PRIORITY"
+        : task.dueAtUtc < scheduledFollowUps.windows.tomorrowStartUtc
+          ? "DUE_TODAY"
+          : task.customer.lastFollowUpAttemptAtUtc === null
+            ? "NEVER_ATTEMPTED"
+            : "UPCOMING",
+    dueSinceUtc: task.dueAtUtc.toISOString(),
+  }));
   const afterSaleResults = afterSaleQuotes.map((quote) => ({
     followUpType: "AFTER_SALE",
     customerId: quote.customer.id,
@@ -3970,49 +4358,73 @@ async function runFollowUpQueue(
   }));
   const results = quoteOnly
     ? sentResults.slice(0, limit)
-    : [...sentResults, ...afterSaleResults, ...otherSalesResults].slice(0, limit);
+    : [...scheduledResults, ...sentResults, ...afterSaleResults].slice(0, limit);
   const displayedAfterSaleCount = results.filter((result) => result.followUpType === "AFTER_SALE").length;
+  const displayedSentQuoteCount = results.filter((result) => result.followUpType === "SENT_QUOTE").length;
   const displayedSalesCount = results.length - displayedAfterSaleCount;
-  const answer = quoteOnly
+  const scheduledCustomerCount = results.filter((result) => result.followUpType === "SCHEDULED_CUSTOMER").length;
+  let answer = quoteOnly
     ? sentQuotes.length
       ? localeText(params, `Showing ${sentQuotes.length} sent quote${sentQuotes.length === 1 ? " that still needs" : "s that still need"} a sales follow-up. Oldest is shown first.`, `Se ${sentQuotes.length === 1 ? "muestra" : "muestran"} ${sentQuotes.length} cotización${sentQuotes.length === 1 ? " enviada que aún necesita" : "es enviadas que aún necesitan"} seguimiento de ventas. La más antigua aparece primero.`)
       : localeText(params, "No active sent quotes are currently marked as needing a sales follow-up.", "No hay cotizaciones enviadas activas marcadas para seguimiento de ventas.")
     : results.length
       ? localeText(params, `Showing ${displayedSalesCount} open sales follow-up${displayedSalesCount === 1 ? "" : "s"} and ${displayedAfterSaleCount} completed-job check-in${displayedAfterSaleCount === 1 ? "" : "s"} due now. Sales follow-ups are status-based and oldest-first because they do not yet have a separate due date.`, `Se muestran ${displayedSalesCount} seguimiento${displayedSalesCount === 1 ? "" : "s"} de ventas abierto${displayedSalesCount === 1 ? "" : "s"} y ${displayedAfterSaleCount} revisión${displayedAfterSaleCount === 1 ? "" : "es"} de trabajo terminado pendiente${displayedAfterSaleCount === 1 ? "" : "s"}. Los seguimientos de ventas se ordenan por estado y antigüedad porque todavía no tienen una fecha de vencimiento separada.`)
       : localeText(params, "No active sales follow-ups or due completed-job check-ins were found.", "No se encontraron seguimientos de ventas activos ni revisiones de trabajos terminados pendientes.");
+  if (quoteOnly && results.length) {
+    const displayedQuoteSignals = sentResults.slice(0, limit);
+    const noRecordedCount = displayedQuoteSignals.filter((result) => result.attentionReason === "NO_RECORDED_FOLLOW_UP").length;
+    const overdueTaskCount = displayedQuoteSignals.filter((result) => result.attentionReason === "TASK_OVERDUE").length;
+    const staleCount = displayedQuoteSignals.filter((result) => result.attentionReason === "FOLLOW_UP_STALE").length;
+    answer = localeText(
+      params,
+      `I found ${results.length} open sent quote${results.length === 1 ? "" : "s"} to review: ${noRecordedCount} with no recorded follow-up, ${overdueTaskCount} with an overdue quote task, and ${staleCount} with stale follow-up activity. Ranked by the strongest quote-specific signal, then age.`,
+      `Encontré ${results.length} cotización${results.length === 1 ? " enviada abierta" : "es enviadas abiertas"} para revisar: ${noRecordedCount} sin seguimiento registrado, ${overdueTaskCount} con una tarea vencida y ${staleCount} con actividad de seguimiento antigua. Se ordenan por la señal específica de la cotización y luego por antigüedad.`,
+    );
+  }
+  if (!quoteOnly && results.length) {
+    const overdueScheduledCount = scheduledResults.filter((result) => result.dueBucket === "OVERDUE").length;
+    const todayScheduledCount = scheduledResults.filter((result) => result.dueBucket === "TODAY").length;
+    answer = localeText(
+      params,
+      `Showing ${scheduledCustomerCount} scheduled customer follow-up${scheduledCustomerCount === 1 ? "" : "s"} (${overdueScheduledCount} overdue and ${todayScheduledCount} due today), ${displayedSentQuoteCount} sent-quote follow-up${displayedSentQuoteCount === 1 ? "" : "s"}, and ${displayedAfterSaleCount} due completed-job check-in${displayedAfterSaleCount === 1 ? "" : "s"}. Scheduled urgency uses the task due date in your workspace timezone.`,
+      `Se muestran ${scheduledCustomerCount} seguimiento${scheduledCustomerCount === 1 ? "" : "s"} programado${scheduledCustomerCount === 1 ? "" : "s"} de clientes (${overdueScheduledCount} vencido${overdueScheduledCount === 1 ? "" : "s"} y ${todayScheduledCount} para hoy), ${displayedSentQuoteCount} seguimiento${displayedSentQuoteCount === 1 ? "" : "s"} de cotizaciones enviadas y ${displayedAfterSaleCount} revisión${displayedAfterSaleCount === 1 ? "" : "es"} de trabajo terminado. La urgencia programada usa la fecha de la tarea en la zona horaria del espacio de trabajo.`,
+    );
+  }
   const citations: AiAssistantCitation[] = [{
     key: "A1",
     label: quoteOnly
       ? localeText(params, "Active sent quotes awaiting follow-up", "Cotizaciones enviadas pendientes de seguimiento")
       : localeText(params, "Tenant follow-up queue", "Cola de seguimiento del espacio de trabajo"),
-    sourceType: "Customer + Quote",
+    sourceType: "ActivityTask + QuoteOutboundEvent + CustomerFollowUpSequence + Customer + Quote",
     classification: "C2_CUSTOMER_CONFIDENTIAL",
   }];
-  const actions: AiAssistantAction[] = results.map((result) => ({
-    type: "OPEN_CUSTOMER",
-    label: localeText(params, `Open ${result.fullName}`, `Abrir a ${result.fullName}`),
-    requiresConfirmation: false,
-    payload: { customerId: result.customerId },
-  }));
-  actions.unshift({
+  const actions: AiAssistantAction[] = [{
     type: "OPEN_WORKSPACE_PAGE",
     label: localeText(params, "Open follow-up", "Abrir seguimiento"),
     requiresConfirmation: false,
     payload: { page: "follow-up" },
-  });
+  }];
+  if (results.length === 1) {
+    actions.push({
+      type: "OPEN_CUSTOMER",
+      label: localeText(params, `Open ${results[0]!.fullName}`, `Abrir a ${results[0]!.fullName}`),
+      requiresConfirmation: false,
+      payload: { customerId: results[0]!.customerId },
+    });
+  }
   const event = await createAssistantUsageEvent(prisma, {
     access: params.access,
     actor: params.actor,
     message: params.message,
     answer,
     classification: "C2_CUSTOMER_CONFIDENTIAL",
-    sourceTypes: ["Customer", "Quote"],
+    sourceTypes: ["ActivityTask", "QuoteOutboundEvent", "CustomerFollowUpSequence", "Customer", "Quote"],
     sourceLabels: [citations[0].label],
     quoteId: results[0]?.quoteId ?? null,
     customerId: results[0]?.customerId ?? null,
     creditsConsumed: 0,
     telemetry: ZERO_AI_TELEMETRY,
-    insightReasons: [quoteOnly ? "sent quote sales follow-up" : "sales and after-sale follow-up queue"],
+    insightReasons: [quoteOnly ? "quote-specific sent-quote task and post-send outbound-event signals" : "task-backed customer, sent-quote, and after-sale follow-up queue"],
   });
 
   return {
@@ -4028,7 +4440,7 @@ async function runFollowUpQueue(
       citations,
       actions,
       auditEventId: event.id,
-      fieldsExcluded: [...defaultExcludedFields(false), "archived customers", "archived quotes"],
+      fieldsExcluded: [...defaultExcludedFields(false), "customer phone numbers", "customer email addresses", "task notes", "archived customers", "archived quotes"],
       diagnostics: diagnostics({
         input: params,
         resolvedTool: "FOLLOW_UP_QUEUE",
@@ -4038,9 +4450,16 @@ async function runFollowUpQueue(
         archivePolicy: "Only active customers and active quotes are considered.",
         filters: {
           quoteOnly,
+          quoteSignalPolicy: "quote-linked task and post-send outbound activity",
           salesFollowUpCount: displayedSalesCount,
+          scheduledCustomerFollowUpCount: scheduledCustomerCount,
+          overdueOnly,
+          todayOnly,
+          urgentOnly,
+          neverAttemptedOnly,
+          notSuccessfullyContactedOnly,
           afterSaleDueCount: displayedAfterSaleCount,
-          dueAtOrBeforeUtc: generatedAtUtc.toISOString(),
+          generatedAtUtc: generatedAtUtc.toISOString(),
           limit,
         },
       }),
@@ -5359,6 +5778,8 @@ export async function runAiAssistant(
     result = await runActivityDraftPreview(prisma, params, generatedAtUtc);
   } else if (tool === "LIST_SCHEDULE") {
     result = await runScheduleList(prisma, params, generatedAtUtc);
+  } else if (tool === "ASSESS_SCHEDULE_FIT") {
+    result = await runScheduleFitAssessment(prisma, params, generatedAtUtc);
   } else if (tool === "PREPARE_BOOKING") {
     result = await runBookingPreview(prisma, params, generatedAtUtc);
   } else if (tool === "PREPARE_DISPATCH") {

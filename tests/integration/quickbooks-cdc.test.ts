@@ -6,6 +6,7 @@ import {
   claimQuickBooksCdcCursor,
   completeQuickBooksCdcClaimFailure,
   completeQuickBooksCdcClaimSuccess,
+  QUICKBOOKS_CDC_MAX_ATTEMPTS,
 } from "../../src/services/quickbooks-cdc";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 
@@ -132,5 +133,42 @@ describe("QuickBooks CDC lease fencing", () => {
       realmId: fixture.connection.realmId,
       status: "RECEIVED",
     });
+  });
+
+  test("dead-letters a repeatedly failing CDC cursor instead of retrying forever", async () => {
+    const fixture = await createCdcFixture("cdc-terminal-failure");
+    await prisma.quickBooksCdcCursor.update({
+      where: { id: fixture.cursor.id },
+      data: { attemptCount: QUICKBOOKS_CDC_MAX_ATTEMPTS - 1 },
+    });
+    const failedAtUtc = new Date("2026-08-28T12:00:00.000Z");
+    const claim = await claimQuickBooksCdcCursor({
+      prisma,
+      runtimeEnv: env,
+      tenantId: fixture.tenant.id,
+      now: new Date(failedAtUtc.getTime() - 1_000),
+    });
+    expect(claim?.claimAttemptCount).toBe(QUICKBOOKS_CDC_MAX_ATTEMPTS);
+
+    await expect(completeQuickBooksCdcClaimFailure({
+      prisma,
+      claim: claim!,
+      errorCode: "QUICKBOOKS_CDC_PROVIDER_UNAVAILABLE",
+      now: failedAtUtc,
+    })).resolves.toBe(true);
+
+    await expect(prisma.quickBooksCdcCursor.findUniqueOrThrow({ where: { id: fixture.cursor.id } }))
+      .resolves.toMatchObject({
+        attemptCount: QUICKBOOKS_CDC_MAX_ATTEMPTS,
+        nextAttemptAtUtc: null,
+        terminalAtUtc: failedAtUtc,
+        lastErrorCode: "QUICKBOOKS_CDC_PROVIDER_UNAVAILABLE",
+      });
+    await expect(claimQuickBooksCdcCursor({
+      prisma,
+      runtimeEnv: env,
+      tenantId: fixture.tenant.id,
+      now: new Date(failedAtUtc.getTime() + 24 * 60 * 60 * 1_000),
+    })).resolves.toBeNull();
   });
 });

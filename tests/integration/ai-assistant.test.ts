@@ -1271,6 +1271,190 @@ describe("AI assistant", () => {
     expect(results.map((row) => row.fullName)).not.toContain("Owner Office Customer");
   });
 
+  test("follow-up assistant returns one earliest scheduled task per visible customer with governed urgency filters", async () => {
+    const owner = await signUp("assistant-scheduled-follow-up");
+    const otherTenant = await signUp("assistant-scheduled-follow-up-other");
+
+    const createScheduledCustomer = async (
+      session: Session,
+      fullName: string,
+      phone: string,
+      email: string,
+    ) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/customers",
+        headers: { cookie: session.cookie },
+        payload: { fullName, phone, email },
+      });
+      expect(response.statusCode).toBe(201);
+      return (response.json() as { customer: { id: string } }).customer.id;
+    };
+
+    const urgentCustomerId = await createScheduledCustomer(
+      owner,
+      "Urgent Scheduled Customer",
+      "555-303-0301",
+      "urgent-follow-up-private@example.com",
+    );
+    const upcomingCustomerId = await createScheduledCustomer(
+      owner,
+      "Upcoming Scheduled Customer",
+      "555-303-0302",
+      "upcoming-follow-up-private@example.com",
+    );
+    const lostCustomerId = await createScheduledCustomer(
+      owner,
+      "Lost Scheduled Customer",
+      "555-303-0303",
+      "lost-follow-up-private@example.com",
+    );
+    const otherCustomerId = await createScheduledCustomer(
+      otherTenant,
+      "Other Tenant Scheduled Secret",
+      "555-303-0399",
+      "other-tenant-follow-up-private@example.com",
+    );
+
+    const urgentTasks = await prisma.activityTask.findMany({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: urgentCustomerId,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+      },
+      orderBy: [{ followUpStepNumber: "asc" }],
+    });
+    const upcomingTasks = await prisma.activityTask.findMany({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: upcomingCustomerId,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+      },
+      orderBy: [{ followUpStepNumber: "asc" }],
+    });
+    expect(urgentTasks).toHaveLength(4);
+    expect(upcomingTasks).toHaveLength(4);
+    await prisma.customer.update({
+      where: { id: lostCustomerId },
+      data: {
+        followUpStatus: "LOST",
+        followUpUpdatedAtUtc: new Date(),
+        lostReason: "NO_RESPONSE",
+        lostReasonNotes: "Do not expose this loss note through follow-up queue retrieval.",
+        lostAtUtc: new Date(),
+        lifecycleVersion: { increment: 1 },
+      },
+    });
+
+    const generatedAtUtc = new Date();
+    await prisma.activityTask.update({
+      where: { id: urgentTasks[0]!.id },
+      data: { dueAtUtc: new Date(generatedAtUtc.getTime() - 26 * 60 * 60 * 1_000) },
+    });
+    await prisma.activityTask.update({
+      where: { id: urgentTasks[1]!.id },
+      data: { dueAtUtc: new Date(generatedAtUtc.getTime() - 25 * 60 * 60 * 1_000) },
+    });
+
+    const neverAttempted = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Which customers have not been followed up with?",
+        tool: "AUTO",
+        context: { currentPage: "follow-up" },
+      },
+    });
+    expect(neverAttempted.statusCode).toBe(200);
+    const neverBody = neverAttempted.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        citations: Array<{ sourceType: string }>;
+        fieldsExcluded: string[];
+        diagnostics: { filters: Record<string, unknown> };
+      };
+    };
+    expect(neverBody.assistant.tool).toBe("FOLLOW_UP_QUEUE");
+    expect(neverBody.assistant.results).toHaveLength(2);
+    expect(new Set(neverBody.assistant.results.map((row) => row.customerId)).size).toBe(2);
+    expect(neverBody.assistant.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        customerId: urgentCustomerId,
+        activityTaskId: urgentTasks[0]!.id,
+        followUpType: "SCHEDULED_CUSTOMER",
+        neverAttempted: true,
+      }),
+      expect.objectContaining({
+        customerId: upcomingCustomerId,
+        activityTaskId: upcomingTasks[0]!.id,
+        followUpType: "SCHEDULED_CUSTOMER",
+        neverAttempted: true,
+      }),
+    ]));
+    expect(neverBody.assistant.results.some((row) => row.customerId === otherCustomerId)).toBe(false);
+    expect(neverBody.assistant.results.some((row) => row.customerId === lostCustomerId)).toBe(false);
+    expect(neverBody.assistant.results.some((row) => row.followUpType !== "SCHEDULED_CUSTOMER")).toBe(false);
+    expect(neverBody.assistant.citations[0]?.sourceType).toContain("CustomerFollowUpSequence");
+    expect(neverBody.assistant.fieldsExcluded).toEqual(expect.arrayContaining([
+      "customer phone numbers",
+      "customer email addresses",
+      "task notes",
+    ]));
+    expect(neverBody.assistant.diagnostics.filters).toMatchObject({
+      neverAttemptedOnly: true,
+      scheduledCustomerFollowUpCount: 2,
+    });
+    expect(neverAttempted.body).not.toContain("urgent-follow-up-private@example.com");
+    expect(neverAttempted.body).not.toContain("upcoming-follow-up-private@example.com");
+    expect(neverAttempted.body).not.toContain("Other Tenant Scheduled Secret");
+    expect(neverAttempted.body).not.toContain("Lost Scheduled Customer");
+    expect(neverAttempted.body).not.toContain("Do not expose this loss note");
+
+    const customersWithoutQuotes = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Which active customers still need a quote?",
+        tool: "CUSTOMERS_WITHOUT_QUOTES",
+        context: { currentPage: "customers" },
+      },
+    });
+    expect(customersWithoutQuotes.statusCode).toBe(200);
+    const noQuoteResults = (customersWithoutQuotes.json() as {
+      assistant: { results: Array<{ customerId: string }> };
+    }).assistant.results;
+    expect(noQuoteResults.some((row) => row.customerId === lostCustomerId)).toBe(false);
+
+    const urgentOnly = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: "Which customers need urgent follow-up?",
+        tool: "AUTO",
+        context: { currentPage: "follow-up" },
+      },
+    });
+    expect(urgentOnly.statusCode).toBe(200);
+    const urgentBody = urgentOnly.json() as {
+      assistant: { results: Array<Record<string, unknown>>; diagnostics: { filters: Record<string, unknown> } };
+    };
+    expect(urgentBody.assistant.results).toEqual([
+      expect.objectContaining({
+        customerId: urgentCustomerId,
+        activityTaskId: urgentTasks[0]!.id,
+        followUpType: "SCHEDULED_CUSTOMER",
+      }),
+    ]);
+    expect(urgentBody.assistant.diagnostics.filters).toMatchObject({
+      urgentOnly: true,
+      scheduledCustomerFollowUpCount: 1,
+    });
+  });
+
   test("legacy AI quote suggestions never attach or mutate an unassigned inferred customer", async () => {
     const owner = await signUp("assistant-legacy-suggest-owner");
     const member = await addWorkspaceUser(owner, "member");
@@ -1688,6 +1872,10 @@ describe("AI assistant", () => {
       data: {
         email: "composition-customer@example.com",
         phone: "555-919-1919",
+        followUpStatus: "LOST",
+        lostReason: "COMPETITOR",
+        lostReasonNotes: "Customer disclosed a confidential competitor negotiation.",
+        lostAtUtc: new Date(),
       },
     });
     let capturedInputJson = "";
@@ -1765,6 +1953,8 @@ describe("AI assistant", () => {
     expect(composerPayloadText).not.toContain("composition-customer@example.com");
     expect(composerPayloadText).not.toContain("555-919-1919");
     expect(composerPayloadText).not.toContain("Do not expose this private note");
+    expect(composerPayloadText).not.toContain("Customer disclosed a confidential competitor negotiation");
+    expect(composerPayload.results[0]).not.toHaveProperty("lostReasonNotes");
 
     const audit = await prisma.aiUsageEvent.findUniqueOrThrow({
       where: { id: body.assistant.auditEventId },
@@ -3913,6 +4103,7 @@ describe("AI assistant", () => {
 
   test("auto-routes follow-up, no-quote, and pipeline scenario tools with exact tenant isolation", async () => {
     const alpha = await signUp("assistant-operations-alpha");
+    const alphaMember = await addWorkspaceUser(alpha, "member");
     const beta = await signUp("assistant-operations-beta");
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1_000);
@@ -3946,6 +4137,64 @@ describe("AI assistant", () => {
     await prisma.quote.update({
       where: { id: sentQuote.id },
       data: { sentAt: yesterday },
+    });
+    const alphaMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: alpha.tenant.id, userId: alpha.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    const recentlyCompletedFollowUp = await createActivityTask({
+      session: alpha,
+      customerId: sentCustomer.id,
+      quoteId: sentQuote.id,
+      assignedTenantUserId: alphaMembership.id,
+      title: "Review customer reply",
+      notes: "quote-specific-secret-note",
+      dueAtUtc: new Date(now.getTime() - 12 * 60 * 60 * 1_000),
+    });
+    await prisma.activityTask.update({
+      where: { id: recentlyCompletedFollowUp.id },
+      data: {
+        status: "COMPLETED",
+        completedAtUtc: new Date(now.getTime() - 6 * 60 * 60 * 1_000),
+        completedByTenantUserId: alphaMembership.id,
+      },
+    });
+    const untouchedSentQuote = await createQuote({
+      session: alpha,
+      customerId: sentCustomer.id,
+      title: "Alpha untouched roof option",
+      serviceType: "ROOFING",
+      status: "SENT_TO_CUSTOMER",
+      price: 7_500,
+      cost: 3_000,
+      createdAt: thirtyDaysAgo,
+    });
+    await prisma.quote.update({
+      where: { id: untouchedSentQuote.id },
+      data: { sentAt: thirtyDaysAgo },
+    });
+    const alphaMemberMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: alpha.tenant.id, userId: alphaMember.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    await prisma.$transaction([
+      prisma.customer.update({
+        where: { id: sentCustomer.id },
+        data: { assignedTenantUserId: alphaMemberMembership.id },
+      }),
+      prisma.quote.update({
+        where: { id: untouchedSentQuote.id },
+        data: { assignedTenantUserId: alphaMemberMembership.id },
+      }),
+    ]);
+    await createActivityTask({
+      session: alpha,
+      customerId: sentCustomer.id,
+      quoteId: untouchedSentQuote.id,
+      assignedTenantUserId: alphaMembership.id,
+      title: "Previous assignee private task",
+      notes: "previous-assignee-secret-note",
+      dueAtUtc: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1_000),
     });
     await createQuote({
       session: alpha,
@@ -3993,15 +4242,70 @@ describe("AI assistant", () => {
       quoteId: sentQuote.id,
       quoteTitle: "Alpha sent roof",
       quoteAmount: 10_000,
+      lastRecordedFollowUpType: "TASK_COMPLETED",
+      hasFollowUpNotes: true,
+      attentionReason: "RECENT_FOLLOW_UP_REVIEW",
+      recommendedAction: "Review the latest context and set the next follow-up",
     }));
-    expect(followUpBody.assistant.actions[0]).toMatchObject({
+    expect(followUpBody.assistant.results).toContainEqual(expect.objectContaining({
+      customerId: sentCustomer.id,
+      quoteId: untouchedSentQuote.id,
+      quoteTitle: "Alpha untouched roof option",
+      attentionReason: "TASK_OVERDUE",
+      openFollowUpTaskTitle: "Previous assignee private task",
+      hasFollowUpNotes: true,
+      recommendedAction: "Complete overdue task: Previous assignee private task",
+    }));
+    expect(followUpBody.assistant.actions).toEqual([expect.objectContaining({
       type: "OPEN_WORKSPACE_PAGE",
       payload: { page: "follow-up" },
-    });
+    })]);
     expect(followUpBody.usage).toMatchObject({ consumedCredits: 0 });
+    expect(followUpResponse.body).not.toContain("quote-specific-secret-note");
     expect(followUpResponse.body).not.toContain(betaCustomer.id);
     expect(followUpResponse.body).not.toContain("Beta Private Follow Up");
     expect(followUpResponse.body).not.toContain("999000");
+
+    const exactQuoteFollowUpResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: alpha.cookie },
+      payload: { message: "What quotes should I follow up on?", tool: "AUTO" },
+    });
+    expect(exactQuoteFollowUpResponse.statusCode).toBe(200);
+    const exactQuoteFollowUpBody = exactQuoteFollowUpResponse.json() as {
+      assistant: {
+        tool: string;
+        results: Array<Record<string, unknown>>;
+        diagnostics: { filters: { quoteOnly: boolean } };
+      };
+    };
+    expect(exactQuoteFollowUpBody.assistant.tool).toBe("FOLLOW_UP_QUEUE");
+    expect(exactQuoteFollowUpBody.assistant.diagnostics.filters.quoteOnly).toBe(true);
+    expect(exactQuoteFollowUpBody.assistant.results).toHaveLength(2);
+    expect(exactQuoteFollowUpBody.assistant.results.every((result) => result.followUpType === "SENT_QUOTE")).toBe(true);
+    expect(exactQuoteFollowUpBody.assistant.results.some((result) => result.followUpType === "SCHEDULED_CUSTOMER")).toBe(false);
+
+    const reassignedMemberResponse = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: alphaMember.cookie },
+      payload: { message: "What quotes should I follow up on?", tool: "AUTO" },
+    });
+    expect(reassignedMemberResponse.statusCode).toBe(200);
+    const reassignedMemberBody = reassignedMemberResponse.json() as {
+      assistant: { results: Array<Record<string, unknown>> };
+    };
+    expect(reassignedMemberBody.assistant.results).toEqual([
+      expect.objectContaining({
+        quoteId: untouchedSentQuote.id,
+        attentionReason: "NO_RECORDED_FOLLOW_UP",
+        openFollowUpTaskTitle: null,
+        hasFollowUpNotes: false,
+      }),
+    ]);
+    expect(reassignedMemberResponse.body).not.toContain("Previous assignee private task");
+    expect(reassignedMemberResponse.body).not.toContain("previous-assignee-secret-note");
 
     const noQuoteResponse = await app.inject({
       method: "POST",
@@ -4036,14 +4340,14 @@ describe("AI assistant", () => {
     };
     expect(scenarioBody.assistant.tool).toBe("PIPELINE_SCENARIO");
     expect(scenarioBody.assistant.results[0]).toMatchObject({
-      openQuoteCount: 1,
-      openPipelineRevenue: 10_000,
+      openQuoteCount: 2,
+      openPipelineRevenue: 17_500,
       assumedWinRatePercent: 30,
-      scenarioRevenue: 3_000,
+      scenarioRevenue: 5_250,
       acceptedQuoteCountLast90Days: 1,
       acceptedRevenueLast90Days: 5_000,
-      revenueBoostPercent: 60,
-      projectedRevenueWithScenario: 8_000,
+      revenueBoostPercent: 105,
+      projectedRevenueWithScenario: 10_250,
     });
     expect(scenarioBody.assistant.answer).not.toContain("999,000");
     expect(scenarioBody.usage).toMatchObject({ consumedCredits: 0 });
@@ -4263,6 +4567,207 @@ describe("AI assistant", () => {
       unitCost: 30,
       unitPrice: 75,
     }));
+  });
+
+  test("schedule-fit clarification resolves natural customer language and compares only authorized teammates", async () => {
+    const owner = await signUp("assistant-capacity-owner");
+    const member = await addWorkspaceUser(owner, "member");
+    const otherTenant = await signUp("assistant-capacity-other");
+    const memberMembership = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: member.user.id, deletedAtUtc: null },
+      select: { id: true },
+    });
+    await prisma.tenant.update({ where: { id: owner.tenant.id }, data: { timezone: "America/Los_Angeles" } });
+    await prisma.tenant.update({ where: { id: otherTenant.tenant.id }, data: { timezone: "America/Los_Angeles" } });
+
+    const customer = await createCustomer({
+      session: owner,
+      name: "Robert California",
+      phoneDigits: "5558675309",
+    });
+    const quote = await createQuote({
+      session: owner,
+      customerId: customer.id,
+      title: "Robert California dining table estimate",
+      serviceType: "ROOFING",
+      status: "READY_FOR_REVIEW",
+      price: 3_500,
+      cost: 2_000,
+      createdAt: new Date(),
+    });
+    const foreignCustomer = await createCustomer({
+      session: otherTenant,
+      name: "Robert California Foreign Secret",
+      phoneDigits: "5558675399",
+    });
+    const foreignQuote = await createQuote({
+      session: otherTenant,
+      customerId: foreignCustomer.id,
+      title: "Foreign private inspection quote",
+      serviceType: "HVAC",
+      status: "READY_FOR_REVIEW",
+      price: 99_999,
+      cost: 1,
+      createdAt: new Date(),
+    });
+    const businessWritesBefore = {
+      jobs: await prisma.job.count({ where: { tenantId: owner.tenant.id } }),
+      appointments: await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id } }),
+      tasks: await prisma.activityTask.count({ where: { tenantId: owner.tenant.id } }),
+    };
+
+    setAssistantCompositionProviderForTest(async () => {
+      throw new Error("Deterministic schedule-fit tools must never call the composition provider.");
+    });
+
+    const generic = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: "Can I fit in a job today somehow?", tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(generic.statusCode).toBe(200);
+    expect(generic.json()).toMatchObject({
+      assistant: {
+        tool: "ASSESS_SCHEDULE_FIT",
+        answer: expect.stringMatching(/which active job, open quote, or customer/i),
+        actions: [],
+        diagnostics: { filters: { outcome: "MISSING_TARGET", travelBufferMinutes: 25, writesPerformed: false } },
+      },
+      usage: { consumedCredits: 0 },
+    });
+    expect(generic.body).not.toContain(foreignQuote.id);
+    expect(generic.body).not.toContain("Foreign private inspection quote");
+
+    const inspectionPrompt = "Which of my teammates have time in between to go do an inspection for Robert California to finalize a quote?";
+    const needsDate = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: { message: inspectionPrompt, tool: "AUTO", context: { currentPage: "quotes" } },
+    });
+    expect(needsDate.statusCode).toBe(200);
+    expect(needsDate.json()).toMatchObject({
+      assistant: {
+        tool: "ASSESS_SCHEDULE_FIT",
+        results: [expect.objectContaining({ quoteId: quote.id, customerId: customer.id })],
+        diagnostics: { filters: { outcome: "MISSING_DATE", mode: "TEAM_INSPECTION", targetType: "QUOTE" } },
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const futureDate = addCalendarDays(
+      tenantDateIso(new Date().toISOString(), "America/Los_Angeles"),
+      3,
+    );
+    const ready = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `Check ${futureDate} for 1 hour`,
+        tool: "AUTO",
+        context: { currentPage: "quotes" },
+        conversation: [{ message: inspectionPrompt, resolvedTool: "ASSESS_SCHEDULE_FIT" }],
+      },
+    });
+    expect(ready.statusCode).toBe(200);
+    const readyBody = ready.json() as {
+      assistant: {
+        tool: string;
+        answer: string;
+        results: Array<Record<string, unknown>>;
+        actions: Array<{ type: string; payload: Record<string, unknown> }>;
+        fieldsExcluded: string[];
+        diagnostics: { filters: Record<string, unknown> };
+      };
+      usage: { consumedCredits: number };
+    };
+    expect(readyBody.assistant.tool).toBe("ASSESS_SCHEDULE_FIT");
+    expect(readyBody.assistant.answer).toMatch(/25-minute buffer.*review, not a reservation/i);
+    expect(readyBody.assistant.results).toEqual([
+      expect.objectContaining({
+        quoteId: quote.id,
+        customerId: customer.id,
+        assignedTenantUserId: memberMembership.id,
+        durationMinutes: 60,
+        travelBufferMinutes: 25,
+        fitReason: "NO_ACTIVE_QUOTEFLY_OVERLAP_WITH_TRAVEL_BUFFER",
+        scheduleOpening: true,
+      }),
+    ]);
+    expect(readyBody.assistant.actions).toEqual([expect.objectContaining({
+      type: "OPEN_SCHEDULE",
+      payload: expect.objectContaining({ date: futureDate, mine: false }),
+    })]);
+    expect(readyBody.assistant.fieldsExcluded).toEqual(expect.arrayContaining([
+      "customer contact details",
+      "teammate email addresses",
+      "route-specific travel estimates",
+      "external calendars",
+    ]));
+    expect(readyBody.assistant.diagnostics.filters).toMatchObject({
+      outcome: "READY",
+      mode: "TEAM_INSPECTION",
+      durationMinutes: 60,
+      durationSource: "PROMPT",
+      travelBufferMinutes: 25,
+      writesPerformed: false,
+    });
+    expect(readyBody.usage.consumedCredits).toBe(0);
+    expect(ready.body).not.toContain(foreignQuote.id);
+    expect(ready.body).not.toContain("Foreign private inspection quote");
+
+    const noSlot = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: owner.cookie },
+      payload: {
+        message: `Check ${futureDate} for 10 hours`,
+        tool: "AUTO",
+        context: { currentPage: "quotes" },
+        conversation: [{ message: inspectionPrompt, resolvedTool: "ASSESS_SCHEDULE_FIT" }],
+      },
+    });
+    expect(noSlot.statusCode).toBe(200);
+    expect(noSlot.json()).toMatchObject({
+      assistant: {
+        tool: "ASSESS_SCHEDULE_FIT",
+        answer: expect.stringMatching(/temporary 8 AM–5 PM planning assumption/i),
+        results: [expect.objectContaining({
+          customerId: customer.id,
+          quoteId: quote.id,
+          targetType: "QUOTE",
+        })],
+        diagnostics: { filters: { outcome: "NO_OPEN_SLOT", planningWindowAssumed: true } },
+      },
+      usage: { consumedCredits: 0 },
+    });
+
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/v1/ai/assistant",
+      headers: { cookie: member.cookie },
+      payload: { message: inspectionPrompt, tool: "AUTO", context: { currentPage: "jobs" } },
+    });
+    expect(forbidden.statusCode).toBe(200);
+    expect(forbidden.json()).toMatchObject({
+      assistant: {
+        tool: "ASSESS_SCHEDULE_FIT",
+        results: [],
+        actions: [{ type: "REQUEST_ADMIN_ACCESS", requiresConfirmation: true }],
+        diagnostics: { filters: { outcome: "FORBIDDEN", writesPerformed: false } },
+      },
+      usage: { consumedCredits: 0 },
+    });
+    expect(forbidden.body).not.toContain(customer.id);
+    expect(forbidden.body).not.toContain(foreignCustomer.id);
+
+    expect({
+      jobs: await prisma.job.count({ where: { tenantId: owner.tenant.id } }),
+      appointments: await prisma.jobAppointment.count({ where: { tenantId: owner.tenant.id } }),
+      tasks: await prisma.activityTask.count({ where: { tenantId: owner.tenant.id } }),
+    }).toEqual(businessWritesBefore);
   });
 
   test("schedule intelligence is tenant-scoped, review-only, and uses no provider or AI credits", async () => {

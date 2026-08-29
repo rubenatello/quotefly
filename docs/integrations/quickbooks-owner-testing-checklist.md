@@ -4,6 +4,8 @@ Status: Acceptance checklist for a future, separately authorized sandbox run. It
 
 Use this with [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). Mocked tests, local builds, and schema presence are not Intuit sandbox evidence.
 
+The operator sequence and staging environment variables are documented in [QuickBooks Online sandbox setup](quickbooks-sandbox-setup.md).
+
 The engineering candidate has provider-shaped automated tests for a
 `RefundReceipt` that canonically links one payment and one target invoice,
 including partial/full projection and ambiguous-link quarantine. Those fixtures

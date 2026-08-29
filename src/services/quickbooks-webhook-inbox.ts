@@ -15,18 +15,34 @@ function subtractUtcDays(now: Date, days: number): Date {
 }
 
 export type QuickBooksWebhookEntityNotification = Readonly<{
+  providerEventId?: string;
+  providerEventSource?: string;
   realmId: string;
   name: string;
   id: string;
   operation: string;
   lastUpdated: string;
+  supported?: boolean;
 }>;
+
+const QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION = "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED";
+
+function quickBooksWebhookSupported(notification: QuickBooksWebhookEntityNotification): boolean {
+  return notification.supported !== false;
+}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 export function quickBooksWebhookEventId(notification: QuickBooksWebhookEntityNotification): string {
+  if (notification.providerEventId) {
+    return sha256(JSON.stringify({
+      realmId: notification.realmId,
+      providerEventSource: notification.providerEventSource ?? "",
+      providerEventId: notification.providerEventId,
+    }));
+  }
   return sha256(JSON.stringify({
     realmId: notification.realmId,
     entity: notification.name,
@@ -79,7 +95,7 @@ async function cleanupExpiredUnknownQuickBooksWebhookQuarantine(
         AND "quickBooksConnectionId" IS NULL
         AND "realmId" = ${realmId}
         AND "status" = 'RECEIVED'
-        AND "lastError" = 'QUICKBOOKS_REALM_UNBOUND'
+        AND "lastError" IN ('QUICKBOOKS_REALM_UNBOUND', 'QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED')
         AND "receivedAtUtc" <= ${cutoffAtUtc}
       ORDER BY "receivedAtUtc" ASC, "id" ASC
       LIMIT ${QUICKBOOKS_RETENTION_BATCH_SIZE}
@@ -91,7 +107,7 @@ async function cleanupExpiredUnknownQuickBooksWebhookQuarantine(
       AND event."quickBooksConnectionId" IS NULL
       AND event."realmId" = ${realmId}
       AND event."status" = 'RECEIVED'
-      AND event."lastError" = 'QUICKBOOKS_REALM_UNBOUND'
+      AND event."lastError" IN ('QUICKBOOKS_REALM_UNBOUND', 'QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED')
     RETURNING event."id"
   `);
   return rows.length;
@@ -109,6 +125,7 @@ export async function adoptQuickBooksWebhookQuarantine(
         quickBooksConnectionId: null,
         realmId: binding.realmId,
         status: "RECEIVED",
+        lastError: "QUICKBOOKS_REALM_UNBOUND",
       },
       data: {
         tenantId: binding.tenantId,
@@ -116,7 +133,22 @@ export async function adoptQuickBooksWebhookQuarantine(
         lastError: null,
       },
     });
-    return adopted.count;
+    const terminal = await transaction.quickBooksWebhookEvent.updateMany({
+      where: {
+        tenantId: null,
+        quickBooksConnectionId: null,
+        realmId: binding.realmId,
+        status: "RECEIVED",
+        lastError: QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION,
+      },
+      data: {
+        tenantId: binding.tenantId,
+        quickBooksConnectionId: binding.quickBooksConnectionId,
+        status: "DEAD",
+        deadAtUtc: new Date(),
+      },
+    });
+    return adopted.count + terminal.count;
   });
 }
 
@@ -151,7 +183,9 @@ async function quarantineUnknownQuickBooksWebhooks(
           // envelope needed to adopt and reconcile the event later.
           payload: { quarantined: true },
           status: "RECEIVED",
-          lastError: "QUICKBOOKS_REALM_UNBOUND",
+          lastError: quickBooksWebhookSupported(notification)
+            ? "QUICKBOOKS_REALM_UNBOUND"
+            : QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION,
         }],
         skipDuplicates: true,
       });
@@ -185,31 +219,57 @@ export async function persistQuickBooksWebhookNotifications(
       continue;
     }
     const realmResult = await withTenantRlsContext(prisma, binding.tenantId, async (transaction) => {
-      let realmPersisted = 0;
-      let realmDuplicate = 0;
-      for (const notification of realmNotifications) {
-        const eventId = quickBooksWebhookEventId(notification);
-        await setQuickBooksWebhookIngressContext(transaction, notification.realmId, eventId);
-        const adopted = await transaction.quickBooksWebhookEvent.updateMany({
-          where: {
-            tenantId: null,
-            quickBooksConnectionId: null,
-            webhookEventId: eventId,
-            realmId: notification.realmId,
-            status: "RECEIVED",
-          },
-          data: {
-            tenantId: binding.tenantId,
-            quickBooksConnectionId: binding.quickBooksConnectionId,
-            lastError: null,
-          },
-        });
-        if (adopted.count === 1) {
-          realmPersisted += 1;
-          continue;
-        }
-        const created = await transaction.quickBooksWebhookEvent.createMany({
-          data: [{
+      const notificationRows = realmNotifications.map((notification) => ({
+        notification,
+        eventId: quickBooksWebhookEventId(notification),
+      }));
+      const supportedEventIds = [...new Set(notificationRows
+        .filter(({ notification }) => quickBooksWebhookSupported(notification))
+        .map(({ eventId }) => eventId))];
+      const unsupportedEventIds = [...new Set(notificationRows
+        .filter(({ notification }) => !quickBooksWebhookSupported(notification))
+        .map(({ eventId }) => eventId))];
+      await setQuickBooksWebhookIngressContext(transaction, realmId);
+      // Adopt and insert the whole bound-realm batch set-wise. The previous
+      // per-event loop performed two or three sequential SQL statements for
+      // every notification and could exceed Intuit's acknowledgement window
+      // on a valid large delivery.
+      const adopted = await transaction.quickBooksWebhookEvent.updateMany({
+        where: {
+          tenantId: null,
+          quickBooksConnectionId: null,
+          webhookEventId: { in: supportedEventIds },
+          realmId,
+          status: "RECEIVED",
+          lastError: "QUICKBOOKS_REALM_UNBOUND",
+        },
+        data: {
+          tenantId: binding.tenantId,
+          quickBooksConnectionId: binding.quickBooksConnectionId,
+          lastError: null,
+        },
+      });
+      const terminalAtUtc = new Date();
+      const adoptedUnsupported = unsupportedEventIds.length === 0
+        ? { count: 0 }
+        : await transaction.quickBooksWebhookEvent.updateMany({
+            where: {
+              tenantId: null,
+              quickBooksConnectionId: null,
+              webhookEventId: { in: unsupportedEventIds },
+              realmId,
+              status: "RECEIVED",
+              lastError: QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION,
+            },
+            data: {
+              tenantId: binding.tenantId,
+              quickBooksConnectionId: binding.quickBooksConnectionId,
+              status: "DEAD",
+              deadAtUtc: terminalAtUtc,
+            },
+          });
+      const created = await transaction.quickBooksWebhookEvent.createMany({
+        data: notificationRows.map(({ notification, eventId }) => ({
             tenantId: binding.tenantId,
             quickBooksConnectionId: binding.quickBooksConnectionId,
             webhookEventId: eventId,
@@ -224,18 +284,23 @@ export async function persistQuickBooksWebhookNotifications(
               operation: notification.operation,
               lastUpdated: notification.lastUpdated,
             },
-            status: "RECEIVED",
-          }],
-          skipDuplicates: true,
-        });
-        if (created.count === 1) realmPersisted += 1;
-        else realmDuplicate += 1;
-      }
+            status: quickBooksWebhookSupported(notification) ? "RECEIVED" : "DEAD",
+            deadAtUtc: quickBooksWebhookSupported(notification) ? null : terminalAtUtc,
+            lastError: quickBooksWebhookSupported(notification)
+              ? null
+              : QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION,
+          })),
+        skipDuplicates: true,
+      });
       await transaction.quickBooksConnection.updateMany({
         where: { id: binding.quickBooksConnectionId, tenantId: binding.tenantId, deletedAtUtc: null },
         data: { lastWebhookAtUtc: new Date() },
       });
-      return { persisted: realmPersisted, duplicate: realmDuplicate };
+      const realmPersisted = adopted.count + adoptedUnsupported.count + created.count;
+      return {
+        persisted: realmPersisted,
+        duplicate: Math.max(0, realmNotifications.length - realmPersisted),
+      };
     }, { maxWait: 5_000, timeout: 10_000 });
     persisted += realmResult.persisted;
     duplicate += realmResult.duplicate;

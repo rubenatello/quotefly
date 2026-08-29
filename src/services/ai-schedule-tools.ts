@@ -15,7 +15,11 @@ const MAX_ASSISTANT_SCHEDULE_RESULTS = 8;
 const MAX_BOOKING_OPENINGS = 3;
 const MAX_BOOKING_SEARCH_DAYS = 7;
 const MAX_BOOKING_CONFLICT_ROWS = 256;
+const MAX_CAPACITY_MEMBERS = 32;
 const BOOKING_GRID_MINUTES = 30;
+const CAPACITY_DEFAULT_START_MINUTE = 8 * 60;
+const CAPACITY_DEFAULT_END_MINUTE = 17 * 60;
+export const ASSISTANT_TRAVEL_BUFFER_MINUTES = 25;
 
 const AssistantScheduleSelect = {
   id: true,
@@ -131,6 +135,54 @@ export type AssistantJobSummary = Readonly<{
   customerName: string;
   assignedTenantUserId: string | null;
   assigneeName: string | null;
+}>;
+
+export type AssistantCapacityTarget = Readonly<{
+  targetType: "JOB" | "QUOTE" | "CUSTOMER";
+  targetId: string;
+  jobId: string | null;
+  jobNumber: number | null;
+  quoteId: string | null;
+  customerId: string;
+  customerName: string;
+  title: string;
+  assignedTenantUserId: string | null;
+  assigneeName: string | null;
+}>;
+
+export type AssistantCapacityOption = Readonly<{
+  target: AssistantCapacityTarget;
+  assignedTenantUserId: string;
+  assigneeName: string;
+  startsAtUtc: string;
+  endsAtUtc: string;
+  timeZone: string;
+  durationMinutes: number;
+  travelBufferMinutes: number;
+  scheduleOpening: true;
+}>;
+
+export type AssistantCapacityAssessment = Readonly<{
+  outcome:
+    | "READY"
+    | "FORBIDDEN"
+    | "MISSING_TARGET"
+    | "TARGET_AMBIGUOUS"
+    | "MISSING_DATE"
+    | "MISSING_DURATION"
+    | "INVALID_LOCAL_TIME"
+    | "NO_OPEN_SLOT"
+    | "SCHEDULE_LIMIT_REACHED";
+  mode: "JOB_FIT" | "TEAM_INSPECTION";
+  targets: readonly AssistantCapacityTarget[];
+  target: AssistantCapacityTarget | null;
+  options: readonly AssistantCapacityOption[];
+  date: string | null;
+  timeZone: string;
+  durationMinutes: number | null;
+  durationSource: "PROMPT" | null;
+  travelBufferMinutes: number;
+  planningWindowAssumed: boolean;
 }>;
 
 function normalize(value: string) {
@@ -318,6 +370,25 @@ async function resolveVisibleJobs(
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     take: 4,
   });
+}
+
+const CAPACITY_SEARCH_STOP_WORDS = new Set([
+  ...JOB_SEARCH_STOP_WORDS,
+  "an", "and", "are", "available", "availability", "between", "can", "check", "could", "crew", "earliest", "finalize", "fit", "free", "gap",
+  "do", "go", "has", "have", "hours", "in", "inspection", "inspector", "is", "it", "kind", "latest", "let", "lets", "member", "members", "of", "open", "opening", "our", "quote", "review", "slot", "somehow",
+  "squeeze", "team", "teammate", "teammates", "time", "today", "tomorrow", "trying", "us", "we", "what", "worker", "workers", "which", "who", "your",
+]);
+
+function capacitySearchTokens(message: string, contextSearch?: string) {
+  const source = contextSearch?.trim() || message;
+  return normalize(source)
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, " ")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b/g, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/g, " ")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length >= 2 && !CAPACITY_SEARCH_STOP_WORDS.has(token))
+    .slice(0, 6);
 }
 
 type LocalDay = Pick<ReturnType<typeof tenantLocalDateParts>, "year" | "month" | "day">;
@@ -513,6 +584,338 @@ function availabilityDailyWindow(message: string): { start: ClockTime; end: Cloc
   const end = clockTime(match[4], match[5], match[6]);
   if (!start || !end || end.hour * 60 + end.minute <= start.hour * 60 + start.minute) return null;
   return { start, end };
+}
+
+const AssistantCapacityQuoteSelect = {
+  id: true,
+  title: true,
+  status: true,
+  assignedTenantUserId: true,
+  customer: { select: { id: true, fullName: true } },
+  assignedTenantUser: {
+    select: {
+      id: true,
+      deletedAtUtc: true,
+      user: { select: { fullName: true, deletedAtUtc: true } },
+    },
+  },
+} as const satisfies Prisma.QuoteSelect;
+
+type AssistantCapacityQuote = Prisma.QuoteGetPayload<{ select: typeof AssistantCapacityQuoteSelect }>;
+
+function estimatedDurationMinutesFromMessage(prompt: string | null | undefined) {
+  if (!prompt) return null;
+  const normalized = normalize(prompt);
+  const range = new RegExp(
+    `\\b(${DURATION_AMOUNT_TOKEN})\\s*(?:-|to|through|a)\\s*(${DURATION_AMOUNT_TOKEN})\\s*(hours?|hrs?|minutes?|mins?|horas?|minutos?)\\b`,
+    "i",
+  ).exec(normalized);
+  if (range?.[1] && range[2] && range[3]) {
+    const highToken = range[2].toLowerCase();
+    const amount = Number.isFinite(Number(highToken)) ? Number(highToken) : DURATION_WORD_AMOUNTS[highToken];
+    if (amount) {
+      const minutes = /^(?:hours?|hrs?|horas?)$/i.test(range[3]) ? Math.round(amount * 60) : Math.round(amount);
+      if (minutes >= BOOKING_GRID_MINUTES && minutes <= 14 * 24 * 60) return minutes;
+    }
+  }
+  return explicitDurationMinutes(normalized, BOOKING_GRID_MINUTES);
+}
+
+function capacityTargetFromJob(job: AssistantJob): AssistantCapacityTarget {
+  return {
+    targetType: "JOB",
+    targetId: job.id,
+    jobId: job.id,
+    jobNumber: job.jobNumber,
+    quoteId: null,
+    customerId: job.customer.id,
+    customerName: job.customer.fullName,
+    title: job.title,
+    assignedTenantUserId: job.assignedTenantUserId,
+    assigneeName: job.assignedTenantUser?.user.fullName ?? null,
+  };
+}
+
+function capacityTargetFromQuote(quote: AssistantCapacityQuote): AssistantCapacityTarget {
+  return {
+    targetType: "QUOTE",
+    targetId: quote.id,
+    jobId: null,
+    jobNumber: null,
+    quoteId: quote.id,
+    customerId: quote.customer.id,
+    customerName: quote.customer.fullName,
+    title: quote.title,
+    assignedTenantUserId: quote.assignedTenantUserId,
+    assigneeName: quote.assignedTenantUser?.user.fullName ?? null,
+  };
+}
+
+async function resolveCapacityTargets(
+  transaction: JobTransaction,
+  access: AccessContext,
+  params: { message: string; jobId?: string; quoteId?: string; search?: string },
+) {
+  const contextJobs = await resolveVisibleJobs(transaction, access, params);
+  if (params.jobId?.trim() || jobNumberFromMessage(params.message) !== null) {
+    return contextJobs.map(capacityTargetFromJob);
+  }
+
+  const quoteScope: Prisma.QuoteWhereInput = {
+    tenantId: access.tenantId,
+    archivedAtUtc: null,
+    deletedAtUtc: null,
+    closedAtUtc: null,
+    status: { in: ["DRAFT", "READY_FOR_REVIEW", "SENT_TO_CUSTOMER", "ACCEPTED"] },
+    ...(!hasCapability(access, "viewAllWorkspaceRecords") ? { assignedTenantUserId: access.tenantUserId } : {}),
+  };
+  const contextQuoteId = params.quoteId?.trim();
+  if (contextQuoteId) {
+    const quote = await transaction.quote.findFirst({
+      where: { ...quoteScope, id: contextQuoteId },
+      select: AssistantCapacityQuoteSelect,
+    });
+    if (!quote) return [];
+    const linkedJob = await transaction.job.findFirst({
+      where: { ...visibleJobWhere(access), sourceQuoteId: quote.id, status: { in: ACTIVE_JOB_STATUSES } },
+      select: AssistantJobSelect,
+    });
+    return [linkedJob ? capacityTargetFromJob(linkedJob) : capacityTargetFromQuote(quote)];
+  }
+
+  const tokens = capacitySearchTokens(params.message, params.search);
+  if (!tokens.length) {
+    const [jobs, quotes] = await Promise.all([
+      transaction.job.findMany({
+        where: { ...visibleJobWhere(access), status: { in: ACTIVE_JOB_STATUSES } },
+        select: AssistantJobSelect,
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: 3,
+      }),
+      transaction.quote.findMany({
+        where: { ...quoteScope, job: null },
+        select: AssistantCapacityQuoteSelect,
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        take: 3,
+      }),
+    ]);
+    return [...jobs.map(capacityTargetFromJob), ...quotes.map(capacityTargetFromQuote)].slice(0, 4);
+  }
+
+  const tokenFilter = tokens.map((token) => ({
+    OR: [
+      { title: { contains: token, mode: "insensitive" as const } },
+      { customer: { fullName: { contains: token, mode: "insensitive" as const } } },
+    ],
+  }));
+  const [jobs, quotes] = await Promise.all([
+    transaction.job.findMany({
+      where: { ...visibleJobWhere(access), status: { in: ACTIVE_JOB_STATUSES }, AND: tokenFilter },
+      select: AssistantJobSelect,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: 4,
+    }),
+    transaction.quote.findMany({
+      where: { ...quoteScope, job: null, AND: tokenFilter },
+      select: AssistantCapacityQuoteSelect,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: 4,
+    }),
+  ]);
+  const combined = [...jobs.map(capacityTargetFromJob), ...quotes.map(capacityTargetFromQuote)];
+  if (combined.length) return combined.slice(0, 4);
+
+  const customers = await transaction.customer.findMany({
+    where: {
+      tenantId: access.tenantId,
+      archivedAtUtc: null,
+      deletedAtUtc: null,
+      ...(!hasCapability(access, "viewAllWorkspaceRecords") ? { assignedTenantUserId: access.tenantUserId } : {}),
+      AND: tokens.map((token) => ({ fullName: { contains: token, mode: "insensitive" } })),
+    },
+    select: { id: true, fullName: true, assignedTenantUserId: true, assignedTenantUser: { select: { user: { select: { fullName: true } } } } },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: 4,
+  });
+  return customers.map((customer): AssistantCapacityTarget => ({
+    targetType: "CUSTOMER",
+    targetId: customer.id,
+    jobId: null,
+    jobNumber: null,
+    quoteId: null,
+    customerId: customer.id,
+    customerName: customer.fullName,
+    title: "Inspection",
+    assignedTenantUserId: customer.assignedTenantUserId,
+    assigneeName: customer.assignedTenantUser?.user.fullName ?? null,
+  }));
+}
+
+function teamInspectionRequest(message: string) {
+  const normalized = normalize(message);
+  return /\b(?:inspection|inspect|estimate\s+visit|site\s+visit|inspeccion|visita)\b/.test(normalized)
+    && /\b(?:team|teammates?|members?|workers?|crew|technicians?|who|which|equipo|companeros?|miembros?|trabajadores?|tecnicos?|quien|cual)\b/.test(normalized);
+}
+
+function capacityClockWindow(message: string) {
+  const requested = availabilityDailyWindow(message);
+  return requested
+    ? { ...requested, assumed: false }
+    : {
+        start: { hour: Math.floor(CAPACITY_DEFAULT_START_MINUTE / 60), minute: CAPACITY_DEFAULT_START_MINUTE % 60 },
+        end: { hour: Math.floor(CAPACITY_DEFAULT_END_MINUTE / 60), minute: CAPACITY_DEFAULT_END_MINUTE % 60 },
+        assumed: true,
+      };
+}
+
+function overlapsBufferedAppointment(
+  startsAtUtc: Date,
+  endsAtUtc: Date,
+  appointment: Pick<AppointmentConflict, "startsAtUtc" | "endsAtUtc">,
+  travelBufferMinutes: number,
+) {
+  const bufferMs = travelBufferMinutes * 60_000;
+  return appointment.startsAtUtc.getTime() - bufferMs < endsAtUtc.getTime()
+    && appointment.endsAtUtc.getTime() + bufferMs > startsAtUtc.getTime();
+}
+
+export async function assessAssistantScheduleCapacity(
+  transaction: JobTransaction,
+  access: AccessContext,
+  params: { message: string; now: Date; timeZone: string; jobId?: string; quoteId?: string; search?: string },
+): Promise<AssistantCapacityAssessment> {
+  const mode = teamInspectionRequest(params.message) ? "TEAM_INSPECTION" as const : "JOB_FIT" as const;
+  const base = {
+    mode,
+    timeZone: params.timeZone,
+    travelBufferMinutes: ASSISTANT_TRAVEL_BUFFER_MINUTES,
+  };
+  if (mode === "TEAM_INSPECTION" && (!hasCapability(access, "manageAssignments") || !hasCapability(access, "viewAllWorkspaceRecords"))) {
+    return { ...base, outcome: "FORBIDDEN", targets: [], target: null, options: [], date: null, durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+
+  const targets = await resolveCapacityTargets(transaction, access, params);
+  const hasTargetReference = Boolean(params.jobId?.trim() || params.quoteId?.trim() || jobNumberFromMessage(params.message) !== null || capacitySearchTokens(params.message, params.search).length);
+  if (!hasTargetReference) {
+    return { ...base, outcome: "MISSING_TARGET", targets, target: null, options: [], date: null, durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+  if (!targets.length) {
+    return { ...base, outcome: "MISSING_TARGET", targets, target: null, options: [], date: null, durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+  if (targets.length !== 1) {
+    return { ...base, outcome: "TARGET_AMBIGUOUS", targets, target: null, options: [], date: null, durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+  const target = targets[0]!;
+  const date = bookingDate(params.message, params.now, params.timeZone);
+  if (!date) {
+    return { ...base, outcome: "MISSING_DATE", targets, target, options: [], date: null, durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+  // Capacity decisions use only duration supplied in the current operational
+  // request. Quote.aiPromptText is C3 raw AI input and is neither an authorized
+  // nor an authoritative scheduling field. Until a reviewed structured duration
+  // is persisted on Quote/Job, Kody asks the user for one.
+  const promptedDuration = estimatedDurationMinutesFromMessage(params.message);
+  const durationMinutes = promptedDuration;
+  const durationSource = promptedDuration ? "PROMPT" as const : null;
+  if (!durationMinutes) {
+    return { ...base, outcome: "MISSING_DURATION", targets, target, options: [], date: localDateIso(date), durationMinutes: null, durationSource: null, planningWindowAssumed: false };
+  }
+
+  const clockWindow = capacityClockWindow(params.message);
+  const starts = tenantWallTimeUtcCandidates({ ...date, ...clockWindow.start }, params.timeZone);
+  const ends = tenantWallTimeUtcCandidates({ ...date, ...clockWindow.end }, params.timeZone);
+  if (!starts.length || !ends.length) {
+    return { ...base, outcome: "INVALID_LOCAL_TIME", targets, target, options: [], date: localDateIso(date), durationMinutes, durationSource, planningWindowAssumed: clockWindow.assumed };
+  }
+  const fromUtc = starts[0]!;
+  const toUtc = ends[ends.length - 1]!;
+  if (toUtc <= fromUtc) {
+    return { ...base, outcome: "INVALID_LOCAL_TIME", targets, target, options: [], date: localDateIso(date), durationMinutes, durationSource, planningWindowAssumed: clockWindow.assumed };
+  }
+
+  const memberWhere: Prisma.TenantUserWhereInput = {
+    tenantId: access.tenantId,
+    deletedAtUtc: null,
+    user: { deletedAtUtc: null },
+    ...(mode === "TEAM_INSPECTION"
+      ? { id: { not: access.tenantUserId } }
+      : target.targetType === "JOB" && target.assignedTenantUserId
+      ? { id: target.assignedTenantUserId }
+      : !hasCapability(access, "viewAllWorkspaceRecords")
+        ? { id: access.tenantUserId }
+        : {}),
+  };
+  const members = await transaction.tenantUser.findMany({
+    where: memberWhere,
+    select: { id: true, user: { select: { fullName: true } } },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: MAX_CAPACITY_MEMBERS + 1,
+  });
+  if (members.length > MAX_CAPACITY_MEMBERS) {
+    return { ...base, outcome: "SCHEDULE_LIMIT_REACHED", targets, target, options: [], date: localDateIso(date), durationMinutes, durationSource, planningWindowAssumed: clockWindow.assumed };
+  }
+  const bufferMs = ASSISTANT_TRAVEL_BUFFER_MINUTES * 60_000;
+  const appointments = members.length ? await transaction.jobAppointment.findMany({
+    where: {
+      tenantId: access.tenantId,
+      assignedTenantUserId: { in: members.map((member) => member.id) },
+      deletedAtUtc: null,
+      status: { in: ACTIVE_SCHEDULE_STATUSES },
+      // Fetch appointments adjacent to the requested window too. Their travel
+      // buffers can overlap an otherwise in-window candidate.
+      startsAtUtc: { lt: new Date(toUtc.getTime() + bufferMs) },
+      endsAtUtc: { gt: new Date(fromUtc.getTime() - bufferMs) },
+    },
+    select: { id: true, assignedTenantUserId: true, startsAtUtc: true, endsAtUtc: true },
+    orderBy: [{ startsAtUtc: "asc" }, { id: "asc" }],
+    take: MAX_BOOKING_CONFLICT_ROWS + 1,
+  }) : [];
+  if (appointments.length > MAX_BOOKING_CONFLICT_ROWS) {
+    return { ...base, outcome: "SCHEDULE_LIMIT_REACHED", targets, target, options: [], date: localDateIso(date), durationMinutes, durationSource, planningWindowAssumed: clockWindow.assumed };
+  }
+
+  const durationMs = durationMinutes * 60_000;
+  const gridMs = BOOKING_GRID_MINUTES * 60_000;
+  const earliestMs = Math.max(fromUtc.getTime(), params.now.getTime());
+  const firstGridMs = Math.ceil(earliestMs / gridMs) * gridMs;
+  const options: AssistantCapacityOption[] = [];
+  for (const member of members) {
+    const memberAppointments = appointments.filter((appointment) => appointment.assignedTenantUserId === member.id);
+    for (let candidateStartMs = firstGridMs; candidateStartMs + durationMs <= toUtc.getTime(); candidateStartMs += gridMs) {
+      const candidateStart = new Date(candidateStartMs);
+      const candidateEnd = new Date(candidateStartMs + durationMs);
+      if (memberAppointments.some((appointment) => overlapsBufferedAppointment(
+        candidateStart,
+        candidateEnd,
+        appointment,
+        ASSISTANT_TRAVEL_BUFFER_MINUTES,
+      ))) continue;
+      options.push({
+        target,
+        assignedTenantUserId: member.id,
+        assigneeName: member.user.fullName,
+        startsAtUtc: candidateStart.toISOString(),
+        endsAtUtc: candidateEnd.toISOString(),
+        timeZone: params.timeZone,
+        durationMinutes,
+        travelBufferMinutes: ASSISTANT_TRAVEL_BUFFER_MINUTES,
+        scheduleOpening: true,
+      });
+      break;
+    }
+  }
+  options.sort((left, right) => left.startsAtUtc.localeCompare(right.startsAtUtc) || left.assigneeName.localeCompare(right.assigneeName));
+  return {
+    ...base,
+    outcome: options.length ? "READY" : "NO_OPEN_SLOT",
+    targets,
+    target,
+    options: options.slice(0, MAX_BOOKING_OPENINGS),
+    date: localDateIso(date),
+    durationMinutes,
+    durationSource,
+    planningWindowAssumed: clockWindow.assumed,
+  };
 }
 
 type BookingSearchWindow = Readonly<{ startsAtUtc: Date; endsAtUtc: Date }>;

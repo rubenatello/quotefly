@@ -143,7 +143,7 @@ function jobSearchResponse() {
       })),
       actions: Array.from({ length: 4 }, (_, index) => ({
         type: "OPEN_WORKSPACE_PAGE",
-        label: "Open Job",
+        label: `Open job #${5100 + index}`,
         requiresConfirmation: false,
         payload: { page: "jobs", jobId: `job-search-${index + 1}`, jobNumber: 5100 + index },
       })),
@@ -155,6 +155,95 @@ function jobSearchResponse() {
         filters: { resultsTruncated: true },
       },
       conversation: { mode: "NEW", acknowledgement: null, previousTool: null, currentTool: "SEARCH_JOBS" },
+    },
+  };
+}
+
+function capacityAssessmentResponse() {
+  const response = scheduleResponse();
+  return {
+    ...response,
+    assistant: {
+      ...response.assistant,
+      tool: "ASSESS_SCHEDULE_FIT",
+      answer: "I found 2 team options for the inspection with a 25-minute travel buffer.",
+      results: [1, 2].map((option) => ({
+        option,
+        capacityType: "TEAM_INSPECTION",
+        targetType: "QUOTE",
+        targetTitle: "Roof inspection",
+        customerName: "Robert California",
+        assigneeName: option === 1 ? "Alex Installer" : "Jordan Tech",
+        startsAtUtc: `2026-08-28T${option === 1 ? "16" : "18"}:00:00.000Z`,
+        endsAtUtc: `2026-08-28T${option === 1 ? "17" : "19"}:00:00.000Z`,
+        timeZone: "America/Los_Angeles",
+        durationMinutes: 60,
+        travelBufferMinutes: 25,
+        fitReason: "NO_ACTIVE_QUOTEFLY_OVERLAP_WITH_TRAVEL_BUFFER",
+        scheduleOpening: true,
+      })),
+      actions: [{
+        type: "OPEN_SCHEDULE",
+        label: "Open August 28 schedule",
+        requiresConfirmation: false,
+        payload: { range: "day", date: "2026-08-28", mine: false },
+      }],
+      diagnostics: {
+        ...response.assistant.diagnostics,
+        requestedTool: "AUTO",
+        resolvedTool: "ASSESS_SCHEDULE_FIT",
+        resultCount: 2,
+        filters: { outcome: "READY", travelBufferMinutes: 25 },
+      },
+      conversation: { mode: "NEW", acknowledgement: null, previousTool: null, currentTool: "ASSESS_SCHEDULE_FIT" },
+    },
+  };
+}
+
+function followUpQueueResponse() {
+  const response = scheduleResponse();
+  return {
+    ...response,
+    assistant: {
+      ...response.assistant,
+      tool: "FOLLOW_UP_QUEUE",
+      answer: "I found 5 customer and quote follow-ups, ranked by current evidence.",
+      results: [
+        {
+          followUpType: "SCHEDULED_CUSTOMER",
+          fullName: "Robert California",
+          attentionReason: "DUE_TODAY",
+          dueSinceUtc: "2026-08-28T16:00:00.000Z",
+          dueBucket: "TODAY",
+          priority: "URGENT",
+          followUpStepNumber: 2,
+          neverAttempted: true,
+          notSuccessfullyContacted: true,
+          quoteTitle: null,
+        },
+        ...Array.from({ length: 4 }, (_, index) => ({
+          followUpType: "SENT_QUOTE",
+          fullName: `Quote Customer ${index + 1}`,
+          quoteTitle: `Open quote ${index + 1}`,
+          attentionReason: index === 0 ? "TASK_OVERDUE" : "NO_RECORDED_FOLLOW_UP",
+          recommendedAction: "Contact the customer and record the outcome",
+          quoteAmount: 1_000 + index * 100,
+        })),
+      ],
+      actions: [{
+        type: "OPEN_WORKSPACE_PAGE",
+        label: "Open follow-up",
+        requiresConfirmation: false,
+        payload: { page: "follow-up" },
+      }],
+      diagnostics: {
+        ...response.assistant.diagnostics,
+        requestedTool: "AUTO",
+        resolvedTool: "FOLLOW_UP_QUEUE",
+        resultCount: 5,
+        filters: { quoteOnly: false },
+      },
+      conversation: { mode: "NEW", acknowledgement: null, previousTool: null, currentTool: "FOLLOW_UP_QUEUE" },
     },
   };
 }
@@ -447,7 +536,7 @@ test("Kody prioritizes Jobs prompts and renders a compact tenant-time schedule w
   await panel.getByTestId("kody-quick-list_schedule").click();
   await expect(panel.getByText(/I found 5 active bookings/)).toBeVisible();
   const results = panel.getByTestId("kody-results");
-  await results.locator(":scope > summary").click();
+  await expect(results).toHaveJSProperty("open", true);
   await expect(results.getByTestId("kody-schedule-card")).toHaveCount(4);
   await expect(results.getByTestId("kody-results-count")).toContainText("Showing 4 of 5");
   const showMoreResults = results.getByTestId("kody-results-show-more");
@@ -513,6 +602,48 @@ test("Kody opens the exact rolling next-seven-day schedule window, including its
   // intact after the Kody handoff.
   await expect(page.getByRole("button", { name: "Sat 29 0 bookings", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Sun 30 0 bookings", exact: true })).toBeVisible();
+});
+
+test("Kody presents capacity and follow-up evidence before distinct actions", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "kody-operational-evidence");
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    const requestBody = route.request().postDataJSON() as { message?: string };
+    const body = /follow up/i.test(requestBody.message ?? "")
+      ? followUpQueueResponse()
+      : capacityAssessmentResponse();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await addSessionCookie(context, account);
+  await page.goto("/app/jobs");
+  await page.getByTestId("kody-launcher").click();
+  const panel = page.getByTestId("kody-chat-panel");
+  const prompt = panel.getByTestId("kody-prompt");
+
+  await prompt.fill("Which teammate can inspect Robert California today for one hour?");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  const capacityResults = panel.getByTestId("kody-results").last();
+  await expect(capacityResults).toHaveJSProperty("open", true);
+  await expect(capacityResults.getByTestId("kody-schedule-card")).toHaveCount(2);
+  const capacityAction = panel.getByRole("button", { name: "Open August 28 schedule", exact: true });
+  await expect(capacityAction).toBeVisible();
+  expect(await capacityResults.evaluate((evidence, action) =>
+    Boolean(evidence.compareDocumentPosition(action as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
+  await capacityAction.elementHandle())).toBe(true);
+
+  await prompt.fill("What quotes should I follow up on?");
+  await panel.getByRole("button", { name: "Send", exact: true }).click();
+  const followUpResults = panel.getByTestId("kody-results").last();
+  await expect(followUpResults).toHaveJSProperty("open", true);
+  await expect(followUpResults).toContainText("Due today");
+  await expect(followUpResults).toContainText("Due since");
+  await expect(followUpResults).not.toContainText("DUE_TODAY");
+  await expect(panel.getByRole("button", { name: "Open follow-up", exact: true })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page, "operational Kody evidence and actions");
+  await capacityAction.click();
+  await expect(page).toHaveURL(/view=schedule/);
+  await expect(page).toHaveURL(/range=day/);
+  await expect(page).toHaveURL(/date=2026-08-28/);
+  await expect(page).toHaveURL(/assignee=all/);
 });
 
 test("Kody discloses and expands non-schedule results and actions", async ({ context, page, request }) => {

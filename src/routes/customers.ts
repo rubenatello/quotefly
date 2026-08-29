@@ -1,5 +1,5 @@
 import { FastifyPluginAsync } from "fastify";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { CustomerLostReason, Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getJwtClaims } from "../lib/auth";
 import { buildAccessContext, hasCapability, type AccessContext } from "../lib/access-policy";
@@ -24,6 +24,7 @@ import {
 } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { withTransactionConflictRetry } from "../lib/transaction-retry";
 import {
   WorkspaceAssigneeSelect,
   assignedRecordScope,
@@ -33,6 +34,17 @@ import {
 } from "../lib/workspace-assignment";
 import { SupportedLocaleSchema } from "../lib/supported-locale";
 import { countActiveJobsForCustomer } from "../services/jobs";
+import {
+  CustomerLifecycleError,
+  markCustomerLost,
+  reopenCustomer,
+} from "../services/customer-lifecycle";
+import {
+  cancelAutomatedCustomerFollowUps,
+  isTerminalCustomerFollowUpStatus,
+  reassignOpenAutomatedCustomerFollowUps,
+  seedCustomerFollowUpSchedule,
+} from "../services/customer-follow-up";
 
 const LeadFollowUpStatusSchema = z.enum([
   "NEEDS_FOLLOW_UP",
@@ -81,6 +93,49 @@ const CustomerParamsSchema = z.object({
 });
 
 const CustomerActivityQuerySchema = PaginationQuerySchema;
+const CustomerLostReasonSchema = z.nativeEnum(CustomerLostReason);
+const MarkCustomerLostSchema = z.object({
+  reason: CustomerLostReasonSchema,
+  notes: z.string().trim().max(1_000).nullable().optional(),
+  expectedVersion: z.number().int().min(1),
+}).superRefine((payload, context) => {
+  if (payload.reason === "OTHER" && !payload.notes?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["notes"],
+      message: "Add a short note when the lost reason is Other.",
+    });
+  }
+});
+const ReopenCustomerSchema = z.object({
+  startFollowUpSequence: z.boolean(),
+  expectedVersion: z.number().int().min(1),
+});
+
+const CustomerListScalarSelect = {
+  id: true,
+  tenantId: true,
+  fullName: true,
+  email: true,
+  phone: true,
+  phoneDigits: true,
+  notes: true,
+  preferredLocale: true,
+  followUpStatus: true,
+  followUpUpdatedAtUtc: true,
+  lastFollowUpAttemptAtUtc: true,
+  lastSuccessfulContactAtUtc: true,
+  lifecycleVersion: true,
+  lostReason: true,
+  lostAtUtc: true,
+  lostByTenantUserId: true,
+  reopenedAtUtc: true,
+  assignedTenantUserId: true,
+  createdAt: true,
+  updatedAt: true,
+  archivedAtUtc: true,
+  deletedAtUtc: true,
+} satisfies Prisma.CustomerSelect;
 
 async function lockActiveCustomerForRetention(
   tx: Prisma.TransactionClient,
@@ -246,16 +301,19 @@ async function loadPhoneMatchCandidates(
 
 function deriveCustomerStage(
   followUpStatus: z.infer<typeof LeadFollowUpStatusSchema>,
-  latestQuoteStatus?: string,
+  reopenedAtUtc?: Date | null,
+  latestQuote?: { status: string; updatedAt: Date } | null,
 ): z.infer<typeof CustomerStageSchema> {
   // Explicit customer outcomes override quote state. Otherwise the latest active quote
   // is the sole workflow signal so an older accepted/rejected quote cannot pin the customer.
   if (followUpStatus === "WON") return "WON";
   if (followUpStatus === "LOST") return "LOST";
-  if (latestQuoteStatus === "ACCEPTED") return "WON";
-  if (latestQuoteStatus === "REJECTED") return "LOST";
-  if (latestQuoteStatus === "SENT_TO_CUSTOMER") return "SENT";
-  if (latestQuoteStatus === "READY_FOR_REVIEW") return "READY";
+  if (reopenedAtUtc && (!latestQuote || reopenedAtUtc >= latestQuote.updatedAt)) {
+    return followUpStatus === "FOLLOWED_UP" ? "CONTACTED" : "NEW";
+  }
+  if (latestQuote?.status === "ACCEPTED") return "WON";
+  if (latestQuote?.status === "SENT_TO_CUSTOMER") return "SENT";
+  if (latestQuote?.status === "READY_FOR_REVIEW") return "READY";
   if (followUpStatus === "FOLLOWED_UP") return "CONTACTED";
   return "NEW";
 }
@@ -330,8 +388,10 @@ function customerStageScopeSql(input: {
         CASE
           WHEN customer."followUpStatus"::text = 'WON' THEN 'WON'
           WHEN customer."followUpStatus"::text = 'LOST' THEN 'LOST'
+          WHEN customer."reopenedAtUtc" IS NOT NULL
+            AND (latest_quote."updatedAt" IS NULL OR customer."reopenedAtUtc" >= latest_quote."updatedAt")
+            THEN CASE WHEN customer."followUpStatus"::text = 'FOLLOWED_UP' THEN 'CONTACTED' ELSE 'NEW' END
           WHEN latest_quote."status"::text = 'ACCEPTED' THEN 'WON'
-          WHEN latest_quote."status"::text = 'REJECTED' THEN 'LOST'
           WHEN latest_quote."status"::text = 'SENT_TO_CUSTOMER' THEN 'SENT'
           WHEN latest_quote."status"::text = 'READY_FOR_REVIEW' THEN 'READY'
           WHEN customer."followUpStatus"::text = 'FOLLOWED_UP' THEN 'CONTACTED'
@@ -339,7 +399,7 @@ function customerStageScopeSql(input: {
         END AS stage
       FROM "Customer" customer
       LEFT JOIN LATERAL (
-        SELECT quote."status"
+        SELECT quote."status", quote."updatedAt"
         FROM "Quote" quote
         WHERE quote."tenantId" = ${input.tenantId}
           AND quote."customerId" = customer."id"
@@ -416,6 +476,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
     const payload = CreateCustomerSchema.parse(request.body);
+    if (payload.followUpStatus === "LOST") {
+      return reply.code(400).send({
+        code: "CUSTOMER_LIFECYCLE_COMMAND_REQUIRED",
+        error: "Create the customer first, then use the mark-lost workflow to record a reason.",
+      });
+    }
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const assignee = await resolveRequestedAssignee(access, payload.assignedTenantUserId);
@@ -564,6 +630,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           where: { id: targetId, ...tenantScope(claims.tenantId), ...recordScope },
         });
         if (!target) return { kind: "not_found" as const };
+        if (target.followUpStatus === "LOST" && payload.followUpStatus !== undefined) {
+          return { kind: "lifecycle_command_required" as const };
+        }
 
         const targetEmail = target.email?.trim().toLowerCase() ?? null;
         const stillMatchesPhone = phoneNumbersEquivalent(target.phone, normalizedPhone);
@@ -597,6 +666,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
               ? {
                   followUpStatus: payload.followUpStatus,
                   followUpUpdatedAtUtc: new Date(),
+                  ...(payload.followUpStatus !== target.followUpStatus
+                    ? { lifecycleVersion: { increment: 1 } }
+                    : {}),
                 }
               : {}),
             archivedAtUtc: null,
@@ -604,6 +676,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             assignedTenantUserId: assignee.assignedTenantUserId,
           },
         });
+        if (payload.followUpStatus === "WON" && target.followUpStatus !== "WON") {
+          await cancelAutomatedCustomerFollowUps(tx, {
+            tenantId: claims.tenantId,
+            customerId: mergedCustomer.id,
+            reason: "CUSTOMER_WON",
+          });
+        }
         const activityEvents: Prisma.CustomerActivityEventCreateManyInput[] = [
           {
             tenantId: claims.tenantId,
@@ -653,6 +732,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       if (mergeOutcome.kind === "not_found") {
         return reply.code(404).send({ error: "Customer selected for merge was not found." });
+      }
+      if (mergeOutcome.kind === "lifecycle_command_required") {
+        return reply.code(409).send({
+          code: "CUSTOMER_LIFECYCLE_COMMAND_REQUIRED",
+          error: "Use the reopen workflow to reactivate a lost customer before merging status changes.",
+        });
       }
       if (mergeOutcome.kind === "stale") {
         return reply.code(409).send({
@@ -725,7 +810,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const actor = await resolveActivityActor(app.prisma, claims);
-      const customer = await app.prisma.$transaction(async (tx) => {
+      const customer = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
         if (
           assignee.assignedTenantUserId
           && !await lockActiveTenantAssignee(tx, {
@@ -795,6 +880,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             detail: event.detail,
           });
         }
+        if (!isTerminalCustomerFollowUpStatus(payload.followUpStatus)) {
+          await seedCustomerFollowUpSchedule(tx, {
+            tenantId: claims.tenantId,
+            customerId: createdCustomer.id,
+            assignedTenantUserId: createdCustomer.assignedTenantUserId,
+            createdByTenantUserId: access.tenantUserId,
+            startedAtUtc: createdCustomer.createdAt,
+          });
+        }
         await enqueueAiIndexJob(tx, {
           tenantId: claims.tenantId,
           sourceType: "Customer",
@@ -825,7 +919,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.get("/customers", { preHandler: [app.authenticate] }, async (request) => {
+  app.get("/customers", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const recordScope = assignedRecordScope(access);
@@ -903,8 +998,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
             ...tenantScope(claims.tenantId),
             ...recordScope,
           },
-          include: {
+          select: {
+            ...CustomerListScalarSelect,
             assignedTenantUser: { select: WorkspaceAssigneeSelect },
+            lostByTenantUser: { select: WorkspaceAssigneeSelect },
             _count: {
               select: {
                 quotes: {
@@ -979,7 +1076,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         summary: {
           quoteCount: _count.quotes,
           latestQuote: quotes[0] ?? null,
-          stage: deriveCustomerStage(customer.followUpStatus, quotes[0]?.status),
+          stage: deriveCustomerStage(customer.followUpStatus, customer.reopenedAtUtc, quotes[0]),
         },
       })),
       pagination: {
@@ -999,6 +1096,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/customers/:customerId", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
@@ -1011,6 +1109,19 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       },
       include: {
         assignedTenantUser: { select: WorkspaceAssigneeSelect },
+        lostByTenantUser: { select: WorkspaceAssigneeSelect },
+        _count: {
+          select: {
+            activityTasks: {
+              where: {
+                tenantId: claims.tenantId,
+                origin: "MANUAL",
+                status: { in: ["OPEN", "IN_PROGRESS"] },
+                deletedAtUtc: null,
+              },
+            },
+          },
+        },
         quotes: {
           where: {
             ...tenantActiveQuoteScope(claims.tenantId),
@@ -1035,14 +1146,15 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
 
-    const { quotes, ...customerRecord } = customer;
+    const { quotes, _count, ...customerRecord } = customer;
     return {
       customer: {
         ...formatCustomerPhoneResponse(customerRecord),
         summary: {
           quoteCount: quotes.length,
           latestQuote: quotes[0] ?? null,
-          stage: deriveCustomerStage(customerRecord.followUpStatus, quotes[0]?.status),
+          stage: deriveCustomerStage(customerRecord.followUpStatus, customerRecord.reopenedAtUtc, quotes[0]),
+          openManualTaskCount: _count.activityTasks,
         },
       },
       quotes,
@@ -1050,6 +1162,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/customers/:customerId/activity", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const claims = getJwtClaims(request);
     const access = buildAccessContext(request);
     const { customerId } = CustomerParamsSchema.parse(request.params);
@@ -1179,6 +1292,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         actorUserId: event.actorUserId,
         actorEmail: event.actorEmail,
         actorName: event.actorName,
+        metadata: event.metadata,
         quoteId: null,
         quoteTitle: null,
         version: null,
@@ -1261,6 +1375,17 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     if (!existing) {
       return reply.code(404).send({ error: "Customer not found for tenant." });
     }
+    if (payload.followUpStatus === "LOST" || (
+      existing.followUpStatus === "LOST"
+      && payload.followUpStatus !== undefined
+    )) {
+      return reply.code(409).send({
+        code: "CUSTOMER_LIFECYCLE_COMMAND_REQUIRED",
+        error: existing.followUpStatus === "LOST"
+          ? "Use the reopen workflow to reactivate a lost customer."
+          : "Use the mark-lost workflow to record a reason.",
+      });
+    }
 
     if (normalizedPhone !== undefined && !phoneNumbersEquivalent(normalizedPhone, existing.phone)) {
       const exactPhoneConflict = await app.prisma.customer.findFirst({
@@ -1309,18 +1434,43 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const customer = await app.prisma.$transaction(async (tx) => {
-      if (
-        assignee?.assignedTenantUserId
-        && !await lockActiveTenantAssignee(tx, {
+    let customer;
+    try {
+      customer = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+        const lockedCustomer = await lockActiveCustomerForRetention(tx, {
           tenantId: claims.tenantId,
-          tenantUserId: assignee.assignedTenantUserId,
-        })
-      ) {
-        return null;
-      }
-      const updatedCustomer = await tx.customer.update({
-        where: { id: existing.id },
+          customerId,
+          assignedTenantUserId: recordScope.assignedTenantUserId,
+        });
+        if (!lockedCustomer) {
+          throw new CustomerLifecycleError(404, "CUSTOMER_NOT_FOUND", "Customer not found for tenant.");
+        }
+        const current = await tx.customer.findUniqueOrThrow({
+          where: { id_tenantId: { id: lockedCustomer.id, tenantId: claims.tenantId } },
+        });
+        if (current.followUpStatus === "LOST" && payload.followUpStatus !== undefined) {
+          throw new CustomerLifecycleError(
+            409,
+            "CUSTOMER_LIFECYCLE_COMMAND_REQUIRED",
+            current.followUpStatus === "LOST"
+              ? "Use the reopen workflow to reactivate a lost customer."
+              : "Use the mark-lost workflow to record a reason.",
+          );
+        }
+        if (
+          assignee?.assignedTenantUserId
+          && !await lockActiveTenantAssignee(tx, {
+            tenantId: claims.tenantId,
+            tenantUserId: assignee.assignedTenantUserId,
+          })
+        ) {
+          return null;
+        }
+        const statusChanged = Boolean(
+          payload.followUpStatus && payload.followUpStatus !== current.followUpStatus,
+        );
+        const updatedCustomer = await tx.customer.update({
+          where: { id_tenantId: { id: current.id, tenantId: claims.tenantId } },
         data: {
           fullName: payload.fullName,
           phone: normalizedPhone,
@@ -1330,17 +1480,25 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           preferredLocale: payload.preferredLocale,
           followUpStatus: payload.followUpStatus,
           followUpUpdatedAtUtc: payload.followUpStatus ? new Date() : undefined,
+          lifecycleVersion: statusChanged ? { increment: 1 } : undefined,
           ...(assignee ? { assignedTenantUserId: assignee.assignedTenantUserId } : {}),
         },
       });
+      if (assignee && assignee.assignedTenantUserId !== current.assignedTenantUserId) {
+        await reassignOpenAutomatedCustomerFollowUps(tx, {
+          tenantId: claims.tenantId,
+          customerId: updatedCustomer.id,
+          assignedTenantUserId: assignee.assignedTenantUserId,
+        });
+      }
 
       const changedIdentityFields: string[] = [];
-      if (payload.fullName !== undefined && payload.fullName !== existing.fullName) changedIdentityFields.push("name");
+      if (payload.fullName !== undefined && payload.fullName !== current.fullName) changedIdentityFields.push("name");
       if (
         normalizedPhone !== undefined &&
-        !phoneNumbersEquivalent(normalizedPhone, existing.phone)
+        !phoneNumbersEquivalent(normalizedPhone, current.phone)
       ) changedIdentityFields.push("phone");
-      if (normalizedEmail !== undefined && normalizedEmail !== existing.email) changedIdentityFields.push("email");
+      if (normalizedEmail !== undefined && normalizedEmail !== current.email) changedIdentityFields.push("email");
 
       if (changedIdentityFields.length > 0) {
         await createCustomerActivityEvent(tx, {
@@ -1353,7 +1511,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      if (payload.notes !== undefined && payload.notes !== existing.notes) {
+      if (payload.notes !== undefined && payload.notes !== current.notes) {
         await createCustomerActivityEvent(tx, {
           tenantId: claims.tenantId,
           customerId: updatedCustomer.id,
@@ -1370,7 +1528,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
       if (
         payload.preferredLocale !== undefined &&
-        payload.preferredLocale !== existing.preferredLocale
+        payload.preferredLocale !== current.preferredLocale
       ) {
         await createCustomerActivityEvent(tx, {
           tenantId: claims.tenantId,
@@ -1382,7 +1540,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      if (payload.followUpStatus && payload.followUpStatus !== existing.followUpStatus) {
+      if (statusChanged && payload.followUpStatus) {
         await createCustomerActivityEvent(tx, {
           tenantId: claims.tenantId,
           customerId: updatedCustomer.id,
@@ -1391,6 +1549,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           title: "Customer status updated",
           detail: `Marked as ${formatFollowUpStatus(payload.followUpStatus)}.`,
         });
+        if (isTerminalCustomerFollowUpStatus(payload.followUpStatus)) {
+          await cancelAutomatedCustomerFollowUps(tx, {
+            tenantId: claims.tenantId,
+            customerId: updatedCustomer.id,
+            reason: `CUSTOMER_${payload.followUpStatus}`,
+          });
+        }
       }
 
       await enqueueAiIndexJob(tx, {
@@ -1401,8 +1566,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         expectedSourceUpdatedAtUtc: updatedCustomer.updatedAt,
       });
 
-      return updatedCustomer;
-    });
+        return updatedCustomer;
+      });
+    } catch (error) {
+      if (!(error instanceof CustomerLifecycleError)) throw error;
+      return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+    }
 
     if (!customer) {
       return reply.code(409).send({
@@ -1412,6 +1581,70 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return { customer: formatCustomerPhoneResponse(customer) };
+  });
+
+  app.post("/customers/:customerId/mark-lost", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const { customerId } = CustomerParamsSchema.parse(request.params);
+    const payload = MarkCustomerLostSchema.parse(request.body);
+    const actor = await resolveActivityActor(app.prisma, claims);
+
+    try {
+      const result = await withTransactionConflictRetry(() =>
+        withTenantRlsContext(app.prisma, claims.tenantId, (tx) => markCustomerLost(tx, {
+          tenantId: claims.tenantId,
+          customerId,
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+          actorTenantUserId: access.tenantUserId,
+          actor,
+          reason: payload.reason,
+          notes: payload.notes,
+          expectedVersion: payload.expectedVersion,
+        })),
+      );
+      return {
+        customer: formatCustomerPhoneResponse(result.customer),
+        canceledAutomaticTaskCount: result.canceledAutomaticTaskCount,
+        openManualTaskCount: result.openManualTaskCount,
+      };
+    } catch (error) {
+      if (!(error instanceof CustomerLifecycleError)) throw error;
+      return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+    }
+  });
+
+  app.post("/customers/:customerId/reopen", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const claims = getJwtClaims(request);
+    const access = buildAccessContext(request);
+    const { customerId } = CustomerParamsSchema.parse(request.params);
+    const payload = ReopenCustomerSchema.parse(request.body);
+    const actor = await resolveActivityActor(app.prisma, claims);
+
+    try {
+      const result = await withTransactionConflictRetry(() =>
+        withTenantRlsContext(app.prisma, claims.tenantId, (tx) => reopenCustomer(tx, {
+          tenantId: claims.tenantId,
+          customerId,
+          assignedTenantUserId: assignedRecordScope(access).assignedTenantUserId,
+          actorTenantUserId: access.tenantUserId,
+          actor,
+          startFollowUpSequence: payload.startFollowUpSequence,
+          expectedVersion: payload.expectedVersion,
+        })),
+      );
+      return {
+        customer: formatCustomerPhoneResponse(result.customer),
+        startedFollowUpSequence: result.startedFollowUpSequence,
+        createdAutomaticTaskCount: result.createdAutomaticTaskCount,
+        openManualTaskCount: result.openManualTaskCount,
+      };
+    } catch (error) {
+      if (!(error instanceof CustomerLifecycleError)) throw error;
+      return reply.code(error.statusCode).send({ code: error.code, error: error.message });
+    }
   });
 
   app.post("/customers/:customerId/restore", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -1482,7 +1715,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
 
-    const archived = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+    const archived = await withTransactionConflictRetry(() =>
+      withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
       const existing = await lockActiveCustomerForRetention(tx, {
         customerId,
         tenantId: claims.tenantId,
@@ -1499,6 +1733,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           customerId: existing.id,
           deletedAtUtc: null,
           status: { in: ["OPEN", "IN_PROGRESS"] },
+          origin: "MANUAL",
         },
       });
       if (activeTaskCount > 0) {
@@ -1513,6 +1748,12 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         return { kind: "active_jobs" as const, activeJobCount };
       }
 
+      await cancelAutomatedCustomerFollowUps(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        reason: "CUSTOMER_ARCHIVED",
+        occurredAtUtc: now,
+      });
       const relatedQuotes = await tx.quote.findMany({
         where: {
           customerId: existing.id,
@@ -1570,7 +1811,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { kind: "changed" as const };
-    });
+    }),
+    );
 
     if (archived.kind === "not_found") {
       return reply.code(404).send({ error: "Customer not found for tenant." });
@@ -1603,7 +1845,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     const now = new Date();
 
-    const deleted = await withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
+    const deleted = await withTransactionConflictRetry(() =>
+      withTenantRlsContext(app.prisma, claims.tenantId, async (tx) => {
       const existing = await lockActiveCustomerForRetention(tx, {
         customerId,
         tenantId: claims.tenantId,
@@ -1620,6 +1863,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           customerId: existing.id,
           deletedAtUtc: null,
           status: { in: ["OPEN", "IN_PROGRESS"] },
+          origin: "MANUAL",
         },
       });
       if (activeTaskCount > 0) {
@@ -1633,6 +1877,13 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       if (activeJobCount > 0) {
         return { kind: "active_jobs" as const, activeJobCount };
       }
+
+      await cancelAutomatedCustomerFollowUps(tx, {
+        tenantId: claims.tenantId,
+        customerId: existing.id,
+        reason: "CUSTOMER_DELETED",
+        occurredAtUtc: now,
+      });
 
       const relatedQuotes = await tx.quote.findMany({
         where: {
@@ -1706,7 +1957,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { kind: "changed" as const };
-    });
+    }),
+    );
 
     if (deleted.kind === "not_found") {
       return reply.code(404).send({ error: "Customer not found for tenant." });

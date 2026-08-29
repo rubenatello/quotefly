@@ -772,6 +772,16 @@ describe("QuoteFly API integration", () => {
     await expect(prisma.aiIndexJob.count({
       where: { tenantId: owner.tenant.id, sourceType: "Customer", sourceId: createdCustomerId },
     })).resolves.toBe(1);
+    await expect(prisma.customerFollowUpSequence.count({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomerId },
+    })).resolves.toBe(1);
+    await expect(prisma.activityTask.count({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: createdCustomerId,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+      },
+    })).resolves.toBe(4);
 
     const invalidCustomerDraft = {
       fullName: "Rolled Back Quote Customer",
@@ -4112,6 +4122,211 @@ describe("QuoteFly API integration", () => {
     });
     await expect(prisma.quote.count({ where: { tenantId: session.tenant.id } })).resolves.toBe(1);
     await expect(prisma.smsMessage.count({ where: { externalSid: smsSid } })).resolves.toBe(1);
+    const smsQuote = await prisma.quote.findFirstOrThrow({
+      where: { tenantId: session.tenant.id },
+      select: { customerId: true },
+    });
+    await expect(prisma.customerFollowUpSequence.count({
+      where: { tenantId: session.tenant.id, customerId: smsQuote.customerId },
+    })).resolves.toBe(1);
+    const smsTasks = await prisma.activityTask.findMany({
+      where: { tenantId: session.tenant.id, customerId: smsQuote.customerId },
+      orderBy: { followUpStepNumber: "asc" },
+      select: { origin: true, createdByTenantUserId: true, followUpStepNumber: true },
+    });
+    expect(smsTasks).toHaveLength(4);
+    expect(smsTasks.every((task) =>
+      task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP" && task.createdByTenantUserId === null)).toBe(true);
+  });
+
+  test("serializes signed SMS quote creation against marking the matched customer lost", async () => {
+    const session = await signUp("twilio-customer-loss-race");
+    const destination = `+1555${String(Date.now()).slice(-7)}`;
+    const sender = "+15550102888";
+    const smsSid = `SM${Date.now()}lossrace`;
+    await prisma.tenantPhoneNumber.create({
+      data: { tenantId: session.tenant.id, e164Number: destination },
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "SMS Loss Race Customer",
+        phone: sender,
+        email: "sms-loss-race@example.com",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const customerId = parseJson<CustomerResponse>(created).customer.id;
+    const customer = await prisma.customer.findUniqueOrThrow({ where: { id: customerId } });
+
+    const form = {
+      From: sender,
+      To: destination,
+      Body: "Roof replacement for SMS Loss Race Customer at 1200 square feet",
+      SmsSid: smsSid,
+    };
+    const webhookUrl = new URL("/v1/sms/webhook", env.API_URL).toString();
+    const signature = twilio.getExpectedTwilioSignature(
+      env.TWILIO_WEBHOOK_AUTH_TOKEN,
+      webhookUrl,
+      form,
+    );
+    const payload = new URLSearchParams(form).toString();
+
+    const [smsResponse, lostResponse] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/sms/webhook",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-twilio-signature": signature,
+        },
+        payload,
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/customers/${customer.id}/mark-lost`,
+        headers: authHeaders(session.cookie),
+        payload: {
+          reason: "CUSTOMER_CANCELED",
+          expectedVersion: customer.lifecycleVersion,
+        },
+      }),
+    ]);
+
+    expect(smsResponse.statusCode).toBe(200);
+    expect(lostResponse.statusCode).toBe(200);
+    const smsResult = parseJson<{ acknowledged: boolean; blocked?: string }>(smsResponse);
+    expect(smsResult.acknowledged).toBe(true);
+    const quoteCount = await prisma.quote.count({
+      where: { tenantId: session.tenant.id, customerId: customer.id },
+    });
+    if (smsResult.blocked) {
+      expect(smsResult.blocked).toBe("CUSTOMER_REOPEN_REQUIRED");
+      expect(quoteCount).toBe(0);
+    } else {
+      expect(quoteCount).toBe(1);
+    }
+    await expect(prisma.customer.findUniqueOrThrow({ where: { id: customer.id } })).resolves.toMatchObject({
+      followUpStatus: "LOST",
+      lostReason: "CUSTOMER_CANCELED",
+    });
+  });
+
+  test("serializes signed SMS approval against quote customer reassignment", async () => {
+    const session = await signUp("twilio-approval-reassignment-race");
+    const destination = `+1555${String(Date.now()).slice(-7)}`;
+    const sender = "+15550103777";
+    await prisma.tenantPhoneNumber.create({
+      data: { tenantId: session.tenant.id, e164Number: destination },
+    });
+
+    const sourceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "SMS Approval Source",
+        phone: sender,
+        email: "sms-approval-source@example.com",
+      },
+    });
+    expect(sourceResponse.statusCode).toBe(201);
+    const sourceCustomerId = parseJson<CustomerResponse>(sourceResponse).customer.id;
+
+    const targetResponse = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: authHeaders(session.cookie),
+      payload: {
+        fullName: "SMS Approval Target",
+        phone: "+15550103778",
+        email: "sms-approval-target@example.com",
+      },
+    });
+    expect(targetResponse.statusCode).toBe(201);
+    const targetCustomerId = parseJson<CustomerResponse>(targetResponse).customer.id;
+
+    const webhookUrl = new URL("/v1/sms/webhook", env.API_URL).toString();
+    const draftForm = {
+      From: sender,
+      To: destination,
+      Body: "Roof replacement for SMS Approval Source at 1200 square feet",
+      SmsSid: `SM${Date.now()}approvaldraft`,
+    };
+    const draftSignature = twilio.getExpectedTwilioSignature(
+      env.TWILIO_WEBHOOK_AUTH_TOKEN,
+      webhookUrl,
+      draftForm,
+    );
+    const draftResponse = await app.inject({
+      method: "POST",
+      url: "/v1/sms/webhook",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-twilio-signature": draftSignature,
+      },
+      payload: new URLSearchParams(draftForm).toString(),
+    });
+    expect(draftResponse.statusCode).toBe(200);
+
+    const quote = await prisma.quote.findFirstOrThrow({
+      where: {
+        tenantId: session.tenant.id,
+        customerId: sourceCustomerId,
+        status: "READY_FOR_REVIEW",
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    await prisma.customer.updateMany({
+      where: {
+        tenantId: session.tenant.id,
+        id: { in: [sourceCustomerId, targetCustomerId] },
+      },
+      data: { followUpStatus: "FOLLOWED_UP" },
+    });
+
+    const approvalForm = {
+      From: sender,
+      To: destination,
+      Body: "1",
+      SmsSid: `SM${Date.now()}approvalsend`,
+    };
+    const approvalSignature = twilio.getExpectedTwilioSignature(
+      env.TWILIO_WEBHOOK_AUTH_TOKEN,
+      webhookUrl,
+      approvalForm,
+    );
+    const [approvalResponse, reassignmentResponse] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/sms/webhook",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-twilio-signature": approvalSignature,
+        },
+        payload: new URLSearchParams(approvalForm).toString(),
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/quotes/${quote.id}`,
+        headers: authHeaders(session.cookie),
+        payload: { customerId: targetCustomerId },
+      }),
+    ]);
+
+    expect(approvalResponse.statusCode).toBe(200);
+    expect(reassignmentResponse.statusCode).toBe(200);
+    await expect(prisma.quote.findUniqueOrThrow({ where: { id: quote.id } })).resolves.toMatchObject({
+      customerId: targetCustomerId,
+      status: "SENT_TO_CUSTOMER",
+    });
+    await expect(prisma.customer.findUniqueOrThrow({ where: { id: targetCustomerId } })).resolves.toMatchObject({
+      followUpStatus: "NEEDS_FOLLOW_UP",
+    });
   });
 
   test("routes unauthenticated QuickBooks webhooks through signature verification", async () => {
@@ -4322,6 +4537,222 @@ describe("QuoteFly API integration", () => {
       payload: oversizedRawPayload,
     });
     expect(bodyCapResponse.statusCode).toBe(413);
+  });
+
+  test("accepts signed QuickBooks CloudEvents and persists the canonical minimal envelope", async () => {
+    const realmId = `cloud-event-realm-${Date.now()}`;
+    const payload = JSON.stringify([{
+      specversion: "1.0",
+      id: `cloud-event-${Date.now()}`,
+      source: "intuit.synthetic-source",
+      type: "qbo.invoice.updated.v1",
+      datacontenttype: "application/json",
+      time: new Date().toISOString(),
+      intuitentityid: "cloud-invoice-1",
+      intuitaccountid: realmId,
+      data: {},
+    }]);
+    const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(payload)
+      .digest("base64");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": signature },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(parseJson<{ received: boolean; count: number; persisted: number }>(response)).toEqual({
+      received: true,
+      count: 1,
+      persisted: 1,
+    });
+    await expect(prisma.quickBooksWebhookEvent.findFirstOrThrow({ where: { realmId } })).resolves.toMatchObject({
+      tenantId: null,
+      quickBooksConnectionId: null,
+      eventType: "Invoice",
+      entityId: "cloud-invoice-1",
+      operation: "Update",
+      status: "RECEIVED",
+      lastError: "QUICKBOOKS_REALM_UNBOUND",
+      payload: { quarantined: true },
+    });
+
+    const replayWithChangedTime = JSON.stringify([{
+      ...JSON.parse(payload)[0],
+      time: new Date(Date.now() + 1_000).toISOString(),
+    }]);
+    const replaySignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(replayWithChangedTime)
+      .digest("base64");
+    const replayResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": replaySignature },
+      payload: replayWithChangedTime,
+    });
+    expect(replayResponse.statusCode).toBe(200);
+    expect(parseJson<{ persisted: number }>(replayResponse).persisted).toBe(0);
+    await expect(prisma.quickBooksWebhookEvent.count({ where: { realmId } })).resolves.toBe(1);
+
+    const distinctSourcePayload = JSON.stringify([{
+      ...JSON.parse(payload)[0],
+      source: "intuit.synthetic-secondary-source",
+      time: new Date(Date.now() + 2_000).toISOString(),
+    }]);
+    const distinctSourceSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(distinctSourcePayload)
+      .digest("base64");
+    const distinctSourceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": distinctSourceSignature },
+      payload: distinctSourcePayload,
+    });
+    expect(distinctSourceResponse.statusCode).toBe(200);
+    expect(parseJson<{ persisted: number }>(distinctSourceResponse).persisted).toBe(1);
+    await expect(prisma.quickBooksWebhookEvent.count({ where: { realmId } })).resolves.toBe(2);
+
+    const unsupportedPayload = JSON.stringify([{
+      specversion: "1.0",
+      id: "unsupported-customer-event",
+      source: "intuit.synthetic-source",
+      type: "qbo.customer.updated.v1",
+      time: new Date().toISOString(),
+      intuitentityid: "customer-1",
+      intuitaccountid: realmId,
+      data: {},
+    }]);
+    const unsupportedSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(unsupportedPayload)
+      .digest("base64");
+    const unsupportedResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": unsupportedSignature },
+      payload: unsupportedPayload,
+    });
+    expect(unsupportedResponse.statusCode).toBe(400);
+  });
+
+  test("persists unsupported QuickBooks deletion events without placing them in the reconciliation queue", async () => {
+    const timestamp = new Date().toISOString();
+    const legacyRealmId = `legacy-delete-realm-${Date.now()}`;
+    const cloudRealmId = `cloud-delete-realm-${Date.now()}`;
+    const fixtures: Array<{ realmId: string; entityId: string; payload: unknown }> = [
+      {
+        realmId: legacyRealmId,
+        entityId: "legacy-deleted-invoice",
+        payload: {
+          eventNotifications: [{
+            realmId: legacyRealmId,
+            dataChangeEvent: {
+              entities: [{
+                name: "Invoice",
+                id: "legacy-deleted-invoice",
+                operation: "Delete",
+                lastUpdated: timestamp,
+              }],
+            },
+          }],
+        },
+      },
+      {
+        realmId: cloudRealmId,
+        entityId: "cloud-deleted-invoice",
+        payload: [{
+          specversion: "1.0",
+          id: `cloud-delete-event-${Date.now()}`,
+          source: "intuit.synthetic-source",
+          type: "qbo.invoice.deleted.v1",
+          time: timestamp,
+          intuitentityid: "cloud-deleted-invoice",
+          intuitaccountid: cloudRealmId,
+          data: {},
+        }],
+      },
+    ];
+
+    for (const fixture of fixtures) {
+      const payload = JSON.stringify(fixture.payload);
+      const signature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+        .update(payload)
+        .digest("base64");
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/webhook",
+        headers: { "content-type": "application/json", "intuit-signature": signature },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(parseJson<{ received: boolean; count: number; persisted: number }>(response)).toEqual({
+        received: true,
+        count: 1,
+        persisted: 1,
+      });
+      await expect(prisma.quickBooksWebhookEvent.findFirstOrThrow({
+        where: { realmId: fixture.realmId, entityId: fixture.entityId },
+      })).resolves.toMatchObject({
+        tenantId: null,
+        quickBooksConnectionId: null,
+        status: "RECEIVED",
+        lastError: "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
+        payload: { quarantined: true },
+      });
+    }
+
+    const session = await signUp("quickbooks-bound-delete-dead-letter");
+    const boundRealmId = `bound-delete-realm-${Date.now()}`;
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: session.tenant.id,
+        realmId: boundRealmId,
+        environment: env.QUICKBOOKS_ENVIRONMENT,
+        status: "CONNECTED",
+      },
+    });
+    await prisma.quickBooksRealmBinding.create({
+      data: {
+        tenantId: session.tenant.id,
+        quickBooksConnectionId: connection.id,
+        realmId: boundRealmId,
+        active: true,
+      },
+    });
+    const boundPayload = JSON.stringify({
+      eventNotifications: [{
+        realmId: boundRealmId,
+        dataChangeEvent: {
+          entities: [{
+            name: "Invoice",
+            id: "bound-deleted-invoice",
+            operation: "Delete",
+            lastUpdated: timestamp,
+          }],
+        },
+      }],
+    });
+    const boundSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(boundPayload)
+      .digest("base64");
+    const boundResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": boundSignature },
+      payload: boundPayload,
+    });
+    expect(boundResponse.statusCode).toBe(200);
+    await expect(prisma.quickBooksWebhookEvent.findFirstOrThrow({
+      where: { realmId: boundRealmId, entityId: "bound-deleted-invoice" },
+    })).resolves.toMatchObject({
+      tenantId: session.tenant.id,
+      quickBooksConnectionId: connection.id,
+      status: "DEAD",
+      lastError: "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
+      deadAtUtc: expect.any(Date),
+    });
   });
 
   test("contains QuickBooks provider workflows by default without calling Intuit", async () => {
@@ -4998,6 +5429,101 @@ describe("QuoteFly API integration", () => {
     expect(JSON.stringify(orphan)).not.toContain(orphanAccessToken);
     expect(response.body).not.toContain(orphanRefreshToken);
     expect(response.headers.location).not.toContain(orphanRefreshToken);
+  });
+
+  test("atomically revalidates the live manager while waiting for the QuickBooks integration lock", async () => {
+    const session = await signUp("quickbooks-final-transaction-authorization");
+    const state = createSignedQuickBooksState(env, {
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      role: "owner",
+    });
+    const realmId = "realm-final-transaction-authorization";
+    await prisma.quickBooksOAuthState.create({
+      data: {
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        stateHash: createHash("sha256").update(state).digest("hex"),
+        expiresAtUtc: new Date(Date.now() + 60_000),
+      },
+    });
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset().mockResolvedValue({
+      access_token: "final-transaction-access-token",
+      refresh_token: "final-transaction-refresh-token",
+      token_type: "bearer",
+      expires_in: 3600,
+    });
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset().mockResolvedValue({
+      realmId,
+      companyName: "Final Transaction Authorization Company",
+    });
+
+    let releaseIntegrationLock = () => undefined;
+    const releaseSignal = new Promise<void>((resolve) => {
+      releaseIntegrationLock = resolve;
+    });
+    let confirmIntegrationLock = () => undefined;
+    const integrationLockHeld = new Promise<void>((resolve) => {
+      confirmIntegrationLock = resolve;
+    });
+    const lockTransaction = prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT 1::int AS "locked"
+        FROM (
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${`quickbooks-connection:${session.tenant.id}`}, 0)
+          )
+        ) acquired
+      `);
+      confirmIntegrationLock();
+      await releaseSignal;
+    }, { maxWait: 5_000, timeout: 10_000 });
+    await integrationLockHeld;
+
+    const callbackPromise = app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=final-transaction-code&realmId=${realmId}`,
+    });
+    let callbackReachedIntegrationLock = false;
+    try {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [waiting] = await prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+          SELECT COUNT(*)::int AS "count"
+          FROM pg_locks
+          WHERE locktype = 'advisory'
+            AND granted = false
+        `);
+        if ((waiting?.count ?? 0) > 0) {
+          callbackReachedIntegrationLock = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(callbackReachedIntegrationLock).toBe(true);
+
+      await prisma.tenantUser.update({
+        where: {
+          tenantId_userId: {
+            tenantId: session.tenant.id,
+            userId: session.user.id,
+          },
+        },
+        data: { role: "member" },
+      });
+    } finally {
+      releaseIntegrationLock();
+      await lockTransaction;
+    }
+
+    const response = await callbackPromise;
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toContain("integrations=quickbooks_disconnect_pending");
+    expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
+    expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+    expect(quickBooksProviderMocks.revokeToken).toHaveBeenCalledOnce();
+    await expect(
+      prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
+    ).resolves.toBe(0);
   });
 
   test("keeps QuickBooks provider failures out of the OAuth redirect", async () => {

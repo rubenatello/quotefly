@@ -28,6 +28,10 @@ const QUICKBOOKS_SETUP_CHECK_KEYS = new Set<QuickBooksSetupCheckKey>([
   "PROVIDER_CONFIGURED",
   "PROVIDER_WORKFLOWS_ENABLED",
   "WEBHOOK_CONFIGURED",
+  "HOSTED_PAYMENTS_ENABLED",
+  "RECONCILIATION_WORKER_ENABLED",
+  "RECONCILIATION_WORKER_HEALTHY",
+  "CDC_WORKER_ENABLED",
   "CONNECTION_ACTIVE",
   "ENVIRONMENT_MATCHES",
   "ACCOUNTING_SCOPE_GRANTED",
@@ -82,7 +86,13 @@ export function normalizeQuickBooksStatusPayload(value: unknown): QuickBooksStat
     !isBoolean(setup.capabilities.canConnect) ||
     !isBoolean(setup.capabilities.canReconnect) ||
     !isBoolean(setup.capabilities.canConfirm) ||
-    !isBoolean(setup.capabilities.canDisconnect)
+    !isBoolean(setup.capabilities.canDisconnect) ||
+    !isRecord(setup.operations) ||
+    !isBoolean(setup.operations.coreConnectionReady) ||
+    !isBoolean(setup.operations.hostedPaymentsReady) ||
+    !isBoolean(setup.operations.reconciliationReady) ||
+    !isBoolean(setup.operations.cdcRecoveryReady) ||
+    !isBoolean(setup.operations.allAccountingWorkflowsReady)
   ) {
     return null;
   }

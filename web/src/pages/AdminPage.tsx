@@ -16,11 +16,12 @@ import { setSEOMetadata } from "../lib/seo";
 import { BASIC_PLAN } from "../lib/plans";
 import { CheckIcon, ClockIcon, CustomerIcon, LockIcon, PriceIcon } from "../components/Icons";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmModal, Input, PageHeader, PaginationControls, ProgressBar, Select, type PageSize } from "../components/ui";
-import { WorkspaceJumpBar, WorkspaceRailCard, WorkspaceSection } from "../components/ui/workspace";
+import { WorkspaceJumpBar, WorkspaceSection } from "../components/ui/workspace";
 import { ThemeSelector } from "../components/settings/ThemeSelector";
 import { LanguageSelector } from "../components/settings/LanguageSelector";
+import { FollowUpSettingsPanel } from "../components/settings/FollowUpSettingsPanel";
 import { notify } from "../lib/notifications";
-import { aiUsageProgressTone, formatAiUsageBreakdown } from "../lib/ai-credits";
+import { formatAiUsageBreakdown } from "../lib/ai-credits";
 import { localizedApiError } from "../lib/localized-api-error";
 import { QuickBooksSetupPanel } from "../components/integrations/QuickBooksSetupPanel";
 import { isTrustedQuickBooksAuthorizationUrl, normalizeQuickBooksStatusPayload } from "../lib/quickbooks";
@@ -52,6 +53,7 @@ type NewUserForm = {
 
 type BillingAction = PlanCode | "portal" | null;
 type QuickBooksAction = "connect" | "confirm" | "disconnect" | null;
+type SettingsCategory = "general" | "follow-up" | "billing" | "quickbooks" | "team";
 
 type PlanCard = {
   code: PlanCode;
@@ -232,6 +234,7 @@ export function AdminPage({ session }: AdminPageProps) {
   ];
   const navigate = useNavigate();
   const location = useLocation();
+  const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
   const [members, setMembers] = useState<OrganizationUser[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
   const [debouncedMemberSearch, setDebouncedMemberSearch] = useState("");
@@ -244,7 +247,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const [teamMembersUsed, setTeamMembersUsed] = useState(0);
   const [seatPlanName, setSeatPlanName] = useState(session?.entitlements?.seatPlanName ?? "Basic");
   const [canManageUsers, setCanManageUsers] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(settingsMode === "users");
   const [saving, setSaving] = useState(false);
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
@@ -257,13 +260,15 @@ export function AdminPage({ session }: AdminPageProps) {
   const [quickBooksAction, setQuickBooksAction] = useState<QuickBooksAction>(null);
   const [confirmQuickBooksSetupOpen, setConfirmQuickBooksSetupOpen] = useState(false);
   const [disconnectQuickBooksOpen, setDisconnectQuickBooksOpen] = useState(false);
+  const [followUpDirty, setFollowUpDirty] = useState(false);
+  const [pendingSettingsCategory, setPendingSettingsCategory] = useState<SettingsCategory | null>(null);
   const memberRequestIdRef = useRef(0);
-  const settingsMode: "org" | "users" = location.pathname.startsWith("/app/settings/users") ? "users" : "org";
 
   const sessionRole = normalizeRole(session?.role ?? "member");
   const superuserView = Boolean(session?.isSuperuser);
   const ownerView = sessionRole === "owner";
   const canManageQuickBooks = sessionRole === "owner" || sessionRole === "admin";
+  const canManageFollowUp = sessionRole === "owner" || sessionRole === "admin";
   const activeSubscriptionPlan = normalizePlanCode(session?.subscriptionPlanCode);
   const effectivePlanCode = session?.effectivePlanCode ?? session?.entitlements?.planCode ?? "starter";
   const effectivePlanName = session?.effectivePlanName ?? session?.entitlements?.planName ?? "Basic";
@@ -398,8 +403,12 @@ export function AdminPage({ session }: AdminPageProps) {
   }, [loadQuickBooksStatus, t]);
 
   useEffect(() => {
-    void loadMembers();
-  }, [loadMembers]);
+    if (settingsMode === "users") {
+      void loadMembers();
+    } else {
+      setLoading(false);
+    }
+  }, [loadMembers, settingsMode]);
 
   useEffect(() => {
     if (location.hash !== "#admin-quickbooks") return;
@@ -547,14 +556,53 @@ export function AdminPage({ session }: AdminPageProps) {
   const aiRenewalText = !aiUsage.billingCycleReconciliationPending && session?.usage?.periodEndUtc
     ? dateText(session.usage.periodEndUtc, locale, t)
     : null;
+  const requestedSettingsSection = new URLSearchParams(location.search).get("section");
+  const activeSettingsCategory: SettingsCategory = settingsMode === "users"
+    ? "team"
+    : location.hash === "#admin-quickbooks"
+      ? "quickbooks"
+      : requestedSettingsSection === "billing"
+        ? "billing"
+        : requestedSettingsSection === "follow-up"
+          ? "follow-up"
+        : "general";
   const adminLinks = [
-    { id: "admin-overview", label: t("admin.nav.overview"), hint: t("admin.nav.overviewHint") },
-    { id: "admin-appearance", label: t("admin.nav.appearance"), hint: t("admin.nav.appearanceHint") },
+    { id: "admin-general", label: t("admin.nav.general"), hint: t("admin.nav.generalHint") },
+    { id: "admin-follow-up", label: t("admin.nav.followUp"), hint: t("admin.nav.followUpHint") },
     { id: "admin-billing", label: t("admin.nav.billing"), hint: t("admin.nav.billingHint") },
     { id: "admin-quickbooks", label: t("admin.nav.quickBooks"), hint: t("admin.nav.quickBooksHint") },
     { id: "admin-team", label: t("admin.nav.team"), hint: t("admin.nav.teamHint") },
   ];
-  const visibleAdminLinks = settingsMode === "users" ? adminLinks.filter((link) => link.id === "admin-team") : adminLinks.filter((link) => link.id !== "admin-team");
+
+  function navigateSettingsCategory(category: SettingsCategory) {
+    if (category === "team") {
+      navigate("/app/settings/users");
+      return;
+    }
+    if (category === "quickbooks") {
+      navigate("/app/settings#admin-quickbooks");
+      return;
+    }
+    if (category === "billing") {
+      navigate("/app/settings?section=billing");
+      return;
+    }
+    if (category === "follow-up") {
+      navigate("/app/settings?section=follow-up");
+      return;
+    }
+    navigate("/app/settings");
+  }
+
+  function selectSettingsCategory(id: string) {
+    const category = id.replace(/^admin-/, "") as SettingsCategory;
+    if (category === activeSettingsCategory) return;
+    if (activeSettingsCategory === "follow-up" && followUpDirty) {
+      setPendingSettingsCategory(category);
+      return;
+    }
+    navigateSettingsCategory(category);
+  }
 
   const billingSummaryText = useMemo(() => {
     if (session?.isTrial) {
@@ -594,27 +642,12 @@ export function AdminPage({ session }: AdminPageProps) {
     );
   }
 
-  const starterLaunchMode = effectivePlanCode === "starter";
-
   return (
     <div className="space-y-5">
       <PageHeader
         title={t("admin.title")}
         subtitle={settingsMode === "users" ? t("admin.usersSubtitle") : t("admin.organizationSubtitle")}
         mode="actions-only"
-        actions={
-          ownerView && hasPortalAccess ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void openBillingPortal()}
-              disabled={billingAction !== null}
-              loading={billingAction === "portal"}
-            >
-              {t("admin.owner.manageBilling")}
-            </Button>
-          ) : undefined
-        }
       />
 
       {error ? (
@@ -628,154 +661,34 @@ export function AdminPage({ session }: AdminPageProps) {
         </Alert>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
-          <WorkspaceRailCard
-            eyebrow={settingsMode === "users" ? t("admin.access.team") : t("admin.access.admin")}
-            title={settingsMode === "users" ? t("admin.access.accessSeats") : t("admin.access.workspaceControl")}
-            description={settingsMode === "users"
-              ? t("admin.access.teamDescription")
-              : t("admin.access.controlDescription")}
-          >
-            <div className="flex flex-wrap gap-2">
-              <Badge tone={planTone(effectivePlanCode)}>{t("admin.access.accessSuffix", { plan: displayPlanName })}</Badge>
-              {settingsMode === "users" ? (
-                <Badge tone={seatLimitReached ? "amber" : "blue"}>{seatLimitReached ? t("admin.access.seatLimitReached") : t("admin.access.seatsAvailable")}</Badge>
-              ) : (
-                <>
-                  {session?.isTrial ? <Badge tone="orange">{t("admin.access.trialActive")}</Badge> : null}
-                  <Badge tone={subscriptionTone(session?.subscriptionStatus)}>
-                    {subscriptionStatusLabel(session?.subscriptionStatus, t)}
-                  </Badge>
-                  <Badge tone={starterLaunchMode ? "blue" : "amber"}>
-                    {starterLaunchMode ? t("admin.access.basicLaunch") : t("admin.access.advancedLater")}
-                  </Badge>
-                </>
-              )}
-            </div>
-            <div className={`mt-4 grid gap-3 ${settingsMode === "users" ? "grid-cols-1" : "sm:grid-cols-3 xl:grid-cols-1"}`}>
-              {settingsMode === "org" ? <AdminMetricCard
-                  icon={<PriceIcon size={16} />}
-                  label={t("admin.access.currentAccess")}
-                  value={displayPlanName}
-                  hint={session?.isTrial ? t("admin.access.trialAccess") : t("admin.access.livePlanAccess")}
-                /> : null}
-              {settingsMode === "org" ? <AdminMetricCard
-                  icon={<ClockIcon size={16} />}
-                  label={t("admin.access.billingState")}
-                  value={subscriptionStatusLabel(session?.subscriptionStatus, t)}
-                  hint={activeSubscriptionPlan ? t("admin.access.subscribed", { plan: activeSubscriptionPlan }) : t("admin.access.noPaidPlan")}
-                /> : null}
-              <AdminMetricCard
-                icon={<CustomerIcon size={16} />}
-                label={t("admin.access.teamSeats")}
-                value={seatUsageText}
-                hint={teamMembersLimit === null ? t("admin.access.noSeatCap") : t("admin.access.seatsEnforced")}
-              />
-            </div>
-            {settingsMode === "org" && session?.usage ? (
-              <div
-                role={aiUsage.billingCycleReconciliationPending ? "status" : undefined}
-                className={`mt-4 rounded-[22px] border px-3 py-3 ${
-                  aiUsage.billingCycleReconciliationPending
-                    ? "border-[var(--qf-warning-border)] bg-[var(--qf-warning-surface)]"
-                    : "border-[var(--qf-border)] bg-[var(--qf-panel-muted)]"
-                }`}
-              >
-                <div className={`flex gap-2 ${
-                  aiUsage.billingCycleReconciliationPending
-                    ? "flex-col items-start"
-                    : "items-center justify-between"
-                }`}>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qf-text-muted)]">{t("admin.access.aiUsage")}</p>
-                  <span className="text-xs font-semibold text-[var(--qf-text)]">
-                    {aiUsage.headline}
-                  </span>
-                </div>
-                {!aiUsage.billingCycleReconciliationPending ? (
-                  <ProgressBar
-                    value={aiUsage.effectivePercent}
-                    label={t("admin.access.monthlyAiUsage")}
-                    tone={aiUsageProgressTone(aiUsage.effectivePercent)}
-                    valueText={aiUsage.valueText}
-                    hint={
-                      aiUsage.limitReached
-                        ? aiRenewalText
-                          ? t("admin.access.usageLimitRenews", { date: aiRenewalText })
-                          : t("admin.access.usageLimitReached")
-                        : aiRenewalText
-                          ? t("admin.access.renews", { date: aiRenewalText })
-                          : undefined
-                    }
-                    className="mt-3"
-                  />
-                ) : null}
-                <p className="mt-2 text-xs leading-5 text-[var(--qf-text-muted)]">{aiUsage.detail}</p>
-              </div>
-            ) : null}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant={settingsMode === "org" ? "primary" : "outline"}
-                onClick={() => navigate("/app/settings")}
-              >
-                {t("admin.access.org")}
-              </Button>
-              <Button
-                size="sm"
-                variant={settingsMode === "users" ? "primary" : "outline"}
-                onClick={() => navigate("/app/settings/users")}
-              >
-                {t("admin.access.users")}
-              </Button>
-            </div>
-            <WorkspaceJumpBar links={visibleAdminLinks} className="mt-4" />
-          </WorkspaceRailCard>
+      <Card variant="default" padding="sm" className="overflow-hidden shadow-sm lg:sticky lg:top-16 lg:z-10">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <WorkspaceJumpBar
+            links={adminLinks}
+            activeId={`admin-${activeSettingsCategory}`}
+            ariaLabel={t("admin.nav.ariaLabel")}
+            onSelect={(link) => selectSettingsCategory(link.id)}
+          />
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Badge tone={planTone(effectivePlanCode)}>{t("admin.access.accessSuffix", { plan: displayPlanName })}</Badge>
+            {session?.isTrial ? <Badge tone="orange">{t("admin.access.trialActive")}</Badge> : null}
+            <Badge tone={subscriptionTone(session?.subscriptionStatus)}>{subscriptionStatusLabel(session?.subscriptionStatus, t)}</Badge>
+          </div>
+        </div>
+      </Card>
 
-          {settingsMode === "org" ? <WorkspaceRailCard
-            eyebrow={t("admin.owner.eyebrow")}
-            title={ownerView ? t("admin.owner.canManage") : t("admin.owner.readOnly")}
-            description={ownerView ? billingSummaryText : t("admin.owner.readOnlyDescription")}
-          >
-            <div className="grid gap-2">
-              {settingsMode === "org" && ownerView && hasPortalAccess ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void openBillingPortal()}
-                  disabled={billingAction !== null}
-                  loading={billingAction === "portal"}
-                  fullWidth
-                >
-                  {t("admin.owner.manageBilling")}
-                </Button>
-              ) : null}
-              {settingsMode === "org" && superuserView ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => navigate("/app/internal/admin")}
-                  fullWidth
-                >
-                  {t("admin.owner.operatorConsole")}
-                </Button>
-              ) : null}
-              {settingsMode === "org" && ownerView ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                  {t("admin.owner.launchFocus")}
-                </div>
-              ) : null}
-            </div>
-          </WorkspaceRailCard> : null}
-        </aside>
-
-        <div className="space-y-6">
-          {settingsMode === "org" ? (
+      <div className="space-y-6">
+          {activeSettingsCategory === "general" ? (
           <WorkspaceSection
-            id="admin-overview"
+            id="admin-general"
             step={t("admin.overview.step")}
             title={t("admin.overview.title")}
             description={t("admin.overview.description")}
+            actions={superuserView ? (
+              <Button type="button" variant="outline" onClick={() => navigate("/app/internal/admin")}>
+                {t("admin.owner.operatorConsole")}
+              </Button>
+            ) : undefined}
           >
             <Card variant="blue" padding="lg">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(0,1.35fr)_minmax(460px,580px)] 2xl:items-start">
@@ -829,7 +742,7 @@ export function AdminPage({ session }: AdminPageProps) {
           </WorkspaceSection>
           ) : null}
 
-          {settingsMode === "org" ? (
+          {activeSettingsCategory === "general" ? (
           <WorkspaceSection
             id="admin-appearance"
             step={t("settings.appearanceStep")}
@@ -853,7 +766,19 @@ export function AdminPage({ session }: AdminPageProps) {
           </WorkspaceSection>
           ) : null}
 
-          {settingsMode === "org" ? (
+          {activeSettingsCategory === "follow-up" ? (
+          <WorkspaceSection
+            id="admin-follow-up"
+            step={t("admin.followUp.step")}
+            title={t("admin.followUp.title")}
+            description={t("admin.followUp.description")}
+            actions={<Badge tone={canManageFollowUp ? "blue" : "slate"}>{canManageFollowUp ? t("admin.followUp.managerAccess") : t("admin.followUp.readOnlyBadge")}</Badge>}
+          >
+            <FollowUpSettingsPanel canManage={canManageFollowUp} onDirtyChange={setFollowUpDirty} />
+          </WorkspaceSection>
+          ) : null}
+
+          {activeSettingsCategory === "billing" ? (
           <WorkspaceSection
             id="admin-billing"
             step={t("admin.billing.step")}
@@ -863,10 +788,32 @@ export function AdminPage({ session }: AdminPageProps) {
           >
             <Card variant="elevated" padding="lg">
         <CardHeader
-          title={t("admin.billing.controls")}
-          subtitle={t("admin.billing.controlsDescription")}
+          title={t("admin.billing.currentPlan")}
+          subtitle={billingSummaryText}
+          actions={ownerView && hasPortalAccess ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void openBillingPortal()}
+              disabled={billingAction !== null}
+              loading={billingAction === "portal"}
+            >
+              {t("admin.owner.manageBilling")}
+            </Button>
+          ) : undefined}
         />
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-4">
+          <Badge tone={planTone(effectivePlanCode)}>{displayPlanName}</Badge>
+          <Badge tone={subscriptionTone(session?.subscriptionStatus)}>{subscriptionStatusLabel(session?.subscriptionStatus, t)}</Badge>
+          {!ownerView ? <Badge tone="amber">{t("admin.billing.ownerOnly")}</Badge> : null}
+        </div>
+
+        <details className="mt-4 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-semibold text-[var(--qf-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qf-focus)]">
+            <span>{t("admin.billing.comparePlans")}</span>
+            <span className="text-xs font-medium text-[var(--qf-text-muted)]">{t("admin.billing.comparePlansHint")}</span>
+          </summary>
+          <div className="grid gap-4 border-t border-[var(--qf-border)] py-4 xl:grid-cols-3">
           {planCards.map((plan) => {
             const isCurrentPaidPlan = activeSubscriptionPlan === plan.code;
             const isCurrentAccessPlan = !session?.isTrial && effectivePlanCode === plan.code;
@@ -916,19 +863,20 @@ export function AdminPage({ session }: AdminPageProps) {
               </article>
             );
           })}
-        </div>
+          </div>
 
-        <Card variant="default" padding="md" className="mt-4 bg-slate-50/80">
+        <Card variant="default" padding="md" className="mb-4 bg-slate-50/80">
           <p className="text-sm font-semibold text-slate-900">{t("admin.billing.launchNote")}</p>
           <p className="mt-1 text-sm text-slate-600">
             {t("admin.billing.launchDescription")}
           </p>
         </Card>
+        </details>
             </Card>
           </WorkspaceSection>
           ) : null}
 
-          {settingsMode === "org" ? (
+          {activeSettingsCategory === "quickbooks" ? (
           <WorkspaceSection
             id="admin-quickbooks"
             step={t("admin.accounting.step")}
@@ -950,7 +898,7 @@ export function AdminPage({ session }: AdminPageProps) {
           </WorkspaceSection>
           ) : null}
 
-          {settingsMode === "users" ? (
+          {activeSettingsCategory === "team" ? (
           <WorkspaceSection
             id="admin-team"
             step={t("admin.team.step")}
@@ -1156,9 +1104,21 @@ export function AdminPage({ session }: AdminPageProps) {
             </div>
           </WorkspaceSection>
           ) : null}
-        </div>
       </div>
 
+      <ConfirmModal
+        open={pendingSettingsCategory !== null}
+        onClose={() => setPendingSettingsCategory(null)}
+        onConfirm={() => {
+          const category = pendingSettingsCategory;
+          setPendingSettingsCategory(null);
+          if (category) navigateSettingsCategory(category);
+        }}
+        title={t("admin.followUp.leaveTitle")}
+        description={t("admin.followUp.leaveDescription")}
+        confirmLabel={t("admin.followUp.leaveConfirm")}
+        confirmVariant="warning"
+      />
       <ConfirmModal
         open={confirmQuickBooksSetupOpen}
         onClose={() => setConfirmQuickBooksSetupOpen(false)}

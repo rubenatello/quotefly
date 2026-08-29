@@ -3,6 +3,7 @@ import {
   ActivityTaskPriority,
   ActivityTaskStatus,
   ActivityTaskType,
+  FollowUpOutcome,
   type Prisma,
 } from "@prisma/client";
 import { z } from "zod";
@@ -13,6 +14,7 @@ import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { tenantActivityWindows } from "../lib/tenant-time";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { withTransactionConflictRetry } from "../lib/transaction-retry";
 import {
   ActivityTaskServiceError,
   completeActivityTask,
@@ -24,10 +26,16 @@ import {
   updateActivityTask,
   type ActivityTaskPublic,
 } from "../services/activity-tasks";
+import {
+  CustomerFollowUpError,
+  getFollowUpSettings,
+  updateFollowUpSettings,
+} from "../services/customer-follow-up";
 
 const ActivityTaskTypeSchema = z.nativeEnum(ActivityTaskType);
 const ActivityTaskStatusSchema = z.nativeEnum(ActivityTaskStatus);
 const ActivityTaskPrioritySchema = z.nativeEnum(ActivityTaskPriority);
+const FollowUpOutcomeSchema = z.nativeEnum(FollowUpOutcome);
 const ActivityTaskParamsSchema = z.object({ activityTaskId: z.string().trim().min(1).max(191) }).strict();
 const ExplicitDateTimeSchema = z
   .string()
@@ -90,7 +98,44 @@ const UpdateActivityTaskSchema = z.object({
   { message: "At least one task field must be updated." },
 );
 
-const VersionCommandSchema = z.object({ version: z.number().int().min(1) }).strict();
+const VersionCommandSchema = z.object({
+  version: z.number().int().min(1),
+  outcome: FollowUpOutcomeSchema.optional(),
+}).strict();
+
+const FollowUpSettingsStepSchema = z.object({
+  stepNumber: z.number().int().min(1).max(6),
+  delayMinutes: z.number().int().min(5).max(43_200),
+  title: z.string().trim().min(1).max(160),
+  notes: z.string().trim().max(2000).nullable(),
+  priority: ActivityTaskPrioritySchema,
+}).strict();
+
+const UpdateFollowUpSettingsSchema = z.object({
+  version: z.number().int().min(0),
+  enabled: z.boolean().optional(),
+  steps: z.array(FollowUpSettingsStepSchema).min(1).max(6).optional(),
+}).strict().superRefine((payload, context) => {
+  if (payload.enabled === undefined && payload.steps === undefined) {
+    context.addIssue({ code: "custom", message: "Change enabled or provide follow-up steps." });
+  }
+  payload.steps?.forEach((step, index) => {
+    if (step.stepNumber !== index + 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["steps", index, "stepNumber"],
+        message: "Follow-up step numbers must be consecutive and start at 1.",
+      });
+    }
+    if (index > 0 && step.delayMinutes <= payload.steps![index - 1]!.delayMinutes) {
+      context.addIssue({
+        code: "custom",
+        path: ["steps", index, "delayMinutes"],
+        message: "Each follow-up step must occur after the previous step.",
+      });
+    }
+  });
+});
 
 function idempotencyKey(request: FastifyRequest): string {
   const raw = request.headers["idempotency-key"];
@@ -124,6 +169,10 @@ function sendServiceError(reply: FastifyReply, error: unknown) {
   });
 }
 
+function serializeFollowUpSettings(settings: Awaited<ReturnType<typeof getFollowUpSettings>>) {
+  return { ...settings, updatedAtUtc: settings.updatedAtUtc.toISOString() };
+}
+
 async function loadTenantWindows(
   transaction: Prisma.TransactionClient,
   tenantId: string,
@@ -139,6 +188,41 @@ async function loadTenantWindows(
 }
 
 export const activityRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/follow-up-settings", { preHandler: [app.authenticate] }, async (request) => {
+    const access = buildAccessContext(request);
+    const settings = await withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
+      getFollowUpSettings(transaction, access.tenantId));
+    return { followUpSettings: serializeFollowUpSettings(settings) };
+  });
+
+  app.patch("/follow-up-settings", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const access = buildAccessContext(request);
+    if (!hasCapability(access, "manageAssignments")) {
+      return reply.code(403).send({
+        code: "FOLLOW_UP_SETTINGS_FORBIDDEN",
+        error: "Only workspace owners and admins can change automatic follow-up settings.",
+      });
+    }
+    const payload = UpdateFollowUpSettingsSchema.parse(request.body);
+    try {
+      const settings = await withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
+        updateFollowUpSettings(transaction, {
+          tenantId: access.tenantId,
+          expectedVersion: payload.version,
+          enabled: payload.enabled,
+          steps: payload.steps,
+        }));
+      return { followUpSettings: serializeFollowUpSettings(settings) };
+    } catch (error) {
+      if (!(error instanceof CustomerFollowUpError)) throw error;
+      return reply.code(error.statusCode).send({
+        code: error.code,
+        error: error.message,
+        ...(error.details ?? {}),
+      });
+    }
+  });
+
   app.get("/activities", { preHandler: [app.authenticate] }, async (request, reply) => {
     const access = buildAccessContext(request);
     const query = ListActivityTasksQuerySchema.parse(request.query);
@@ -299,19 +383,22 @@ export const activityRoutes: FastifyPluginAsync = async (app) => {
     const actor = await resolveActivityActor(app.prisma, claims);
     try {
       const result = await measureRequestPerformance(request, "db", () =>
-        withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
-          completeActivityTask(transaction, access, {
-            taskId: activityTaskId,
-            version: payload.version,
-            actor,
-            command: {
-              operation: `COMPLETE:${activityTaskId}`,
-              idempotencyKey: idempotencyKey(request),
-              payload,
-              requestId: request.id,
-            },
-          }),
-        { maxWait: 5_000, timeout: 15_000 }),
+        withTransactionConflictRetry(() =>
+          withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
+            completeActivityTask(transaction, access, {
+              taskId: activityTaskId,
+              version: payload.version,
+              outcome: payload.outcome,
+              actor,
+              command: {
+                operation: `COMPLETE:${activityTaskId}`,
+                idempotencyKey: idempotencyKey(request),
+                payload,
+                requestId: request.id,
+              },
+            }),
+          { maxWait: 5_000, timeout: 15_000 }),
+        ),
       );
       return { task: serializeTask(result.task), duplicate: result.duplicate };
     } catch (error) {

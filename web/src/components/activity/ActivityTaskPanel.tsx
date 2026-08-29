@@ -28,6 +28,7 @@ import {
   type ActivityTaskPriority,
   type ActivityTaskType,
   type Customer,
+  type FollowUpOutcome,
   type OrganizationUser,
 } from "../../lib/api";
 import { notify } from "../../lib/notifications";
@@ -102,6 +103,7 @@ function draftCustomerOption(draft: ActivityTaskDraft, nowIso: string): Customer
     notes: null,
     preferredLocale: null,
     followUpStatus: "NEEDS_FOLLOW_UP",
+    lifecycleVersion: 1,
     createdAt: nowIso,
     updatedAt: nowIso,
   };
@@ -554,6 +556,7 @@ export function ActivityTaskPanel({
   const [editorDraft, setEditorDraft] = useState<ActivityTaskDraft | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [removeTask, setRemoveTask] = useState<ActivityTask | null>(null);
+  const [outcomeTask, setOutcomeTask] = useState<ActivityTask | null>(null);
   const requestIdRef = useRef(0);
   const openedInitialTaskRef = useRef<string | null>(null);
   const openedInitialDraftRef = useRef<string | null>(null);
@@ -600,6 +603,10 @@ export function ActivityTaskPanel({
     const task = items.find((item) => item.id === initialTaskId);
     if (!task) return;
     openedInitialTaskRef.current = initialTaskId;
+    if (task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP" && (task.status === "OPEN" || task.status === "IN_PROGRESS")) {
+      setOutcomeTask(task);
+      return;
+    }
     setEditorTask(task);
     setEditorOpen(true);
   }, [initialTaskId, items, loading]);
@@ -614,33 +621,39 @@ export function ActivityTaskPanel({
     setEditorOpen(true);
   }, [initialDraft]);
 
-  async function complete(task: ActivityTask) {
+  async function complete(task: ActivityTask, outcome?: FollowUpOutcome) {
     setSaving(true);
     try {
-      const result = await api.activities.complete(task.id, task.version);
+      const result = await api.activities.complete(task.id, task.version, outcome);
+      setOutcomeTask(null);
       await load();
-      notify.success(t("activity.tasks.completedNotice"), {
-        description: task.title,
-        action: {
-          label: t("activity.tasks.undo"),
-          onClick: () => {
-            void api.activities.reopen(result.task.id, result.task.version)
-              .then(async () => {
-                await load();
-                notify.success(t("activity.tasks.undoNotice"));
-              })
-              .catch((reopenError) => notify.error(localizedApiError(reopenError, t, {
-                fallbackKey: "activity.tasks.reopenError",
-                statusKeys: { 400: "apiErrors.invalidRequest" },
-              })));
+      if (task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP" && outcome) {
+        notify.success(t(`activity.tasks.outcome.${outcome.toLowerCase()}.notice`), { description: task.title });
+      } else {
+        notify.success(t("activity.tasks.completedNotice"), {
+          description: task.title,
+          action: {
+            label: t("activity.tasks.undo"),
+            onClick: () => {
+              void api.activities.reopen(result.task.id, result.task.version)
+                .then(async () => {
+                  await load();
+                  notify.success(t("activity.tasks.undoNotice"));
+                })
+                .catch((reopenError) => notify.error(localizedApiError(reopenError, t, {
+                  fallbackKey: "activity.tasks.reopenError",
+                  statusKeys: { 400: "apiErrors.invalidRequest" },
+                })));
+            },
           },
-        },
-      });
+        });
+      }
     } catch (saveError) {
       notify.error(localizedApiError(saveError, t, {
         fallbackKey: "activity.tasks.completeError",
         statusKeys: { 400: "apiErrors.invalidRequest" },
       }));
+      setOutcomeTask(null);
       await load();
     } finally {
       setSaving(false);
@@ -787,6 +800,14 @@ export function ActivityTaskPanel({
                       {dueLabel(task, timezone, t, locale)}
                     </Badge>
                     <span className="text-xs font-medium text-[var(--qf-text-muted)]">{typeLabel(task.type, t)}</span>
+                    {task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP" ? (
+                      <Badge tone="violet">{t("activity.tasks.automatic")}</Badge>
+                    ) : null}
+                    {task.followUpOutcome ? (
+                      <Badge tone={task.followUpOutcome === "CONTACTED" ? "emerald" : "slate"}>
+                        {t(`activity.tasks.outcome.${task.followUpOutcome.toLowerCase()}.label`)}
+                      </Badge>
+                    ) : null}
                   </div>
                   <h3 className="mt-2 text-sm font-semibold text-[var(--qf-text)] sm:text-base">{task.title}</h3>
                   <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
@@ -800,16 +821,25 @@ export function ActivityTaskPanel({
                       {t("activity.tasks.quote")}
                     </Button>
                   ) : null}
-                  {task.status === "COMPLETED" || task.status === "CANCELED" ? (
+                  {task.origin === "MANUAL" && (task.status === "COMPLETED" || task.status === "CANCELED") ? (
                     <Button className="min-h-11 sm:min-h-11" variant="outline" size="sm" icon={<RotateCcw size={16} aria-hidden="true" />} onClick={() => void reopen(task)} disabled={saving}>
                       {t("activity.tasks.reopen")}
                     </Button>
-                  ) : (
-                    <Button className="min-h-11 sm:min-h-11" size="sm" icon={<Check size={16} aria-hidden="true" />} onClick={() => void complete(task)} disabled={saving}>
+                  ) : task.status === "OPEN" || task.status === "IN_PROGRESS" ? (
+                    <Button
+                      className="min-h-11 sm:min-h-11"
+                      size="sm"
+                      icon={<Check size={16} aria-hidden="true" />}
+                      onClick={() => {
+                        if (task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP") setOutcomeTask(task);
+                        else void complete(task);
+                      }}
+                      disabled={saving}
+                    >
                       {t("activity.tasks.complete")}
                     </Button>
-                  )}
-                  {task.status === "OPEN" || task.status === "IN_PROGRESS" ? (
+                  ) : null}
+                  {task.origin === "MANUAL" && (task.status === "OPEN" || task.status === "IN_PROGRESS") ? (
                     <Button
                       variant="outline"
                       size="sm"
@@ -824,7 +854,7 @@ export function ActivityTaskPanel({
                       {t("activity.tasks.editAction")}
                     </Button>
                   ) : null}
-                  {canManage ? (
+                  {canManage && task.origin === "MANUAL" ? (
                     <Button className="min-h-11 sm:min-h-11" variant="ghost" size="sm" icon={<Trash2 size={16} aria-hidden="true" />} onClick={() => setRemoveTask(task)}>
                       {t("activity.tasks.remove")}
                     </Button>
@@ -879,6 +909,41 @@ export function ActivityTaskPanel({
           notify.warning(t("activity.tasks.latestLoaded"), { description: t("activity.tasks.latestLoadedDescription") });
         }}
       />
+
+      <Modal
+        open={outcomeTask !== null}
+        onClose={() => {
+          if (!saving) setOutcomeTask(null);
+        }}
+        closeOnBackdrop={!saving}
+        ariaLabel={t("activity.tasks.outcome.title")}
+      >
+        <ModalHeader
+          title={t("activity.tasks.outcome.title")}
+          description={outcomeTask ? t("activity.tasks.outcome.description", { customer: outcomeTask.customer.fullName }) : undefined}
+          onClose={saving ? undefined : () => setOutcomeTask(null)}
+        />
+        <ModalBody>
+          <p className="text-sm leading-6 text-[var(--qf-text-soft)]">{t("activity.tasks.outcome.help")}</p>
+          <div className="mt-4 grid gap-3">
+            {(["CONTACTED", "NO_RESPONSE", "SKIPPED"] as const).map((outcome) => (
+              <button
+                key={outcome}
+                type="button"
+                disabled={saving || !outcomeTask}
+                onClick={() => outcomeTask && void complete(outcomeTask, outcome)}
+                className="min-h-14 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-3 text-left transition hover:border-[var(--qf-border-strong)] hover:bg-[var(--qf-interactive-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="block text-sm font-semibold text-[var(--qf-text)]">{t(`activity.tasks.outcome.${outcome.toLowerCase()}.label`)}</span>
+                <span className="mt-1 block text-xs leading-5 text-[var(--qf-text-muted)]">{t(`activity.tasks.outcome.${outcome.toLowerCase()}.description`)}</span>
+              </button>
+            ))}
+          </div>
+        </ModalBody>
+        <ModalFooter>
+          <Button type="button" variant="outline" onClick={() => setOutcomeTask(null)} disabled={saving}>{t("activity.tasks.cancel")}</Button>
+        </ModalFooter>
+      </Modal>
 
       <ConfirmModal
         open={Boolean(removeTask)}

@@ -266,33 +266,40 @@ describe("QuickBooks security-record retention", () => {
   });
 
   test("unknown-realm ingress deletes only old quarantine for its exact realm", async () => {
+    // Ingress cleanup intentionally uses the wall clock. Keep these fixtures
+    // relative to the same clock instead of the fixed policy-test timestamp so
+    // this assertion cannot age into the seven-day retention window in CI.
+    const ingressNow = new Date();
+    const ingressDaysBefore = (days: number) => new Date(
+      ingressNow.getTime() - days * 24 * 60 * 60 * 1_000,
+    );
     const realmId = `unbound-retention-${Date.now()}`;
     const oldSameRealm = await createWebhookEvent({
       label: "quarantine-old-same",
       realmId,
       status: "RECEIVED",
-      receivedAtUtc: daysBefore(8),
+      receivedAtUtc: ingressDaysBefore(8),
       lastError: "QUICKBOOKS_REALM_UNBOUND",
     });
     const currentSameRealm = await createWebhookEvent({
       label: "quarantine-current-same",
       realmId,
       status: "RECEIVED",
-      receivedAtUtc: daysBefore(6),
+      receivedAtUtc: ingressDaysBefore(6),
       lastError: "QUICKBOOKS_REALM_UNBOUND",
     });
     const oldOtherRealm = await createWebhookEvent({
       label: "quarantine-old-other",
       realmId: `${realmId}-other`,
       status: "RECEIVED",
-      receivedAtUtc: daysBefore(8),
+      receivedAtUtc: ingressDaysBefore(8),
       lastError: "QUICKBOOKS_REALM_UNBOUND",
     });
     const oldNonQuarantine = await createWebhookEvent({
       label: "quarantine-old-nonquarantine",
       realmId,
       status: "RECEIVED",
-      receivedAtUtc: daysBefore(8),
+      receivedAtUtc: ingressDaysBefore(8),
       lastError: "OTHER_FAILURE",
     });
 

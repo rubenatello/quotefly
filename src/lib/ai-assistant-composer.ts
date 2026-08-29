@@ -162,6 +162,9 @@ const FALLBACK_MODEL = "gpt-4o-mini";
 
 const OMIT_FIELD_PATTERN =
   /(?:^|_)(?:id|tenant|email|phone|prompt|token|secret|password|hash|ref|url|provider)(?:$|_)/i;
+const PROVIDER_OMITTED_FIELD_KEYS = new Set([
+  "lost_reason_notes",
+]);
 const DISALLOWED_ANSWER_PATTERN =
   /\b(?:all tenants|other tenants|cross[-\s]*tenant|tenant id|tenantid|raw prompt|api key|secret|provider identifier|bypass tenant|ignore tenant|todos\s+los\s+(?:tenants|inquilinos|espacios\s+de\s+trabajo)|otros?\s+(?:tenants|inquilinos|espacios\s+de\s+trabajo)|id\s+del\s+(?:tenant|inquilino)|prompt\s+sin\s+censura|clave\s+(?:de\s+)?api|secreto|identificador\s+del\s+proveedor|evita(?:r)?\s+(?:el\s+)?(?:tenant|inquilino)|ignora(?:r)?\s+(?:el\s+)?(?:tenant|inquilino))\b/i;
 const FINANCIAL_ANSWER_PATTERN = /\b(?:internal cost|unit cost|gross profit|gross margin|margin|cost subtotal|costo\s+interno|costo\s+por\s+unidad|ganancia\s+bruta|margen\s+bruto|margen|subtotal\s+de\s+costos?)\b/i;
@@ -309,6 +312,11 @@ function normalizeKey(key: string) {
   return key.replace(/[A-Z]/g, (value) => `_${value.toLowerCase()}`).replace(/^_/, "").toLowerCase();
 }
 
+function omitProviderField(key: string) {
+  const normalizedKey = normalizeKey(key);
+  return OMIT_FIELD_PATTERN.test(normalizedKey) || PROVIDER_OMITTED_FIELD_KEYS.has(normalizedKey);
+}
+
 function safeValue(value: string | number | boolean | null): string | number | boolean | null {
   if (typeof value !== "string") return value;
   return value
@@ -327,7 +335,7 @@ function safeResultRows(
     const safeEntries: Array<[string, string | number | boolean | null]> = [];
     for (const [key, value] of Object.entries(row)) {
       if (safeEntries.length >= MAX_ROW_FIELDS) break;
-      if (OMIT_FIELD_PATTERN.test(normalizeKey(key))) continue;
+      if (omitProviderField(key)) continue;
       safeEntries.push([
         key,
         safeValue(typeof value === "string"
@@ -376,7 +384,7 @@ function safeDiagnostics(diagnostics: AiAssistantCompositionInput["diagnostics"]
     archivePolicy: safeValue(diagnostics.archivePolicy) as string,
     filters: Object.fromEntries(
       Object.entries(diagnostics.filters)
-        .filter(([key]) => !OMIT_FIELD_PATTERN.test(normalizeKey(key)))
+        .filter(([key]) => !omitProviderField(key))
         .map(([key, value]) => [key, safeFilterValue(value)]),
     ) as Record<string, string | number | boolean | null>,
   };
@@ -462,7 +470,7 @@ function exactValuesFromSensitiveKeys(value: unknown, path: string[] = []): stri
     return Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) => exactValuesFromSensitiveKeys(entry, [...path, key]));
   }
   const key = path[path.length - 1] ?? "";
-  if (!OMIT_FIELD_PATTERN.test(normalizeKey(key))) return [];
+  if (!omitProviderField(key)) return [];
   const primitive = String(value).normalize("NFKC").trim();
   return primitive.length >= 3 ? [primitive] : [];
 }
@@ -561,7 +569,7 @@ function addAuthorizedValueEvidence(
   }
   if (typeof value === "object") {
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      if (OMIT_FIELD_PATTERN.test(normalizeKey(key))) continue;
+      if (omitProviderField(key)) continue;
       addAuthorizedValueEvidence(evidence, entry, [...path, key]);
     }
     return;

@@ -304,6 +304,7 @@ function kodyLoadingText(elapsedMs: number, tool: AiAssistantTool | "AUTO", t: T
     if (tool === "DRAFT_PRODUCT") return t("kody.loading.productDraft");
     if (tool === "DRAFT_QUOTE") return t("kody.loading.quoteDraft");
     if (tool === "PREPARE_BOOKING") return t("kody.loading.bookingReview");
+    if (tool === "ASSESS_SCHEDULE_FIT") return t("kody.loading.bookingReview");
     if (tool === "PREPARE_DISPATCH") return t("kody.loading.dispatchReview");
     if (tool === "PREPARE_ACTIVITY") return t("kody.loading.activityDraft");
     if (tool === "PREPARE_QUOTE_SEND") return t("kody.loading.quoteSend");
@@ -340,7 +341,7 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
     SEARCH_JOBS: t("kody.toolExtensions.searchJobs"), GET_JOB_STATUS: t("kody.toolExtensions.jobStatus"),
     LIST_INVOICES: t("kody.toolExtensions.listInvoices"), GET_INVOICE_STATUS: t("kody.toolExtensions.invoiceStatus"),
     GET_QUICKBOOKS_SETUP_STATUS: t("kody.toolExtensions.quickBooksStatus"),
-    LIST_SCHEDULE: t("kody.tools.listSchedule"), PREPARE_BOOKING: t("kody.tools.prepareBooking"),
+    LIST_SCHEDULE: t("kody.tools.listSchedule"), ASSESS_SCHEDULE_FIT: t("kody.tools.assessScheduleFit"), PREPARE_BOOKING: t("kody.tools.prepareBooking"),
     PREPARE_DISPATCH: t("kody.tools.prepareDispatch"),
     LIST_MY_ACTIVITIES: t("kody.tools.listActivities"), PRIORITIZE_MY_DAY: t("kody.tools.prioritizeDay"),
     PREPARE_ACTIVITY: t("kody.tools.prepareActivity"),
@@ -353,7 +354,7 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
 }
 
 function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
-  if (action.type === "OPEN_QUOTE_DRAFT" && action.label.trim()) {
+  if (["OPEN_QUOTE_DRAFT", "OPEN_WORKSPACE_PAGE", "OPEN_BOOKING_REVIEW", "OPEN_SCHEDULE"].includes(action.type) && action.label.trim()) {
     return action.label;
   }
   if (action.type === "OPEN_WORKSPACE_PAGE") {
@@ -384,7 +385,14 @@ function localizedResultField(key: string, t: TFunction, isInvoiceResult = false
     unitPrice: t("kody.resultFields.customerPrice"), unitCost: t("kody.resultFields.internalCost"),
     quoteAmount: t("kody.resultFields.quoteAmount"), amount: t("kody.resultFields.amount"), revenue: t("kody.resultFields.revenue"),
     cost: t("kody.resultFields.cost"), profit: t("kody.resultFields.profit"), margin: t("kody.resultFields.margin"),
-    followUpType: t("kody.resultFields.followUpType"), dueSince: t("kody.resultFields.dueSince"),
+    followUpType: t("kody.resultFields.followUpType"), dueSince: t("kody.resultFields.dueSince"), dueSinceUtc: t("kody.resultFields.dueSince"),
+    attentionReason: t("kody.resultFields.attentionReason"), recommendedAction: t("kody.resultFields.recommendedAction"),
+    lastRecordedFollowUpAtUtc: t("kody.resultFields.lastFollowUp"), lastRecordedFollowUpType: t("kody.resultFields.lastFollowUpType"),
+    lastPostSendOutboundActivityAtUtc: t("kody.resultFields.lastPostSendActivity"), lastPostSendOutboundActivityType: t("kody.resultFields.lastPostSendActivityType"),
+    openFollowUpTaskTitle: t("kody.resultFields.nextTask"), openFollowUpTaskDueAtUtc: t("kody.resultFields.nextTaskDue"),
+    hasFollowUpNotes: t("kody.resultFields.contextNotes"), targetTitle: t("kody.resultFields.work"),
+    durationMinutes: t("kody.resultFields.duration"), estimatedDurationMinutes: t("kody.resultFields.estimatedDuration"),
+    travelBufferMinutes: t("kody.resultFields.travelBuffer"), fitReason: t("kody.resultFields.fitReason"),
     activityRank: t("kody.resultFields.activityRank"), taskType: t("kody.resultFields.taskType"),
     priority: t("kody.resultFields.priority"), dueBucket: t("kody.resultFields.dueBucket"),
     dueAtUtc: t("kody.resultFields.dueAt"),
@@ -397,6 +405,9 @@ function localizedResultField(key: string, t: TFunction, isInvoiceResult = false
     assigneeName: t("kody.resultFields.assignee"),
     assignedTo: t("kody.resultFields.assignedTo"), description: t("kody.resultFields.description"), notes: t("kody.resultFields.notes"),
     createdAtUtc: t("kody.resultFields.created"), updatedAtUtc: t("kody.resultFields.updated"),
+    followUpStatus: t("kody.resultFields.followUpStatus"), lostReason: t("kody.resultFields.lostReason"),
+    lostReasonNotes: t("kody.resultFields.lostReasonNotes"), lostAtUtc: t("kody.resultFields.lostAt"),
+    lostByName: t("kody.resultFields.lostBy"),
   };
   return labels[key] ?? t("kody.resultFields.detail");
 }
@@ -420,6 +431,15 @@ function localizedKnownValue(value: string, t: TFunction) {
     ARRIVED: t("kody.values.arrived"), IN_PROGRESS: t("kody.values.inProgress"),
     COMPLETED: t("kody.values.completed"), CANCELED: t("kody.values.canceled"),
     OVERDUE: t("kody.values.overdue"), TODAY: t("kody.values.today"), UPCOMING: t("kody.values.upcoming"),
+    URGENT_PRIORITY: t("kody.values.urgentPriority"), DUE_TODAY: t("kody.values.dueToday"), NEVER_ATTEMPTED: t("kody.values.neverAttempted"),
+    TASK_OVERDUE: t("kody.values.taskOverdue"), NO_RECORDED_FOLLOW_UP: t("kody.values.noRecordedFollowUp"),
+    FOLLOW_UP_STALE: t("kody.values.followUpStale"), NEXT_TASK_SCHEDULED: t("kody.values.nextTaskScheduled"),
+    RECENT_FOLLOW_UP_REVIEW: t("kody.values.recentFollowUpReview"),
+    PRICE: t("customers.lifecycle.reasons.PRICE"), NO_RESPONSE: t("customers.lifecycle.reasons.NO_RESPONSE"),
+    COMPETITOR: t("customers.lifecycle.reasons.COMPETITOR"), TIMING: t("customers.lifecycle.reasons.TIMING"),
+    NOT_A_FIT: t("customers.lifecycle.reasons.NOT_A_FIT"), CUSTOMER_CANCELED: t("customers.lifecycle.reasons.CUSTOMER_CANCELED"),
+    OTHER: t("customers.lifecycle.reasons.OTHER"),
+    NO_ACTIVE_QUOTEFLY_OVERLAP_WITH_TRAVEL_BUFFER: t("kody.values.noQuoteFlyOverlapWithBuffer"),
     EMAIL: t("kody.values.email"), SMS: t("kody.values.text"), COPY: t("kody.values.copy"),
     CONSTRUCTION: t("domain.trade.CONSTRUCTION"), HVAC: t("domain.trade.HVAC"), PLUMBING: t("domain.trade.PLUMBING"),
     FLOORING: t("domain.trade.FLOORING"), ROOFING: t("domain.trade.ROOFING"), GARDENING: t("domain.trade.GARDENING"),
@@ -708,7 +728,7 @@ function KodyResultCard({
 }) {
   const { t } = useTranslation();
   const { locale } = useLocale();
-  const isScheduleResult = "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result);
+  const isScheduleResult = "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result) || (result.scheduleOpening === true && "startsAtUtc" in result);
   const isInvoiceResult = "invoiceId" in result || "invoiceNumber" in result;
   const protectedScheduleFields = /(?:address|instruction|phone|email|contact|cost|margin)/i;
   const entries = visibleKodyResultEntries(result)
@@ -720,7 +740,7 @@ function KodyResultCard({
     const start = startsAtUtc ? formatKodyDate(startsAtUtc, locale, timeZone, true) : null;
     const end = endsAtUtc ? formatKodyDate(endsAtUtc, locale, timeZone, true) : null;
     const customerName = getString(result.customerName) ?? t("kody.confirm.theCustomer");
-    const jobTitle = getString(result.jobTitle);
+    const jobTitle = getString(result.jobTitle) ?? getString(result.targetTitle);
     const jobNumber = getFiniteNumber(result.jobNumber);
     const assigneeName = getString(result.assigneeName);
     const status = getString(result.appointmentStatus) ?? getString(result.status);
@@ -756,6 +776,18 @@ function KodyResultCard({
             <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
               <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.assignee")}</dt>
               <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{assigneeName}</dd>
+            </div>
+          ) : null}
+          {getFiniteNumber(result.durationMinutes) !== null ? (
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.duration")}</dt>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{t("kody.scheduleCard.minutes", { count: getFiniteNumber(result.durationMinutes) })}</dd>
+            </div>
+          ) : null}
+          {getFiniteNumber(result.travelBufferMinutes) !== null ? (
+            <div className="grid gap-0.5 sm:flex sm:items-start sm:justify-between sm:gap-3">
+              <dt className="shrink-0 text-[var(--qf-text-muted)]">{t("kody.resultFields.travelBuffer")}</dt>
+              <dd className="min-w-0 break-words text-left font-medium text-[var(--qf-text)] sm:text-right">{t("kody.scheduleCard.minutes", { count: getFiniteNumber(result.travelBufferMinutes) })}</dd>
             </div>
           ) : null}
           {status ? (
@@ -812,9 +844,16 @@ function KodyResponse({
   const [lastFeedbackSave, setLastFeedbackSave] = useState<"rating" | "note" | null>(null);
   const [visibleActionCount, setVisibleActionCount] = useState(3);
   const [visibleResultCount, setVisibleResultCount] = useState(4);
-  const [resultsOpen, setResultsOpen] = useState(response.diagnostics.resolvedTool === "PREPARE_BOOKING");
+  const [resultsOpen, setResultsOpen] = useState([
+    "FOLLOW_UP_QUEUE",
+    "PRIORITIZE_MY_DAY",
+    "LIST_SCHEDULE",
+    "ASSESS_SCHEDULE_FIT",
+    "PREPARE_BOOKING",
+  ].includes(response.diagnostics.resolvedTool));
   const isScheduleResponse = response.diagnostics.resolvedTool === "LIST_SCHEDULE"
     || response.diagnostics.resolvedTool === "PREPARE_BOOKING"
+    || response.diagnostics.resolvedTool === "ASSESS_SCHEDULE_FIT"
     || response.diagnostics.resolvedTool === "PREPARE_DISPATCH"
     || response.results.some((result) => "appointmentId" in result || ("jobNumber" in result && "startsAtUtc" in result));
   const shownResultCount = Math.min(response.results.length, visibleResultCount);
@@ -872,8 +911,55 @@ function KodyResponse({
           {visibleAnswer || t("kody.response.emptyAnswer")}
         </p>
 
+        {response.results.length ? (
+          <details
+            open={resultsOpen}
+            onToggle={(event) => setResultsOpen(event.currentTarget.open)}
+            className="group order-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2"
+            data-testid="kody-results"
+          >
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
+              <span>{t("kody.results.view", { count: response.results.length })}</span>
+              <ChevronDown
+                size={16}
+                className="text-[var(--qf-text-muted)] motion-safe:transition-transform motion-safe:group-open:rotate-180"
+                aria-hidden="true"
+              />
+            </summary>
+            <div id={`kody-results-${response.auditEventId}`} className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
+              {response.results.slice(0, shownResultCount).map((result, index) => (
+                <KodyResultCard
+                  key={`${response.auditEventId}-${index}`}
+                  result={result}
+                  index={index}
+                  displayTimeZone={displayTimeZone}
+                />
+              ))}
+              {response.results.length > shownResultCount ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setVisibleResultCount((count) => Math.min(count + 4, response.results.length))}
+                  className="w-full"
+                  aria-controls={`kody-results-${response.auditEventId}`}
+                  data-testid="kody-results-show-more"
+                >
+                  {t("kody.results.showMore", { count: response.results.length - shownResultCount })}
+                </Button>
+              ) : null}
+              <p className="text-xs font-medium text-[var(--qf-text-muted)]" data-testid="kody-results-count" aria-live="polite">
+                {resultsTruncated
+                  ? t("kody.results.showingTruncated", { shown: shownResultCount })
+                  : t("kody.results.showing", { shown: shownResultCount, total: response.results.length })}
+                {isScheduleResponse ? ` ${t("kody.results.scheduleScope")}` : ""}
+              </p>
+            </div>
+          </details>
+        ) : null}
+
         {response.actions.length ? (
-          <div id={`kody-actions-${response.auditEventId}`} className="mt-3 flex flex-wrap gap-2">
+          <div id={`kody-actions-${response.auditEventId}`} className="order-3 mt-3 flex flex-wrap gap-2">
             {response.actions.slice(0, shownActionCount).map((action, index) => (
               <Button
                 key={`${action.type}-${index}`}
@@ -1003,53 +1089,6 @@ function KodyResponse({
           </div>
         ) : null}
       </div>
-
-      {response.results.length ? (
-        <details
-          open={resultsOpen}
-          onToggle={(event) => setResultsOpen(event.currentTarget.open)}
-          className="group order-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2"
-          data-testid="kody-results"
-        >
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm font-semibold text-[var(--qf-text)] marker:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
-            <span>{t("kody.results.view", { count: response.results.length })}</span>
-            <ChevronDown
-              size={16}
-              className="text-[var(--qf-text-muted)] motion-safe:transition-transform motion-safe:group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </summary>
-          <div id={`kody-results-${response.auditEventId}`} className="mt-2 grid gap-2 border-t border-[var(--qf-border)] pt-3">
-            {response.results.slice(0, shownResultCount).map((result, index) => (
-              <KodyResultCard
-                key={`${response.auditEventId}-${index}`}
-                result={result}
-                index={index}
-                displayTimeZone={displayTimeZone}
-              />
-            ))}
-            {response.results.length > shownResultCount ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setVisibleResultCount((count) => Math.min(count + 4, response.results.length))}
-                className="w-full"
-                aria-controls={`kody-results-${response.auditEventId}`}
-                data-testid="kody-results-show-more"
-              >
-                {t("kody.results.showMore", { count: response.results.length - shownResultCount })}
-              </Button>
-            ) : null}
-            <p className="text-xs font-medium text-[var(--qf-text-muted)]" data-testid="kody-results-count" aria-live="polite">
-              {resultsTruncated
-                ? t("kody.results.showingTruncated", { shown: shownResultCount })
-                : t("kody.results.showing", { shown: shownResultCount, total: response.results.length })}
-              {isScheduleResponse ? ` ${t("kody.results.scheduleScope")}` : ""}
-            </p>
-          </div>
-        </details>
-      ) : null}
 
       <details
         className="group order-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-kody-assistant-surface)] px-3 py-2 text-xs text-[var(--qf-text-soft)]"
@@ -1461,7 +1500,10 @@ export function KodyAssistant({
       const bookingNeedsClarification = assistantResponse.tool === "PREPARE_BOOKING"
         && typeof bookingOutcome === "string"
         && ["MISSING_DATE", "MISSING_TIME", "MISSING_DURATION", "MISSING_SEARCH_WINDOW"].includes(bookingOutcome);
-      if (!bookingNeedsClarification) setContextOverride(null);
+      const capacityNeedsClarification = assistantResponse.tool === "ASSESS_SCHEDULE_FIT"
+        && typeof bookingOutcome === "string"
+        && ["MISSING_TARGET", "TARGET_AMBIGUOUS", "MISSING_DATE", "MISSING_DURATION"].includes(bookingOutcome);
+      if (!bookingNeedsClarification && !capacityNeedsClarification) setContextOverride(null);
     } catch (err) {
       if (activeRequestRef.current?.id !== requestId || controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
         return;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Writable } from "node:stream";
 import { after, test } from "node:test";
 import Fastify from "fastify";
 import {
@@ -65,4 +66,31 @@ test("request logging strips OAuth credentials and customer PII from query strin
   const output = JSON.stringify(serialized);
   assert.equal(serialized.url, "/v1/integrations/quickbooks/callback");
   assert.doesNotMatch(output, /secret-code|signed-state|realm-secret|customer|5551234567/);
+});
+
+test("Fastify automatic request logs never serialize OAuth callback query parameters", async () => {
+  let output = "";
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    },
+  });
+  const app = Fastify({
+    logger: {
+      stream,
+      serializers: { req: safeRequestLogSerializer },
+    },
+  });
+  openApps.push(app);
+  app.get("/v1/integrations/quickbooks/callback", async () => ({ ok: true }));
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/integrations/quickbooks/callback?code=oauth-code-secret&state=oauth-state-secret&realmId=realm-secret",
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.match(output, /\/v1\/integrations\/quickbooks\/callback/);
+  assert.doesNotMatch(output, /oauth-code-secret|oauth-state-secret|realm-secret|\?code=|realmId/);
 });

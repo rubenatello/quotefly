@@ -487,6 +487,9 @@ export type InternalControlPlaneSummary = {
     issueCount: number;
     createdAt: string;
   };
+  workers: {
+    quickBooksReconciliation: WorkerHeartbeatPayload | null;
+  };
   mutationPolicy: { enabled: false; reason: string };
 };
 
@@ -659,6 +662,7 @@ export type AiAssistantRequestedTool =
   | "NAVIGATE_WORKSPACE"
   | "FOLLOW_UP_QUEUE"
   | "LIST_SCHEDULE"
+  | "ASSESS_SCHEDULE_FIT"
   | "LIST_MY_ACTIVITIES"
   | "PRIORITIZE_MY_DAY"
   | "CUSTOMERS_WITHOUT_QUOTES"
@@ -890,6 +894,7 @@ type DecimalLike = number | string;
 
 export type CustomerLifecycle = "active" | "archived" | "deleted";
 export type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
+export type CustomerLostReason = "PRICE" | "NO_RESPONSE" | "COMPETITOR" | "TIMING" | "NOT_A_FIT" | "CUSTOMER_CANCELED" | "OTHER";
 
 export type CustomerQuoteSummary = {
   id: string;
@@ -912,6 +917,13 @@ export type Customer = {
   preferredLocale?: SupportedLocale | null;
   followUpStatus: LeadFollowUpStatus;
   followUpUpdatedAtUtc?: string | null;
+  lifecycleVersion: number;
+  lostReason?: CustomerLostReason | null;
+  lostReasonNotes?: string | null;
+  lostAtUtc?: string | null;
+  lostByTenantUserId?: string | null;
+  lostByTenantUser?: WorkspaceAssignee | null;
+  reopenedAtUtc?: string | null;
   archivedAtUtc?: string | null;
   deletedAtUtc?: string | null;
   createdAt: string;
@@ -922,6 +934,7 @@ export type Customer = {
     quoteCount: number;
     latestQuote: CustomerQuoteSummary | null;
     stage: CustomerStage;
+    openManualTaskCount?: number;
   };
 };
 
@@ -1081,6 +1094,7 @@ export type CustomerActivityEvent = {
   quoteTitle?: string | null;
   version?: number | null;
   channel?: QuoteOutboundChannel | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type ChatToQuoteParsed = {
@@ -1529,6 +1543,35 @@ export type ActivityTaskType = "FOLLOW_UP" | "PREPARE_QUOTE" | "SEND_QUOTE" | "C
 export type ActivityTaskStatus = "OPEN" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
 export type ActivityTaskPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 export type ActivityTaskDueFilter = "active" | "overdue" | "today" | "upcoming" | "completed";
+export type ActivityTaskOrigin = "MANUAL" | "AUTOMATED_CUSTOMER_FOLLOW_UP";
+export type FollowUpOutcome = "CONTACTED" | "NO_RESPONSE" | "SKIPPED";
+
+export type FollowUpSettingsStep = {
+  stepNumber: number;
+  delayMinutes: number;
+  title: string;
+  notes: string | null;
+  priority: ActivityTaskPriority;
+};
+
+export type FollowUpSettings = {
+  enabled: boolean;
+  version: number;
+  updatedAtUtc: string;
+  steps: FollowUpSettingsStep[];
+};
+
+export type FollowUpSettingsUpdate = {
+  version: number;
+  enabled?: boolean;
+  steps?: Array<{
+    stepNumber: number;
+    delayMinutes: number;
+    title: string;
+    notes?: string | null;
+    priority: ActivityTaskPriority;
+  }>;
+};
 export type JobStatus = "UNSCHEDULED" | "SCHEDULED" | "DISPATCHED" | "IN_PROGRESS" | "COMPLETED" | "CANCELED";
 export type JobAppointmentStatus = "SCHEDULED" | "DISPATCHED" | "ARRIVED" | "COMPLETED" | "CANCELED";
 export type WorkspaceNotificationKind =
@@ -1592,11 +1635,15 @@ export type ActivityTask = {
   customerId: string;
   quoteId: string | null;
   assignedTenantUserId: string;
-  createdByTenantUserId: string;
+  createdByTenantUserId: string | null;
   completedByTenantUserId: string | null;
   type: ActivityTaskType;
   status: ActivityTaskStatus;
   priority: ActivityTaskPriority;
+  origin: ActivityTaskOrigin;
+  followUpOutcome: FollowUpOutcome | null;
+  followUpSequenceId: string | null;
+  followUpStepNumber: number | null;
   title: string;
   notes: string | null;
   dueAtUtc: string;
@@ -1966,6 +2013,10 @@ export type QuickBooksSetupCheckKey =
   | "PROVIDER_CONFIGURED"
   | "PROVIDER_WORKFLOWS_ENABLED"
   | "WEBHOOK_CONFIGURED"
+  | "HOSTED_PAYMENTS_ENABLED"
+  | "RECONCILIATION_WORKER_ENABLED"
+  | "RECONCILIATION_WORKER_HEALTHY"
+  | "CDC_WORKER_ENABLED"
   | "CONNECTION_ACTIVE"
   | "ENVIRONMENT_MATCHES"
   | "ACCOUNTING_SCOPE_GRANTED"
@@ -1982,6 +2033,22 @@ export type QuickBooksSetupReadiness = {
   confirmedAtUtc?: string | null;
   checks: Array<{ key: QuickBooksSetupCheckKey; passed: boolean; managedBy: "QUOTEFLY" | "WORKSPACE" }>;
   capabilities: { canConnect: boolean; canReconnect: boolean; canConfirm: boolean; canDisconnect: boolean };
+  operations: {
+    coreConnectionReady: boolean;
+    hostedPaymentsReady: boolean;
+    reconciliationReady: boolean;
+    cdcRecoveryReady: boolean;
+    allAccountingWorkflowsReady: boolean;
+  };
+};
+
+export type WorkerHeartbeatPayload = {
+  status: "STARTING" | "RUNNING" | "STOPPING" | "STOPPED" | "FAILED";
+  fresh: boolean;
+  heartbeatAtUtc: string;
+  startedAtUtc: string;
+  cycleStartedAtUtc: string;
+  lastCycleDurationMs?: number | null;
 };
 
 export type QuickBooksStatusPayload = {
@@ -1991,6 +2058,7 @@ export type QuickBooksStatusPayload = {
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";
+  reconciliationWorker: WorkerHeartbeatPayload | null;
   setup: QuickBooksSetupReadiness;
   connection: null | {
     environment: string;
@@ -2729,11 +2797,11 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-    complete: (activityTaskId: string, version: number) =>
+    complete: (activityTaskId: string, version: number, outcome?: FollowUpOutcome) =>
       request<{ task: ActivityTask; duplicate: boolean }>(`/v1/activities/${activityTaskId}/complete`, {
         method: "POST",
         headers: activityCommandHeaders(),
-        body: JSON.stringify({ version }),
+        body: JSON.stringify({ version, ...(outcome ? { outcome } : {}) }),
       }),
 
     reopen: (activityTaskId: string, version: number) =>
@@ -2748,6 +2816,15 @@ export const api = {
         method: "DELETE",
         headers: activityCommandHeaders(),
         body: JSON.stringify({ version }),
+      }),
+  },
+
+  followUpSettings: {
+    get: () => request<{ followUpSettings: FollowUpSettings }>("/v1/follow-up-settings"),
+    update: (body: FollowUpSettingsUpdate) =>
+      request<{ followUpSettings: FollowUpSettings }>("/v1/follow-up-settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
       }),
   },
 
@@ -3101,6 +3178,32 @@ export const api = {
       },
     ) => request<{ customer: Customer }>(`/v1/customers/${customerId}`, {
       method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+    markLost: (customerId: string, body: {
+      reason: CustomerLostReason;
+      notes?: string | null;
+      expectedVersion: number;
+    }) => request<{
+      customer: Customer;
+      canceledAutomaticTaskCount: number;
+      openManualTaskCount: number;
+    }>(`/v1/customers/${customerId}/mark-lost`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+    reopen: (customerId: string, body: {
+      startFollowUpSequence: boolean;
+      expectedVersion: number;
+    }) => request<{
+      customer: Customer;
+      startedFollowUpSequence: boolean;
+      createdAutomaticTaskCount: number;
+      openManualTaskCount: number;
+    }>(`/v1/customers/${customerId}/reopen`, {
+      method: "POST",
       body: JSON.stringify(body),
     }),
 

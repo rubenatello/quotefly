@@ -395,6 +395,7 @@ export async function ensureJobForAcceptedQuote(
     status: string;
     title: string;
     scopeText: string;
+    customerFollowUpStatus: string;
     closedAtUtc: Date | null;
     createdAt: Date;
     updatedAt: Date;
@@ -408,6 +409,7 @@ export async function ensureJobForAcceptedQuote(
       quote."status",
       quote."title",
       quote."scopeText",
+      customer."followUpStatus"::text AS "customerFollowUpStatus",
       quote."closedAtUtc",
       quote."createdAt",
       quote."updatedAt"
@@ -423,6 +425,7 @@ export async function ensureJobForAcceptedQuote(
       AND customer."deletedAtUtc" IS NULL
       ${memberScope}
     FOR UPDATE OF quote
+    FOR NO KEY UPDATE OF customer
   `);
   const quote = rows[0];
   if (!quote) {
@@ -430,6 +433,13 @@ export async function ensureJobForAcceptedQuote(
   }
   if (quote.status !== "ACCEPTED") {
     return null;
+  }
+  if (quote.customerFollowUpStatus === "LOST") {
+    throw new JobServiceError(
+      409,
+      "CUSTOMER_REOPEN_REQUIRED",
+      "Reopen this customer before creating a job from the accepted quote.",
+    );
   }
 
   const existingAfterLock = await transaction.job.findFirst({

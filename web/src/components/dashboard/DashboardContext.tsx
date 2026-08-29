@@ -222,7 +222,6 @@ export function followUpLabel(status: LeadFollowUpStatus): string {
 
 function effectiveFollowUpStatus(customer: Customer, latestQuote?: Quote): LeadFollowUpStatus {
   if (latestQuote?.status === "ACCEPTED") return "WON";
-  if (latestQuote?.status === "REJECTED") return "LOST";
   return customer.followUpStatus;
 }
 
@@ -1326,6 +1325,11 @@ export function DashboardProvider({
   }, [selectedQuote, canViewQuoteHistory, loadQuotes, loadQuoteDetail, loadQuoteHistory, t]);
 
   const updateLeadFollowUpStatus = useCallback(async (customerId: string, followUpStatus: LeadFollowUpStatus) => {
+    const customer = customers.find((candidate) => candidate.id === customerId);
+    if (followUpStatus === "LOST" || customer?.followUpStatus === "LOST") {
+      setError(t("customers.lifecycle.reopenBeforeStatusChange"));
+      return;
+    }
     setSaving(true); setError(null);
     try {
       await api.customers.update(customerId, { followUpStatus });
@@ -1333,7 +1337,7 @@ export function DashboardProvider({
       if (selectedQuote) await loadQuoteDetail(selectedQuote.id, { includeOutboundEvents: false });
       setNotice(t("quoteFeedback.followUp.updated", { status: t(`domain.followUp.${followUpStatus}`) }));
     } catch (err) { setError(localizedApiError(err, t, { fallbackKey: "quoteFeedback.followUp.error" })); } finally { setSaving(false); }
-  }, [selectedQuote, loadCustomers, loadQuotes, loadQuoteDetail, t]);
+  }, [customers, selectedQuote, loadCustomers, loadQuotes, loadQuoteDetail, t]);
 
   /* ─── Computed ─── */
 

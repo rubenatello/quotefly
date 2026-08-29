@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
 import { prisma } from "../../src/lib/prisma";
+import { seedCustomerFollowUpSchedule } from "../../src/services/customer-follow-up";
+import { applyQuoteCustomerLifecycle } from "../../src/services/customer-lifecycle";
 
 type Session = {
   cookie: string;
@@ -207,6 +209,654 @@ describe("activity task workflows", () => {
   afterAll(async () => {
     await app.close();
     await prisma.$disconnect();
+  });
+
+  test("versions settings and atomically schedules new customers with explicit follow-up outcomes", async () => {
+    const owner = await signUp("automatic-follow-up");
+    const member = await addMember(owner, "Automatic Follow-up Member");
+
+    const initialSettings = await app.inject({
+      method: "GET",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+    });
+    expect(initialSettings.statusCode).toBe(200);
+    expect(initialSettings.json()).toMatchObject({
+      followUpSettings: {
+        enabled: true,
+        version: 0,
+        steps: [
+          { stepNumber: 1, delayMinutes: 15, priority: "HIGH" },
+          { stepNumber: 2, delayMinutes: 1440, priority: "NORMAL" },
+          { stepNumber: 3, delayMinutes: 4320, priority: "NORMAL" },
+          { stepNumber: 4, delayMinutes: 10080, priority: "HIGH" },
+        ],
+      },
+    });
+
+    const disabled = await app.inject({
+      method: "PATCH",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+      payload: { version: 0, enabled: false },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({ followUpSettings: { enabled: false, version: 1 } });
+
+    const stale = await app.inject({
+      method: "PATCH",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+      payload: { version: 0, enabled: true },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: "FOLLOW_UP_SETTINGS_STALE_VERSION", currentVersion: 1 });
+
+    const disabledCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Disabled Schedule Customer", phone: "555-101-1001" },
+    });
+    expect(disabledCustomer.statusCode).toBe(201);
+    const disabledCustomerId = (disabledCustomer.json() as { customer: { id: string } }).customer.id;
+    expect(await prisma.customerFollowUpSequence.count({ where: { customerId: disabledCustomerId } })).toBe(0);
+
+    const enabled = await app.inject({
+      method: "PATCH",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+      payload: { version: 1, enabled: true },
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json()).toMatchObject({ followUpSettings: { enabled: true, version: 2 } });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Scheduled Customer", phone: "555-101-1002", assignedTenantUserId: member.membershipId },
+    });
+    expect(created.statusCode).toBe(201);
+    const customerId = (created.json() as { customer: { id: string } }).customer.id;
+    const sequence = await prisma.customerFollowUpSequence.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, customerId },
+      include: { tasks: { orderBy: { followUpStepNumber: "asc" } } },
+    });
+    expect(sequence.templateVersion).toBe(2);
+    expect(sequence.tasks).toHaveLength(4);
+    expect(sequence.tasks.every((task) => task.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP")).toBe(true);
+    expect(sequence.tasks.map((task) => task.assignedTenantUserId)).toEqual(Array(4).fill(member.membershipId));
+
+    const firstBeforeMemberEdit = sequence.tasks[0]!;
+    const blockedMemberEdit = await app.inject({
+      method: "PATCH",
+      url: `/v1/activities/${firstBeforeMemberEdit.id}`,
+      headers: { cookie: member.cookie, "idempotency-key": "automatic-follow-up-member-edit-0001" },
+      payload: {
+        version: firstBeforeMemberEdit.version,
+        title: "Hide this required follow-up",
+        notes: "Move it out of the queue",
+        priority: "LOW",
+        dueAtUtc: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString(),
+      },
+    });
+    expect(blockedMemberEdit.statusCode).toBe(409);
+    expect(blockedMemberEdit.json()).toMatchObject({ code: "FOLLOW_UP_TASK_IMMUTABLE" });
+    expect(await prisma.activityTask.findUniqueOrThrow({ where: { id: firstBeforeMemberEdit.id } })).toMatchObject({
+      version: firstBeforeMemberEdit.version,
+      title: firstBeforeMemberEdit.title,
+      notes: firstBeforeMemberEdit.notes,
+      priority: firstBeforeMemberEdit.priority,
+      dueAtUtc: firstBeforeMemberEdit.dueAtUtc,
+    });
+
+    const systemEvents = await prisma.activityTaskEvent.findMany({
+      where: { activityTaskId: { in: sequence.tasks.map((task) => task.id) } },
+    });
+    expect(systemEvents).toHaveLength(4);
+    expect(systemEvents.every((event) => event.actorKind === "SYSTEM" && event.actorTenantUserId === null)).toBe(true);
+
+    const reused = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: {
+        fullName: "Scheduled Customer",
+        phone: "555-101-1002",
+        duplicateAction: "use_existing",
+        duplicateCustomerId: customerId,
+      },
+    });
+    expect(reused.statusCode).toBe(200);
+    expect(await prisma.customerFollowUpSequence.count({ where: { customerId } })).toBe(1);
+
+    const skippedCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Skipped Follow-up Customer", phone: "555-101-1003" },
+    });
+    expect(skippedCustomer.statusCode).toBe(201);
+    const skippedCustomerId = (skippedCustomer.json() as { customer: { id: string } }).customer.id;
+    const skippedSequence = await prisma.customerFollowUpSequence.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, customerId: skippedCustomerId },
+      include: { tasks: { orderBy: { followUpStepNumber: "asc" } } },
+    });
+    const skipped = await app.inject({
+      method: "POST",
+      url: `/v1/activities/${skippedSequence.tasks[0]!.id}/complete`,
+      headers: { cookie: owner.cookie, "idempotency-key": "automatic-follow-up-skipped-0001" },
+      payload: { version: skippedSequence.tasks[0]!.version, outcome: "SKIPPED" },
+    });
+    expect(skipped.statusCode).toBe(200);
+    expect(skipped.json()).toMatchObject({ task: { status: "COMPLETED", followUpOutcome: "SKIPPED" } });
+    const skippedCustomerRecord = await prisma.customer.findUniqueOrThrow({ where: { id: skippedCustomerId } });
+    expect(skippedCustomerRecord.lastFollowUpAttemptAtUtc).toBeNull();
+    expect(skippedCustomerRecord.lastSuccessfulContactAtUtc).toBeNull();
+    const skippedSequenceAfter = await prisma.customerFollowUpSequence.findUniqueOrThrow({
+      where: { id: skippedSequence.id },
+      include: { tasks: true },
+    });
+    expect(skippedSequenceAfter.status).toBe("ACTIVE");
+    expect(skippedSequenceAfter.tasks.filter((task) => task.status === "OPEN")).toHaveLength(3);
+
+    const first = sequence.tasks[0]!;
+    const missingOutcome = await app.inject({
+      method: "POST",
+      url: `/v1/activities/${first.id}/complete`,
+      headers: { cookie: owner.cookie, "idempotency-key": "automatic-follow-up-missing-outcome-01" },
+      payload: { version: first.version },
+    });
+    expect(missingOutcome.statusCode).toBe(422);
+    expect(missingOutcome.json()).toMatchObject({ code: "FOLLOW_UP_OUTCOME_REQUIRED" });
+
+    const noResponse = await app.inject({
+      method: "POST",
+      url: `/v1/activities/${first.id}/complete`,
+      headers: { cookie: owner.cookie, "idempotency-key": "automatic-follow-up-no-response-0001" },
+      payload: { version: first.version, outcome: "NO_RESPONSE" },
+    });
+    expect(noResponse.statusCode).toBe(200);
+    expect(noResponse.json()).toMatchObject({ task: { status: "COMPLETED", followUpOutcome: "NO_RESPONSE" } });
+    expect((await prisma.customer.findUniqueOrThrow({ where: { id: customerId } })).lastFollowUpAttemptAtUtc).not.toBeNull();
+
+    const second = sequence.tasks[1]!;
+    const contacted = await app.inject({
+      method: "POST",
+      url: `/v1/activities/${second.id}/complete`,
+      headers: { cookie: owner.cookie, "idempotency-key": "automatic-follow-up-contacted-0001" },
+      payload: { version: second.version, outcome: "CONTACTED" },
+    });
+    expect(contacted.statusCode).toBe(200);
+    const finalSequence = await prisma.customerFollowUpSequence.findUniqueOrThrow({
+      where: { id: sequence.id },
+      include: { tasks: { orderBy: { followUpStepNumber: "asc" } } },
+    });
+    expect(finalSequence.status).toBe("COMPLETED");
+    expect(finalSequence.tasks.map((task) => task.status)).toEqual(["COMPLETED", "COMPLETED", "CANCELED", "CANCELED"]);
+    const finalCustomer = await prisma.customer.findUniqueOrThrow({ where: { id: customerId } });
+    expect(finalCustomer.followUpStatus).toBe("FOLLOWED_UP");
+    expect(finalCustomer.lastSuccessfulContactAtUtc).not.toBeNull();
+  });
+
+  test("serializes automatic follow-up completion against marking the customer lost", async () => {
+    const owner = await signUp("follow-up-completion-loss-race");
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Follow-up Loss Race Customer", phone: "555-201-3099" },
+    });
+    expect(created.statusCode).toBe(201);
+    const customer = (created.json() as {
+      customer: { id: string; lifecycleVersion: number };
+    }).customer;
+    const task = await prisma.activityTask.findFirstOrThrow({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: customer.id,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+        status: "OPEN",
+      },
+      orderBy: { followUpStepNumber: "asc" },
+    });
+
+    const [completion, loss] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/v1/activities/${task.id}/complete`,
+        headers: {
+          cookie: owner.cookie,
+          "idempotency-key": "follow-up-completion-loss-race-0001",
+        },
+        payload: { version: task.version, outcome: "CONTACTED" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/customers/${customer.id}/mark-lost`,
+        headers: { cookie: owner.cookie },
+        payload: {
+          reason: "NO_RESPONSE",
+          expectedVersion: customer.lifecycleVersion,
+        },
+      }),
+    ]);
+
+    expect([completion.statusCode, loss.statusCode].sort()).toEqual([200, 409]);
+    const storedCustomer = await prisma.customer.findUniqueOrThrow({ where: { id: customer.id } });
+    const storedTask = await prisma.activityTask.findUniqueOrThrow({ where: { id: task.id } });
+    if (loss.statusCode === 200) {
+      expect(completion.json()).toMatchObject({
+        code: expect.stringMatching(/^(FOLLOW_UP_CUSTOMER_TERMINAL|ACTIVITY_REOPEN_REQUIRED)$/),
+      });
+      expect(storedCustomer.followUpStatus).toBe("LOST");
+      expect(storedTask.status).toBe("CANCELED");
+    } else {
+      expect(loss.json()).toMatchObject({ code: "CUSTOMER_LIFECYCLE_STALE_VERSION" });
+      expect(storedCustomer.followUpStatus).toBe("FOLLOWED_UP");
+      expect(storedTask.status).toBe("COMPLETED");
+    }
+  });
+
+  test("records a structured customer loss atomically and reopens with an optional fresh sequence", async () => {
+    const owner = await signUp("customer-loss-lifecycle");
+    const otherOwner = await signUp("customer-loss-other-tenant");
+    const ownerActor = await ownerMembership(owner);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Structured Loss Customer", phone: "555-201-3001" },
+    });
+    expect(created.statusCode).toBe(201);
+    const createdCustomer = (created.json() as { customer: { id: string; lifecycleVersion: number } }).customer;
+    const originalSequence = await prisma.customerFollowUpSequence.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomer.id, status: "ACTIVE" },
+      include: { tasks: true },
+    });
+    expect(originalSequence.tasks).toHaveLength(4);
+
+    const manualTask = await app.inject({
+      method: "POST",
+      url: "/v1/activities",
+      headers: { cookie: owner.cookie, "idempotency-key": "customer-loss-manual-task-0001" },
+      payload: taskPayload(createdCustomer.id, "Review retained paperwork"),
+    });
+    expect(manualTask.statusCode).toBe(201);
+    const manualTaskId = (manualTask.json() as { task: { id: string } }).task.id;
+
+    const otherWithoutNotes = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: { reason: "OTHER", expectedVersion: createdCustomer.lifecycleVersion },
+    });
+    expect(otherWithoutNotes.statusCode).toBe(400);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: { reason: "PRICE", expectedVersion: createdCustomer.lifecycleVersion + 1 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: "CUSTOMER_LIFECYCLE_STALE_VERSION" });
+
+    const crossTenant = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/mark-lost`,
+      headers: { cookie: otherOwner.cookie },
+      payload: { reason: "PRICE", expectedVersion: createdCustomer.lifecycleVersion },
+    });
+    expect(crossTenant.statusCode).toBe(404);
+    expect(crossTenant.json()).toMatchObject({ code: "CUSTOMER_NOT_FOUND" });
+
+    const sensitiveNotes = "Customer selected a lower-priced local competitor.";
+    const lost = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        reason: "PRICE",
+        notes: sensitiveNotes,
+        expectedVersion: createdCustomer.lifecycleVersion,
+      },
+    });
+    expect(lost.statusCode).toBe(200);
+    const lostBody = lost.json() as {
+      customer: { lifecycleVersion: number; followUpStatus: string; lostReason: string; lostReasonNotes: string; lostAtUtc: string; lostByTenantUserId: string };
+      canceledAutomaticTaskCount: number;
+      openManualTaskCount: number;
+    };
+    expect(lostBody).toMatchObject({
+      customer: {
+        lifecycleVersion: createdCustomer.lifecycleVersion + 1,
+        followUpStatus: "LOST",
+        lostReason: "PRICE",
+        lostReasonNotes: sensitiveNotes,
+        lostByTenantUserId: ownerActor.id,
+      },
+      canceledAutomaticTaskCount: 4,
+      openManualTaskCount: 1,
+    });
+    expect(lostBody.customer.lostAtUtc).toEqual(expect.any(String));
+
+    const [lostCustomerList, lostCustomerDetail, lostCustomerActivity] = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: "/v1/customers?stage=LOST",
+        headers: { cookie: owner.cookie },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/v1/customers/${createdCustomer.id}`,
+        headers: { cookie: owner.cookie },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/v1/customers/${createdCustomer.id}/activity`,
+        headers: { cookie: owner.cookie },
+      }),
+    ]);
+    expect(lostCustomerList.statusCode).toBe(200);
+    expect(lostCustomerList.headers["cache-control"]).toBe("private, no-store");
+    const listedLostCustomer = (lostCustomerList.json() as {
+      customers: Array<Record<string, unknown>>;
+    }).customers.find((customer) => customer.id === createdCustomer.id);
+    expect(listedLostCustomer).toBeDefined();
+    expect(listedLostCustomer).not.toHaveProperty("lostReasonNotes");
+    expect(lostCustomerDetail.statusCode).toBe(200);
+    expect(lostCustomerDetail.headers["cache-control"]).toBe("private, no-store");
+    expect(lostCustomerDetail.json()).toMatchObject({
+      customer: { id: createdCustomer.id, lostReasonNotes: sensitiveNotes },
+    });
+    expect(lostCustomerActivity.statusCode).toBe(200);
+    expect(lostCustomerActivity.headers["cache-control"]).toBe("private, no-store");
+
+    const [sequenceAfterLoss, manualAfterLoss, lossActivity] = await Promise.all([
+      prisma.customerFollowUpSequence.findUniqueOrThrow({
+        where: { id: originalSequence.id },
+        include: { tasks: true },
+      }),
+      prisma.activityTask.findUniqueOrThrow({ where: { id: manualTaskId } }),
+      prisma.customerActivityEvent.findFirstOrThrow({
+        where: { tenantId: owner.tenant.id, customerId: createdCustomer.id, eventType: "CUSTOMER_LOST" },
+      }),
+    ]);
+    expect(sequenceAfterLoss.status).toBe("CANCELED");
+    expect(sequenceAfterLoss.tasks.every((task) => task.status === "CANCELED")).toBe(true);
+    expect(manualAfterLoss).toMatchObject({ origin: "MANUAL", status: "OPEN" });
+    expect(lossActivity).toMatchObject({
+      detail: "Reason: Price.",
+      metadata: expect.objectContaining({ reason: "PRICE", hasNotes: true, openManualTaskCount: 1 }),
+    });
+    expect(JSON.stringify(lossActivity)).not.toContain(sensitiveNotes);
+
+    const quoteWhileLost = await app.inject({
+      method: "POST",
+      url: "/v1/quotes",
+      headers: { cookie: owner.cookie, "idempotency-key": "customer-loss-quote-block-0001" },
+      payload: {
+        customerId: createdCustomer.id,
+        serviceType: "CONSTRUCTION",
+        title: "Quote that must not be created",
+        scopeText: "Lifecycle guard must reject this draft atomically.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 0,
+      },
+    });
+    expect(quoteWhileLost.statusCode).toBe(409);
+    expect(quoteWhileLost.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+    expect(await prisma.quote.count({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomer.id },
+    })).toBe(0);
+
+    const bypass = await app.inject({
+      method: "PATCH",
+      url: `/v1/customers/${createdCustomer.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { followUpStatus: "NEEDS_FOLLOW_UP" },
+    });
+    expect(bypass.statusCode).toBe(409);
+    expect(bypass.json()).toMatchObject({ code: "CUSTOMER_LIFECYCLE_COMMAND_REQUIRED" });
+
+    await expect(prisma.$transaction((tx) => seedCustomerFollowUpSchedule(tx, {
+      tenantId: owner.tenant.id,
+      customerId: createdCustomer.id,
+      createdByTenantUserId: ownerActor.id,
+    }))).rejects.toMatchObject({ code: "FOLLOW_UP_CUSTOMER_TERMINAL" });
+
+    const reopenedWithoutSchedule = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/reopen`,
+      headers: { cookie: owner.cookie },
+      payload: { startFollowUpSequence: false, expectedVersion: lostBody.customer.lifecycleVersion },
+    });
+    expect(reopenedWithoutSchedule.statusCode).toBe(200);
+    const reopenedCustomer = (reopenedWithoutSchedule.json() as {
+      customer: { lifecycleVersion: number; followUpStatus: string; lostReason: null; lostReasonNotes: null; lostAtUtc: null; reopenedAtUtc: string };
+      startedFollowUpSequence: boolean;
+      createdAutomaticTaskCount: number;
+    });
+    expect(reopenedCustomer).toMatchObject({
+      customer: {
+        lifecycleVersion: lostBody.customer.lifecycleVersion + 1,
+        followUpStatus: "NEEDS_FOLLOW_UP",
+        lostReason: null,
+        lostReasonNotes: null,
+        lostAtUtc: null,
+      },
+      startedFollowUpSequence: false,
+      createdAutomaticTaskCount: 0,
+    });
+    expect(reopenedCustomer.customer.reopenedAtUtc).toEqual(expect.any(String));
+
+    const lostAgain = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: { reason: "TIMING", expectedVersion: reopenedCustomer.customer.lifecycleVersion },
+    });
+    expect(lostAgain.statusCode).toBe(200);
+    const lostAgainVersion = (lostAgain.json() as { customer: { lifecycleVersion: number } }).customer.lifecycleVersion;
+    const historicalDraft = await prisma.quote.create({
+      data: {
+        tenantId: owner.tenant.id,
+        customerId: createdCustomer.id,
+        serviceType: "CONSTRUCTION",
+        status: "DRAFT",
+        title: "Existing quote while customer is lost",
+        scopeText: "This quote cannot be accepted until the customer is reopened.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 0,
+        totalAmount: 200,
+      },
+    });
+    const acceptWhileLost = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${historicalDraft.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { status: "ACCEPTED" },
+    });
+    expect(acceptWhileLost.statusCode).toBe(409);
+    expect(acceptWhileLost.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+    expect(await prisma.quote.findUniqueOrThrow({ where: { id: historicalDraft.id } })).toMatchObject({ status: "DRAFT" });
+    expect(await prisma.job.count({ where: { sourceQuoteId: historicalDraft.id } })).toBe(0);
+
+    const reopenedWithSchedule = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${createdCustomer.id}/reopen`,
+      headers: { cookie: owner.cookie },
+      payload: { startFollowUpSequence: true, expectedVersion: lostAgainVersion },
+    });
+    expect(reopenedWithSchedule.statusCode).toBe(200);
+    expect(reopenedWithSchedule.json()).toMatchObject({
+      startedFollowUpSequence: true,
+      createdAutomaticTaskCount: 4,
+      openManualTaskCount: 1,
+    });
+    const allSequences = await prisma.customerFollowUpSequence.findMany({
+      where: { tenantId: owner.tenant.id, customerId: createdCustomer.id },
+      include: { tasks: true },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(allSequences).toHaveLength(2);
+    expect(new Set(allSequences.flatMap((sequence) => sequence.tasks.map((task) => task.sourceKey))).size).toBe(8);
+
+    const rejectCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Rejected Quote Customer", phone: "555-201-3002" },
+    });
+    expect(rejectCustomer.statusCode).toBe(201);
+    const rejectCustomerId = (rejectCustomer.json() as { customer: { id: string } }).customer.id;
+    const rejectedManualTask = await app.inject({
+      method: "POST",
+      url: "/v1/activities",
+      headers: { cookie: owner.cookie, "idempotency-key": "customer-rejection-manual-task-0001" },
+      payload: taskPayload(rejectCustomerId, "Review rejected quote manually"),
+    });
+    expect(rejectedManualTask.statusCode).toBe(201);
+    const rejectedManualTaskId = (rejectedManualTask.json() as { task: { id: string } }).task.id;
+    const rejectedLifecycle = await prisma.$transaction((tx) => applyQuoteCustomerLifecycle(tx, {
+      tenantId: owner.tenant.id,
+      customerId: rejectCustomerId,
+      quoteStatus: "REJECTED",
+    }));
+    expect(rejectedLifecycle).toMatchObject({
+      customerStatusChanged: false,
+      canceledAutomaticTaskCount: 4,
+    });
+    expect(await prisma.customer.findUniqueOrThrow({ where: { id: rejectCustomerId } })).toMatchObject({
+      followUpStatus: "NEEDS_FOLLOW_UP",
+      lostReason: null,
+      lostAtUtc: null,
+    });
+    expect(await prisma.customerFollowUpSequence.findFirstOrThrow({ where: { customerId: rejectCustomerId } })).toMatchObject({
+      status: "CANCELED",
+      cancellationReason: "QUOTE_REJECTED",
+    });
+    expect(await prisma.activityTask.count({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: rejectCustomerId,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+        status: "OPEN",
+      },
+    })).toBe(0);
+    expect(await prisma.activityTask.findUniqueOrThrow({ where: { id: rejectedManualTaskId } })).toMatchObject({
+      origin: "MANUAL",
+      status: "OPEN",
+    });
+
+    const automationDisabledCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Disabled Reopen Automation Customer", phone: "555-201-3003" },
+    });
+    expect(automationDisabledCustomer.statusCode).toBe(201);
+    const automationDisabledRecord = (automationDisabledCustomer.json() as {
+      customer: { id: string; lifecycleVersion: number };
+    }).customer;
+    const automationDisabledLoss = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${automationDisabledRecord.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: { reason: "NO_RESPONSE", expectedVersion: automationDisabledRecord.lifecycleVersion },
+    });
+    expect(automationDisabledLoss.statusCode).toBe(200);
+    const automationDisabledLossVersion = (automationDisabledLoss.json() as {
+      customer: { lifecycleVersion: number };
+    }).customer.lifecycleVersion;
+    const currentSettings = await app.inject({
+      method: "GET",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+    });
+    expect(currentSettings.statusCode).toBe(200);
+    const currentSettingsVersion = (currentSettings.json() as {
+      followUpSettings: { version: number };
+    }).followUpSettings.version;
+    const disabledSettings = await app.inject({
+      method: "PATCH",
+      url: "/v1/follow-up-settings",
+      headers: { cookie: owner.cookie },
+      payload: { version: currentSettingsVersion, enabled: false },
+    });
+    expect(disabledSettings.statusCode).toBe(200);
+    const requestedAutomationReopen = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${automationDisabledRecord.id}/reopen`,
+      headers: { cookie: owner.cookie },
+      payload: { startFollowUpSequence: true, expectedVersion: automationDisabledLossVersion },
+    });
+    expect(requestedAutomationReopen.statusCode).toBe(200);
+    expect(requestedAutomationReopen.json()).toMatchObject({
+      startedFollowUpSequence: false,
+      createdAutomaticTaskCount: 0,
+    });
+    const disabledReopenActivity = await prisma.customerActivityEvent.findFirstOrThrow({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: automationDisabledRecord.id,
+        eventType: "CUSTOMER_REOPENED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(disabledReopenActivity).toMatchObject({
+      detail: expect.stringContaining("without starting a new follow-up sequence"),
+      metadata: expect.objectContaining({
+        followUpSequenceRequested: true,
+        startedFollowUpSequence: false,
+        createdAutomaticTaskCount: 0,
+      }),
+    });
+
+    const activeJobCustomer = await createCustomer(owner, "Active Job Customer");
+    const activeJobQuote = await prisma.quote.create({
+      data: {
+        tenantId: owner.tenant.id,
+        customerId: activeJobCustomer.id,
+        serviceType: "CONSTRUCTION",
+        status: "ACCEPTED",
+        title: "Active construction job",
+        scopeText: "Active work must be completed before customer loss.",
+        internalCostSubtotal: 100,
+        customerPriceSubtotal: 200,
+        taxAmount: 0,
+        totalAmount: 200,
+      },
+    });
+    await prisma.job.create({
+      data: {
+        tenantId: owner.tenant.id,
+        customerId: activeJobCustomer.id,
+        sourceQuoteId: activeJobQuote.id,
+        jobNumber: 1,
+        status: "IN_PROGRESS",
+        title: activeJobQuote.title,
+        scopeSnapshot: activeJobQuote.scopeText,
+        serviceType: activeJobQuote.serviceType,
+        acceptedAtUtc: new Date(),
+      },
+    });
+    const activeJobBlocked = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${activeJobCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: { reason: "CUSTOMER_CANCELED", expectedVersion: activeJobCustomer.lifecycleVersion },
+    });
+    expect(activeJobBlocked.statusCode).toBe(409);
+    expect(activeJobBlocked.json()).toMatchObject({ code: "CUSTOMER_HAS_ACTIVE_JOBS" });
+    expect(await prisma.customer.findUniqueOrThrow({ where: { id: activeJobCustomer.id } })).toMatchObject({
+      followUpStatus: "NEEDS_FOLLOW_UP",
+      lostReason: null,
+    });
   });
 
   test("permits browser idempotency preflight and enforces replay, payload, and CAS semantics", async () => {
@@ -1003,6 +1653,91 @@ describe("activity task workflows", () => {
     expect(guessedMutation.statusCode).toBe(404);
   });
 
+  test("runtime role isolates normalized follow-up templates, steps, and customer sequences", async () => {
+    const owner = await signUp("follow-up-runtime-privileges");
+    const otherOwner = await signUp("follow-up-runtime-other");
+
+    const ownerCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: owner.cookie },
+      payload: { fullName: "Runtime Scheduled Customer", phone: "555-808-0101" },
+    });
+    const otherCustomer = await app.inject({
+      method: "POST",
+      url: "/v1/customers",
+      headers: { cookie: otherOwner.cookie },
+      payload: { fullName: "Other Runtime Scheduled Customer", phone: "555-808-0102" },
+    });
+    expect(ownerCustomer.statusCode).toBe(201);
+    expect(otherCustomer.statusCode).toBe(201);
+
+    const ownerTemplate = await prisma.followUpTemplate.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, isDefault: true },
+      include: { steps: true },
+    });
+    const otherTemplate = await prisma.followUpTemplate.findFirstOrThrow({
+      where: { tenantId: otherOwner.tenant.id, isDefault: true },
+    });
+    const ownerSequence = await prisma.customerFollowUpSequence.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id },
+    });
+    const otherSequence = await prisma.customerFollowUpSequence.findFirstOrThrow({
+      where: { tenantId: otherOwner.tenant.id },
+    });
+
+    const noContext = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      const templates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "FollowUpTemplate"`);
+      const steps = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "FollowUpTemplateStep"`);
+      const sequences = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "CustomerFollowUpSequence"`);
+      return { templates, steps, sequences };
+    });
+    expect(noContext).toEqual({ templates: [], steps: [], sequences: [] });
+
+    const tenantRows = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      const templates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "FollowUpTemplate" ORDER BY "id"`);
+      const steps = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "FollowUpTemplateStep" ORDER BY "id"`);
+      const sequences = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "CustomerFollowUpSequence" ORDER BY "id"`);
+      const crossTenantUpdateCount = await tx.$executeRaw(Prisma.sql`
+        UPDATE "FollowUpTemplate" SET "enabled" = false WHERE "id" = ${otherTemplate.id}
+      `);
+      return { templates, steps, sequences, crossTenantUpdateCount };
+    });
+    expect(tenantRows.templates.map((row) => row.id)).toEqual([ownerTemplate.id]);
+    expect(tenantRows.steps.map((row) => row.id).sort()).toEqual(ownerTemplate.steps.map((step) => step.id).sort());
+    expect(tenantRows.sequences.map((row) => row.id)).toEqual([ownerSequence.id]);
+    expect(tenantRows.crossTenantUpdateCount).toBe(0);
+    expect(tenantRows.templates.map((row) => row.id)).not.toContain(otherTemplate.id);
+    expect(tenantRows.sequences.map((row) => row.id)).not.toContain(otherSequence.id);
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "FollowUpTemplate" (
+          "id", "tenantId", "version", "enabled", "isDefault", "retiredAtUtc", "createdAt", "updatedAt"
+        ) VALUES (
+          ${`wrong-follow-up-template-${Date.now()}`}, ${otherOwner.tenant.id}, 99, true, false, NOW(), NOW(), NOW()
+        )
+      `);
+    })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`DELETE FROM "FollowUpTemplateStep" WHERE "id" = ${ownerTemplate.steps[0]!.id}`);
+    })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      await tx.$executeRaw(Prisma.sql`DELETE FROM "CustomerFollowUpSequence" WHERE "id" = ${ownerSequence.id}`);
+    })).rejects.toThrow();
+  });
+
   test("runtime role enforces direct tenant RLS and immutable event privileges", async () => {
     const owner = await signUp("activity-runtime-privileges");
     const otherOwner = await signUp("activity-runtime-other");
@@ -1047,6 +1782,22 @@ describe("activity task workflows", () => {
     expect(tenantA.events.map((row) => row.activityTaskId)).toEqual([taskId]);
     expect(tenantA.crossTenantUpdateCount).toBe(0);
 
+    const compatibilityEventId = `compat-event-${Date.now()}`;
+    const compatibilityActorKind = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
+      await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
+      return tx.$queryRaw<Array<{ actorKind: string }>>(Prisma.sql`
+        INSERT INTO "ActivityTaskEvent" (
+          "id", "tenantId", "activityTaskId", "actorTenantUserId", "type", "requestId", "commandKeyHash", "commandPayloadHash"
+        ) VALUES (
+          ${compatibilityEventId}, ${owner.tenant.id}, ${taskId}, ${event.actorTenantUserId},
+          'UPDATED'::"ActivityTaskEventType", 'rolling-deploy-compatibility', ${"c".repeat(64)}, ${"d".repeat(64)}
+        )
+        RETURNING "actorKind"::text AS "actorKind"
+      `);
+    });
+    expect(compatibilityActorKind).toEqual([{ actorKind: "USER" }]);
+
     const tenantB = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
       await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${otherOwner.tenant.id}, true)`);
@@ -1072,10 +1823,10 @@ describe("activity task workflows", () => {
       await tx.$executeRaw(Prisma.sql`SELECT set_config('app.tenant_id', ${owner.tenant.id}, true)`);
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO "ActivityTaskEvent" (
-          "id", "tenantId", "activityTaskId", "actorTenantUserId", "type", "requestId", "commandKeyHash", "commandPayloadHash"
+          "id", "tenantId", "activityTaskId", "actorTenantUserId", "actorKind", "type", "requestId", "commandKeyHash", "commandPayloadHash"
         ) VALUES (
           ${`wrong-event-${Date.now()}`}, ${otherOwner.tenant.id}, ${otherTaskId}, ${otherMembership.id},
-          'UPDATED'::"ActivityTaskEventType", 'wrong-tenant', ${"a".repeat(64)}, ${"b".repeat(64)}
+          'USER'::"ActivityActorKind", 'UPDATED'::"ActivityTaskEventType", 'wrong-tenant', ${"a".repeat(64)}, ${"b".repeat(64)}
         )
       `);
     })).rejects.toThrow();

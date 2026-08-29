@@ -90,6 +90,15 @@ export type LeadFollowUpStatus =
   | "WON"
   | "LOST";
 
+export type CustomerLostReason =
+  | "PRICE"
+  | "NO_RESPONSE"
+  | "COMPETITOR"
+  | "TIMING"
+  | "NOT_A_FIT"
+  | "CUSTOMER_CANCELED"
+  | "OTHER";
+
 export type QuoteOutboundChannel =
   | "EMAIL_APP"
   | "SMS_APP"

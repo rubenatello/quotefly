@@ -8,13 +8,18 @@ import { useDashboard, formatDateTime } from "../components/dashboard/DashboardC
 import { KodyButton } from "../components/ai/KodyButton";
 import { publishKodyOutcome } from "../components/ai/kody-events";
 import { usePageView } from "../lib/analytics";
-import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerQuoteSummary, type OrganizationUser, type SupportedLocale } from "../lib/api";
+import { api, type Customer, type CustomerActivityEvent, type CustomerLifecycle, type CustomerLostReason, type CustomerQuoteSummary, type OrganizationUser, type SupportedLocale } from "../lib/api";
 import { localizedApiError } from "../lib/localized-api-error";
 import { formatUsPhoneDisplay, formatUsPhoneInput, normalizeUsPhoneDigits, toPhoneHrefValue } from "../lib/phone";
 import { QuickCustomerModal, type QuickCustomerForm } from "../components/customers/QuickCustomerModal";
 import { notify } from "../lib/notifications";
 import i18n from "../i18n/i18n";
 import { useLocale } from "../i18n";
+import {
+  CustomerLifecycleModal,
+  type CustomerLifecycleMode,
+} from "../components/customers/CustomerLifecycleModal";
+import { customerLostReasonLabel } from "../components/customers/customer-lifecycle-labels";
 
 type CustomerStage = "NEW" | "CONTACTED" | "READY" | "SENT" | "WON" | "LOST";
 
@@ -27,6 +32,12 @@ type CustomerRow = {
 type CustomerRetentionAction =
   | { type: "archive" | "delete" | "restore"; row: CustomerRow }
   | null;
+
+function customerQuoteBlockedMessage(customer: Pick<Customer, "archivedAtUtc" | "deletedAtUtc" | "followUpStatus">): string | null {
+  if (customer.archivedAtUtc || customer.deletedAtUtc) return i18n.t("customers.restoreBeforeQuote");
+  if (customer.followUpStatus === "LOST") return i18n.t("customers.lifecycle.reopenBeforeQuote");
+  return null;
+}
 
 function roleLabelForAssignment(role: OrganizationUser["role"]): string {
   return i18n.t(`domain.role.${role}`);
@@ -250,7 +261,8 @@ function CustomerDesktopRow({
   onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
-  const canQuote = !customer.archivedAtUtc && !customer.deletedAtUtc;
+  const quoteBlockedMessage = customerQuoteBlockedMessage(customer);
+  const canQuote = quoteBlockedMessage === null;
 
   return (
     <div className="hidden min-h-[86px] grid-cols-[minmax(220px,1.25fr)_minmax(220px,1fr)_minmax(190px,0.9fr)_150px_190px] items-center gap-5 border-l-2 border-transparent px-5 py-3 transition xl:grid hover:border-quotefly-blue hover:bg-slate-50/80 2xl:grid-cols-[minmax(260px,1.35fr)_minmax(250px,1fr)_minmax(220px,0.9fr)_160px_200px]">
@@ -319,7 +331,7 @@ function CustomerDesktopRow({
           className="whitespace-nowrap"
           onClick={() => onStartQuote(customer.id)}
           disabled={!canQuote}
-          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : i18n.t("customers.restoreBeforeQuote")}
+          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : quoteBlockedMessage ?? undefined}
         >
           {i18n.t("customers.newQuote")}
         </Button>
@@ -348,7 +360,9 @@ function CustomerMobileCard({
   onOpenActivity: (customerId: string) => void;
 }) {
   const { customer, latestQuote, stage } = row;
-  const canQuote = !customer.archivedAtUtc && !customer.deletedAtUtc;
+  const quoteBlockedMessage = customerQuoteBlockedMessage(customer);
+  const canQuote = quoteBlockedMessage === null;
+  const quoteBlockDescriptionId = `customer-${customer.id}-quote-blocked`;
 
   return (
     <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_6px_18px_rgba(15,23,42,0.045)] xl:hidden">
@@ -417,18 +431,25 @@ function CustomerMobileCard({
           icon={<FilePlus2 size={14} />}
           onClick={() => onStartQuote(customer.id)}
           disabled={!canQuote}
-          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : i18n.t("customers.restoreBeforeQuote")}
+          aria-describedby={!canQuote ? quoteBlockDescriptionId : undefined}
+          title={canQuote ? i18n.t("customers.openQuote", { title: customer.fullName }) : quoteBlockedMessage ?? undefined}
         >
           {i18n.t("customers.newQuote")}
         </Button>
       </div>
+      {!canQuote ? (
+        <p id={quoteBlockDescriptionId} className="text-xs font-medium text-[var(--qf-danger-strong)]">
+          {quoteBlockedMessage}
+        </p>
+      ) : null}
     </article>
   );
 }
 
-function activityTone(item: CustomerActivityEvent): "slate" | "blue" | "orange" | "emerald" {
+function activityTone(item: CustomerActivityEvent): "slate" | "blue" | "orange" | "emerald" | "red" {
   if (item.sourceType === "quote_outbound") return "orange";
-  if (item.eventType === "ACCEPTED" || item.eventType === "WON" || item.eventType === "RESTORED") return "emerald";
+  if (item.eventType === "CUSTOMER_LOST") return "red";
+  if (item.eventType === "ACCEPTED" || item.eventType === "WON" || item.eventType === "RESTORED" || item.eventType === "CUSTOMER_REOPENED") return "emerald";
   if (item.eventType === "ARCHIVED" || item.eventType === "REJECTED") return "slate";
   return "blue";
 }
@@ -509,6 +530,8 @@ function activityDisplay(
     DELETED: "customers.activity.event.customerDeleted",
     RESTORED: "customers.activity.event.customerRestored",
     MERGED: "customers.activity.event.customerMerged",
+    CUSTOMER_LOST: "customers.activity.event.customerLost",
+    CUSTOMER_REOPENED: "customers.activity.event.customerReopened",
   };
   const detailKey: Record<string, string> = {
     CREATED: "customers.activity.detail.customerAdded",
@@ -521,6 +544,28 @@ function activityDisplay(
     RESTORED: "customers.activity.detail.customerRestored",
     MERGED: "customers.activity.detail.customerMerged",
   };
+
+  if (item.eventType === "CUSTOMER_LOST") {
+    const reason = item.metadata?.reason;
+    const notes = item.metadata?.notes;
+    const reasonLabel = typeof reason === "string"
+      ? customerLostReasonLabel(reason as CustomerLostReason, t)
+      : t("customers.lifecycle.reasons.OTHER");
+    return {
+      title: t(eventTitleKey.CUSTOMER_LOST),
+      detail: typeof notes === "string" && notes.trim()
+        ? t("customers.activity.detail.customerLostWithNotes", { reason: reasonLabel, notes })
+        : t("customers.activity.detail.customerLost", { reason: reasonLabel }),
+    };
+  }
+  if (item.eventType === "CUSTOMER_REOPENED") {
+    return {
+      title: t(eventTitleKey.CUSTOMER_REOPENED),
+      detail: item.metadata?.startedFollowUpSequence === true
+        ? t("customers.activity.detail.customerReopenedWithSchedule")
+        : t("customers.activity.detail.customerReopenedWithoutSchedule"),
+    };
+  }
 
   const isUserAuthoredNote = item.eventType === "NOTES_ADDED" || item.eventType === "NOTES_UPDATED";
   return {
@@ -542,6 +587,12 @@ function localizedCustomerError(error: unknown, t: TFunction, fallbackKey: strin
     codeKeys: {
       ASSIGNEE_INACTIVE: "customers.errors.assigneeInactive",
       ACTIVE_ACTIVITY_TASKS: "customers.errors.activeTasks",
+      CUSTOMER_ALREADY_LOST: "customers.lifecycle.errors.alreadyLost",
+      CUSTOMER_NOT_LOST: "customers.lifecycle.errors.notLost",
+      CUSTOMER_LIFECYCLE_STALE_VERSION: "customers.lifecycle.errors.stale",
+      CUSTOMER_LIFECYCLE_COMMAND_REQUIRED: "customers.lifecycle.errors.commandRequired",
+      CUSTOMER_HAS_ACTIVE_JOBS: "customers.lifecycle.errors.activeJobs",
+      CUSTOMER_LOST_OTHER_NOTES_REQUIRED: "customers.lifecycle.errors.otherNotesRequired",
     },
   });
 }
@@ -600,6 +651,10 @@ export function CustomersPage() {
   const [detailsFeedback, setDetailsFeedback] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [customerRetentionAction, setCustomerRetentionAction] = useState<CustomerRetentionAction>(null);
   const [customerRetentionSaving, setCustomerRetentionSaving] = useState(false);
+  const [customerLifecycleMode, setCustomerLifecycleMode] = useState<CustomerLifecycleMode | null>(null);
+  const [customerLifecycleSaving, setCustomerLifecycleSaving] = useState(false);
+  const [customerLifecycleError, setCustomerLifecycleError] = useState<string | null>(null);
+  const [followUpAutomationEnabled, setFollowUpAutomationEnabled] = useState<boolean | null>(null);
   const [discardCustomerChangesOpen, setDiscardCustomerChangesOpen] = useState(false);
   const pendingCustomerCloseActionRef = useRef<(() => void) | null>(null);
   const [selectedCustomerDetail, setSelectedCustomerDetail] = useState<Customer | null>(null);
@@ -630,6 +685,20 @@ export function CustomersPage() {
       });
     return () => { mounted = false; };
   }, [canManageAssignments]);
+
+  const refreshFollowUpAutomation = useCallback(async () => {
+    setFollowUpAutomationEnabled(null);
+    try {
+      const result = await api.followUpSettings.get();
+      setFollowUpAutomationEnabled(result.followUpSettings.enabled);
+    } catch {
+      setFollowUpAutomationEnabled(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshFollowUpAutomation();
+  }, [refreshFollowUpAutomation]);
 
   useEffect(() => {
     if (searchParams.get("compose") === "customer") {
@@ -925,6 +994,77 @@ export function CustomersPage() {
     }
   }
 
+  function openCustomerLifecycle(mode: CustomerLifecycleMode) {
+    if (!selectedActivityRow || detailsChanged || notesChanged) return;
+    if (mode === "reopen") void refreshFollowUpAutomation();
+    setCustomerLifecycleError(null);
+    setCustomerLifecycleMode(mode);
+  }
+
+  async function markSelectedCustomerLost(input: { reason: CustomerLostReason; notes: string | null }) {
+    if (!selectedActivityRow || customerLifecycleSaving) return;
+    const customerId = selectedActivityRow.customer.id;
+    setCustomerLifecycleSaving(true);
+    setCustomerLifecycleError(null);
+    try {
+      const result = await api.customers.markLost(customerId, {
+        ...input,
+        expectedVersion: selectedActivityRow.customer.lifecycleVersion,
+      });
+      setSelectedCustomerDetail(result.customer);
+      await Promise.all([
+        loadCustomerPage(),
+        loadCustomers(),
+        loadQuotes(),
+        loadCustomerDetail(customerId),
+        loadCustomerActivity(customerId, 1),
+      ]);
+      setActivityPage(1);
+      setCustomerLifecycleMode(null);
+      notify.success(t("customers.lifecycle.markLostNotice"), {
+        description: t("customers.lifecycle.markLostNoticeDescription", {
+          automaticCount: result.canceledAutomaticTaskCount,
+          manualCount: result.openManualTaskCount,
+        }),
+      });
+    } catch (err) {
+      setCustomerLifecycleError(localizedCustomerError(err, t, "customers.errors.action"));
+    } finally {
+      setCustomerLifecycleSaving(false);
+    }
+  }
+
+  async function reopenSelectedCustomer(input: { startFollowUpSequence: boolean }) {
+    if (!selectedActivityRow || customerLifecycleSaving) return;
+    const customerId = selectedActivityRow.customer.id;
+    setCustomerLifecycleSaving(true);
+    setCustomerLifecycleError(null);
+    try {
+      const result = await api.customers.reopen(customerId, {
+        ...input,
+        expectedVersion: selectedActivityRow.customer.lifecycleVersion,
+      });
+      setSelectedCustomerDetail(result.customer);
+      await Promise.all([
+        loadCustomerPage(),
+        loadCustomers(),
+        loadCustomerDetail(customerId),
+        loadCustomerActivity(customerId, 1),
+      ]);
+      setActivityPage(1);
+      setCustomerLifecycleMode(null);
+      notify.success(t("customers.lifecycle.reopenNotice"), {
+        description: result.startedFollowUpSequence
+          ? t("customers.lifecycle.reopenNoticeWithSchedule", { count: result.createdAutomaticTaskCount })
+          : t("customers.lifecycle.reopenNoticeWithoutSchedule"),
+      });
+    } catch (err) {
+      setCustomerLifecycleError(localizedCustomerError(err, t, "customers.errors.action"));
+    } finally {
+      setCustomerLifecycleSaving(false);
+    }
+  }
+
   function finishClosingActivityModal() {
     activityRequestIdRef.current += 1;
     detailRequestIdRef.current += 1;
@@ -1156,6 +1296,50 @@ export function CustomersPage() {
                 </Alert>
               ) : null}
 
+              {selectedActivityRow.customer.followUpStatus === "LOST" ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-red-950 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-100">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-700 dark:text-red-300">{t("customers.lifecycle.lostSummaryTitle")}</p>
+                      <p className="mt-1 text-sm font-semibold">
+                        {selectedActivityRow.customer.lostReason
+                          ? customerLostReasonLabel(selectedActivityRow.customer.lostReason, t)
+                          : t("customers.lifecycle.reasons.OTHER")}
+                      </p>
+                      <p className="mt-1 text-xs text-red-800/80 dark:text-red-200/80">
+                        {t("customers.lifecycle.lostSummaryMeta", {
+                          date: selectedActivityRow.customer.lostAtUtc
+                            ? formatLocalDateTime(selectedActivityRow.customer.lostAtUtc)
+                            : "—",
+                          actor: selectedActivityRow.customer.lostByTenantUser?.user.fullName ?? t("customers.lifecycle.systemActor"),
+                        })}
+                      </p>
+                    </div>
+                    {!selectedCustomerInactive ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        icon={<ArchiveRestore size={15} />}
+                        disabled={detailsChanged || notesChanged}
+                        title={detailsChanged || notesChanged ? t("customers.lifecycle.saveDraftsFirst") : undefined}
+                        onClick={() => openCustomerLifecycle("reopen")}
+                      >
+                        {t("customers.lifecycle.reopenAction")}
+                      </Button>
+                    ) : null}
+                  </div>
+                  {selectedActivityRow.customer.lostReasonNotes ? (
+                    <p className="mt-3 whitespace-pre-wrap rounded-lg border border-red-200/80 bg-white/60 px-3 py-2 text-sm text-red-950 dark:border-red-900/60 dark:bg-black/10 dark:text-red-100">
+                      {selectedActivityRow.customer.lostReasonNotes}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {(detailsChanged || notesChanged) && !selectedCustomerInactive ? (
+                <Alert tone="warning">{t("customers.lifecycle.saveDraftsFirst")}</Alert>
+              ) : null}
+
               <div className="rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4 py-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -1278,7 +1462,8 @@ export function CustomersPage() {
                   <Button
                     size="sm"
                     icon={<FilePlus2 size={14} />}
-                    disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
+                    disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc || selectedActivityRow.customer.followUpStatus === "LOST")}
+                    title={selectedActivityRow.customer.followUpStatus === "LOST" ? t("customers.lifecycle.reopenBeforeQuote") : undefined}
                     onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
                   >
                     {t("customers.newQuote")}
@@ -1343,6 +1528,8 @@ export function CustomersPage() {
                               ? "bg-[var(--qf-warning-strong)] text-white"
                               : tone === "emerald"
                                 ? "bg-[var(--qf-success-strong)] text-white"
+                                : tone === "red"
+                                  ? "bg-[var(--qf-danger-strong)] text-white"
                                 : "bg-[var(--qf-text-soft)] text-[var(--qf-panel)]"
                         }`}
                       >
@@ -1420,8 +1607,31 @@ export function CustomersPage() {
         </ModalBody>
         {selectedActivityRow ? (
           <ModalFooter className="justify-between">
-            {canManageRecordRetention ? <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-              {selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? (
+            <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              {!selectedCustomerInactive ? (
+                selectedActivityRow.customer.followUpStatus === "LOST" ? (
+                  <Button
+                    variant="outline"
+                    icon={<ArchiveRestore size={15} />}
+                    disabled={detailsChanged || notesChanged}
+                    title={detailsChanged || notesChanged ? t("customers.lifecycle.saveDraftsFirst") : undefined}
+                    onClick={() => openCustomerLifecycle("reopen")}
+                  >
+                    {t("customers.lifecycle.reopenAction")}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="danger"
+                    icon={<XCircle size={15} />}
+                    disabled={detailsChanged || notesChanged}
+                    title={detailsChanged || notesChanged ? t("customers.lifecycle.saveDraftsFirst") : undefined}
+                    onClick={() => openCustomerLifecycle("mark-lost")}
+                  >
+                    {t("customers.lifecycle.markLostAction")}
+                  </Button>
+                )
+              ) : null}
+              {canManageRecordRetention && (selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc) ? (
                 <Button
                   variant="outline"
                   icon={<ArchiveRestore size={15} />}
@@ -1429,7 +1639,7 @@ export function CustomersPage() {
                 >
                   {t("customers.retention.restore")}
                 </Button>
-              ) : (
+              ) : canManageRecordRetention ? (
                 <>
                   <Button variant="outline" onClick={() => setCustomerRetentionAction({ type: "archive", row: selectedActivityRow })}>
                     {t("customers.retention.archive")}
@@ -1438,8 +1648,8 @@ export function CustomersPage() {
                     {t("customers.retention.delete")}
                   </Button>
                 </>
-              )}
-            </div> : <div />}
+              ) : null}
+            </div>
             <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               <KodyButton
                 label="Kody"
@@ -1458,8 +1668,12 @@ export function CustomersPage() {
               <Button
                 className="min-w-0 flex-1 sm:flex-none"
                 onClick={() => closeActivityModal(() => navigateToBuilder(selectedActivityRow.customer.id))}
-                disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc)}
-                title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc ? t("customers.restoreBeforeQuote") : undefined}
+                disabled={Boolean(selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc || selectedActivityRow.customer.followUpStatus === "LOST")}
+                title={selectedActivityRow.customer.archivedAtUtc || selectedActivityRow.customer.deletedAtUtc
+                  ? t("customers.restoreBeforeQuote")
+                  : selectedActivityRow.customer.followUpStatus === "LOST"
+                    ? t("customers.lifecycle.reopenBeforeQuote")
+                    : undefined}
               >
                 {t("customers.newQuote")}
               </Button>
@@ -1467,6 +1681,25 @@ export function CustomersPage() {
           </ModalFooter>
         ) : null}
       </Modal>
+
+      {customerLifecycleMode ? (
+        <CustomerLifecycleModal
+          key={`${selectedActivityRow?.customer.id ?? "customer"}-${customerLifecycleMode}`}
+          mode={customerLifecycleMode}
+          customer={selectedActivityRow?.customer ?? null}
+          open
+          saving={customerLifecycleSaving}
+          error={customerLifecycleError}
+          followUpAutomationEnabled={followUpAutomationEnabled}
+          onClose={() => {
+            if (customerLifecycleSaving) return;
+            setCustomerLifecycleMode(null);
+            setCustomerLifecycleError(null);
+          }}
+          onMarkLost={(input) => void markSelectedCustomerLost(input)}
+          onReopen={(input) => void reopenSelectedCustomer(input)}
+        />
+      ) : null}
 
       <ConfirmModal
         open={discardCustomerChangesOpen}

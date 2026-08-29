@@ -4,11 +4,16 @@ import {
   ActivityTaskPriority,
   ActivityTaskStatus,
   ActivityTaskType,
+  FollowUpOutcome,
   Prisma,
 } from "@prisma/client";
 import type { AccessContext } from "../lib/access-policy";
 import { hasCapability } from "../lib/access-policy";
 import { createCustomerActivityEvent, type ActivityActor } from "../lib/activity";
+import {
+  applyAutomatedFollowUpOutcome,
+  lockCustomerForAutomatedFollowUpCompletion,
+} from "./customer-follow-up";
 
 export type ActivityTaskTransaction = Prisma.TransactionClient;
 
@@ -33,6 +38,10 @@ export const ActivityTaskPublicSelect = {
   type: true,
   status: true,
   priority: true,
+  origin: true,
+  followUpOutcome: true,
+  followUpSequenceId: true,
+  followUpStepNumber: true,
   title: true,
   notes: true,
   dueAtUtc: true,
@@ -427,6 +436,7 @@ async function recordTaskEvent(
       tenantId: access.tenantId,
       activityTaskId: input.task.id,
       actorTenantUserId: access.tenantUserId,
+      actorKind: "USER",
       type: input.type,
       fromStatus: input.fromStatus ?? null,
       toStatus: input.toStatus ?? null,
@@ -859,6 +869,13 @@ export async function updateActivityTask(
   if (existing.status === "COMPLETED" || existing.status === "CANCELED") {
     throw new ActivityTaskServiceError(409, "ACTIVITY_REOPEN_REQUIRED", "Reopen this task before editing it.");
   }
+  if (existing.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP") {
+    throw new ActivityTaskServiceError(
+      409,
+      "FOLLOW_UP_TASK_IMMUTABLE",
+      "Automatic customer follow-up tasks cannot be edited. Complete the task with an explicit outcome instead.",
+    );
+  }
   if (input.status === "CANCELED" && !hasCapability(access, "manageAssignments")) {
     throw new ActivityTaskServiceError(403, "ACTIVITY_CANCEL_FORBIDDEN", "Only workspace owners and admins can cancel tasks.");
   }
@@ -900,6 +917,7 @@ export async function completeActivityTask(
   input: {
     taskId: string;
     version: number;
+    outcome?: FollowUpOutcome;
     actor: ActivityActor;
     command: ActivityTaskCommand;
   },
@@ -916,19 +934,67 @@ export async function completeActivityTask(
   if (existing.status === "CANCELED") {
     throw new ActivityTaskServiceError(409, "ACTIVITY_REOPEN_REQUIRED", "Reopen this task before completing it.");
   }
-  return updateTaskWithCommand(transaction, access, {
+  const automated = existing.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP";
+  if (automated && !input.outcome) {
+    throw new ActivityTaskServiceError(
+      422,
+      "FOLLOW_UP_OUTCOME_REQUIRED",
+      "Choose contacted, no response, or skipped before completing an automatic follow-up.",
+    );
+  }
+  if (!automated && input.outcome) {
+    throw new ActivityTaskServiceError(
+      422,
+      "FOLLOW_UP_OUTCOME_NOT_APPLICABLE",
+      "A follow-up outcome can only be recorded on an automatic customer follow-up.",
+    );
+  }
+  if (
+    automated
+    && !await lockCustomerForAutomatedFollowUpCompletion(transaction, {
+      tenantId: access.tenantId,
+      customerId: existing.customerId,
+    })
+  ) {
+    throw new ActivityTaskServiceError(
+      409,
+      "FOLLOW_UP_CUSTOMER_TERMINAL",
+      "This customer is won or lost, so the automatic follow-up can no longer be completed.",
+    );
+  }
+  const occurredAtUtc = new Date();
+  const result = await updateTaskWithCommand(transaction, access, {
     taskId: existing.id,
     version: input.version,
     data: {
       status: "COMPLETED",
-      completedAtUtc: new Date(),
+      completedAtUtc: occurredAtUtc,
       completedByTenantUserId: access.tenantUserId,
       canceledAtUtc: null,
+      ...(automated ? { followUpOutcome: input.outcome } : {}),
     },
     eventType: "COMPLETED",
     actor: input.actor,
     command: input.command,
   });
+  if (
+    automated
+    && input.outcome
+    && existing.followUpSequenceId
+    && existing.followUpStepNumber
+    && !result.duplicate
+  ) {
+    await applyAutomatedFollowUpOutcome(transaction, {
+      tenantId: access.tenantId,
+      customerId: existing.customerId,
+      taskId: existing.id,
+      sequenceId: existing.followUpSequenceId,
+      stepNumber: existing.followUpStepNumber,
+      outcome: input.outcome,
+      occurredAtUtc,
+    });
+  }
+  return result;
 }
 
 export async function reopenActivityTask(
@@ -952,6 +1018,13 @@ export async function reopenActivityTask(
   }
   if (existing.status === "IN_PROGRESS") {
     throw new ActivityTaskServiceError(409, "ACTIVITY_ALREADY_ACTIVE", "This task is already in progress.");
+  }
+  if (existing.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP") {
+    throw new ActivityTaskServiceError(
+      409,
+      "FOLLOW_UP_REOPEN_FORBIDDEN",
+      "Automatic follow-up outcomes are immutable. Create a new manual task if more work is needed.",
+    );
   }
   if (existing.status === "CANCELED" && !hasCapability(access, "manageAssignments")) {
     throw new ActivityTaskServiceError(403, "ACTIVITY_REOPEN_FORBIDDEN", "Only workspace owners and admins can reopen canceled tasks.");
@@ -992,6 +1065,14 @@ export async function deleteActivityTask(
   }
   const prepared = await prepareCommand(transaction, access, input.command, { allowDeleted: true });
   if (prepared.replay) return prepared.replay;
+  const existing = await getMutableTask(transaction, access, input.taskId);
+  if (existing.origin === "AUTOMATED_CUSTOMER_FOLLOW_UP") {
+    throw new ActivityTaskServiceError(
+      409,
+      "FOLLOW_UP_DELETE_FORBIDDEN",
+      "Automatic follow-up tasks cannot be removed. Complete the task with a follow-up outcome.",
+    );
+  }
   return updateTaskWithCommand(transaction, access, {
     taskId: input.taskId,
     version: input.version,

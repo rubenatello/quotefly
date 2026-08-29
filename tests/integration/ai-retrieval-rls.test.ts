@@ -16,6 +16,8 @@ let alphaJobId = "";
 let betaJobId = "";
 let alphaInvoiceId = "";
 let betaInvoiceId = "";
+let alphaFollowUpQuoteId = "";
+let betaFollowUpQuoteId = "";
 
 function runtimeDatabaseUrl() {
   const base = new URL(process.env.DATABASE_URL!);
@@ -94,6 +96,78 @@ describe("AI retrieval PostgreSQL RLS", () => {
           customerPriceSubtotal: 30,
           taxAmount: 0,
           totalAmount: 30,
+        },
+      }),
+    ]);
+    const sentAt = new Date(Date.now() - 4 * 24 * 60 * 60 * 1_000);
+    const [alphaFollowUpQuote, betaFollowUpQuote] = await Promise.all([
+      prisma.quote.create({
+        data: {
+          tenantId: alpha.id,
+          customerId: alphaCustomer.id,
+          assignedTenantUserId: alphaMembership.id,
+          serviceType: "PLUMBING",
+          status: "SENT_TO_CUSTOMER",
+          title: "Alpha Runtime Follow Up",
+          scopeText: "Alpha runtime follow-up fixture",
+          internalCostSubtotal: 10,
+          customerPriceSubtotal: 20,
+          taxAmount: 0,
+          totalAmount: 20,
+          sentAt,
+        },
+      }),
+      prisma.quote.create({
+        data: {
+          tenantId: beta.id,
+          customerId: betaCustomer.id,
+          assignedTenantUserId: betaMembership.id,
+          serviceType: "HVAC",
+          status: "SENT_TO_CUSTOMER",
+          title: "Beta Runtime Follow Up",
+          scopeText: "Beta runtime follow-up fixture",
+          internalCostSubtotal: 15,
+          customerPriceSubtotal: 30,
+          taxAmount: 0,
+          totalAmount: 30,
+          sentAt,
+        },
+      }),
+    ]);
+    alphaFollowUpQuoteId = alphaFollowUpQuote.id;
+    betaFollowUpQuoteId = betaFollowUpQuote.id;
+    const completedAtUtc = new Date(Date.now() - 60 * 60 * 1_000);
+    await Promise.all([
+      prisma.activityTask.create({
+        data: {
+          tenantId: alpha.id,
+          customerId: alphaCustomer.id,
+          quoteId: alphaFollowUpQuote.id,
+          assignedTenantUserId: alphaMembership.id,
+          createdByTenantUserId: alphaMembership.id,
+          completedByTenantUserId: alphaMembership.id,
+          type: "FOLLOW_UP",
+          status: "COMPLETED",
+          title: "Alpha runtime call",
+          notes: "Alpha-only note presence",
+          dueAtUtc: completedAtUtc,
+          completedAtUtc,
+        },
+      }),
+      prisma.activityTask.create({
+        data: {
+          tenantId: beta.id,
+          customerId: betaCustomer.id,
+          quoteId: betaFollowUpQuote.id,
+          assignedTenantUserId: betaMembership.id,
+          createdByTenantUserId: betaMembership.id,
+          completedByTenantUserId: betaMembership.id,
+          type: "FOLLOW_UP",
+          status: "COMPLETED",
+          title: "Beta runtime call",
+          notes: "Beta-only note presence",
+          dueAtUtc: completedAtUtc,
+          completedAtUtc,
         },
       }),
     ]);
@@ -303,6 +377,23 @@ describe("AI retrieval PostgreSQL RLS", () => {
     expect(invoices.assistant.results.map((result) => result.invoiceId)).toEqual([alphaInvoiceId]);
     expect(invoices.assistant.results.map((result) => result.invoiceId)).not.toContain(betaInvoiceId);
     expect(invoices.consumedCredits).toBe(0);
+
+    const followUps = await runAiAssistant(runtimePrisma, {
+      access: { ...access, requestId: `runtime-kody-follow-ups-${Date.now()}` },
+      actor,
+      message: "What quotes should I follow up on?",
+      tool: "AUTO",
+      context: { currentPage: "follow-up", limit: 8 },
+    });
+    expect(followUps.assistant.diagnostics.filters.quoteOnly).toBe(true);
+    expect(followUps.assistant.results).toContainEqual(expect.objectContaining({
+      quoteId: alphaFollowUpQuoteId,
+      lastRecordedFollowUpType: "TASK_COMPLETED",
+      hasFollowUpNotes: true,
+    }));
+    expect(followUps.assistant.results.map((result) => result.quoteId)).not.toContain(betaFollowUpQuoteId);
+    expect(JSON.stringify(followUps.assistant.results)).not.toContain("Beta-only");
+    expect(followUps.consumedCredits).toBe(0);
   });
 
   test("runtime role has no owner, superuser, or BYPASSRLS privilege", async () => {

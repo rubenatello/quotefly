@@ -460,6 +460,17 @@ describe("jobs from accepted quotes", () => {
     });
     expect(await prisma.job.count({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } })).toBe(1);
     expect((await jobForQuote(owner.tenant.id, quote.id)).status).toBe("UNSCHEDULED");
+    await expect(prisma.customer.findUniqueOrThrow({ where: { id: customer.id } })).resolves.toMatchObject({
+      followUpStatus: "WON",
+    });
+    await expect(prisma.activityTask.count({
+      where: {
+        tenantId: owner.tenant.id,
+        customerId: customer.id,
+        origin: "AUTOMATED_CUSTOMER_FOLLOW_UP",
+        status: { in: ["OPEN", "IN_PROGRESS"] },
+      },
+    })).resolves.toBe(0);
 
     const repeatedRestore = await app.inject({
       method: "POST",
@@ -470,6 +481,85 @@ describe("jobs from accepted quotes", () => {
     expect(repeatedRestore.json()).toMatchObject({ code: "QUOTE_JOB_LOCKED" });
     expect(await prisma.job.count({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } })).toBe(1);
   });
+
+  test.each(["SENT_TO_CUSTOMER", "ACCEPTED"] as const)(
+    "blocks restoring a %s revision while its customer is lost",
+    async (restoredStatus) => {
+      const owner = await signUp(`jobs-lost-${restoredStatus.toLowerCase()}-restore`);
+      const customer = await createCustomer(owner, `Lost ${restoredStatus} Restore Customer`);
+      const quote = await createQuote(owner, customer.id, `Lost ${restoredStatus} restore work`);
+      const revision = await prisma.quoteRevision.create({
+        data: {
+          tenantId: owner.tenant.id,
+          quoteId: quote.id,
+          customerId: customer.id,
+          version: 1,
+          eventType: "STATUS_CHANGED",
+          changedFields: ["status"],
+          actorUserId: owner.user.id,
+          actorEmail: owner.user.email,
+          actorName: owner.user.fullName,
+          title: quote.title,
+          status: restoredStatus,
+          customerPriceSubtotal: 150,
+          totalAmount: 150,
+          snapshot: {
+            quote: {
+              id: quote.id,
+              title: quote.title,
+              serviceType: "CONSTRUCTION",
+              status: restoredStatus,
+              jobStatus: "NOT_STARTED",
+              afterSaleFollowUpStatus: "NOT_READY",
+              scopeText: "Lifecycle-protected historical scope.",
+              internalCostSubtotal: 50,
+              customerPriceSubtotal: 150,
+              taxAmount: 0,
+              totalAmount: 150,
+              documentLocale: "en-US",
+              sentAtUtc: restoredStatus === "SENT_TO_CUSTOMER" ? new Date().toISOString() : null,
+              closedAtUtc: restoredStatus === "ACCEPTED" ? new Date().toISOString() : null,
+              jobCompletedAtUtc: null,
+              afterSaleFollowUpDueAtUtc: null,
+              afterSaleFollowUpCompletedAtUtc: null,
+            },
+            customer: {
+              id: customer.id,
+              fullName: customer.fullName,
+              email: customer.email,
+              phone: customer.phone,
+            },
+            lineItems: [],
+          },
+        },
+      });
+
+      const lost = await app.inject({
+        method: "POST",
+        url: `/v1/customers/${customer.id}/mark-lost`,
+        headers: { cookie: owner.cookie },
+        payload: {
+          reason: "CUSTOMER_CANCELED",
+          expectedVersion: customer.lifecycleVersion,
+        },
+      });
+      expect(lost.statusCode).toBe(200);
+
+      const restored = await app.inject({
+        method: "POST",
+        url: `/v1/quotes/${quote.id}/history/${revision.id}/restore`,
+        headers: { cookie: owner.cookie },
+      });
+      expect(restored.statusCode).toBe(409);
+      expect(restored.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+      await expect(prisma.quote.findUniqueOrThrow({ where: { id: quote.id } })).resolves.toMatchObject({
+        status: "DRAFT",
+      });
+      await expect(prisma.job.count({
+        where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id },
+      })).resolves.toBe(0);
+    },
+  );
 
   test("opens after-sale follow-up on authoritative completion without overwriting manual completion", async () => {
     const owner = await signUp("jobs-after-sale-handoff");
@@ -540,6 +630,126 @@ describe("jobs from accepted quotes", () => {
       select: { nextValue: true },
     });
     expect(sequence.nextValue).toBe(3);
+  });
+
+  test("keeps concurrent customer loss and quote acceptance in one valid lifecycle", async () => {
+    const owner = await signUp("jobs-concurrent-customer-loss");
+    const customer = await createCustomer(owner, "Concurrent Loss Customer");
+    const quote = await createQuote(owner, customer.id, "Concurrent loss accepted work");
+
+    const [acceptResponse, lossResponse] = await Promise.all([
+      app.inject({
+        method: "PATCH",
+        url: `/v1/quotes/${quote.id}`,
+        headers: { cookie: owner.cookie },
+        payload: { status: "ACCEPTED" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/customers/${customer.id}/mark-lost`,
+        headers: { cookie: owner.cookie },
+        payload: { reason: "CUSTOMER_CANCELED", expectedVersion: customer.lifecycleVersion },
+      }),
+    ]);
+
+    expect([acceptResponse.statusCode, lossResponse.statusCode].sort()).toEqual([200, 409]);
+    const [storedCustomer, storedQuote, jobs] = await Promise.all([
+      prisma.customer.findUniqueOrThrow({ where: { id: customer.id } }),
+      prisma.quote.findUniqueOrThrow({ where: { id: quote.id } }),
+      prisma.job.findMany({ where: { tenantId: owner.tenant.id, sourceQuoteId: quote.id } }),
+    ]);
+
+    if (acceptResponse.statusCode === 200) {
+      expect(lossResponse.json()).toMatchObject({ code: "CUSTOMER_LIFECYCLE_STALE_VERSION" });
+      expect(storedCustomer.followUpStatus).toBe("WON");
+      expect(storedQuote.status).toBe("ACCEPTED");
+      expect(jobs).toHaveLength(1);
+    } else {
+      expect(acceptResponse.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+      expect(storedCustomer.followUpStatus).toBe("LOST");
+      expect(storedQuote.status).toBe("DRAFT");
+      expect(jobs).toHaveLength(0);
+    }
+  });
+
+  test("blocks quote reassignment to a lost customer even when sent status is unchanged", async () => {
+    const owner = await signUp("jobs-lost-customer-reassignment");
+    const sourceCustomer = await createCustomer(owner, "Reassignment Source Customer");
+    const lostCustomer = await createCustomer(owner, "Reassignment Lost Customer");
+    const quote = await createQuote(owner, sourceCustomer.id, "Sent quote reassignment guard");
+    const sent = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { status: "SENT_TO_CUSTOMER" },
+    });
+    expect(sent.statusCode).toBe(200);
+    const lost = await app.inject({
+      method: "POST",
+      url: `/v1/customers/${lostCustomer.id}/mark-lost`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        reason: "NOT_A_FIT",
+        expectedVersion: lostCustomer.lifecycleVersion,
+      },
+    });
+    expect(lost.statusCode).toBe(200);
+
+    const reassigned = await app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { customerId: lostCustomer.id },
+    });
+    expect(reassigned.statusCode).toBe(409);
+    expect(reassigned.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+    await expect(prisma.quote.findUniqueOrThrow({ where: { id: quote.id } })).resolves.toMatchObject({
+      customerId: sourceCustomer.id,
+      status: "SENT_TO_CUSTOMER",
+    });
+  });
+
+  test("serializes sent quote reassignment against marking the target customer lost", async () => {
+    const owner = await signUp("jobs-customer-reassignment-loss-race");
+    const sourceCustomer = await createCustomer(owner, "Race Reassignment Source");
+    const targetCustomer = await createCustomer(owner, "Race Reassignment Target");
+    const quote = await createQuote(owner, sourceCustomer.id, "Sent reassignment race guard");
+    await expect(app.inject({
+      method: "PATCH",
+      url: `/v1/quotes/${quote.id}`,
+      headers: { cookie: owner.cookie },
+      payload: { status: "SENT_TO_CUSTOMER" },
+    })).resolves.toMatchObject({ statusCode: 200 });
+
+    const [reassignment, loss] = await Promise.all([
+      app.inject({
+        method: "PATCH",
+        url: `/v1/quotes/${quote.id}`,
+        headers: { cookie: owner.cookie },
+        payload: { customerId: targetCustomer.id },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/customers/${targetCustomer.id}/mark-lost`,
+        headers: { cookie: owner.cookie },
+        payload: {
+          reason: "TIMING",
+          expectedVersion: targetCustomer.lifecycleVersion,
+        },
+      }),
+    ]);
+
+    expect(loss.statusCode).toBe(200);
+    expect([200, 409]).toContain(reassignment.statusCode);
+    const storedQuote = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
+    const storedTarget = await prisma.customer.findUniqueOrThrow({ where: { id: targetCustomer.id } });
+    expect(storedTarget.followUpStatus).toBe("LOST");
+    if (reassignment.statusCode === 200) {
+      expect(storedQuote.customerId).toBe(targetCustomer.id);
+    } else {
+      expect(reassignment.json()).toMatchObject({ code: "CUSTOMER_REOPEN_REQUIRED" });
+      expect(storedQuote.customerId).toBe(sourceCustomer.id);
+    }
   });
 
   test("keeps member job visibility scoped to the assigned member and linked assigned records", async () => {

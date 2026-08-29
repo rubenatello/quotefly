@@ -48,6 +48,11 @@ test("routes operational Kody prompts before broad customer and quote intents", 
   assert.equal(resolveAssistantTool("What openings are available for Job #12 tomorrow between 8 AM and 5 PM?"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Check Job #12 for a free 2-hour slot tomorrow between 8 AM and 5 PM"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("When can we fit Job #12 in tomorrow?"), "PREPARE_BOOKING");
+  assert.equal(resolveAssistantTool("Can I fit in a job today somehow?"), "ASSESS_SCHEDULE_FIT");
+  assert.equal(
+    resolveAssistantTool("Which of my teammates have time in between to do an inspection for Robert California to finalize a quote?"),
+    "ASSESS_SCHEDULE_FIT",
+  );
   assert.equal(resolveAssistantTool("Find a slot for Job #12 tomorrow"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("Can Kody find a time for Job #12 tomorrow?"), "PREPARE_BOOKING");
   assert.equal(resolveAssistantTool("What is free for Job #12 tomorrow?"), "PREPARE_BOOKING");
@@ -163,6 +168,14 @@ test("routes operational Kody prompts before broad customer and quote intents", 
     ),
     "PREPARE_QUOTE_SEND",
   );
+});
+
+test("Kody describes QuickBooks flags as configuration rather than operational proof", () => {
+  const source = readFileSync("src/lib/ai-assistant.ts", "utf8");
+  assert.match(source, /reviewed accounting workflows are configured/);
+  assert.match(source, /Configuration alone does not prove worker health/);
+  assert.doesNotMatch(source, /all reviewed accounting workflows are ready/);
+  assert.match(source, /allAccountingWorkflowsConfigured/);
 });
 
 test("customer draft parsing separates unlabeled contact details from the full name", async () => {
@@ -291,6 +304,7 @@ test("deterministic operational tools do not consume the external AI budget", as
     "PRIORITIZE_MY_DAY",
     "PREPARE_ACTIVITY",
     "LIST_SCHEDULE",
+    "ASSESS_SCHEDULE_FIT",
     "PREPARE_BOOKING",
     "PREPARE_DISPATCH",
     "SEARCH_JOBS",

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
@@ -23,6 +23,11 @@ import {
 import { classifyQuickBooksWorkerFailure } from "../services/quickbooks-worker-failures";
 import { visitQuickBooksWorkerTenantPage } from "../services/quickbooks-worker-scheduler";
 import {
+  QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+  recordWorkerHeartbeat,
+  type WorkerHeartbeatStatus,
+} from "../services/worker-heartbeats";
+import {
   claimQuickBooksWebhookEvent,
   completeQuickBooksWebhookEvent,
   failQuickBooksWebhookEvent,
@@ -37,9 +42,69 @@ const QUICKBOOKS_CDC_SCAN_INTERVAL_MS = 15_000;
 const QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS = 60 * 60 * 1_000;
 const QUICKBOOKS_ACTIVE_TICK_PAUSE_MS = 100;
 const QUICKBOOKS_IDLE_TICK_PAUSE_MS = 1_000;
+const QUICKBOOKS_HEARTBEAT_REFRESH_MS = 15_000;
+const WORKER_STARTED_AT_UTC = new Date();
+const WORKER_INSTANCE_REF_HASH = createHash("sha256")
+  .update(randomUUID(), "utf8")
+  .digest("hex");
+let currentCycleStartedAtUtc = WORKER_STARTED_AT_UTC;
+let lastHeartbeatWriteAt = 0;
+
+async function persistWorkerHeartbeat(
+  status: WorkerHeartbeatStatus,
+  metrics: Prisma.InputJsonValue = {},
+  options: { force?: boolean; lastCycleDurationMs?: number | null } = {},
+) {
+  const now = new Date();
+  if (!options.force && now.getTime() - lastHeartbeatWriteAt < QUICKBOOKS_HEARTBEAT_REFRESH_MS) return;
+  await recordWorkerHeartbeat(prisma, {
+    workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+    instanceRefHash: WORKER_INSTANCE_REF_HASH,
+    status,
+    startedAtUtc: WORKER_STARTED_AT_UTC,
+    cycleStartedAtUtc: currentCycleStartedAtUtc,
+    heartbeatAtUtc: now,
+    lastCycleDurationMs: options.lastCycleDurationMs,
+    metrics,
+  });
+  lastHeartbeatWriteAt = now.getTime();
+}
 
 function pause(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function tenantRefHash(tenantId: string) {
+  return createHash("sha256").update(tenantId, "utf8").digest("hex").slice(0, 16);
+}
+
+function writeWorkerLog(
+  level: "info" | "warn" | "error",
+  event: string,
+  fields: Readonly<Record<string, boolean | number | string>> = {},
+) {
+  const record = JSON.stringify({
+    level,
+    event,
+    workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+    occurredAtUtc: new Date().toISOString(),
+    ...fields,
+  });
+  (level === "error" ? process.stderr : process.stdout).write(`${record}\n`);
+}
+
+function recordProviderWorkflowDuration(
+  metrics: {
+    providerWorkflowCount: number;
+    providerWorkflowTotalDurationMs: number;
+    providerWorkflowMaxDurationMs: number;
+  },
+  startedAtMs: number,
+) {
+  const durationMs = Math.max(0, Date.now() - startedAtMs);
+  metrics.providerWorkflowCount += 1;
+  metrics.providerWorkflowTotalDurationMs += durationMs;
+  metrics.providerWorkflowMaxDurationMs = Math.max(metrics.providerWorkflowMaxDurationMs, durationMs);
 }
 
 const WEBHOOK_PROVIDER_WORKLIST_KEY = "quoteflyPendingProviderInvoiceIds";
@@ -317,16 +382,13 @@ async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessO
     const outcome = await failQuickBooksWebhookEvent(prisma, claim, failure.code, {
       retryable: failure.retryable,
     });
-    console.warn(
-      {
-        tenantRefHash: createHash("sha256").update(tenantId, "utf8").digest("hex").slice(0, 16),
-        eventType: claim.eventType,
-        failureCode: failure.code,
-        retryable: failure.retryable,
-        outcome,
-      },
-      "QuickBooks reconciliation work item failed",
-    );
+    writeWorkerLog("warn", "quickbooks_reconciliation_work_item_failed", {
+      tenantRefHash: tenantRefHash(tenantId),
+      eventType: claim.eventType,
+      failureCode: failure.code,
+      retryable: failure.retryable,
+      outcome,
+    });
     return {
       status: outcome === "DEAD" ? "dead" : "failed",
       failureCode: failure.code,
@@ -364,6 +426,7 @@ async function run() {
     throw new Error("QuickBooks reconciliation worker is rollout-gated and default-off.");
   }
   await assertAiRetrievalRlsReady(prisma, { requireRuntimeRole: env.NODE_ENV === "production" });
+  await persistWorkerHeartbeat("STARTING", { rolloutEnabled: true }, { force: true });
   let webhookAfterTenantId: string | null = null;
   let revocationAfterTenantId: string | null = null;
   let cdcAfterTenantId: string | null = null;
@@ -383,6 +446,8 @@ async function run() {
 
   while (!stopping) {
     const tickStartedAt = Date.now();
+    currentCycleStartedAtUtc = new Date(tickStartedAt);
+    await persistWorkerHeartbeat("RUNNING", { phase: "cycle_start" }, { force: true });
     const metrics = {
       processed: 0,
       failed: 0,
@@ -391,6 +456,9 @@ async function run() {
       dueEventCount: 0,
       oldestBacklogAgeMs: 0,
       failureCodes: {} as Record<string, number>,
+      providerWorkflowCount: 0,
+      providerWorkflowTotalDurationMs: 0,
+      providerWorkflowMaxDurationMs: 0,
     };
     const webhookPage = await visitQuickBooksWorkerTenantPage({
       afterTenantId: webhookAfterTenantId,
@@ -407,12 +475,21 @@ async function run() {
               Math.max(0, Date.now() - backlog.oldestReceivedAtUtc.getTime()),
             );
           }
+          const providerWorkflowStartedAtMs = Date.now();
           const outcome = await processTenant(tenant.id);
+          recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
           if (outcome.status !== "idle") metrics[outcome.status] += 1;
           if (outcome.failureCode) {
             metrics.failureCodes[outcome.failureCode] = (metrics.failureCodes[outcome.failureCode] ?? 0) + 1;
           }
         }
+        await persistWorkerHeartbeat("RUNNING", {
+          phase: "webhook_scan",
+          processed: metrics.processed,
+          failed: metrics.failed,
+          dead: metrics.dead,
+          dueEventCount: metrics.dueEventCount,
+        });
       },
     });
     webhookAfterTenantId = webhookPage.nextAfterTenantId;
@@ -425,12 +502,14 @@ async function run() {
         loadPage: loadTenantPage,
         visit: async (tenant) => {
           if (stopping) return;
+        const providerWorkflowStartedAtMs = Date.now();
         await retryQuickBooksRevocation({ prisma, runtimeEnv: env, tenantId: tenant.id }).catch((error) => {
-          console.warn(
-            { errorName: error instanceof Error ? error.name : "UnknownError" },
-            "QuickBooks token revocation retry failed",
-          );
+          writeWorkerLog("warn", "quickbooks_token_revocation_retry_failed", {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          });
         });
+        recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
+        await persistWorkerHeartbeat("RUNNING", { phase: "revocation_scan" });
         },
       });
       revocationAfterTenantId = revocationPage.nextAfterTenantId;
@@ -447,17 +526,20 @@ async function run() {
         loadPage: loadTenantPage,
         visit: async (tenant) => {
           if (stopping) return;
+          const providerWorkflowStartedAtMs = Date.now();
           await recoverQuickBooksChanges({
             prisma,
             runtimeEnv: env,
             tenantId: tenant.id,
             getAccessToken: (connection) => getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection }),
           }).catch((error) => {
-            console.warn(
-              { tenantRefHash: Buffer.from(tenant.id).toString("base64url").slice(0, 16), errorName: error instanceof Error ? error.name : "UnknownError" },
-              "QuickBooks CDC recovery failed",
-            );
+            writeWorkerLog("warn", "quickbooks_cdc_recovery_failed", {
+              tenantRefHash: tenantRefHash(tenant.id),
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            });
           });
+          recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
+          await persistWorkerHeartbeat("RUNNING", { phase: "cdc_scan" });
         },
       });
       cdcAfterTenantId = cdcPage.nextAfterTenantId;
@@ -481,10 +563,9 @@ async function run() {
         unknownRealmQuarantineHasMore = quarantineResult.hasMore;
       } catch (error) {
         unknownRealmQuarantineRetentionFailed = true;
-        console.warn(
-          { errorName: error instanceof Error ? error.name : "UnknownError" },
-          "QuickBooks unknown-realm quarantine retention failed",
-        );
+        writeWorkerLog("warn", "quickbooks_unknown_realm_retention_failed", {
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
       }
       const retentionPage = await visitQuickBooksWorkerTenantPage({
         afterTenantId: retentionAfterTenantId,
@@ -502,11 +583,12 @@ async function run() {
             if (result.hasMore || result.lockSkipped) retentionHasMoreTenantCount += 1;
           } catch (error) {
             retentionFailedTenantCount += 1;
-            console.warn(
-              { tenantRefHash: Buffer.from(tenant.id).toString("base64url").slice(0, 16), errorName: error instanceof Error ? error.name : "UnknownError" },
-              "QuickBooks security retention failed",
-            );
+            writeWorkerLog("warn", "quickbooks_security_retention_failed", {
+              tenantRefHash: tenantRefHash(tenant.id),
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            });
           }
+          await persistWorkerHeartbeat("RUNNING", { phase: "retention_scan" });
         },
       });
       retentionAfterTenantId = retentionPage.nextAfterTenantId;
@@ -515,9 +597,16 @@ async function run() {
       nextRetentionScanAt = Date.now() + QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS;
     }
 
-    console.info(
-      {
-        ...metrics,
+    writeWorkerLog("info", "quickbooks_reconciliation_worker_heartbeat", {
+        processed: metrics.processed,
+        failed: metrics.failed,
+        dead: metrics.dead,
+        dueTenantCount: metrics.dueTenantCount,
+        dueEventCount: metrics.dueEventCount,
+        oldestBacklogAgeMs: metrics.oldestBacklogAgeMs,
+        providerWorkflowCount: metrics.providerWorkflowCount,
+        providerWorkflowTotalDurationMs: metrics.providerWorkflowTotalDurationMs,
+        providerWorkflowMaxDurationMs: metrics.providerWorkflowMaxDurationMs,
         webhookTenantCount: webhookPage.tenantCount,
         webhookCycleComplete: webhookPage.cycleComplete,
         revocationTenantCount,
@@ -536,19 +625,38 @@ async function run() {
         maxWebhookEventsPerTenant: 1,
         maxReconciliationsPerWorkItem: QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM,
         tickDurationMs: Date.now() - tickStartedAt,
-        heartbeatAtUtc: new Date().toISOString(),
-      },
-      "QuickBooks reconciliation worker heartbeat",
-    );
+      });
+    await persistWorkerHeartbeat("RUNNING", {
+      processed: metrics.processed,
+      failed: metrics.failed,
+      dead: metrics.dead,
+      dueTenantCount: metrics.dueTenantCount,
+      dueEventCount: metrics.dueEventCount,
+      oldestBacklogAgeMs: metrics.oldestBacklogAgeMs,
+      failureCodes: metrics.failureCodes,
+      providerWorkflowCount: metrics.providerWorkflowCount,
+      providerWorkflowTotalDurationMs: metrics.providerWorkflowTotalDurationMs,
+      providerWorkflowMaxDurationMs: metrics.providerWorkflowMaxDurationMs,
+      webhookTenantCount: webhookPage.tenantCount,
+      cdcTenantCount,
+      retentionFailedTenantCount,
+      unknownRealmQuarantineRetentionFailed,
+    }, { force: true, lastCycleDurationMs: Date.now() - tickStartedAt });
     await pause(metrics.dueEventCount > 0
       ? QUICKBOOKS_ACTIVE_TICK_PAUSE_MS
       : QUICKBOOKS_IDLE_TICK_PAUSE_MS);
   }
+  await persistWorkerHeartbeat("STOPPED", { stopping: true }, { force: true });
 }
 
 run()
-  .catch((error: unknown) => {
-    console.error({ errorName: error instanceof Error ? error.name : "UnknownError" }, "QuickBooks reconciliation worker stopped");
+  .catch(async (error: unknown) => {
+    writeWorkerLog("error", "quickbooks_reconciliation_worker_stopped", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    await persistWorkerHeartbeat("FAILED", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    }, { force: true }).catch(() => undefined);
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());

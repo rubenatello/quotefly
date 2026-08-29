@@ -82,6 +82,7 @@ function buildCorsOrigin(): CorsOriginFunction {
 const WORKSPACE_ACCESS_MUTATION_PREFIXES = [
   "/v1/customers",
   "/v1/activities",
+  "/v1/follow-up-settings",
   "/v1/jobs",
   "/v1/invoices",
   "/v1/quotes",

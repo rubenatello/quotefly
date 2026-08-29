@@ -29,6 +29,16 @@ export type QuickBooksTokenConnection = Readonly<{
 export type QuickBooksDisconnectResult = "disconnected" | "pending";
 
 const QUICKBOOKS_CREDENTIAL_CLAIM_MINIMUM_MS = 120_000;
+export const QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS = 8;
+const QUICKBOOKS_CONNECTION_REVOCATION_DEAD = "QUICKBOOKS_TOKEN_REVOCATION_DEAD";
+
+export function assertQuickBooksConnectionEnvironment(
+  runtimeEnv: Pick<RuntimeEnv, "QUICKBOOKS_ENVIRONMENT">,
+  connection: { environment: string },
+): void {
+  if (connection.environment === runtimeEnv.QUICKBOOKS_ENVIRONMENT) return;
+  throw new QuickBooksProviderError("QUICKBOOKS_CONNECTION_ENVIRONMENT_MISMATCH", false, 409);
+}
 
 function credentialClaimExpiresAt(runtimeEnv: RuntimeEnv, now: Date) {
   // Refresh and revoke each make one provider mutation with an AbortSignal
@@ -62,6 +72,55 @@ async function deactivateRealmBinding(
   });
 }
 
+export async function invalidateQuickBooksHostedPaymentLinks(
+  transaction: Prisma.TransactionClient,
+  tenantId: string,
+  connectionId: string,
+  now = new Date(),
+) {
+  const invalidated = await transaction.quickBooksInvoiceOperation.updateMany({
+    where: {
+      tenantId,
+      quickBooksConnectionId: connectionId,
+      archivedAtUtc: null,
+      providerInvoiceId: { not: null },
+    },
+    data: {
+      status: "RECONCILIATION_REQUIRED",
+      claimTokenHash: null,
+      claimExpiresAtUtc: null,
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      providerSyncToken: null,
+      providerInvoiceStatus: null,
+      providerBalance: null,
+      providerUpdatedAtUtc: null,
+      lastReconciledAtUtc: null,
+      succeededAtUtc: null,
+      failedAtUtc: now,
+      lastFailureCode: "QUICKBOOKS_CONNECTION_REAUTH_RECONCILIATION_REQUIRED",
+    },
+  });
+  const unpublished = await transaction.quickBooksInvoiceOperation.updateMany({
+    where: {
+      tenantId,
+      quickBooksConnectionId: connectionId,
+      archivedAtUtc: null,
+      providerInvoiceId: null,
+    },
+    data: {
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      providerSyncToken: null,
+      providerInvoiceStatus: null,
+      providerBalance: null,
+      providerUpdatedAtUtc: null,
+      lastReconciledAtUtc: null,
+    },
+  });
+  return invalidated.count + unpublished.count;
+}
+
 export async function getSerializedQuickBooksAccessToken(params: {
   prisma: PrismaClient;
   runtimeEnv: RuntimeEnv;
@@ -82,6 +141,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
       },
       select: {
         id: true,
+        environment: true,
         accessTokenEncrypted: true,
         refreshTokenEncrypted: true,
         accessTokenExpiresAtUtc: true,
@@ -92,6 +152,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
   if (!liveConnection || liveConnection.disconnectRequestedAtUtc) {
     throw new QuickBooksProviderError("QUICKBOOKS_CONNECTION_NOT_CONNECTED", false);
   }
+  assertQuickBooksConnectionEnvironment(runtimeEnv, liveConnection);
   const expiresAt = liveConnection.accessTokenExpiresAtUtc?.getTime() ?? 0;
   if (liveConnection.accessTokenEncrypted && expiresAt > Date.now() + 60_000) {
     return decryptQuickBooksSecret(runtimeEnv, liveConnection.accessTokenEncrypted);
@@ -259,13 +320,22 @@ export async function disconnectQuickBooksConnection(params: {
       where: { tenantId: params.tenantId, deletedAtUtc: null },
       select: {
         id: true,
+        environment: true,
         status: true,
         refreshTokenEncrypted: true,
         revocationAttemptCount: true,
         disconnectRequestedAtUtc: true,
       },
     });
-    if (!connection || connection.status === "DISCONNECTED") return { result: "disconnected" as const };
+    if (!connection) return { result: "disconnected" as const };
+    await invalidateQuickBooksHostedPaymentLinks(
+      transaction,
+      params.tenantId,
+      connection.id,
+      now,
+    );
+    if (connection.status === "DISCONNECTED") return { result: "disconnected" as const };
+    assertQuickBooksConnectionEnvironment(params.runtimeEnv, connection);
 
     const connectionGeneration = await currentQuickBooksConnectionGeneration(transaction, params.tenantId);
     const existingDisconnectEvent = await latestQuickBooksDisconnectEventContext(
@@ -423,8 +493,37 @@ export async function disconnectQuickBooksConnection(params: {
     });
     return finalized === 1 ? "disconnected" : "pending";
   } catch {
-    await withTenantRlsContext(params.prisma, params.tenantId, (transaction) =>
-      transaction.quickBooksConnection.updateMany({
+    await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      if (claimedConnection.revocationAttemptCount >= QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS) {
+        const terminal = await transaction.quickBooksConnection.updateMany({
+          where: {
+            id: claimedConnection.id,
+            tenantId: params.tenantId,
+            status: "REVOCATION_PENDING",
+            refreshTokenEncrypted: claimedConnection.refreshTokenEncrypted,
+            tokenRefreshClaimHash: claimTokenHash,
+          },
+          data: {
+            status: "ERROR",
+            tokenRefreshClaimHash: null,
+            tokenRefreshClaimExpiresAtUtc: null,
+            revocationNextAttemptAtUtc: null,
+            lastError: QUICKBOOKS_CONNECTION_REVOCATION_DEAD,
+          },
+        });
+        if (terminal.count === 1) {
+          await deactivateRealmBinding(transaction, params.tenantId, claimedConnection.id);
+          await recordQuickBooksConnectionEvent(transaction, {
+            tenantId: params.tenantId,
+            quickBooksConnectionId: claimedConnection.id,
+            ...claimedConnection.lifecycleContext,
+            action: "DISCONNECTED",
+            outcome: "FAILED",
+          });
+        }
+        return;
+      }
+      await transaction.quickBooksConnection.updateMany({
         where: {
           id: claimedConnection.id,
           tenantId: params.tenantId,
@@ -438,8 +537,8 @@ export async function disconnectQuickBooksConnection(params: {
           revocationNextAttemptAtUtc: nextRevocationAttemptAt(claimedConnection.revocationAttemptCount),
           lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
         },
-      }),
-    ).catch(() => undefined);
+      });
+    }).catch(() => undefined);
     return "pending";
   }
 }
@@ -469,6 +568,7 @@ export async function retryQuickBooksRevocation(params: {
     await transaction.quickBooksConnection.updateMany({
       where: {
         tenantId: params.tenantId,
+        environment: params.runtimeEnv.QUICKBOOKS_ENVIRONMENT,
         status: "CONNECTED",
         disconnectRequestedAtUtc: { not: null },
         refreshTokenEncrypted: { not: null },
@@ -494,32 +594,13 @@ export async function retryQuickBooksRevocation(params: {
       },
       select: {
         id: true,
+        environment: true,
         refreshTokenEncrypted: true,
         revocationAttemptCount: true,
       },
     });
-    if (!candidate?.refreshTokenEncrypted) return null;
-    const claimExpiresAtUtc = credentialClaimExpiresAt(params.runtimeEnv, now);
-    const claimed = await transaction.quickBooksConnection.updateMany({
-      where: {
-        id: candidate.id,
-        tenantId: params.tenantId,
-        status: "REVOCATION_PENDING",
-        refreshTokenEncrypted: candidate.refreshTokenEncrypted,
-        revocationAttemptCount: candidate.revocationAttemptCount,
-        OR: [
-          { tokenRefreshClaimHash: null },
-          { tokenRefreshClaimExpiresAtUtc: { lte: now } },
-        ],
-      },
-      data: {
-        revocationAttemptCount: { increment: 1 },
-        revocationNextAttemptAtUtc: claimExpiresAtUtc,
-        tokenRefreshClaimHash: claimTokenHash,
-        tokenRefreshClaimExpiresAtUtc: claimExpiresAtUtc,
-      },
-    });
-    if (claimed.count !== 1) return null;
+    if (!candidate?.refreshTokenEncrypted) return { result: "idle" as const };
+    assertQuickBooksConnectionEnvironment(params.runtimeEnv, candidate);
     const connectionGeneration = await currentQuickBooksConnectionGeneration(transaction, params.tenantId);
     let lifecycleContext = await latestQuickBooksDisconnectEventContext(
       transaction,
@@ -541,13 +622,70 @@ export async function retryQuickBooksRevocation(params: {
         outcome: "PENDING",
       });
     }
+    if (candidate.revocationAttemptCount >= QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS) {
+      const terminal = await transaction.quickBooksConnection.updateMany({
+        where: {
+          id: candidate.id,
+          tenantId: params.tenantId,
+          status: "REVOCATION_PENDING",
+          refreshTokenEncrypted: candidate.refreshTokenEncrypted,
+          revocationAttemptCount: candidate.revocationAttemptCount,
+          OR: [
+            { tokenRefreshClaimHash: null },
+            { tokenRefreshClaimExpiresAtUtc: { lte: now } },
+          ],
+        },
+        data: {
+          status: "ERROR",
+          revocationNextAttemptAtUtc: null,
+          tokenRefreshClaimHash: null,
+          tokenRefreshClaimExpiresAtUtc: null,
+          lastError: QUICKBOOKS_CONNECTION_REVOCATION_DEAD,
+        },
+      });
+      if (terminal.count === 1) {
+        await deactivateRealmBinding(transaction, params.tenantId, candidate.id);
+        await recordQuickBooksConnectionEvent(transaction, {
+          tenantId: params.tenantId,
+          quickBooksConnectionId: candidate.id,
+          ...lifecycleContext,
+          action: "DISCONNECTED",
+          outcome: "FAILED",
+        });
+        return { result: "dead" as const };
+      }
+      return { result: "idle" as const };
+    }
+    const claimExpiresAtUtc = credentialClaimExpiresAt(params.runtimeEnv, now);
+    const claimed = await transaction.quickBooksConnection.updateMany({
+      where: {
+        id: candidate.id,
+        tenantId: params.tenantId,
+        status: "REVOCATION_PENDING",
+        refreshTokenEncrypted: candidate.refreshTokenEncrypted,
+        revocationAttemptCount: candidate.revocationAttemptCount,
+        OR: [
+          { tokenRefreshClaimHash: null },
+          { tokenRefreshClaimExpiresAtUtc: { lte: now } },
+        ],
+      },
+      data: {
+        revocationAttemptCount: { increment: 1 },
+        revocationNextAttemptAtUtc: claimExpiresAtUtc,
+        tokenRefreshClaimHash: claimTokenHash,
+        tokenRefreshClaimExpiresAtUtc: claimExpiresAtUtc,
+      },
+    });
+    if (claimed.count !== 1) return { result: "idle" as const };
     return {
+      result: "claimed" as const,
       ...candidate,
       revocationAttemptCount: candidate.revocationAttemptCount + 1,
       lifecycleContext,
     };
   });
-  if (!connection?.refreshTokenEncrypted) return orphanResult;
+  if (connection.result === "dead") return "dead";
+  if (connection.result !== "claimed" || !connection.refreshTokenEncrypted) return orphanResult;
 
   try {
     await revokeQuickBooksToken(
@@ -592,8 +730,38 @@ export async function retryQuickBooksRevocation(params: {
     });
     return finalized === 1 ? "revoked" : "retry";
   } catch {
-    await withTenantRlsContext(params.prisma, params.tenantId, (transaction) =>
-      transaction.quickBooksConnection.updateMany({
+    const directResult = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      if (connection.revocationAttemptCount >= QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS) {
+        const terminal = await transaction.quickBooksConnection.updateMany({
+          where: {
+            id: connection.id,
+            tenantId: params.tenantId,
+            status: "REVOCATION_PENDING",
+            refreshTokenEncrypted: connection.refreshTokenEncrypted,
+            tokenRefreshClaimHash: claimTokenHash,
+          },
+          data: {
+            status: "ERROR",
+            tokenRefreshClaimHash: null,
+            tokenRefreshClaimExpiresAtUtc: null,
+            revocationNextAttemptAtUtc: null,
+            lastError: QUICKBOOKS_CONNECTION_REVOCATION_DEAD,
+          },
+        });
+        if (terminal.count === 1) {
+          await deactivateRealmBinding(transaction, params.tenantId, connection.id);
+          await recordQuickBooksConnectionEvent(transaction, {
+            tenantId: params.tenantId,
+            quickBooksConnectionId: connection.id,
+            ...connection.lifecycleContext,
+            action: "DISCONNECTED",
+            outcome: "FAILED",
+          });
+          return "dead" as const;
+        }
+        return "retry" as const;
+      }
+      await transaction.quickBooksConnection.updateMany({
         where: {
           id: connection.id,
           tenantId: params.tenantId,
@@ -607,8 +775,9 @@ export async function retryQuickBooksRevocation(params: {
           revocationNextAttemptAtUtc: nextRevocationAttemptAt(connection.revocationAttemptCount),
           lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
         },
-      }),
-    ).catch(() => undefined);
-    return "retry";
+      });
+      return "retry" as const;
+    }).catch(() => "retry" as const);
+    return directResult;
   }
 }

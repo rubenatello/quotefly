@@ -121,6 +121,70 @@ const EnvSchema = z.object({
       message: "Enabled RAG requires AI_INDEX_INLINE_REFRESH=true or ENABLE_AI_INDEX_WORKER=true.",
     });
   }
+
+  // Provider feature dependencies are runtime invariants, not production-only
+  // recommendations. Validate them in development and test as well so a
+  // mutable deployment flag cannot expose a workflow without its recovery
+  // path.
+  const quickBooksClientConfigured = Boolean(value.QUICKBOOKS_CLIENT_ID.trim());
+  const quickBooksSecretConfigured = Boolean(value.QUICKBOOKS_CLIENT_SECRET.trim());
+  if (quickBooksClientConfigured !== quickBooksSecretConfigured) {
+    ctx.addIssue({
+      code: "custom",
+      path: [quickBooksClientConfigured ? "QUICKBOOKS_CLIENT_SECRET" : "QUICKBOOKS_CLIENT_ID"],
+      message: "QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET must be configured together.",
+    });
+  }
+  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && (!quickBooksClientConfigured || !quickBooksSecretConfigured)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED"],
+      message: "QuickBooks client credentials must be configured before provider workflows can be enabled.",
+    });
+  }
+  if (value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED && !value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_HOSTED_PAYMENTS_ENABLED"],
+      message: "QuickBooks provider workflows must be enabled before hosted payments can be enabled.",
+    });
+  }
+  if (
+    (value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED || value.QUICKBOOKS_CDC_WORKER_ENABLED)
+    && !value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: [value.QUICKBOOKS_CDC_WORKER_ENABLED
+        ? "QUICKBOOKS_CDC_WORKER_ENABLED"
+        : "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED"],
+      message: "QuickBooks workers require provider workflows to be enabled.",
+    });
+  }
+  if (value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED && !value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_HOSTED_PAYMENTS_ENABLED"],
+      message: "QuickBooks hosted payments require the reconciliation worker to be enabled.",
+    });
+  }
+  if (value.QUICKBOOKS_CDC_WORKER_ENABLED && !value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_CDC_WORKER_ENABLED"],
+      message: "QuickBooks CDC recovery requires the reconciliation worker to be enabled.",
+    });
+  }
+  if (
+    (value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED || value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED)
+    && !value.QUICKBOOKS_WEBHOOK_VERIFIER.trim()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_WEBHOOK_VERIFIER"],
+      message: "A QuickBooks webhook verifier is required for hosted payments and reconciliation workers.",
+    });
+  }
   if (value.NODE_ENV !== "production") return;
 
   if (value.AI_RAG_ROLLOUT_MODE !== "off" && !value.OPENAI_API_KEY.trim()) {
@@ -267,53 +331,6 @@ const EnvSchema = z.object({
         message: "Configured OpenAI embedding model and rate must match the approved pricing catalog.",
       });
     }
-  }
-
-  const quickBooksClientConfigured = Boolean(value.QUICKBOOKS_CLIENT_ID.trim());
-  const quickBooksSecretConfigured = Boolean(value.QUICKBOOKS_CLIENT_SECRET.trim());
-  if (quickBooksClientConfigured !== quickBooksSecretConfigured) {
-    ctx.addIssue({
-      code: "custom",
-      path: [quickBooksClientConfigured ? "QUICKBOOKS_CLIENT_SECRET" : "QUICKBOOKS_CLIENT_ID"],
-      message: "QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET must be configured together.",
-    });
-  }
-
-  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && (!quickBooksClientConfigured || !quickBooksSecretConfigured)) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED"],
-      message: "QuickBooks client credentials must be configured before provider workflows can be enabled.",
-    });
-  }
-  if (value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED && !value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["QUICKBOOKS_HOSTED_PAYMENTS_ENABLED"],
-      message: "QuickBooks provider workflows must be enabled before hosted payments can be enabled.",
-    });
-  }
-  if (
-    (value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED || value.QUICKBOOKS_CDC_WORKER_ENABLED)
-    && !value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: [value.QUICKBOOKS_CDC_WORKER_ENABLED
-        ? "QUICKBOOKS_CDC_WORKER_ENABLED"
-        : "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED"],
-      message: "QuickBooks workers require provider workflows to be enabled.",
-    });
-  }
-  if (
-    (value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED || value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED)
-    && !value.QUICKBOOKS_WEBHOOK_VERIFIER.trim()
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["QUICKBOOKS_WEBHOOK_VERIFIER"],
-      message: "A QuickBooks webhook verifier is required for hosted payments and reconciliation workers.",
-    });
   }
 
   const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();

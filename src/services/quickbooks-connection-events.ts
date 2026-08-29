@@ -63,7 +63,7 @@ export async function recordQuickBooksConnectionEvent(
     actorTenantUserId: string | null;
     requestId: string;
     action: QuickBooksConnectionEventAction;
-    outcome: "PENDING" | "SUCCEEDED";
+    outcome: "PENDING" | "SUCCEEDED" | "FAILED";
     connectionGeneration: number;
   }>,
 ) {

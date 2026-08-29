@@ -92,7 +92,8 @@ test("workspace home summarizes leads, quote momentum, and priority work without
   await expect(page.getByText("Home Unquoted Lead", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Home Quoted Customer", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Home Roof Repair Quote", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Awaiting response", { exact: true })).toBeVisible();
+  await expect(page.getByText("Welcome and confirm the request", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("High", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Prioritize my day", exact: true })).toBeVisible();
   await expect(page.getByTestId("kody-launcher")).toBeHidden();
   await expect(page.getByRole("button", { name: "New quote", exact: true })).toHaveCount(1);

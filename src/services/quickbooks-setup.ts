@@ -1,4 +1,4 @@
-export const QUICKBOOKS_SETUP_CHECKLIST_VERSION = "2026-08-27.v1";
+export const QUICKBOOKS_SETUP_CHECKLIST_VERSION = "2026-08-28.v2";
 export const QUICKBOOKS_ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
 
 export type QuickBooksSetupPhase =
@@ -12,6 +12,10 @@ export type QuickBooksSetupCheckKey =
   | "PROVIDER_CONFIGURED"
   | "PROVIDER_WORKFLOWS_ENABLED"
   | "WEBHOOK_CONFIGURED"
+  | "HOSTED_PAYMENTS_ENABLED"
+  | "RECONCILIATION_WORKER_ENABLED"
+  | "RECONCILIATION_WORKER_HEALTHY"
+  | "CDC_WORKER_ENABLED"
   | "CONNECTION_ACTIVE"
   | "ENVIRONMENT_MATCHES"
   | "ACCOUNTING_SCOPE_GRANTED"
@@ -42,6 +46,10 @@ export type QuickBooksSetupRuntime = Readonly<{
   providerConfigured: boolean;
   providerWorkflowsEnabled: boolean;
   webhookConfigured: boolean;
+  hostedPaymentsEnabled: boolean;
+  reconciliationWorkerEnabled: boolean;
+  reconciliationWorkerHealthy?: boolean;
+  cdcWorkerEnabled: boolean;
   environment: "sandbox" | "production";
 }>;
 
@@ -62,6 +70,13 @@ export type QuickBooksSetupReadiness = Readonly<{
     canConfirm: boolean;
     canDisconnect: boolean;
   }>;
+  operations: Readonly<{
+    coreConnectionReady: boolean;
+    hostedPaymentsReady: boolean;
+    reconciliationReady: boolean;
+    cdcRecoveryReady: boolean;
+    allAccountingWorkflowsReady: boolean;
+  }>;
 }>;
 
 /**
@@ -75,6 +90,10 @@ export function deriveQuickBooksSetupReadiness(
   const providerConfigured = runtime.providerConfigured;
   const providerWorkflowsEnabled = runtime.providerWorkflowsEnabled;
   const webhookConfigured = runtime.webhookConfigured;
+  const hostedPaymentsEnabled = runtime.hostedPaymentsEnabled;
+  const reconciliationWorkerEnabled = runtime.reconciliationWorkerEnabled;
+  const reconciliationWorkerHealthy = runtime.reconciliationWorkerHealthy ?? false;
+  const cdcWorkerEnabled = runtime.cdcWorkerEnabled;
   const connectionActive = connection?.status === "CONNECTED";
   const environmentMatches = Boolean(connection && connection.environment === runtime.environment);
   const accountingScopeGranted = connection?.accountingScopeGranted
@@ -94,6 +113,10 @@ export function deriveQuickBooksSetupReadiness(
     { key: "PROVIDER_CONFIGURED", passed: providerConfigured, managedBy: "QUOTEFLY" },
     { key: "PROVIDER_WORKFLOWS_ENABLED", passed: providerWorkflowsEnabled, managedBy: "QUOTEFLY" },
     { key: "WEBHOOK_CONFIGURED", passed: webhookConfigured, managedBy: "QUOTEFLY" },
+    { key: "HOSTED_PAYMENTS_ENABLED", passed: hostedPaymentsEnabled, managedBy: "QUOTEFLY" },
+    { key: "RECONCILIATION_WORKER_ENABLED", passed: reconciliationWorkerEnabled, managedBy: "QUOTEFLY" },
+    { key: "RECONCILIATION_WORKER_HEALTHY", passed: reconciliationWorkerHealthy, managedBy: "QUOTEFLY" },
+    { key: "CDC_WORKER_ENABLED", passed: cdcWorkerEnabled, managedBy: "QUOTEFLY" },
     { key: "CONNECTION_ACTIVE", passed: connectionActive, managedBy: "WORKSPACE" },
     { key: "ENVIRONMENT_MATCHES", passed: environmentMatches, managedBy: "QUOTEFLY" },
     { key: "ACCOUNTING_SCOPE_GRANTED", passed: accountingScopeGranted, managedBy: "WORKSPACE" },
@@ -107,8 +130,16 @@ export function deriveQuickBooksSetupReadiness(
     managedBy: "QUOTEFLY" | "WORKSPACE";
   }[];
 
+  const optionalOperationChecks = new Set<QuickBooksSetupCheckKey>([
+    "WEBHOOK_CONFIGURED",
+    "HOSTED_PAYMENTS_ENABLED",
+    "RECONCILIATION_WORKER_ENABLED",
+    "RECONCILIATION_WORKER_HEALTHY",
+    "CDC_WORKER_ENABLED",
+    "SETUP_CONFIRMED",
+  ]);
   const requiredChecksPassed = checks
-    .filter((check) => check.key !== "SETUP_CONFIRMED")
+    .filter((check) => !optionalOperationChecks.has(check.key))
     .every((check) => check.passed);
   const platformAvailable = providerConfigured && providerWorkflowsEnabled;
   const phase: QuickBooksSetupPhase = !platformAvailable
@@ -120,6 +151,14 @@ export function deriveQuickBooksSetupReadiness(
         : confirmed
           ? "CONFIRMED"
           : "READY_FOR_CONFIRMATION";
+
+  const coreConnectionReady = requiredChecksPassed && confirmed;
+  const reconciliationReady = coreConnectionReady
+    && webhookConfigured
+    && reconciliationWorkerEnabled
+    && reconciliationWorkerHealthy;
+  const hostedPaymentsReady = reconciliationReady && hostedPaymentsEnabled;
+  const cdcRecoveryReady = reconciliationReady && cdcWorkerEnabled;
 
   return {
     phase,
@@ -133,6 +172,13 @@ export function deriveQuickBooksSetupReadiness(
       canReconnect: platformAvailable && Boolean(connection && connection.status !== "DISCONNECTED"),
       canConfirm: requiredChecksPassed,
       canDisconnect: Boolean(connection && connection.status !== "DISCONNECTED"),
+    },
+    operations: {
+      coreConnectionReady,
+      hostedPaymentsReady,
+      reconciliationReady,
+      cdcRecoveryReady,
+      allAccountingWorkflowsReady: hostedPaymentsReady && cdcRecoveryReady,
     },
   };
 }

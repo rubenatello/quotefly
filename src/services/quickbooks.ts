@@ -1147,6 +1147,7 @@ export async function ensureQuickBooksAccessToken(
     | "accessTokenEncrypted"
     | "refreshTokenEncrypted"
     | "accessTokenExpiresAtUtc"
+    | "environment"
     | "tenantId"
   >,
   save: (input: {
@@ -1157,6 +1158,9 @@ export async function ensureQuickBooksAccessToken(
     refreshTokenRotatedAtUtc: Date;
   }) => Promise<void>,
 ): Promise<string> {
+  if (connection.environment !== runtimeEnv.QUICKBOOKS_ENVIRONMENT) {
+    throw new QuickBooksProviderError("QUICKBOOKS_CONNECTION_ENVIRONMENT_MISMATCH", false, 409);
+  }
   const accessToken = connection.accessTokenEncrypted ? decryptQuickBooksSecret(runtimeEnv, connection.accessTokenEncrypted) : null;
   const refreshToken = connection.refreshTokenEncrypted
     ? decryptQuickBooksSecret(runtimeEnv, connection.refreshTokenEncrypted)

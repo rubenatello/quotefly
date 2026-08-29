@@ -124,6 +124,9 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
           providerConfigured: isQuickBooksConfigured(app.env),
           providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
           webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+          hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
+          reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
+          cdcWorkerEnabled: app.env.QUICKBOOKS_CDC_WORKER_ENABLED,
           environment: app.env.QUICKBOOKS_ENVIRONMENT,
         },
       });
