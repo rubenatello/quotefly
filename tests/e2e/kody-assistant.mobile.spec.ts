@@ -656,7 +656,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
   await expect(kodyDialog.getByText(`Found ${customer.fullName} in this workspace.`)).toBeVisible();
   const resultDetails = kodyDialog.getByTestId("kody-results");
   await resultDetails.locator("summary").click();
-  await expect(resultDetails).toContainText("Sent quote");
+  await expect(resultDetails).toContainText("Full name");
   await expect(resultDetails).toContainText("Sent to customer");
   await expect(resultDetails).toContainText("Aug 14, 2026");
   await expect(resultDetails).not.toContainText("SENT_QUOTE");

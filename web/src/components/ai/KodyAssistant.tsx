@@ -354,7 +354,7 @@ function localizedToolLabel(tool: AiAssistantTool, t: TFunction) {
 }
 
 function localizedActionLabel(action: AiAssistantAction, t: TFunction) {
-  if (["OPEN_QUOTE_DRAFT", "OPEN_WORKSPACE_PAGE", "OPEN_BOOKING_REVIEW", "OPEN_SCHEDULE"].includes(action.type) && action.label.trim()) {
+  if (["OPEN_QUOTE_DRAFT", "OPEN_BOOKING_REVIEW", "OPEN_SCHEDULE"].includes(action.type) && action.label.trim()) {
     return action.label;
   }
   if (action.type === "OPEN_WORKSPACE_PAGE") {
