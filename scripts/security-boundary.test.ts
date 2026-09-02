@@ -338,6 +338,9 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
       QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
       QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
     },
     "quickbooks-oauth": {
       NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
@@ -345,6 +348,8 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
       QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
     },
   };
 
@@ -358,7 +363,24 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     assert.equal(report.profile, profile);
     assert.equal(report.outcome, "pass");
     assert.ok(report.required.every((entry) => entry.status === "configured"));
+    assert.ok(report.required.every((entry) => !entry.expectationStatus || entry.expectationStatus === "matched"));
     assert.ok(report.forbidden.every((entry) => entry.status === "missing"));
+  }
+
+  for (const [profile, variableName, wrongValue] of [
+    ["quickbooks", "QUICKBOOKS_OAUTH_ONLY_MODE", "true"],
+    ["quickbooks", "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED", "false"],
+    ["quickbooks-oauth", "QUICKBOOKS_ENVIRONMENT", "production"],
+    ["quickbooks-oauth", "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED", "true"],
+  ]) {
+    const result = runAudit(profile, { ...requiredEnvironment[profile], [variableName]: wrongValue });
+    assert.equal(result.status, 1, `${profile}:${variableName}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, "fail");
+    assert.equal(
+      report.required.find((entry) => entry.name === variableName)?.expectationStatus,
+      "mismatched",
+    );
   }
 
   const secretEnvironment = Object.fromEntries(allSecretNames.map((name, index) => [name, `secret-sentinel-${index}`]));
@@ -488,4 +510,32 @@ test("QuickBooks OAuth actor migration restores forced RLS before its transactio
   assert.ok(cleanup < foreignKey);
   assert.ok(foreignKey < restore);
   assert.ok(restore < commit);
+});
+
+test("QuickBooks hosted-link migration deterministically fences active rows before clearing every remaining capability", () => {
+  const source = readFileSync(
+    new URL(
+      "../prisma/migrations/20260902173500_add_quickbooks_reauth_connection_event/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /WITH\s+"clearedHostedLinks"/i);
+
+  const fenceStart = source.indexOf("-- Fence active provider-bound rows first.");
+  const clearStart = source.indexOf("-- Clear every remaining plaintext capability", fenceStart);
+  assert.ok(fenceStart >= 0 && clearStart > fenceStart, "hosted-link fence and clearing statements must remain ordered");
+
+  const fenceSource = source.slice(fenceStart, clearStart);
+  assert.match(fenceSource, /"status"\s*=\s*'RECONCILIATION_REQUIRED'/i);
+  assert.match(fenceSource, /"providerInvoiceLink"\s*=\s*NULL/i);
+  assert.match(fenceSource, /"providerInvoiceLink"\s+IS\s+NOT\s+NULL/i);
+  assert.match(fenceSource, /"archivedAtUtc"\s+IS\s+NULL/i);
+  assert.match(fenceSource, /"providerInvoiceId"\s+IS\s+NOT\s+NULL/i);
+
+  const clearSource = source.slice(clearStart);
+  assert.match(clearSource, /"providerInvoiceLink"\s*=\s*NULL/i);
+  assert.match(clearSource, /"invoiceLinkFetchedAtUtc"\s*=\s*NULL/i);
+  assert.match(clearSource, /WHERE\s+"providerInvoiceLink"\s+IS\s+NOT\s+NULL/i);
+  assert.doesNotMatch(clearSource, /"archivedAtUtc"\s+IS\s+NULL/i);
 });

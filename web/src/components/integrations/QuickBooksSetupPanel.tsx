@@ -139,6 +139,7 @@ export function QuickBooksSetupPanel({
       ? { label: t("admin.quickBooksSetup.reconnect"), handler: onConnect }
       : null;
   const actionableFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "WORKSPACE");
+  const platformFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "QUOTEFLY");
   const reconciliationWorkerExpected = setup.checks.some(
     (check) => check.key === "RECONCILIATION_WORKER_ENABLED" && check.passed,
   );
@@ -202,6 +203,15 @@ export function QuickBooksSetupPanel({
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {actionableFailures.map((check) => <li key={check.key}>{t(checkKeys[check.key])}</li>)}
             </ul>
+          </Alert>
+        </div>
+      ) : null}
+
+      {connection?.status === "CONNECTED" && platformFailures.length ? (
+        <div className="mt-5">
+          <Alert tone="warning">
+            <p className="font-semibold">{t("admin.quickBooksSetup.platformWaitingTitle")}</p>
+            <p className="mt-1">{t("admin.quickBooksSetup.platformWaitingDescription")}</p>
           </Alert>
         </div>
       ) : null}
@@ -304,6 +314,7 @@ export function QuickBooksSetupPanel({
         companyName={connection?.companyName}
         operations={setup.operations}
         canConnect={Boolean(primaryAction)}
+        connectLabel={primaryAction?.label ?? t("admin.quickBooksSetup.connect")}
         onConnect={primaryAction?.handler ?? onConnect}
       />
     </>

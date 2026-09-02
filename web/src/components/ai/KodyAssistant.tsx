@@ -480,7 +480,7 @@ function formatResultValue(key: string, value: string | number | boolean | null,
   }
   if (key === "paymentStatus") {
     const paymentStatuses: Record<string, string> = {
-      PENDING: t("domain.invoicePaymentStatus.PENDING"), SUCCEEDED: t("domain.invoicePaymentStatus.SUCCEEDED"),
+      PENDING: t("domain.invoicePaymentStatus.PENDING"), PARTIALLY_PAID: t("domain.invoicePaymentStatus.PARTIALLY_PAID"), SUCCEEDED: t("domain.invoicePaymentStatus.SUCCEEDED"),
       FAILED: t("domain.invoicePaymentStatus.FAILED"), REFUNDED: t("domain.invoicePaymentStatus.REFUNDED"),
       PARTIALLY_REFUNDED: t("domain.invoicePaymentStatus.PARTIALLY_REFUNDED"), CANCELED: t("domain.invoicePaymentStatus.CANCELED"),
     };

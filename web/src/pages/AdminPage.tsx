@@ -192,18 +192,21 @@ function billingNoticeText(code: string | null, subscriptionConfirmed: boolean, 
   return null;
 }
 
-function integrationNoticeText(code: string | null, t: TFunction): string | null {
-  if (code === "quickbooks_connected") return t("admin.notices.quickBooksConnected");
-  if (code === "quickbooks_denied") return t("admin.notices.quickBooksDenied");
-  if (code === "quickbooks_invalid_state") return t("admin.notices.quickBooksInvalid");
-  if (code === "quickbooks_realm_in_use") return t("admin.notices.quickBooksInUse");
-  if (code === "quickbooks_realm_change_blocked") return t("admin.notices.quickBooksRealmChangeBlocked");
-  if (code === "quickbooks_cleanup_failed") return t("admin.notices.quickBooksCleanupFailed");
-  if (code === "quickbooks_session_mismatch") return t("admin.notices.quickBooksSessionMismatch");
-  if (code === "quickbooks_billing_required") return t("admin.notices.quickBooksBillingRequired");
-  if (code === "quickbooks_disconnect_pending") return t("admin.notices.quickBooksDisconnectPending");
-  if (code === "quickbooks_not_configured") return t("admin.notices.quickBooksUnavailable");
-  if (code === "quickbooks_error") return t("admin.notices.quickBooksError");
+function integrationNotice(code: string | null, t: TFunction): {
+  text: string;
+  tone: "success" | "warning" | "error";
+} | null {
+  if (code === "quickbooks_connected") return { text: t("admin.notices.quickBooksConnected"), tone: "success" };
+  if (code === "quickbooks_denied") return { text: t("admin.notices.quickBooksDenied"), tone: "warning" };
+  if (code === "quickbooks_billing_required") return { text: t("admin.notices.quickBooksBillingRequired"), tone: "warning" };
+  if (code === "quickbooks_disconnect_pending") return { text: t("admin.notices.quickBooksDisconnectPending"), tone: "warning" };
+  if (code === "quickbooks_invalid_state") return { text: t("admin.notices.quickBooksInvalid"), tone: "error" };
+  if (code === "quickbooks_realm_in_use") return { text: t("admin.notices.quickBooksInUse"), tone: "error" };
+  if (code === "quickbooks_realm_change_blocked") return { text: t("admin.notices.quickBooksRealmChangeBlocked"), tone: "error" };
+  if (code === "quickbooks_cleanup_failed") return { text: t("admin.notices.quickBooksCleanupFailed"), tone: "error" };
+  if (code === "quickbooks_session_mismatch") return { text: t("admin.notices.quickBooksSessionMismatch"), tone: "error" };
+  if (code === "quickbooks_not_configured") return { text: t("admin.notices.quickBooksUnavailable"), tone: "error" };
+  if (code === "quickbooks_error") return { text: t("admin.notices.quickBooksError"), tone: "error" };
   return null;
 }
 
@@ -256,6 +259,7 @@ export function AdminPage({ session }: AdminPageProps) {
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeTone, setNoticeTone] = useState<"success" | "warning" | "error">("success");
   const [form, setForm] = useState<NewUserForm>(EMPTY_NEW_USER);
   const [pendingRemovalMember, setPendingRemovalMember] = useState<OrganizationUser | null>(null);
   const [quickBooksStatus, setQuickBooksStatus] = useState<QuickBooksStatusPayload | null>(null);
@@ -372,6 +376,7 @@ export function AdminPage({ session }: AdminPageProps) {
         reviewResponsibilityConfirmed: true,
       });
       setConfirmQuickBooksSetupOpen(false);
+      setNoticeTone("success");
       setNotice(t("admin.notices.quickBooksSetupConfirmed"));
       await loadQuickBooksStatus();
     } catch (err) {
@@ -387,6 +392,7 @@ export function AdminPage({ session }: AdminPageProps) {
     try {
       const result = await api.integrations.quickbooks.disconnect();
       setDisconnectQuickBooksOpen(false);
+      setNoticeTone(result.revocationPending ? "warning" : "success");
       setNotice(result.revocationPending
         ? t("admin.notices.quickBooksDisconnectPending")
         : t("admin.notices.quickBooksDisconnected"));
@@ -418,7 +424,8 @@ export function AdminPage({ session }: AdminPageProps) {
     if (location.hash !== "#admin-quickbooks") return;
     const frame = window.requestAnimationFrame(() => {
       const section = document.getElementById("admin-quickbooks");
-      section?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      section?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
       section?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
@@ -431,11 +438,12 @@ export function AdminPage({ session }: AdminPageProps) {
       ["active", "trialing"].includes((session?.subscriptionStatus ?? "").toLowerCase());
     const nextNotice = billingNoticeText(billingState, billingSubscriptionConfirmed, t);
     const integrationsState = new URLSearchParams(location.search).get("integrations");
-    const nextIntegrationNotice = integrationNoticeText(integrationsState, t);
+    const nextIntegrationNotice = integrationNotice(integrationsState, t);
 
     if (!nextNotice && !nextIntegrationNotice) return;
 
-    setNotice(nextNotice ?? nextIntegrationNotice);
+    setNotice(nextNotice ?? nextIntegrationNotice?.text ?? null);
+    setNoticeTone(nextIntegrationNotice?.tone ?? (billingState === "cancel" ? "warning" : "success"));
     setError(null);
     if (nextIntegrationNotice) {
       navigate("/app/settings#admin-quickbooks", { replace: true });
@@ -468,6 +476,7 @@ export function AdminPage({ session }: AdminPageProps) {
       });
       setForm(EMPTY_NEW_USER);
       await loadMembers();
+      setNoticeTone("success");
       setNotice(t("admin.notices.memberAdded"));
     } catch (err) {
       setError(localizedApiError(err, t, {
@@ -486,6 +495,7 @@ export function AdminPage({ session }: AdminPageProps) {
     try {
       await api.org.users.updateRole(memberId, { role });
       await loadMembers();
+      setNoticeTone("success");
       setNotice(t("admin.notices.roleUpdated"));
     } catch (err) {
       setError(localizedApiError(err, t, { fallbackKey: "admin.errors.updateRole" }));
@@ -664,7 +674,7 @@ export function AdminPage({ session }: AdminPageProps) {
         </Alert>
       ) : null}
       {notice ? (
-        <Alert tone="success" onDismiss={() => setNotice(null)}>
+        <Alert tone={noticeTone} onDismiss={() => setNotice(null)}>
           {notice}
         </Alert>
       ) : null}
@@ -893,15 +903,21 @@ export function AdminPage({ session }: AdminPageProps) {
             actions={quickBooksStatus ? <Badge tone={quickBooksStatus.setup.confirmed ? "emerald" : quickBooksStatus.setup.phase === "UNAVAILABLE" ? "red" : "amber"}>{t(`admin.quickBooksSetup.phases.${quickBooksStatus.setup.phase === "UNAVAILABLE" ? "unavailable" : quickBooksStatus.setup.phase === "NOT_CONNECTED" ? "notConnected" : quickBooksStatus.setup.phase === "ACTION_REQUIRED" ? "actionRequired" : quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "readyToConfirm" : "confirmed"}`)}</Badge> : undefined}
           >
             <QuickBooksSetupPanel
-              canManage={canManageQuickBooks}
+              canManage={canManageQuickBooks && quickBooksStatus?.canManage !== false}
               status={quickBooksStatus}
               loading={quickBooksLoading}
               error={quickBooksError}
               action={quickBooksAction}
               onRetry={() => void loadQuickBooksStatus()}
               onConnect={() => void startQuickBooksConnection()}
-              onConfirm={() => setConfirmQuickBooksSetupOpen(true)}
-              onDisconnect={() => setDisconnectQuickBooksOpen(true)}
+              onConfirm={() => {
+                setQuickBooksError(null);
+                setConfirmQuickBooksSetupOpen(true);
+              }}
+              onDisconnect={() => {
+                setQuickBooksError(null);
+                setDisconnectQuickBooksOpen(true);
+              }}
             />
           </WorkspaceSection>
           ) : null}
@@ -1136,7 +1152,9 @@ export function AdminPage({ session }: AdminPageProps) {
         confirmLabel={t("admin.quickBooksSetup.confirmButton")}
         confirmVariant="success"
         loading={quickBooksAction === "confirm"}
-      />
+      >
+        {quickBooksError ? <Alert tone="error">{quickBooksError}</Alert> : null}
+      </ConfirmModal>
       <ConfirmModal
         open={disconnectQuickBooksOpen}
         onClose={() => setDisconnectQuickBooksOpen(false)}
@@ -1146,7 +1164,9 @@ export function AdminPage({ session }: AdminPageProps) {
         confirmLabel={t("admin.quickBooksSetup.disconnectButton")}
         confirmVariant="warning"
         loading={quickBooksAction === "disconnect"}
-      />
+      >
+        {quickBooksError ? <Alert tone="error">{quickBooksError}</Alert> : null}
+      </ConfirmModal>
       <ConfirmModal
         open={pendingRemovalMember !== null}
         onClose={() => setPendingRemovalMember(null)}

@@ -9,7 +9,12 @@ import {
   fetchQuickBooksRefundReceipt,
   QuickBooksProviderError,
 } from "../services/quickbooks";
-import { getSerializedQuickBooksAccessToken, retryQuickBooksRevocation } from "../services/quickbooks-credentials";
+import {
+  getSerializedQuickBooksAccessToken,
+  isQuickBooksReauthorizationError,
+  retryQuickBooksRevocation,
+  runQuickBooksProviderRequestWithRefresh,
+} from "../services/quickbooks-credentials";
 import {
   pageQuickBooksProviderEntityIds,
   QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM,
@@ -241,8 +246,12 @@ async function invoiceIdsForClaim(claim: Awaited<ReturnType<typeof claimQuickBoo
     };
   }
   if (claim.eventType === "RefundReceipt") {
-    const accessToken = await getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection });
-    const refundReceipt = await fetchQuickBooksRefundReceipt(env, claim.realmId, accessToken, claim.entityId);
+    const refundReceipt = await runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection,
+      operation: (accessToken) => fetchQuickBooksRefundReceipt(env, claim.realmId, accessToken, claim.entityId),
+    });
     const linkedPayments = refundReceipt.LinkedTxn.filter((linked) =>
       linked.TxnType?.trim().toLowerCase() === "payment" && linked.TxnId?.trim()
     );
@@ -257,12 +266,17 @@ async function invoiceIdsForClaim(claim: Awaited<ReturnType<typeof claimQuickBoo
       throw new QuickBooksProviderError("QUICKBOOKS_REFUND_APPLICATION_UNSUPPORTED", false);
     }
     const providerInvoiceId = linkedInvoices[0]!.TxnId!.trim();
-    const payment = await fetchQuickBooksPayment(
-      env,
-      claim.realmId,
-      accessToken,
-      linkedPayments[0]!.TxnId!.trim(),
-    );
+    const payment = await runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection,
+      operation: (accessToken) => fetchQuickBooksPayment(
+        env,
+        claim.realmId,
+        accessToken,
+        linkedPayments[0]!.TxnId!.trim(),
+      ),
+    });
     const paymentInvoiceIds = new Set((payment.Line ?? [])
       .flatMap((line) => line.LinkedTxn ?? [])
       .filter((linked) => linked.TxnType?.trim().toLowerCase() === "invoice" && linked.TxnId?.trim())
@@ -276,8 +290,12 @@ async function invoiceIdsForClaim(claim: Awaited<ReturnType<typeof claimQuickBoo
     throw new QuickBooksProviderError("QUICKBOOKS_WEBHOOK_ENTITY_UNSUPPORTED", false);
   }
   try {
-    const accessToken = await getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection });
-    const payment = await fetchQuickBooksPayment(env, claim.realmId, accessToken, claim.entityId);
+    const payment = await runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection,
+      operation: (accessToken) => fetchQuickBooksPayment(env, claim.realmId, accessToken, claim.entityId),
+    });
     const providerInvoiceIds = (payment.Line ?? [])
       .flatMap((line) => line.LinkedTxn ?? [])
       .filter((linked) => linked.TxnType === "Invoice" && linked.TxnId)

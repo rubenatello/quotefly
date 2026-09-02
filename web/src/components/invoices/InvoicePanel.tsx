@@ -14,7 +14,6 @@ import {
 import {
   api,
   type Invoice,
-  type InvoicePaymentStatus,
   type InvoiceStatus,
   type QuickBooksCustomerCandidate,
   type QuickBooksInvoiceOperationStatus,
@@ -23,6 +22,7 @@ import {
   type QuickBooksItemCandidate,
 } from "../../lib/api";
 import { localizedApiError } from "../../lib/localized-api-error";
+import { invoicePaymentDisplay } from "../../lib/invoice-payment-display";
 import {
   isCurrentQuickBooksRequestContext,
   isQuickBooksPreviewCurrentForPublish,
@@ -65,13 +65,6 @@ function invoiceStatusTone(status: InvoiceStatus): "slate" | "blue" | "emerald" 
   if (status === "OPEN") return "blue";
   if (status === "VOID") return "red";
   if (status === "UNCOLLECTIBLE") return "amber";
-  return "slate";
-}
-
-function paymentStatusTone(status: InvoicePaymentStatus): "slate" | "emerald" | "red" | "amber" {
-  if (status === "SUCCEEDED") return "emerald";
-  if (status === "FAILED" || status === "CANCELED") return "red";
-  if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "amber";
   return "slate";
 }
 
@@ -379,6 +372,8 @@ export function InvoicePanel({
     allowOnlineAchPayment: quickBooksAllowAch,
     allowOnlineCardPayment: quickBooksAllowCard,
   }), [quickBooksAllowAch, quickBooksAllowCard, quickBooksBillingEmail]);
+  const paymentDisplay = invoice ? invoicePaymentDisplay(invoice) : null;
+  const invoicePaymentLabel = paymentDisplay ? t(paymentDisplay.translationKey) : "";
   const quickBooksBillingEmailInvalid = Boolean(
     quickBooksBillingEmail.trim()
     && !isValidQuickBooksBillingEmail(quickBooksBillingEmail),
@@ -751,7 +746,7 @@ export function InvoicePanel({
         {invoice ? (
           <div className="flex flex-wrap gap-2">
             <Badge tone={invoiceStatusTone(invoice.status)}>{t(`domain.invoiceStatus.${invoice.status}`)}</Badge>
-            <Badge tone={paymentStatusTone(invoice.paymentStatus)}>{t(`domain.invoicePaymentStatus.${invoice.paymentStatus}`)}</Badge>
+            <Badge tone={paymentDisplay?.tone ?? "slate"}>{invoicePaymentLabel}</Badge>
           </div>
         ) : null}
       </div>
@@ -853,9 +848,19 @@ export function InvoicePanel({
                 <div className="mt-3"><LoadingState variant="compact" title={t("invoices.quickBooks.loading")} /></div>
               ) : quickBooksPreview ? (
                 <div className="mt-3 space-y-3">
-                  {!quickBooksEnabled ? <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert> : null}
+                  {!quickBooksEnabled ? (
+                    <div id="quickbooks-review-paused-help">
+                      <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert>
+                    </div>
+                  ) : null}
                   {!quickBooksPreview.operation && quickBooksPreview.connection ? (
-                    <div className="space-y-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 sm:p-4" data-testid="quickbooks-review-controls">
+                    <fieldset
+                      disabled={!quickBooksEnabled}
+                      aria-describedby={!quickBooksEnabled ? "quickbooks-review-paused-help" : undefined}
+                      className="space-y-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 disabled:opacity-75 sm:p-4"
+                      data-testid="quickbooks-review-controls"
+                    >
+                      <legend className="sr-only">{t("invoices.quickBooks.reviewSetupTitle")}</legend>
                       <div>
                         <p className="text-sm font-semibold text-[var(--qf-text)]">{t("invoices.quickBooks.reviewSetupTitle")}</p>
                         <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.reviewSetupDescription")}</p>
@@ -911,7 +916,10 @@ export function InvoicePanel({
                         </p>
                         {quickBooksSearchErrors.customer ? <p role="alert" className="text-xs text-[var(--qf-danger-text)]">{quickBooksSearchErrors.customer}</p> : null}
                         {quickBooksSearchCompleted.customer && !quickBooksCustomerCandidates.length ? (
-                          <p className="rounded-lg bg-[var(--qf-panel-muted)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.noCustomerMatches")}</p>
+                          <div className="rounded-lg bg-[var(--qf-panel-muted)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">
+                            <p className="font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.noCustomerMatches")}</p>
+                            <p className="mt-1 leading-5">{t("invoices.quickBooks.missingCustomerGuidance")}</p>
+                          </div>
                         ) : null}
                         {quickBooksCustomerCandidates.length ? (
                           <ul aria-label={t("invoices.quickBooks.customerResults")} className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-1">
@@ -1029,7 +1037,10 @@ export function InvoicePanel({
                               </p>
                               {quickBooksSearchErrors[itemKey] ? <p role="alert" className="mt-2 text-xs text-[var(--qf-danger-text)]">{quickBooksSearchErrors[itemKey]}</p> : null}
                               {quickBooksSearchCompleted[itemKey] && !(quickBooksItemCandidates[itemKey]?.length) ? (
-                                <p className="mt-2 rounded-lg bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">{t("invoices.quickBooks.noItemMatches")}</p>
+                                <div className="mt-2 rounded-lg bg-[var(--qf-panel)] px-3 py-2 text-xs text-[var(--qf-text-muted)]">
+                                  <p className="font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.noItemMatches")}</p>
+                                  <p className="mt-1 leading-5">{t("invoices.quickBooks.missingItemGuidance")}</p>
+                                </div>
                               ) : null}
                               {quickBooksItemCandidates[itemKey]?.length ? (
                                 <ul aria-label={t("invoices.quickBooks.itemResults", { description: line.description })} className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1">
@@ -1165,7 +1176,7 @@ export function InvoicePanel({
                         </div>
                       </fieldset>
                       {quickBooksReviewDirty ? <Alert tone="warning">{t("invoices.quickBooks.unsavedReviewChanges")}</Alert> : null}
-                    </div>
+                    </fieldset>
                   ) : null}
                   {quickBooksPreview.operation?.status === "SUCCEEDED" ? (
                     <Alert tone="success">{t("invoices.quickBooks.success", { number: quickBooksPreview.providerDocNumber })}</Alert>
@@ -1183,7 +1194,7 @@ export function InvoicePanel({
                           <li key={blocker}>{t(`invoices.quickBooks.blockers.${blocker}`)}</li>
                         ))}
                       </ul>
-                      <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => navigate("/app/settings")}>
+                      <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => navigate("/app/settings#admin-quickbooks")}>
                         {t("invoices.quickBooks.openSettings")}
                       </Button>
                     </div>

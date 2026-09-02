@@ -26,7 +26,6 @@ import { ServiceCategory } from "@prisma/client";
 const quickBooksProviderMocks = vi.hoisted(() => ({
   exchangeAuthorizationCode: vi.fn(),
   fetchCompanyInfo: vi.fn(),
-  ensureAccessToken: vi.fn(),
   findCustomer: vi.fn(),
   createCustomer: vi.fn(),
   findItem: vi.fn(),
@@ -77,7 +76,6 @@ vi.mock("../../src/services/quickbooks", async () => {
     ...actual,
     exchangeQuickBooksAuthorizationCode: quickBooksProviderMocks.exchangeAuthorizationCode,
     fetchQuickBooksCompanyInfo: quickBooksProviderMocks.fetchCompanyInfo,
-    ensureQuickBooksAccessToken: quickBooksProviderMocks.ensureAccessToken,
     findQuickBooksCustomerByDisplayName: quickBooksProviderMocks.findCustomer,
     createQuickBooksCustomer: quickBooksProviderMocks.createCustomer,
     findQuickBooksItemByName: quickBooksProviderMocks.findItem,
@@ -4636,21 +4634,21 @@ describe("QuoteFly API integration", () => {
     expect(unsupportedResponse.statusCode).toBe(400);
   });
 
-  test("persists unsupported QuickBooks deletion events without placing them in the reconciliation queue", async () => {
+  test("queues QuickBooks Payment deletion events while fail-closing unsupported invoice deletion", async () => {
     const timestamp = new Date().toISOString();
     const legacyRealmId = `legacy-delete-realm-${Date.now()}`;
     const cloudRealmId = `cloud-delete-realm-${Date.now()}`;
     const fixtures: Array<{ realmId: string; entityId: string; payload: unknown }> = [
       {
         realmId: legacyRealmId,
-        entityId: "legacy-deleted-invoice",
+        entityId: "legacy-deleted-payment",
         payload: {
           eventNotifications: [{
             realmId: legacyRealmId,
             dataChangeEvent: {
               entities: [{
-                name: "Invoice",
-                id: "legacy-deleted-invoice",
+                name: "Payment",
+                id: "legacy-deleted-payment",
                 operation: "Delete",
                 lastUpdated: timestamp,
               }],
@@ -4660,14 +4658,14 @@ describe("QuoteFly API integration", () => {
       },
       {
         realmId: cloudRealmId,
-        entityId: "cloud-deleted-invoice",
+        entityId: "cloud-deleted-payment",
         payload: [{
           specversion: "1.0",
           id: `cloud-delete-event-${Date.now()}`,
           source: "intuit.synthetic-source",
-          type: "qbo.invoice.deleted.v1",
+          type: "qbo.payment.deleted.v1",
           time: timestamp,
-          intuitentityid: "cloud-deleted-invoice",
+          intuitentityid: "cloud-deleted-payment",
           intuitaccountid: cloudRealmId,
           data: {},
         }],
@@ -4698,12 +4696,12 @@ describe("QuoteFly API integration", () => {
         tenantId: null,
         quickBooksConnectionId: null,
         status: "RECEIVED",
-        lastError: "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
+        lastError: "QUICKBOOKS_REALM_UNBOUND",
         payload: { quarantined: true },
       });
     }
 
-    const session = await signUp("quickbooks-bound-delete-dead-letter");
+    const session = await signUp("quickbooks-bound-payment-delete");
     const boundRealmId = `bound-delete-realm-${Date.now()}`;
     const connection = await prisma.quickBooksConnection.create({
       data: {
@@ -4726,8 +4724,8 @@ describe("QuoteFly API integration", () => {
         realmId: boundRealmId,
         dataChangeEvent: {
           entities: [{
-            name: "Invoice",
-            id: "bound-deleted-invoice",
+            name: "Payment",
+            id: "bound-deleted-payment",
             operation: "Delete",
             lastUpdated: timestamp,
           }],
@@ -4745,10 +4743,43 @@ describe("QuoteFly API integration", () => {
     });
     expect(boundResponse.statusCode).toBe(200);
     await expect(prisma.quickBooksWebhookEvent.findFirstOrThrow({
-      where: { realmId: boundRealmId, entityId: "bound-deleted-invoice" },
+      where: { realmId: boundRealmId, entityId: "bound-deleted-payment" },
     })).resolves.toMatchObject({
       tenantId: session.tenant.id,
       quickBooksConnectionId: connection.id,
+      eventType: "Payment",
+      operation: "Delete",
+      status: "RECEIVED",
+      lastError: null,
+      deadAtUtc: null,
+    });
+
+    const unsupportedInvoicePayload = JSON.stringify({
+      eventNotifications: [{
+        realmId: boundRealmId,
+        dataChangeEvent: {
+          entities: [{
+            name: "Invoice",
+            id: "bound-deleted-invoice",
+            operation: "Delete",
+            lastUpdated: timestamp,
+          }],
+        },
+      }],
+    });
+    const unsupportedInvoiceSignature = createHmac("sha256", process.env.QUICKBOOKS_WEBHOOK_VERIFIER!)
+      .update(unsupportedInvoicePayload)
+      .digest("base64");
+    const unsupportedInvoiceResponse = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/webhook",
+      headers: { "content-type": "application/json", "intuit-signature": unsupportedInvoiceSignature },
+      payload: unsupportedInvoicePayload,
+    });
+    expect(unsupportedInvoiceResponse.statusCode).toBe(200);
+    await expect(prisma.quickBooksWebhookEvent.findFirstOrThrow({
+      where: { realmId: boundRealmId, entityId: "bound-deleted-invoice" },
+    })).resolves.toMatchObject({
       status: "DEAD",
       lastError: "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
       deadAtUtc: expect.any(Date),
@@ -5307,11 +5338,11 @@ describe("QuoteFly API integration", () => {
 
     const missingSessionReplay = await app.inject({
       method: "GET",
-      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(missingSessionState)}&code=missing-session-replay&realmId=missing-session-realm`,
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(missingSessionState)}&error=access_denied`,
       headers: authHeaders(owner.cookie),
     });
     expect(missingSessionReplay.statusCode).toBe(302);
-    expect(missingSessionReplay.headers.location).toContain("integrations=quickbooks_invalid_state");
+    expect(missingSessionReplay.headers.location).toContain("integrations=quickbooks_denied");
 
     const wrongSessionState = await startConnection();
     const wrongSession = await app.inject({
@@ -5324,11 +5355,11 @@ describe("QuoteFly API integration", () => {
 
     const wrongSessionReplay = await app.inject({
       method: "GET",
-      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(wrongSessionState)}&code=wrong-session-replay&realmId=wrong-session-realm`,
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(wrongSessionState)}&error=access_denied`,
       headers: authHeaders(owner.cookie),
     });
     expect(wrongSessionReplay.statusCode).toBe(302);
-    expect(wrongSessionReplay.headers.location).toContain("integrations=quickbooks_invalid_state");
+    expect(wrongSessionReplay.headers.location).toContain("integrations=quickbooks_denied");
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
   });

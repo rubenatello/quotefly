@@ -223,6 +223,70 @@ test("accepted quotes create manageable jobs with mobile-safe assignment and mem
   await expect(page.getByRole("button", { name: "Create draft invoice", exact: true })).toHaveCount(0);
 });
 
+test("invoice panel distinguishes a current partial payment from a payment reversal", async ({
+  context,
+  page,
+  request,
+}) => {
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  const owner = await signUpViaApi(request, "invoice-payment-display");
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: "Invoice Payment Display Customer",
+    email: "invoice-payment-display@example.com",
+  });
+  const quote = await createQuoteViaApi(request, owner, customer.id, {
+    title: "Invoice payment display workflow",
+  });
+  const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { status: "ACCEPTED" },
+  });
+  expect(accepted.status()).toBe(200);
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: owner.cookieHeader,
+      "Idempotency-Key": `invoice-payment-display-${Date.now()}`,
+    },
+    data: { sourceQuoteId: quote.id },
+  });
+  expect(created.status()).toBe(201);
+  const invoice = (await created.json()) as { invoice: Record<string, unknown> };
+  let display: "partial" | "reversed" = "partial";
+  await page.route("**/v1/invoices?**", async (route) => {
+    const renderedInvoice = display === "partial"
+      ? {
+          ...invoice.invoice,
+          paymentStatus: "PARTIALLY_PAID",
+          hasReversedPayment: true,
+          amountPaid: 125,
+          balanceDue: 375,
+        }
+      : {
+          ...invoice.invoice,
+          paymentStatus: "PENDING",
+          hasReversedPayment: true,
+          amountPaid: 0,
+          balanceDue: 500,
+        };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [renderedInvoice], total: 1, limit: 1, offset: 0 }),
+    });
+  });
+
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/quotes/${quote.id}`);
+  const panel = page.getByTestId("invoice-panel");
+  await expect(panel.getByText("Partially paid", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Payment reversed", { exact: true })).toHaveCount(0);
+
+  display = "reversed";
+  await page.reload();
+  await expect(panel.getByText("Payment reversed", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Partially paid", { exact: true })).toHaveCount(0);
+});
+
 test("invoice panel ignores a late response after the selected quote changes", async ({
   context,
   page,

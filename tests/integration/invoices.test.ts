@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -15,7 +16,6 @@ import { reconcileQuickBooksInvoice } from "../../src/services/quickbooks-reconc
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 
 const quickBooksProviderMocks = vi.hoisted(() => ({
-  ensureAccessToken: vi.fn(),
   createInvoice: vi.fn(),
   fetchInvoice: vi.fn(),
   findInvoiceByDocNumber: vi.fn(),
@@ -25,6 +25,7 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
   fetchRefundReceipt: vi.fn(),
   fetchCustomer: vi.fn(),
   fetchItem: vi.fn(),
+  refreshToken: vi.fn(),
   revokeToken: vi.fn(),
 }));
 
@@ -34,7 +35,6 @@ vi.mock("../../src/services/quickbooks", async () => {
   );
   return {
     ...actual,
-    ensureQuickBooksAccessToken: quickBooksProviderMocks.ensureAccessToken,
     createQuickBooksInvoice: quickBooksProviderMocks.createInvoice,
     fetchQuickBooksInvoice: quickBooksProviderMocks.fetchInvoice,
     findQuickBooksInvoicesByDocNumber: quickBooksProviderMocks.findInvoiceByDocNumber,
@@ -44,6 +44,7 @@ vi.mock("../../src/services/quickbooks", async () => {
     fetchQuickBooksRefundReceipt: quickBooksProviderMocks.fetchRefundReceipt,
     fetchQuickBooksCustomer: quickBooksProviderMocks.fetchCustomer,
     fetchQuickBooksItem: quickBooksProviderMocks.fetchItem,
+    refreshQuickBooksAccessToken: quickBooksProviderMocks.refreshToken,
     revokeQuickBooksToken: quickBooksProviderMocks.revokeToken,
   };
 });
@@ -330,7 +331,6 @@ describe("invoice ledger API", () => {
   });
 
   beforeEach(async () => {
-    quickBooksProviderMocks.ensureAccessToken.mockReset().mockResolvedValue("test-access-token");
     quickBooksProviderMocks.createInvoice.mockReset();
     quickBooksProviderMocks.fetchInvoice.mockReset().mockImplementation(async (
       _runtimeEnv: unknown,
@@ -373,6 +373,7 @@ describe("invoice ledger API", () => {
     quickBooksProviderMocks.fetchRefundReceipt.mockReset();
     quickBooksProviderMocks.fetchCustomer.mockReset();
     quickBooksProviderMocks.fetchItem.mockReset();
+    quickBooksProviderMocks.refreshToken.mockReset();
     quickBooksProviderMocks.revokeToken.mockReset().mockResolvedValue(undefined);
     await prisma.quickBooksWebhookEvent.deleteMany();
     await prisma.billingWebhookEvent.deleteMany();
@@ -921,7 +922,6 @@ describe("invoice ledger API", () => {
       },
     });
     expect(response.body).not.toContain("realm-preview");
-    expect(quickBooksProviderMocks.ensureAccessToken).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
   });
 
@@ -1449,7 +1449,6 @@ describe("invoice ledger API", () => {
     expect(staleRealm.body).not.toContain(changedRealm);
     expect(staleRealm.body).not.toContain("qb-customer-stale-review-updated");
     expect(staleRealm.body).not.toContain("qb-item-stale-review-updated");
-    expect(quickBooksProviderMocks.ensureAccessToken).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
     expect(await prisma.quickBooksInvoiceOperation.count({
       where: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id },
@@ -1828,6 +1827,201 @@ describe("invoice ledger API", () => {
     expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
   });
 
+  test("retains provider identity when create succeeds but the authoritative read fails", async () => {
+    const owner = await signUp("invoice-qb-created-read-failed");
+    const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, "created-read-failed");
+    const providerInvoiceId = "qb-invoice-created-read-failed";
+    quickBooksProviderMocks.createInvoice.mockResolvedValue({
+      Id: providerInvoiceId,
+      DocNumber: "QF-000001",
+      TotalAmt: 150,
+      Balance: 150,
+    });
+    quickBooksProviderMocks.fetchInvoice.mockRejectedValueOnce(
+      new QuickBooksProviderError("QUICKBOOKS_HTTP_503", false, 503),
+    );
+
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": `qb-created-read-failed-${Date.now()}` },
+      payload: { invoiceVersion: invoice.version, reviewBinding },
+    });
+    expect(publish.statusCode).toBe(202);
+    expect(publish.json()).toMatchObject({
+      code: "QUICKBOOKS_RESULT_UNCERTAIN",
+      reconciliationRequired: true,
+      operation: { status: "RECONCILIATION_REQUIRED", reconciliationAvailable: true },
+    });
+    await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
+    })).resolves.toMatchObject({
+      status: "RECONCILIATION_REQUIRED",
+      providerInvoiceId,
+      lastFailureCode: "QUICKBOOKS_HTTP_503",
+    });
+
+    const blockedRetry = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": `qb-created-read-failed-retry-${Date.now()}` },
+      payload: { invoiceVersion: invoice.version, reviewBinding },
+    });
+    expect(blockedRetry.statusCode).toBe(409);
+    expect(blockedRetry.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_REQUIRED" });
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+
+    const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as Record<string, unknown>;
+    quickBooksProviderMocks.fetchInvoice.mockResolvedValue({
+      ...providerPayload,
+      Id: providerInvoiceId,
+      TotalAmt: 150,
+      Balance: 150,
+      SyncToken: "1",
+      MetaData: { LastUpdatedTime: "2026-09-02T20:00:00.000Z" },
+      CurrencyRef: { value: "USD" },
+      LinkedTxn: [],
+    });
+    const reconciled = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/reconcile`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json()).toMatchObject({ found: true, operation: { status: "SUCCEEDED" } });
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test("retains provider identity when authorization is revoked after create and never creates twice", async () => {
+    const owner = await signUp("invoice-qb-created-read-reauth");
+    const { invoice, connection, reviewBinding } = await createQuickBooksReadyInvoice(
+      owner,
+      "created-read-reauth",
+    );
+    const providerInvoiceId = "qb-invoice-created-read-reauth";
+    quickBooksProviderMocks.createInvoice.mockImplementation(async () => {
+      // The CREATE used the current access token successfully. Expiring it here
+      // makes the immediately following authoritative GET attempt a refresh.
+      await prisma.quickBooksConnection.update({
+        where: { id: connection.id },
+        data: { accessTokenExpiresAtUtc: new Date(0) },
+      });
+      return {
+        Id: providerInvoiceId,
+        DocNumber: "QF-000001",
+        TotalAmt: 150,
+        Balance: 150,
+      };
+    });
+    quickBooksProviderMocks.refreshToken.mockRejectedValueOnce(
+      new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 400),
+    );
+
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": `qb-created-read-reauth-${Date.now()}` },
+      payload: { invoiceVersion: invoice.version, reviewBinding },
+    });
+    expect(publish.statusCode).toBe(409);
+    expect(publish.json()).toMatchObject({
+      code: "QUICKBOOKS_REAUTH_REQUIRED",
+      reconciliationRequired: true,
+      operation: { status: "RECONCILIATION_REQUIRED", reconciliationAvailable: true },
+    });
+    await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
+    })).resolves.toMatchObject({
+      status: "RECONCILIATION_REQUIRED",
+      providerInvoiceId,
+      lastFailureCode: "QUICKBOOKS_REAUTH_REQUIRED",
+    });
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: connection.id },
+    })).resolves.toMatchObject({ status: "NEEDS_REAUTH", refreshTokenEncrypted: null });
+
+    // Simulate a completed OAuth reconnect. The durable provider identity must
+    // still block another CREATE and direct the operator to reconciliation.
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: {
+        status: "CONNECTED",
+        accessTokenEncrypted: encryptQuickBooksSecret(env, "reconnected-access-token"),
+        refreshTokenEncrypted: encryptQuickBooksSecret(env, "reconnected-refresh-token"),
+        accessTokenExpiresAtUtc: new Date("2099-01-01T00:00:00.000Z"),
+        setupConfirmedAtUtc: new Date(),
+        setupConfirmedByTenantUserId: connection.setupConfirmedByTenantUserId,
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+        lastError: null,
+      },
+    });
+    const blockedRetry = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": `qb-created-read-reauth-retry-${Date.now()}` },
+      payload: { invoiceVersion: invoice.version, reviewBinding },
+    });
+    expect(blockedRetry.statusCode).toBe(409);
+    expect(blockedRetry.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_REQUIRED" });
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+
+    const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as Record<string, unknown>;
+    quickBooksProviderMocks.fetchInvoice.mockResolvedValue({
+      ...providerPayload,
+      Id: providerInvoiceId,
+      TotalAmt: 150,
+      Balance: 150,
+      SyncToken: "1",
+      MetaData: { LastUpdatedTime: "2026-09-02T20:00:00.000Z" },
+      CurrencyRef: { value: "USD" },
+      LinkedTxn: [],
+    });
+    const reconciled = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/reconcile`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json()).toMatchObject({ found: true, operation: { status: "SUCCEEDED" } });
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test("reuses the provider request ID when an invoice create retries after a resource 401", async () => {
+    const owner = await signUp("invoice-qb-create-401-retry");
+    const { invoice, reviewBinding, connection } = await createQuickBooksReadyInvoice(owner, "create-401-retry");
+    quickBooksProviderMocks.refreshToken.mockResolvedValue({
+      access_token: "invoice-create-rotated-access",
+      refresh_token: "invoice-create-rotated-refresh",
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+    quickBooksProviderMocks.createInvoice
+      .mockRejectedValueOnce(new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401))
+      .mockResolvedValueOnce({
+        Id: "qb-invoice-create-401-retry",
+        DocNumber: "QF-000001",
+        TotalAmt: 150,
+        Balance: 150,
+      });
+
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": `qb-create-401-retry-${Date.now()}` },
+      payload: { invoiceVersion: invoice.version, reviewBinding },
+    });
+    expect(publish.statusCode).toBe(201);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(2);
+    expect(quickBooksProviderMocks.createInvoice.mock.calls[0]?.[4]).toBeTruthy();
+    expect(quickBooksProviderMocks.createInvoice.mock.calls[1]?.[4])
+      .toBe(quickBooksProviderMocks.createInvoice.mock.calls[0]?.[4]);
+    expect(quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3])
+      .toEqual(quickBooksProviderMocks.createInvoice.mock.calls[1]?.[3]);
+    expect(quickBooksProviderMocks.refreshToken).toHaveBeenCalledTimes(1);
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({ status: "CONNECTED" });
+  });
+
   test("quarantines an ambiguous provider result and reconciles it without another write", async () => {
     const owner = await signUp("invoice-qb-uncertain");
     const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, "uncertain");
@@ -2024,7 +2218,7 @@ describe("invoice ledger API", () => {
       })).resolves.toMatchObject({
         status: "SUCCEEDED",
         providerInvoiceId: providerInvoice.Id,
-        providerInvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=uncertain-hosted",
+        providerInvoiceLink: expect.stringMatching(/^qbl1\./),
         claimTokenHash: null,
         claimExpiresAtUtc: null,
       });
@@ -2167,6 +2361,178 @@ describe("invoice ledger API", () => {
       providerRealmId: connection.realmId,
       claimTokenHash: null,
       claimExpiresAtUtc: null,
+    });
+  });
+
+  test("returns a stable reconnect response when manual refresh or reconciliation finds revoked authorization", async () => {
+    quickBooksProviderMocks.refreshToken.mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 400),
+    );
+
+    const refreshOwner = await signUp("invoice-qb-refresh-reauth");
+    const refreshFixture = await createQuickBooksReconciliationFixture(refreshOwner, "refresh-reauth");
+    await prisma.quickBooksConnection.update({
+      where: { id: refreshFixture.connection.id },
+      data: { accessTokenExpiresAtUtc: new Date(0) },
+    });
+    const refresh = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${refreshFixture.invoice.id}/refresh`,
+      headers: { cookie: refreshOwner.cookie },
+    });
+    expect(refresh.statusCode).toBe(409);
+    expect(refresh.json()).toMatchObject({ code: "QUICKBOOKS_REAUTH_REQUIRED" });
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: refreshFixture.connection.id },
+    })).resolves.toMatchObject({ status: "NEEDS_REAUTH", refreshTokenEncrypted: null });
+
+    const reconcileOwner = await signUp("invoice-qb-reconcile-reauth");
+    const reconcileFixture = await createQuickBooksReconciliationFixture(reconcileOwner, "reconcile-reauth");
+    await prisma.quickBooksConnection.update({
+      where: { id: reconcileFixture.connection.id },
+      data: { accessTokenExpiresAtUtc: new Date(0) },
+    });
+    const reconcile = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${reconcileFixture.invoice.id}/reconcile`,
+      headers: { cookie: reconcileOwner.cookie },
+    });
+    expect(reconcile.statusCode).toBe(409);
+    expect(reconcile.json()).toMatchObject({
+      code: "QUICKBOOKS_REAUTH_REQUIRED",
+      found: true,
+      reconciliationRequired: true,
+      operation: { status: "RECONCILIATION_REQUIRED" },
+    });
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: reconcileFixture.connection.id },
+    })).resolves.toMatchObject({ status: "NEEDS_REAUTH", refreshTokenEncrypted: null });
+  });
+
+  test("deterministically migrates plaintext hosted links without changing unrelated operation lifecycles", async () => {
+    const owner = await signUp("invoice-qb-hosted-link-migration");
+    const active = await createQuickBooksReconciliationFixture(owner, "migration-active");
+    const archived = await createQuickBooksReconciliationFixture(
+      owner,
+      "migration-archived",
+      active.connection,
+    );
+    const providerless = await createQuickBooksReadyInvoice(
+      owner,
+      "migration-providerless",
+      active.connection,
+    );
+    const noLink = await createQuickBooksReconciliationFixture(
+      owner,
+      "migration-no-link",
+      active.connection,
+    );
+    const reviewer = await prisma.tenantUser.findFirstOrThrow({
+      where: { tenantId: owner.tenant.id, userId: owner.user.id },
+      select: { id: true },
+    });
+    const now = new Date("2026-09-02T20:00:00.000Z");
+
+    await prisma.quickBooksInvoiceOperation.update({
+      where: { id: active.operation.id },
+      data: {
+        providerInvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=migration-active",
+        invoiceLinkFetchedAtUtc: now,
+        providerSyncToken: "4",
+        providerInvoiceStatus: "Open",
+        providerBalance: 150,
+        providerUpdatedAtUtc: now,
+        lastReconciledAtUtc: now,
+      },
+    });
+    await prisma.quickBooksInvoiceOperation.update({
+      where: { id: archived.operation.id },
+      data: {
+        providerInvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=migration-archived",
+        invoiceLinkFetchedAtUtc: now,
+        archivedAtUtc: now,
+      },
+    });
+    const providerlessOperation = await prisma.quickBooksInvoiceOperation.create({
+      data: {
+        tenantId: owner.tenant.id,
+        invoiceId: providerless.invoice.id,
+        quickBooksConnectionId: active.connection.id,
+        requestedByTenantUserId: reviewer.id,
+        status: "FAILED",
+        commandKeyHash: createHash("sha256").update("migration-providerless-command").digest("hex"),
+        payloadHash: createHash("sha256").update("migration-providerless-payload").digest("hex"),
+        providerRealmId: active.connection.realmId,
+        providerRequestId: "migration-providerless-request",
+        providerDocNumber: "QF-MIGRATION-PROVIDERLESS",
+        processingStartedAtUtc: now,
+        lastAttemptAtUtc: now,
+        failedAtUtc: now,
+        lastFailureCode: "PREEXISTING_PROVIDERLESS_FAILURE",
+        providerInvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=migration-providerless",
+        invoiceLinkFetchedAtUtc: now,
+      },
+    });
+
+    const migrationSource = readFileSync(
+      new URL(
+        "../../prisma/migrations/20260902173500_add_quickbooks_reauth_connection_event/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const backfillStart = migrationSource.indexOf("-- Fence active provider-bound rows first.");
+    expect(backfillStart).toBeGreaterThanOrEqual(0);
+    const backfillStatements = migrationSource
+      .slice(backfillStart)
+      .split(/;\s*(?:\r?\n|$)/u)
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    expect(backfillStatements).toHaveLength(2);
+    for (const statement of backfillStatements) {
+      await prisma.$executeRawUnsafe(statement);
+    }
+
+    await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { id: active.operation.id },
+    })).resolves.toMatchObject({
+      status: "RECONCILIATION_REQUIRED",
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      providerSyncToken: null,
+      providerInvoiceStatus: null,
+      providerBalance: null,
+      providerUpdatedAtUtc: null,
+      lastReconciledAtUtc: null,
+      succeededAtUtc: null,
+      lastFailureCode: "QUICKBOOKS_HOSTED_LINK_REENCRYPTION_REQUIRED",
+    });
+    const migratedArchived = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { id: archived.operation.id },
+    });
+    expect(migratedArchived).toMatchObject({
+      status: "SUCCEEDED",
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      lastFailureCode: null,
+    });
+    expect(migratedArchived.succeededAtUtc).not.toBeNull();
+    await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { id: providerlessOperation.id },
+    })).resolves.toMatchObject({
+      status: "FAILED",
+      providerInvoiceId: null,
+      providerInvoiceLink: null,
+      invoiceLinkFetchedAtUtc: null,
+      lastFailureCode: "PREEXISTING_PROVIDERLESS_FAILURE",
+    });
+    await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { id: noLink.operation.id },
+    })).resolves.toMatchObject({
+      status: "SUCCEEDED",
+      providerInvoiceId: noLink.providerInvoiceId,
+      providerInvoiceLink: null,
+      lastFailureCode: null,
     });
   });
 
@@ -3490,7 +3856,8 @@ describe("invoice ledger API", () => {
       const reconciledOperation = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
         where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
       });
-      expect(reconciledOperation.providerInvoiceLink).toBe(providerInvoiceLink);
+      expect(reconciledOperation.providerInvoiceLink).toMatch(/^qbl1\./);
+      expect(reconciledOperation.providerInvoiceLink).not.toContain(providerInvoiceLink);
       expect(reconciledOperation.lastReconciledAtUtc).toBeInstanceOf(Date);
       expect(reconciledOperation.invoiceLinkFetchedAtUtc?.getTime())
         .toBe(reconciledOperation.lastReconciledAtUtc?.getTime());
@@ -3647,7 +4014,7 @@ describe("invoice ledger API", () => {
       });
       await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
         where: { id: fixture.operation.id },
-      })).resolves.toMatchObject({ providerInvoiceLink });
+      })).resolves.toMatchObject({ providerInvoiceLink: expect.stringMatching(/^qbl1\./) });
 
       quickBooksProviderMocks.fetchInvoice.mockResolvedValueOnce({
         ...fixture.providerPayload,

@@ -1098,7 +1098,7 @@ model QuickBooksInvoiceOperation {
   providerRequestId       String                           @db.VarChar(191)
   providerInvoiceId       String?                          @db.VarChar(191)
   providerDocNumber       String                           @db.VarChar(191)
-  providerInvoiceLink     String?                          @db.VarChar(2048)
+  providerInvoiceLink     String?                          @db.VarChar(4096)
   providerSyncToken       String?                          @db.VarChar(191)
   providerInvoiceStatus   String?                          @db.VarChar(191)
   providerBalance         Decimal?                         @db.Decimal(10, 2)

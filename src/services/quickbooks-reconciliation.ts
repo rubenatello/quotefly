@@ -3,6 +3,8 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { env } from "../config/env";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
+  decryptQuickBooksHostedPaymentLink,
+  encryptQuickBooksHostedPaymentLink,
   fetchQuickBooksInvoice,
   fetchQuickBooksPayment,
   fetchQuickBooksRefundReceipt,
@@ -14,6 +16,10 @@ import {
   type QuickBooksRefundReceiptEvidenceEntity,
   type QuickBooksReconciliationInvoiceEntity,
 } from "./quickbooks";
+import {
+  isQuickBooksReauthorizationError,
+  runQuickBooksProviderRequestWithRefresh,
+} from "./quickbooks-credentials";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
 type RuntimeEnv = typeof env;
@@ -607,13 +613,26 @@ export async function reconcileQuickBooksInvoice(params: {
     providerUpdatedAtUtc: context.operation.providerUpdatedAtUtc,
     lastReconciledAtUtc: context.operation.lastReconciledAtUtc,
   };
-  const accessToken = await params.getAccessToken(context.connection);
-  const providerInvoiceResponse = await fetchQuickBooksInvoice(
-    params.runtimeEnv,
-    context.connection.realmId,
-    accessToken,
-    context.operation.providerInvoiceId,
-  );
+  let providerInvoiceResponse: Awaited<ReturnType<typeof fetchQuickBooksInvoice>>;
+  try {
+    providerInvoiceResponse = await runQuickBooksProviderRequestWithRefresh({
+      prisma: params.prisma,
+      runtimeEnv: params.runtimeEnv,
+      connection: context.connection,
+      getAccessToken: params.getAccessToken,
+      operation: (accessToken) => fetchQuickBooksInvoice(
+        params.runtimeEnv,
+        context.connection.realmId,
+        accessToken,
+        context.operation.providerInvoiceId,
+      ),
+    });
+  } catch (error) {
+    if (isQuickBooksReauthorizationError(error)) {
+      throw new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 401);
+    }
+    throw error;
+  }
   let providerInvoice: QuickBooksReconciliationInvoiceEntity;
   try {
     providerInvoice = validateQuickBooksReconciliationInvoice(providerInvoiceResponse);
@@ -703,12 +722,18 @@ export async function reconcileQuickBooksInvoice(params: {
   const amountPaid = money(context.invoiceTotal - balance);
   let applications: SupportedPaymentApplication[];
   try {
-    const evidence = await fetchPaymentEvidence(
-      params.runtimeEnv,
-      context.connection.realmId,
-      accessToken,
-      providerInvoice,
-    );
+    const evidence = await runQuickBooksProviderRequestWithRefresh({
+      prisma: params.prisma,
+      runtimeEnv: params.runtimeEnv,
+      connection: context.connection,
+      getAccessToken: params.getAccessToken,
+      operation: (accessToken) => fetchPaymentEvidence(
+        params.runtimeEnv,
+        context.connection.realmId,
+        accessToken,
+        providerInvoice,
+      ),
+    });
     applications = supportedPaymentApplications({
       invoice: providerInvoice,
       payments: evidence.payments,
@@ -719,6 +744,9 @@ export async function reconcileQuickBooksInvoice(params: {
       requiredReduction: voided ? 0 : amountPaid,
     });
   } catch (error) {
+    if (isQuickBooksReauthorizationError(error)) {
+      throw new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 401);
+    }
     if (!(error instanceof QuickBooksEvidenceError)) throw error;
     await quarantineQuickBooksReconciliation({
       prisma: params.prisma,
@@ -737,6 +765,9 @@ export async function reconcileQuickBooksInvoice(params: {
   const onlinePaymentsExpected = context.operation.allowOnlineAchPayment || context.operation.allowOnlineCardPayment;
   const hostedPaymentUrl = onlinePaymentsExpected && !voided && balance > 0
     ? validateQuickBooksInvoiceLink(providerInvoice.InvoiceLink)
+    : null;
+  const encryptedHostedPaymentUrl = hostedPaymentUrl
+    ? encryptQuickBooksHostedPaymentLink(params.runtimeEnv, hostedPaymentUrl)
     : null;
   const paymentLinkUnavailable = onlinePaymentsExpected && !hostedPaymentUrl && !voided && balance > 0;
   const incomingGeneration = providerGeneration(providerInvoice);
@@ -797,7 +828,17 @@ export async function reconcileQuickBooksInvoice(params: {
           paymentStatus: current.paymentStatus as QuickBooksReconciliationResult["paymentStatus"],
           amountPaid: money(current.amountPaid),
           balanceDue: money(current.balanceDue),
-          hostedPaymentUrlAvailable: Boolean(validateQuickBooksInvoiceLink(currentOperation.providerInvoiceLink)),
+          hostedPaymentUrlAvailable: (() => {
+            if (!currentOperation.providerInvoiceLink) return false;
+            try {
+              return Boolean(validateQuickBooksInvoiceLink(decryptQuickBooksHostedPaymentLink(
+                params.runtimeEnv,
+                currentOperation.providerInvoiceLink,
+              )));
+            } catch {
+              return false;
+            }
+          })(),
         },
       };
     }
@@ -884,7 +925,7 @@ export async function reconcileQuickBooksInvoice(params: {
         status: paymentLinkUnavailable ? "RECONCILIATION_REQUIRED" : "SUCCEEDED",
         claimTokenHash: null,
         claimExpiresAtUtc: null,
-        providerInvoiceLink: hostedPaymentUrl,
+        providerInvoiceLink: encryptedHostedPaymentUrl,
         invoiceLinkFetchedAtUtc: hostedPaymentUrl ? now : null,
         providerSyncToken: incomingGeneration.syncToken,
         providerInvoiceStatus: incomingProviderStatus,

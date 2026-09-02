@@ -1,6 +1,6 @@
 # QuickBooks API Progress
 
-Last updated: 2026-08-28
+Last updated: 2026-09-02
 
 Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
 
@@ -25,6 +25,8 @@ The repository contains a default-off candidate for:
 - unknown-result quarantine and read-only reconciliation;
 - restricted hosted invoice-link storage;
 - terminal-state and disconnect/reconnect invalidation for cached hosted invoice links;
+- purpose-bound AES-256-GCM encryption for cached hosted invoice links, with current/previous-key rotation support and fail-closed legacy invalidation;
+- an explicit `NEEDS_REAUTH` lifecycle when Intuit rejects a refresh credential, without treating ordinary company-permission failures as credential loss;
 - a durable webhook inbox state machine, CDC cursor, realm-routing record, and revocation-pending state;
 - tenant-composite relationships and forced RLS for tenant-owned QuickBooks records;
 - projection into QuoteFly's internal Invoice and InvoicePayment ledger.
@@ -33,7 +35,7 @@ Presence in the schema or code is not availability. The candidate must pass the 
 
 The current worktree includes automated provider-shaped coverage for bounded
 `RefundReceipt` reads, webhook and CDC recognition, partial/full ledger
-projection, idempotent replay, and fail-closed ambiguous linkage. This is local
+projection, payment-deletion recovery, idempotent replay, and fail-closed ambiguous linkage. This is local
 test evidence only: it does not prove how a live Intuit sandbox company links a
 refund receipt, payment, and invoice, and it does not satisfy the owner-managed
 sandbox refund/reversal checkbox below.
@@ -98,6 +100,7 @@ The uncommitted migration `20260827120000_add_quickbooks_hosted_payment_reconcil
 - `QuickBooksRealmBinding` is intentionally a minimal non-secret routing table with forced tenant RLS plus a transaction-local, realm-exact webhook lookup policy; it must never accumulate tokens, company names, customer data, or public API exposure;
 - stored hosted invoice links are restricted provider data and require no-log, no-cache, retention, backup, and incident handling evidence;
 - migration `20260828180000_invalidate_stale_quickbooks_invoice_links` clears pre-existing cached links and provider generations once so the hardened lifecycle begins from a fresh canonical reconciliation;
+- migration `20260902173500_add_quickbooks_reauth_connection_event` adds the reconnect audit event, expands the encrypted hosted-link envelope column, and invalidates pre-encryption cached links for canonical recovery;
 - webhook lease/state invariants and OAuth user/membership binding must be proven at the service and database-backed test layers before enablement.
 
 ## Official references

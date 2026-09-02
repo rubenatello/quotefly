@@ -8,10 +8,12 @@ import {
   disconnectQuickBooksConnection,
   getSerializedQuickBooksAccessToken,
   retryQuickBooksRevocation,
+  runQuickBooksProviderRequestWithRefresh,
 } from "../../src/services/quickbooks-credentials";
 import {
   decryptQuickBooksSecret,
   encryptQuickBooksSecret,
+  QuickBooksProviderError,
 } from "../../src/services/quickbooks";
 import {
   QUICKBOOKS_ORPHAN_REVOCATION_MAX_ATTEMPTS,
@@ -148,6 +150,263 @@ describe("QuickBooks credential-operation claim", () => {
         status: "CONNECTED",
         disconnectRequestedAtUtc: null,
         tokenRefreshClaimHash: null,
+      });
+  });
+
+  test("transitions revoked refresh credentials to NEEDS_REAUTH and removes stale readiness", async () => {
+    const { tenant, connection } = await createConnection("refresh-revoked");
+    providerMocks.refreshToken.mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 400),
+    );
+
+    await expect(getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: connection.id,
+        tenantId: tenant.id,
+        realmId: connection.realmId,
+      },
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_REAUTH_REQUIRED" });
+
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "NEEDS_REAUTH",
+        accessTokenEncrypted: null,
+        refreshTokenEncrypted: null,
+        accessTokenExpiresAtUtc: null,
+        setupConfirmedAtUtc: null,
+        setupConfirmedByTenantUserId: null,
+        setupChecklistVersion: null,
+        tokenRefreshClaimHash: null,
+        tokenRefreshClaimExpiresAtUtc: null,
+        lastError: "QUICKBOOKS_REAUTH_REQUIRED",
+      });
+    await expect(prisma.quickBooksConnectionEvent.findFirst({
+      where: {
+        tenantId: tenant.id,
+        quickBooksConnectionId: connection.id,
+        action: "REAUTH_REQUIRED",
+        outcome: "SUCCEEDED",
+      },
+    })).resolves.toBeTruthy();
+
+    await expect(getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: connection.id,
+        tenantId: tenant.id,
+        realmId: connection.realmId,
+      },
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_CONNECTION_NOT_CONNECTED" });
+    expect(providerMocks.refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  test("recovers a resource 401 with one serialized refresh and one provider retry", async () => {
+    const { tenant, connection } = await createConnection("resource-401-recovery", {
+      accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+    providerMocks.refreshToken.mockResolvedValue({
+      access_token: "rotated-resource-access",
+      refresh_token: "rotated-resource-refresh",
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+    const operation = vi.fn()
+      .mockRejectedValueOnce(new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401))
+      .mockResolvedValueOnce("provider-result");
+
+    await expect(runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection: { id: connection.id, tenantId: tenant.id, realmId: connection.realmId },
+      operation,
+    })).resolves.toBe("provider-result");
+
+    expect(providerMocks.refreshToken).toHaveBeenCalledTimes(1);
+    expect(operation).toHaveBeenNthCalledWith(1, "access-resource-401-recovery");
+    expect(operation).toHaveBeenNthCalledWith(2, "rotated-resource-access");
+    const persisted = await prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } });
+    expect(persisted.status).toBe("CONNECTED");
+    expect(decryptQuickBooksSecret(env, persisted.accessTokenEncrypted!)).toBe("rotated-resource-access");
+  });
+
+  test("serializes concurrent resource 401 recovery to at most one token refresh", async () => {
+    const { tenant, connection } = await createConnection("resource-401-concurrent", {
+      accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+    const bothInitialAttemptsStarted = deferred<void>();
+    const releaseInitialAttempts = deferred<void>();
+    const refreshBarrier = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    providerMocks.refreshToken.mockImplementation(() => refreshBarrier.promise);
+    let initialAttemptCount = 0;
+    const operation = vi.fn(async (accessToken: string) => {
+      if (accessToken === "access-resource-401-concurrent") {
+        initialAttemptCount += 1;
+        if (initialAttemptCount === 2) bothInitialAttemptsStarted.resolve();
+        await releaseInitialAttempts.promise;
+        throw new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401);
+      }
+      return accessToken;
+    });
+    const connectionRef = { id: connection.id, tenantId: tenant.id, realmId: connection.realmId };
+
+    const settled = Promise.allSettled([
+      runQuickBooksProviderRequestWithRefresh({
+        prisma,
+        runtimeEnv: env,
+        connection: connectionRef,
+        operation,
+      }),
+      runQuickBooksProviderRequestWithRefresh({
+        prisma,
+        runtimeEnv: env,
+        connection: connectionRef,
+        operation,
+      }),
+    ]);
+    await bothInitialAttemptsStarted.promise;
+    releaseInitialAttempts.resolve();
+    await waitFor(async () => {
+      const row = await prisma.quickBooksConnection.findUnique({ where: { id: connection.id } });
+      return providerMocks.refreshToken.mock.calls.length === 1 && Boolean(row?.tokenRefreshClaimHash);
+    }, "concurrent resource 401 refresh claim");
+    refreshBarrier.resolve({
+      access_token: "concurrent-rotated-access",
+      refresh_token: "concurrent-rotated-refresh",
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+
+    const results = await settled;
+    expect(providerMocks.refreshToken).toHaveBeenCalledTimes(1);
+    expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        expect(result.reason).toMatchObject({ code: "QUICKBOOKS_TOKEN_REFRESH_BUSY", statusCode: 503 });
+      }
+    }
+    const persisted = await prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } });
+    expect(persisted.status).toBe("CONNECTED");
+    expect(decryptQuickBooksSecret(env, persisted.accessTokenEncrypted!)).toBe("concurrent-rotated-access");
+    expect(decryptQuickBooksSecret(env, persisted.refreshTokenEncrypted!)).toBe("concurrent-rotated-refresh");
+  });
+
+  test("a stale resource 401 cannot erase or refresh credentials installed by a reconnect", async () => {
+    const { tenant, connection } = await createConnection("resource-401-reconnect-race", {
+      accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+    const firstAttemptStarted = deferred<void>();
+    const releaseFirstAttempt = deferred<void>();
+    const operation = vi.fn(async (accessToken: string) => {
+      if (operation.mock.calls.length === 1) {
+        firstAttemptStarted.resolve();
+        await releaseFirstAttempt.promise;
+        throw new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401);
+      }
+      return accessToken;
+    });
+
+    const request = runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection: { id: connection.id, tenantId: tenant.id, realmId: connection.realmId },
+      operation,
+    });
+    await firstAttemptStarted.promise;
+    const reconnectedAccessCiphertext = encryptQuickBooksSecret(env, "reconnected-access");
+    const reconnectedRefreshCiphertext = encryptQuickBooksSecret(env, "reconnected-refresh");
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: {
+        accessTokenEncrypted: reconnectedAccessCiphertext,
+        refreshTokenEncrypted: reconnectedRefreshCiphertext,
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+        tokenRefreshClaimHash: null,
+        tokenRefreshClaimExpiresAtUtc: null,
+      },
+    });
+    releaseFirstAttempt.resolve();
+
+    await expect(request).resolves.toBe("reconnected-access");
+    expect(providerMocks.refreshToken).not.toHaveBeenCalled();
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "CONNECTED",
+        accessTokenEncrypted: reconnectedAccessCiphertext,
+        refreshTokenEncrypted: reconnectedRefreshCiphertext,
+      });
+  });
+
+  test("a second resource 401 after refresh does not destroy a valid refresh credential", async () => {
+    const { tenant, connection } = await createConnection("resource-401-twice", {
+      accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+    providerMocks.refreshToken.mockResolvedValue({
+      access_token: "twice-rotated-access",
+      refresh_token: "twice-rotated-refresh",
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+    const operation = vi.fn().mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401),
+    );
+
+    await expect(runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection: { id: connection.id, tenantId: tenant.id, realmId: connection.realmId },
+      operation,
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_ACCESS_UNAUTHORIZED_AFTER_REFRESH", statusCode: 503 });
+    expect(providerMocks.refreshToken).toHaveBeenCalledTimes(1);
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({ status: "CONNECTED" });
+  });
+
+  test("resource 403 and a bare refresh-endpoint 401 never orphan stored credentials", async () => {
+    const forbidden = await createConnection("resource-403", {
+      accessTokenExpiresAtUtc: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+    await expect(runQuickBooksProviderRequestWithRefresh({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: forbidden.connection.id,
+        tenantId: forbidden.tenant.id,
+        realmId: forbidden.connection.realmId,
+      },
+      operation: async () => {
+        throw new QuickBooksProviderError("QUICKBOOKS_HTTP_403", false, 403);
+      },
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_HTTP_403" });
+    expect(providerMocks.refreshToken).not.toHaveBeenCalled();
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: forbidden.connection.id } }))
+      .resolves.toMatchObject({ status: "CONNECTED" });
+
+    const refresh401 = await createConnection("refresh-bare-401");
+    providerMocks.refreshToken.mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_TOKEN_REFRESH_HTTP_401", false, 401),
+    );
+    await expect(getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: refresh401.connection.id,
+        tenantId: refresh401.tenant.id,
+        realmId: refresh401.connection.realmId,
+      },
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_TOKEN_REFRESH_HTTP_401" });
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: refresh401.connection.id } }))
+      .resolves.toMatchObject({
+        status: "CONNECTED",
+        accessTokenEncrypted: refresh401.connection.accessTokenEncrypted,
+        refreshTokenEncrypted: refresh401.connection.refreshTokenEncrypted,
       });
   });
 

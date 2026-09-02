@@ -29,7 +29,9 @@ export function classifyQuickBooksWorkerFailure(error: unknown): QuickBooksWorke
   if (error instanceof QuickBooksProviderError) {
     return {
       code: sanitizedFailureCode(error.code),
-      retryable: true,
+      retryable: error.code !== "QUICKBOOKS_REAUTH_REQUIRED"
+        && error.statusCode !== 401
+        && error.statusCode !== 403,
     };
   }
   return {

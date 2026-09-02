@@ -60,10 +60,12 @@ function serializeInvoice(invoice: InvoicePublic) {
     tenantId: _tenantId,
     deletedAtUtc: _deletedAtUtc,
     archivedAtUtc: _archivedAtUtc,
+    payments: reversedPayments,
     ...safe
   } = invoice;
   return {
     ...safe,
+    hasReversedPayment: reversedPayments.length > 0,
     subtotalAmount: Number(invoice.subtotalAmount),
     taxAmount: Number(invoice.taxAmount),
     totalAmount: Number(invoice.totalAmount),

@@ -3,11 +3,15 @@ import type { env } from "../config/env";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   fetchQuickBooksCdc,
+  QuickBooksProviderError,
   type QuickBooksInvoiceEntity,
   type QuickBooksPaymentEntity,
   type QuickBooksRefundReceiptEntity,
 } from "./quickbooks";
-import type { QuickBooksTokenConnection } from "./quickbooks-credentials";
+import {
+  runQuickBooksProviderRequestWithRefresh,
+  type QuickBooksTokenConnection,
+} from "./quickbooks-credentials";
 import { quickBooksWebhookEventId } from "./quickbooks-webhook-inbox";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
@@ -293,13 +297,18 @@ export async function recoverQuickBooksChanges(params: {
   if (!context) return null;
 
   try {
-    const accessToken = await params.getAccessToken(context.connection);
-    const changes = await fetchQuickBooksCdc(
-      params.runtimeEnv,
-      context.connection.realmId,
-      accessToken,
-      context.changedSinceUtc,
-    );
+    const changes = await runQuickBooksProviderRequestWithRefresh({
+      prisma: params.prisma,
+      runtimeEnv: params.runtimeEnv,
+      connection: context.connection,
+      getAccessToken: params.getAccessToken,
+      operation: (accessToken) => fetchQuickBooksCdc(
+        params.runtimeEnv,
+        context.connection.realmId,
+        accessToken,
+        context.changedSinceUtc,
+      ),
+    });
     const now = new Date();
     const providerCursor = changes.providerTime ?? now;
     const workItems = buildQuickBooksCdcWorkItems({
@@ -326,7 +335,11 @@ export async function recoverQuickBooksChanges(params: {
     await completeQuickBooksCdcClaimFailure({
       prisma: params.prisma,
       claim: context,
-      errorCode: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+      errorCode: error instanceof QuickBooksProviderError
+        ? error.code
+        : error instanceof Error
+          ? error.name
+          : "UNKNOWN_ERROR",
     });
     throw error;
   }

@@ -974,6 +974,25 @@ export function completeQuickBooksInvoicePublish(
   });
 }
 
+export function retainCreatedQuickBooksInvoiceForReconciliation(
+  transaction: Transaction,
+  access: AccessContext,
+  params: {
+    invoiceId: string;
+    claimToken: string;
+    providerInvoiceId: string;
+    failureCode: string;
+  },
+) {
+  return finishOperation(transaction, access, {
+    ...params,
+    providerInvoiceLink: null,
+    expectedStatus: "PROCESSING",
+    nextStatus: "RECONCILIATION_REQUIRED",
+    eventType: "PROVIDER_RECONCILIATION_REQUIRED",
+  });
+}
+
 export async function markQuickBooksInitialReconciliationRequired(
   transaction: Transaction,
   access: AccessContext,

@@ -1803,6 +1803,7 @@ export type JobNote = {
 export type InvoiceStatus = "DRAFT" | "OPEN" | "PAID" | "VOID" | "UNCOLLECTIBLE";
 export type InvoicePaymentStatus =
   | "PENDING"
+  | "PARTIALLY_PAID"
   | "SUCCEEDED"
   | "FAILED"
   | "REFUNDED"
@@ -1817,6 +1818,7 @@ export type Invoice = {
   invoiceNumber: number;
   status: InvoiceStatus;
   paymentStatus: InvoicePaymentStatus;
+  hasReversedPayment: boolean;
   titleSnapshot: string;
   documentLocale: SupportedLocale;
   currency: string;

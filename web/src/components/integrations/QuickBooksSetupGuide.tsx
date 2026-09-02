@@ -15,6 +15,7 @@ type QuickBooksSetupGuideProps = {
   companyName?: string | null;
   operations: QuickBooksSetupReadiness["operations"];
   canConnect: boolean;
+  connectLabel: string;
   onConnect: () => void;
 };
 
@@ -33,6 +34,7 @@ export function QuickBooksSetupGuide({
   companyName,
   operations,
   canConnect,
+  connectLabel,
   onConnect,
 }: QuickBooksSetupGuideProps) {
   const { t } = useTranslation();
@@ -140,7 +142,7 @@ export function QuickBooksSetupGuide({
               onConnect();
             }}
           >
-            {t("admin.quickBooksSetup.connect")}
+            {connectLabel}
           </Button>
         ) : null}
       </ModalFooter>

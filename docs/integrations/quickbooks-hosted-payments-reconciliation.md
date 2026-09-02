@@ -1,6 +1,6 @@
 # QuickBooks Hosted Payments And Reconciliation
 
-Last updated: 2026-08-27
+Last updated: 2026-09-02
 
 Status: Engineering candidate in progress. QuickBooks provider workflows remain default-off and are not approved for production enablement.
 
@@ -44,6 +44,8 @@ The link must:
 - never enter logs, analytics, Kody/OpenAI prompts, public quote payloads, or referrer headers;
 - be returned only to an authorized tenant user or an explicitly scoped customer-share workflow;
 - use `Cache-Control: no-store` and `Referrer-Policy: no-referrer` at delivery boundaries.
+
+At rest, a cached link is stored only in a purpose-bound authenticated-encryption envelope. Legacy plaintext values are invalidated by migration and must be recovered through canonical reconciliation before they can be presented again.
 
 Publishing opens the internal QuoteFly invoice and records the provider invoice identity. It does not set `sentAtUtc` until QuoteFly actually presents or sends the hosted link.
 

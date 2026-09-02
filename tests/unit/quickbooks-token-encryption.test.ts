@@ -9,6 +9,8 @@ const PREVIOUS_KEY = "quickbooks-previous-token-key-00000000001";
 let parseEnv: typeof import("../../src/config/env.js").parseEnv;
 let decryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").decryptQuickBooksSecret;
 let encryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").encryptQuickBooksSecret;
+let decryptQuickBooksHostedPaymentLink: typeof import("../../src/services/quickbooks.js").decryptQuickBooksHostedPaymentLink;
+let encryptQuickBooksHostedPaymentLink: typeof import("../../src/services/quickbooks.js").encryptQuickBooksHostedPaymentLink;
 let createSignedQuickBooksState: typeof import("../../src/services/quickbooks.js").createSignedQuickBooksState;
 let verifySignedQuickBooksState: typeof import("../../src/services/quickbooks.js").verifySignedQuickBooksState;
 let fetchQuickBooksCdc: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCdc;
@@ -18,11 +20,13 @@ let fetchQuickBooksInvoice: typeof import("../../src/services/quickbooks.js").fe
 let fetchQuickBooksItem: typeof import("../../src/services/quickbooks.js").fetchQuickBooksItem;
 let fetchQuickBooksPayment: typeof import("../../src/services/quickbooks.js").fetchQuickBooksPayment;
 let fetchQuickBooksRefundReceipt: typeof import("../../src/services/quickbooks.js").fetchQuickBooksRefundReceipt;
+let refreshQuickBooksAccessToken: typeof import("../../src/services/quickbooks.js").refreshQuickBooksAccessToken;
 let QuickBooksProviderError: typeof import("../../src/services/quickbooks.js").QuickBooksProviderError;
 let QUICKBOOKS_INVOICE_LINK_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_INVOICE_LINK_MINOR_VERSION;
 let searchQuickBooksCustomers: typeof import("../../src/services/quickbooks.js").searchQuickBooksCustomers;
 let classifyQuickBooksWorkerFailure: typeof import("../../src/services/quickbooks-worker-failures.js").classifyQuickBooksWorkerFailure;
 let QuickBooksReconciliationError: typeof import("../../src/services/quickbooks-reconciliation.js").QuickBooksReconciliationError;
+let isQuickBooksReauthorizationError: typeof import("../../src/services/quickbooks-credentials.js").isQuickBooksReauthorizationError;
 
 before(async () => {
   process.env.DATABASE_URL ||= "postgresql://unit:unit@127.0.0.1:1/quotefly_unit";
@@ -31,6 +35,8 @@ before(async () => {
   ({
     decryptQuickBooksSecret,
     encryptQuickBooksSecret,
+    decryptQuickBooksHostedPaymentLink,
+    encryptQuickBooksHostedPaymentLink,
     createSignedQuickBooksState,
     fetchQuickBooksCdc,
     fetchQuickBooksCompanyInfo,
@@ -39,6 +45,7 @@ before(async () => {
     fetchQuickBooksItem,
     fetchQuickBooksPayment,
     fetchQuickBooksRefundReceipt,
+    refreshQuickBooksAccessToken,
     QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
     QuickBooksProviderError,
     searchQuickBooksCustomers,
@@ -46,6 +53,7 @@ before(async () => {
   } = await import("../../src/services/quickbooks.js"));
   ({ classifyQuickBooksWorkerFailure } = await import("../../src/services/quickbooks-worker-failures.js"));
   ({ QuickBooksReconciliationError } = await import("../../src/services/quickbooks-reconciliation.js"));
+  ({ isQuickBooksReauthorizationError } = await import("../../src/services/quickbooks-credentials.js"));
 });
 
 function runtimeEnv(overrides: Partial<NodeJS.ProcessEnv> = {}) {
@@ -138,6 +146,53 @@ describe("QuickBooks token encryption", () => {
 
     assert.throws(() => decryptQuickBooksSecret(env, tampered), /payload is invalid/i);
     assert.throws(() => decryptQuickBooksSecret(env, "v2.not-valid"), /payload is invalid/i);
+  });
+});
+
+describe("QuickBooks hosted payment-link encryption", () => {
+  const hostedPaymentUrl = "https://app.qbo.intuit.com/app/invoice?txnId=invoice-link-test";
+
+  it("persists a purpose-bound envelope instead of the capability URL", () => {
+    const env = runtimeEnv();
+    const encrypted = encryptQuickBooksHostedPaymentLink(env, hostedPaymentUrl);
+
+    assert.equal(encrypted.startsWith("qbl1."), true);
+    assert.equal(encrypted.includes(hostedPaymentUrl), false);
+    assert.equal(decryptQuickBooksHostedPaymentLink(env, encrypted), hostedPaymentUrl);
+    assert.throws(() => decryptQuickBooksSecret(env, encrypted), /payload is invalid/i);
+  });
+
+  it("supports key rotation and fails closed for the wrong key or tampering", () => {
+    const encryptedWithOldKey = encryptQuickBooksHostedPaymentLink(
+      runtimeEnv({ QUICKBOOKS_TOKEN_ENCRYPTION_KEY: PREVIOUS_KEY }),
+      hostedPaymentUrl,
+    );
+    const rotatedEnv = runtimeEnv({
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: CURRENT_KEY,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: PREVIOUS_KEY,
+    });
+    const tamperedParts = encryptedWithOldKey.split(".");
+    const encryptedPayload = tamperedParts[3] as string;
+    tamperedParts[3] = `${encryptedPayload.startsWith("A") ? "B" : "A"}${encryptedPayload.slice(1)}`;
+    const tampered = tamperedParts.join(".");
+
+    assert.equal(decryptQuickBooksHostedPaymentLink(rotatedEnv, encryptedWithOldKey), hostedPaymentUrl);
+    assert.throws(
+      () => decryptQuickBooksHostedPaymentLink(runtimeEnv(), encryptedWithOldKey),
+      /payload is invalid/i,
+    );
+    assert.throws(
+      () => decryptQuickBooksHostedPaymentLink(rotatedEnv, tampered),
+      /payload is invalid/i,
+    );
+    assert.throws(
+      () => encryptQuickBooksHostedPaymentLink(rotatedEnv, "https://example.com/not-intuit"),
+      /link is invalid/i,
+    );
+    assert.throws(
+      () => encryptQuickBooksHostedPaymentLink(rotatedEnv, `https://app.qbo.intuit.com/${"a".repeat(2_100)}`),
+      /link is invalid/i,
+    );
   });
 });
 
@@ -279,6 +334,32 @@ describe("QuickBooks provider response validation", () => {
     }
   }
 
+  it("classifies invalid_grant token refresh responses as a reconnect requirement without retaining provider text", async () => {
+    const env = runtimeEnv({
+      QUICKBOOKS_CLIENT_ID: "sandbox-client-id",
+      QUICKBOOKS_CLIENT_SECRET: "sandbox-client-secret",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      error: "invalid_grant",
+      error_description: "provider detail must not cross the boundary",
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+    try {
+      await assert.rejects(
+        () => refreshQuickBooksAccessToken(env, "revoked-refresh-token"),
+        (error: unknown) => error instanceof QuickBooksProviderError
+          && error.code === "QUICKBOOKS_REAUTH_REQUIRED"
+          && error.statusCode === 400
+          && !error.message.includes("provider detail"),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("fails closed with stable codes for malformed invoice, payment, customer, item, company, CDC, and search payloads", async () => {
     const env = runtimeEnv();
     await rejectsMalformedPayload(
@@ -393,6 +474,24 @@ describe("QuickBooks provider response validation", () => {
 });
 
 describe("QuickBooks reconciliation worker failure policy", () => {
+  it("requires an explicit terminal refresh-token code before reconnecting", () => {
+    assert.equal(isQuickBooksReauthorizationError(new QuickBooksProviderError(
+      "QUICKBOOKS_PROVIDER_REQUEST_FAILED",
+      false,
+      403,
+    )), false);
+    assert.equal(isQuickBooksReauthorizationError(new QuickBooksProviderError(
+      "QUICKBOOKS_REAUTH_REQUIRED",
+      false,
+      400,
+    )), true);
+    assert.equal(isQuickBooksReauthorizationError(new QuickBooksProviderError(
+      "QUICKBOOKS_PROVIDER_REQUEST_FAILED",
+      false,
+      401,
+    )), false);
+  });
+
   it("preserves canonical retryability and sanitizes unknown failures", () => {
     assert.deepEqual(
       classifyQuickBooksWorkerFailure(new QuickBooksReconciliationError(
@@ -409,6 +508,14 @@ describe("QuickBooks reconciliation worker failure policy", () => {
         true,
       )),
       { code: "QUICKBOOKS_NOT_CONNECTED", retryable: true },
+    );
+    assert.deepEqual(
+      classifyQuickBooksWorkerFailure(new QuickBooksProviderError(
+        "QUICKBOOKS_REAUTH_REQUIRED",
+        false,
+        401,
+      )),
+      { code: "QUICKBOOKS_REAUTH_REQUIRED", retryable: false },
     );
     assert.deepEqual(
       classifyQuickBooksWorkerFailure(new Error("customer@example.com should not escape")),

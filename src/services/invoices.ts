@@ -64,6 +64,17 @@ export const InvoicePublicSelect = {
       createdAt: true,
     },
   },
+  payments: {
+    where: {
+      provider: "QUICKBOOKS" as const,
+      status: "CANCELED" as const,
+      failureCode: "QUICKBOOKS_PAYMENT_REMOVED_OR_REVERSED",
+      deletedAtUtc: null,
+    },
+    orderBy: [{ updatedAt: "desc" as const }, { id: "desc" as const }],
+    take: 1,
+    select: { id: true },
+  },
   customer: {
     select: {
       id: true,

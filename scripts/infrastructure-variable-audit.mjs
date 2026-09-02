@@ -76,8 +76,19 @@ const PROFILES = {
       "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
       "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
       "QUICKBOOKS_OAUTH_ONLY_MODE",
+      "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
+      "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
+      "QUICKBOOKS_CDC_WORKER_ENABLED",
     ],
     forbidden: ["DIRECT_DATABASE_URL"],
+    expected: {
+      QUICKBOOKS_ENVIRONMENT: ["sandbox", "production"],
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"],
+      QUICKBOOKS_OAUTH_ONLY_MODE: ["false"],
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: ["true"],
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["true"],
+      QUICKBOOKS_CDC_WORKER_ENABLED: ["true"],
+    },
   },
   "quickbooks-oauth": {
     required: [
@@ -91,11 +102,22 @@ const PROFILES = {
       "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
       "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
       "QUICKBOOKS_OAUTH_ONLY_MODE",
+      "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
+      "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
+      "QUICKBOOKS_CDC_WORKER_ENABLED",
     ],
     forbidden: [
       "DIRECT_DATABASE_URL",
       "QUICKBOOKS_WEBHOOK_VERIFIER",
     ],
+    expected: {
+      QUICKBOOKS_ENVIRONMENT: ["sandbox"],
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"],
+      QUICKBOOKS_OAUTH_ONLY_MODE: ["true"],
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: ["false"],
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["false"],
+      QUICKBOOKS_CDC_WORKER_ENABLED: ["false"],
+    },
   },
 };
 
@@ -119,14 +141,27 @@ if (args.length !== 2 || args[0] !== "--profile" || !(args[1] in PROFILES)) {
 
 const profile = args[1];
 const registry = PROFILES[profile];
-const describe = (name) => ({
+const describe = (name) => {
+  const configuredValue = process.env[name]?.trim();
+  const expectedValues = registry.expected?.[name];
+  return {
+    name,
+    classification: CLASSIFICATIONS[name] ?? CONFIGURATION,
+    status: configuredValue ? "configured" : "missing",
+    ...(expectedValues
+      ? { expectationStatus: configuredValue && expectedValues.includes(configuredValue) ? "matched" : "mismatched" }
+      : {}),
+  };
+};
+const describeForbidden = (name) => ({
   name,
   classification: CLASSIFICATIONS[name] ?? CONFIGURATION,
   status: process.env[name]?.trim() ? "configured" : "missing",
 });
 const required = registry.required.map(describe);
-const forbidden = registry.forbidden.map(describe);
+const forbidden = registry.forbidden.map(describeForbidden);
 const outcome = required.every((entry) => entry.status === "configured")
+  && required.every((entry) => entry.expectationStatus === undefined || entry.expectationStatus === "matched")
   && forbidden.every((entry) => entry.status === "missing")
   ? "pass"
   : "fail";

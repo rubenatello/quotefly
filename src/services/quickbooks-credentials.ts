@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { env } from "../config/env";
 import { withTenantRlsContext } from "../lib/tenant-rls";
@@ -31,6 +31,19 @@ export type QuickBooksDisconnectResult = "disconnected" | "pending";
 const QUICKBOOKS_CREDENTIAL_CLAIM_MINIMUM_MS = 120_000;
 export const QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS = 8;
 const QUICKBOOKS_CONNECTION_REVOCATION_DEAD = "QUICKBOOKS_TOKEN_REVOCATION_DEAD";
+
+export function isQuickBooksReauthorizationError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "QUICKBOOKS_REAUTH_REQUIRED";
+}
+
+function isQuickBooksResourceUnauthorizedError(error: unknown): boolean {
+  return error instanceof QuickBooksProviderError
+    && error.statusCode === 401
+    && !isQuickBooksReauthorizationError(error);
+}
 
 export function assertQuickBooksConnectionEnvironment(
   runtimeEnv: Pick<RuntimeEnv, "QUICKBOOKS_ENVIRONMENT">,
@@ -121,6 +134,96 @@ export async function invalidateQuickBooksHostedPaymentLinks(
   return invalidated.count + unpublished.count;
 }
 
+async function refreshQuickBooksAccessTokenAfterResourceUnauthorized(params: {
+  prisma: PrismaClient;
+  runtimeEnv: RuntimeEnv;
+  connection: QuickBooksTokenConnection;
+  rejectedAccessToken: string;
+}): Promise<string> {
+  const liveConnection = await withTenantRlsContext(params.prisma, params.connection.tenantId, (transaction) =>
+    transaction.quickBooksConnection.findFirst({
+      where: {
+        id: params.connection.id,
+        tenantId: params.connection.tenantId,
+        realmId: params.connection.realmId,
+        status: "CONNECTED",
+        disconnectRequestedAtUtc: null,
+        deletedAtUtc: null,
+        setupConfirmedAtUtc: { not: null },
+        setupConfirmedByTenantUserId: { not: null },
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+      },
+      select: {
+        accessTokenEncrypted: true,
+        refreshTokenEncrypted: true,
+      },
+    }),
+  );
+  if (!liveConnection?.accessTokenEncrypted || !liveConnection.refreshTokenEncrypted) {
+    return getSerializedQuickBooksAccessToken(params);
+  }
+
+  const currentAccessToken = decryptQuickBooksSecret(params.runtimeEnv, liveConnection.accessTokenEncrypted);
+  const rejectedDigest = createHash("sha256").update(params.rejectedAccessToken, "utf8").digest();
+  const currentDigest = createHash("sha256").update(currentAccessToken, "utf8").digest();
+  if (!timingSafeEqual(rejectedDigest, currentDigest)) {
+    // Another request or reconnect already installed a newer credential. The
+    // stale 401 must not alter that generation.
+    return getSerializedQuickBooksAccessToken(params);
+  }
+
+  await withTenantRlsContext(params.prisma, params.connection.tenantId, (transaction) =>
+    transaction.quickBooksConnection.updateMany({
+      where: {
+        id: params.connection.id,
+        tenantId: params.connection.tenantId,
+        realmId: params.connection.realmId,
+        status: "CONNECTED",
+        disconnectRequestedAtUtc: null,
+        deletedAtUtc: null,
+        accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+        refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+      },
+      data: {
+        accessTokenExpiresAtUtc: new Date(0),
+        lastError: "QUICKBOOKS_ACCESS_TOKEN_REJECTED",
+      },
+    }),
+  );
+
+  return getSerializedQuickBooksAccessToken(params);
+}
+
+export async function runQuickBooksProviderRequestWithRefresh<T>(params: {
+  prisma: PrismaClient;
+  runtimeEnv: RuntimeEnv;
+  connection: QuickBooksTokenConnection;
+  operation: (accessToken: string) => Promise<T>;
+  getAccessToken?: (connection: QuickBooksTokenConnection) => Promise<string>;
+}): Promise<T> {
+  const accessToken = await (params.getAccessToken
+    ? params.getAccessToken(params.connection)
+    : getSerializedQuickBooksAccessToken(params));
+  try {
+    return await params.operation(accessToken);
+  } catch (error) {
+    if (!isQuickBooksResourceUnauthorizedError(error)) throw error;
+  }
+
+  const refreshedAccessToken = await refreshQuickBooksAccessTokenAfterResourceUnauthorized({
+    prisma: params.prisma,
+    runtimeEnv: params.runtimeEnv,
+    connection: params.connection,
+    rejectedAccessToken: accessToken,
+  });
+  try {
+    return await params.operation(refreshedAccessToken);
+  } catch (error) {
+    if (!isQuickBooksResourceUnauthorizedError(error)) throw error;
+    throw new QuickBooksProviderError("QUICKBOOKS_ACCESS_UNAUTHORIZED_AFTER_REFRESH", false, 503);
+  }
+}
+
 export async function getSerializedQuickBooksAccessToken(params: {
   prisma: PrismaClient;
   runtimeEnv: RuntimeEnv;
@@ -177,6 +280,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
         setupConfirmedByTenantUserId: { not: null },
         setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
         disconnectRequestedAtUtc: null,
+        accessTokenEncrypted: liveConnection.accessTokenEncrypted,
         refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
         OR: [
           { tokenRefreshClaimHash: null },
@@ -213,6 +317,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
           setupConfirmedByTenantUserId: { not: null },
           setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
           disconnectRequestedAtUtc: null,
+          accessTokenEncrypted: liveConnection.accessTokenEncrypted,
           refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
           tokenRefreshClaimHash: claimTokenHash,
         },
@@ -238,6 +343,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
           tenantId: connection.tenantId,
           status: "CONNECTED",
           disconnectRequestedAtUtc: { not: null },
+          accessTokenEncrypted: liveConnection.accessTokenEncrypted,
           refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
           tokenRefreshClaimHash: claimTokenHash,
         },
@@ -276,6 +382,8 @@ export async function getSerializedQuickBooksAccessToken(params: {
           tenantId: connection.tenantId,
           status: "CONNECTED",
           disconnectRequestedAtUtc: { not: null },
+          accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+          refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
           tokenRefreshClaimHash: claimTokenHash,
         },
         data: {
@@ -288,18 +396,64 @@ export async function getSerializedQuickBooksAccessToken(params: {
         },
       });
       if (retainedForRevocation.count === 0) {
-        await transaction.quickBooksConnection.updateMany({
-          where: {
-            id: liveConnection.id,
-            tenantId: connection.tenantId,
-            tokenRefreshClaimHash: claimTokenHash,
-          },
-          data: {
-            tokenRefreshClaimHash: null,
-            tokenRefreshClaimExpiresAtUtc: null,
-            lastError: "QUICKBOOKS_TOKEN_REFRESH_FAILED",
-          },
-        });
+        if (isQuickBooksReauthorizationError(error)) {
+          const transitioned = await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
+              accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+              refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+              tokenRefreshClaimHash: claimTokenHash,
+            },
+            data: {
+              status: "NEEDS_REAUTH",
+              accessTokenEncrypted: null,
+              refreshTokenEncrypted: null,
+              accessTokenExpiresAtUtc: null,
+              setupConfirmedAtUtc: null,
+              setupConfirmedByTenantUserId: null,
+              setupChecklistVersion: null,
+              tokenRefreshClaimHash: null,
+              tokenRefreshClaimExpiresAtUtc: null,
+              lastError: "QUICKBOOKS_REAUTH_REQUIRED",
+            },
+          });
+          if (transitioned.count === 1) {
+            const reauthAtUtc = new Date();
+            await invalidateQuickBooksHostedPaymentLinks(
+              transaction,
+              connection.tenantId,
+              liveConnection.id,
+              reauthAtUtc,
+            );
+            await recordQuickBooksConnectionEvent(transaction, {
+              tenantId: connection.tenantId,
+              quickBooksConnectionId: liveConnection.id,
+              actorTenantUserId: null,
+              requestId: `system:quickbooks-reauth:${liveConnection.id}`,
+              action: "REAUTH_REQUIRED",
+              outcome: "SUCCEEDED",
+              connectionGeneration: await currentQuickBooksConnectionGeneration(transaction, connection.tenantId),
+            });
+          }
+        } else {
+          await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+              refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+              tokenRefreshClaimHash: claimTokenHash,
+            },
+            data: {
+              tokenRefreshClaimHash: null,
+              tokenRefreshClaimExpiresAtUtc: null,
+              lastError: "QUICKBOOKS_TOKEN_REFRESH_FAILED",
+            },
+          });
+        }
       }
     }).catch(() => undefined);
     throw error;

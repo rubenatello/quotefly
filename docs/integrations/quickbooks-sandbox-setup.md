@@ -59,7 +59,7 @@ Neon and other managed-PostgreSQL rehearsals must also follow the [PostgreSQL 16
 
 The redirect URI must match exactly. Keep sandbox and production credentials, callback URLs, webhook configuration, realm IDs, and evidence separate.
 
-Unsupported deletion delivery does not block provider enablement: QuoteFly persists and acknowledges it safely without changing the local ledger. A later release must define invoice deletion semantics, update the local ledger atomically, and add sandbox recovery evidence before those events may drive a local financial-state change.
+Payment deletion is supported as a reconciliation trigger: QuoteFly durably queues the event and, when Intuit confirms that the payment no longer exists, finds the previously linked QuoteFly invoice and rebuilds its collection state from canonical provider evidence. Invoice and RefundReceipt deletion remain unsupported financial mutations; those events fail closed and require operator review instead of silently changing the ledger.
 
 ## 2. Configure QuoteFly staging secrets
 

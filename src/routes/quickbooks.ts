@@ -12,6 +12,7 @@ import {
   buildQuickBooksAuthorizationUrl,
   createQuickBooksInvoice,
   createSignedQuickBooksState,
+  decryptQuickBooksHostedPaymentLink,
   encryptQuickBooksSecret,
   exchangeQuickBooksAuthorizationCode,
   fetchQuickBooksInvoice,
@@ -35,6 +36,8 @@ import {
   disconnectQuickBooksConnection,
   getSerializedQuickBooksAccessToken,
   invalidateQuickBooksHostedPaymentLinks,
+  isQuickBooksReauthorizationError,
+  runQuickBooksProviderRequestWithRefresh,
 } from "../services/quickbooks-credentials";
 import {
   QuickBooksOrphanCredentialPersistenceError,
@@ -52,6 +55,7 @@ import {
   quickBooksInvoiceReconciliationAvailable,
   QuickBooksInvoiceOperationError,
   QuickBooksInvoiceOperationPublicSelect,
+  retainCreatedQuickBooksInvoiceForReconciliation,
   retainQuickBooksInvoiceReconciliation,
   type QuickBooksInvoiceOperationPublic,
   type QuickBooksInvoiceSyncPreview,
@@ -206,11 +210,17 @@ const QUICKBOOKS_SUPPORTED_WEBHOOK_OPERATIONS: Readonly<Record<string, "Create" 
   voided: "Void",
 };
 
-function normalizeQuickBooksWebhookOperation(operation: string): {
+function normalizeQuickBooksWebhookOperation(
+  entityName: "Invoice" | "Payment" | "RefundReceipt",
+  operation: string,
+): {
   operation: string;
   supported: boolean;
 } {
   const key = operation.trim().toLowerCase();
+  if (entityName === "Payment" && (key === "delete" || key === "deleted")) {
+    return { operation: "Delete", supported: true };
+  }
   const normalized = QUICKBOOKS_SUPPORTED_WEBHOOK_OPERATIONS[key];
   return normalized
     ? { operation: normalized, supported: true }
@@ -226,7 +236,7 @@ function normalizeQuickBooksWebhookNotifications(
   if (!Array.isArray(payload)) {
     return payload.eventNotifications.flatMap(
       (notification) => notification.dataChangeEvent.entities.map((entity) => {
-        const normalizedOperation = normalizeQuickBooksWebhookOperation(entity.operation);
+        const normalizedOperation = normalizeQuickBooksWebhookOperation(entity.name, entity.operation);
         return {
           realmId: notification.realmId,
           name: entity.name,
@@ -247,12 +257,13 @@ function normalizeQuickBooksWebhookNotifications(
     const match = /^qbo\.(invoice|payment|refundreceipt)\.([a-z][a-z0-9-]{0,63})\.v1$/i.exec(event.type);
     if (!match) throw new Error("QuickBooks CloudEvent type passed validation without a supported entity.");
     const entityKey = match[1].toLowerCase() as keyof typeof entityNames;
-    const normalizedOperation = normalizeQuickBooksWebhookOperation(match[2]);
+    const entityName = entityNames[entityKey];
+    const normalizedOperation = normalizeQuickBooksWebhookOperation(entityName, match[2]);
     return {
       providerEventId: event.id,
       providerEventSource: event.source,
       realmId: event.intuitaccountid,
-      name: entityNames[entityKey],
+      name: entityName,
       id: event.intuitentityid,
       ...normalizedOperation,
       lastUpdated: event.time,
@@ -684,6 +695,27 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     });
   }
 
+  async function runQuickBooksProviderRequest<T>(
+    connection: { id: string; tenantId: string; realmId: string },
+    operation: (accessToken: string) => Promise<T>,
+  ): Promise<T> {
+    return runQuickBooksProviderRequestWithRefresh({
+      prisma: app.prisma,
+      runtimeEnv: app.env,
+      connection,
+      operation,
+    });
+  }
+
+  function sendQuickBooksReauthRequired(reply: FastifyReply, error: unknown) {
+    if (!isQuickBooksReauthorizationError(error)) return false;
+    reply.code(409).send({
+      error: "QuickBooks authorization needs attention. Reconnect the workspace and try again.",
+      code: "QUICKBOOKS_REAUTH_REQUIRED",
+    });
+    return true;
+  }
+
   async function loadConnectedQuickBooksProvider(tenantId: string) {
     return withTenantRlsContext(app.prisma, tenantId, (transaction) =>
       transaction.quickBooksConnection.findFirst({
@@ -927,10 +959,49 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
     let issuedRefreshToken: string | null = null;
     try {
-      // Consume every valid callback state exactly once, including denied and
-      // malformed terminal callbacks. A canceled authorization must never
-      // leave a replayable one-time state behind for its remaining TTL.
       const stateHash = createHash("sha256").update(query.state, "utf8").digest("hex");
+      const stateExists = await withTenantRlsContext(
+        app.prisma,
+        verifiedState.tenantId,
+        (transaction) => transaction.quickBooksOAuthState.count({
+          where: {
+            tenantId: verifiedState.tenantId,
+            userId: verifiedState.userId,
+            stateHash,
+            consumedAtUtc: null,
+            expiresAtUtc: { gt: new Date() },
+          },
+        }),
+      );
+      if (stateExists !== 1) throw new QuickBooksOAuthStateReplayError();
+
+      // A signed state is not sufficient authorization. Bind the callback to
+      // the exact initiating HttpOnly browser session before consuming its
+      // one-time state so a missing or wrong session cannot burn an owner's
+      // legitimate OAuth attempt.
+      await app.authenticate(request, reply);
+      if (reply.sent) return reply;
+      const callbackClaims = getJwtClaims(request);
+      if (
+        callbackClaims.tenantId !== verifiedState.tenantId
+        || callbackClaims.userId !== verifiedState.userId
+      ) {
+        return failureRedirect("quickbooks_session_mismatch");
+      }
+      const callbackMembership = request.liveAuthMembership;
+      if (!callbackMembership) return failureRedirect("quickbooks_session_mismatch");
+      const callbackEntitlements = buildTenantEntitlements(
+        callbackMembership.tenant,
+        new Date(),
+        { userEmail: callbackMembership.user.email },
+      );
+      if (!callbackEntitlements.hasWorkspaceAccess) {
+        return failureRedirect("quickbooks_billing_required");
+      }
+
+      // Consume every session-bound callback state exactly once, including
+      // denied and malformed terminal callbacks. A canceled authorization
+      // must never leave a replayable one-time state behind for its TTL.
       const stateConsumed = await withTenantRlsContext(
         app.prisma,
         verifiedState.tenantId,
@@ -961,29 +1032,6 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         { maxWait: 5_000, timeout: 10_000 },
       );
       if (!stateConsumed) throw new QuickBooksOAuthStateReplayError();
-
-      // OAuth Security BCP requires the callback to remain bound to the user
-      // agent that initiated authorization. A valid state alone is not enough:
-      // revalidate the HttpOnly QuoteFly session and require the exact actor.
-      await app.authenticate(request, reply);
-      if (reply.sent) return reply;
-      const callbackClaims = getJwtClaims(request);
-      if (
-        callbackClaims.tenantId !== verifiedState.tenantId
-        || callbackClaims.userId !== verifiedState.userId
-      ) {
-        return failureRedirect("quickbooks_session_mismatch");
-      }
-      const callbackMembership = request.liveAuthMembership;
-      if (!callbackMembership) return failureRedirect("quickbooks_session_mismatch");
-      const callbackEntitlements = buildTenantEntitlements(
-        callbackMembership.tenant,
-        new Date(),
-        { userEmail: callbackMembership.user.email },
-      );
-      if (!callbackEntitlements.hasWorkspaceAccess) {
-        return failureRedirect("quickbooks_billing_required");
-      }
 
       if (query.error) return failureRedirect("quickbooks_denied");
       if (!query.code || !query.realmId) return failureRedirect("quickbooks_error");
@@ -1529,16 +1577,23 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before searching customers.", code: "QUICKBOOKS_NOT_CONNECTED" });
-      const accessToken = await getAccessToken(connection);
-      const candidates = await searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit);
-      reply.header("Cache-Control", "private, no-store");
-      return {
-        candidates: candidates.map((customer) => ({
-          quickBooksCustomerId: customer.Id,
-          displayName: customer.DisplayName ?? "QuickBooks customer",
-          email: customer.PrimaryEmailAddr?.Address ?? null,
-        })),
-      };
+      try {
+        const candidates = await runQuickBooksProviderRequest(
+          connection,
+          (accessToken) => searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit),
+        );
+        reply.header("Cache-Control", "private, no-store");
+        return {
+          candidates: candidates.map((customer) => ({
+            quickBooksCustomerId: customer.Id,
+            displayName: customer.DisplayName ?? "QuickBooks customer",
+            email: customer.PrimaryEmailAddr?.Address ?? null,
+          })),
+        };
+      } catch (error) {
+        if (sendQuickBooksReauthRequired(reply, error)) return;
+        throw error;
+      }
     },
   );
 
@@ -1553,16 +1608,23 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before searching items.", code: "QUICKBOOKS_NOT_CONNECTED" });
-      const accessToken = await getAccessToken(connection);
-      const candidates = await searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit);
-      reply.header("Cache-Control", "private, no-store");
-      return {
-        candidates: candidates.map((item) => ({
-          quickBooksItemId: item.Id,
-          name: item.Name ?? "QuickBooks item",
-          type: item.Type ?? null,
-        })),
-      };
+      try {
+        const candidates = await runQuickBooksProviderRequest(
+          connection,
+          (accessToken) => searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit),
+        );
+        reply.header("Cache-Control", "private, no-store");
+        return {
+          candidates: candidates.map((item) => ({
+            quickBooksItemId: item.Id,
+            name: item.Name ?? "QuickBooks item",
+            type: item.Type ?? null,
+          })),
+        };
+      } catch (error) {
+        if (sendQuickBooksReauthRequired(reply, error)) return;
+        throw error;
+      }
     },
   );
 
@@ -1578,8 +1640,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before reviewing mappings.", code: "QUICKBOOKS_NOT_CONNECTED" });
       try {
-        const accessToken = await getAccessToken(connection);
-        const customer = await fetchQuickBooksCustomer(app.env, connection.realmId, accessToken, body.quickBooksCustomerId);
+        const customer = await runQuickBooksProviderRequest(
+          connection,
+          (accessToken) => fetchQuickBooksCustomer(app.env, connection.realmId, accessToken, body.quickBooksCustomerId),
+        );
         const mapping = await withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           reviewQuickBooksCustomerMapping(transaction, access, {
             connectionId: connection.id,
@@ -1592,6 +1656,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return { mapping };
       } catch (error) {
         if (error instanceof QuickBooksMappingError) return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+        if (sendQuickBooksReauthRequired(reply, error)) return;
         throw error;
       }
     },
@@ -1609,8 +1674,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before reviewing mappings.", code: "QUICKBOOKS_NOT_CONNECTED" });
       try {
-        const accessToken = await getAccessToken(connection);
-        const item = await fetchQuickBooksItem(app.env, connection.realmId, accessToken, body.quickBooksItemId);
+        const item = await runQuickBooksProviderRequest(
+          connection,
+          (accessToken) => fetchQuickBooksItem(app.env, connection.realmId, accessToken, body.quickBooksItemId),
+        );
         const mapping = await withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           reviewQuickBooksItemMapping(transaction, access, {
             connectionId: connection.id,
@@ -1624,6 +1691,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return { mapping };
       } catch (error) {
         if (error instanceof QuickBooksMappingError) return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+        if (sendQuickBooksReauthRequired(reply, error)) return;
         throw error;
       }
     },
@@ -1757,29 +1825,22 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      const providerConnection = {
+        ...claim.connection,
+        realmId: claim.operation.providerRealmId,
+      };
       let createdInvoice: Awaited<ReturnType<typeof createQuickBooksInvoice>>;
-      let authoritativeInvoice: Awaited<ReturnType<typeof fetchQuickBooksInvoice>>;
       try {
-        const accessToken = await getAccessToken({
-          ...claim.connection,
-          realmId: claim.operation.providerRealmId,
-        });
-        createdInvoice = await createQuickBooksInvoice(
-          app.env,
-          claim.operation.providerRealmId,
-          accessToken,
-          claim.providerPayload,
-          claim.providerRequestId,
+        createdInvoice = await runQuickBooksProviderRequest(
+          providerConnection,
+          (accessToken) => createQuickBooksInvoice(
+            app.env,
+            claim.operation.providerRealmId,
+            accessToken,
+            claim.providerPayload,
+            claim.providerRequestId,
+          ),
         );
-        authoritativeInvoice = await fetchQuickBooksInvoice(
-          app.env,
-          claim.operation.providerRealmId,
-          accessToken,
-          createdInvoice.Id,
-        );
-        if (authoritativeInvoice.Id !== createdInvoice.Id) {
-          throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_ID_MISMATCH", true);
-        }
       } catch (error) {
         const failure = classifyQuickBooksProviderFailure(error);
         const operation = await withTenantRlsContext(
@@ -1796,6 +1857,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           { code: failure.code, ambiguous: failure.ambiguous, invoiceId },
           "QuickBooks invoice publish failed",
         );
+        if (sendQuickBooksReauthRequired(reply, error)) return;
         return reply.code(failure.ambiguous ? 202 : 502).send({
           error: failure.ambiguous
             ? "The QuickBooks result is uncertain. Reconcile it before trying again."
@@ -1803,6 +1865,58 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           code: failure.ambiguous ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_PUBLISH_REJECTED",
           duplicate: false,
           reconciliationRequired: failure.ambiguous,
+          operation: serializeQuickBooksInvoiceOperation(operation),
+        });
+      }
+
+      let authoritativeInvoice: Awaited<ReturnType<typeof fetchQuickBooksInvoice>>;
+      try {
+        authoritativeInvoice = await runQuickBooksProviderRequest(
+          providerConnection,
+          (accessToken) => fetchQuickBooksInvoice(
+            app.env,
+            claim.operation.providerRealmId,
+            accessToken,
+            createdInvoice.Id,
+          ),
+        );
+        if (authoritativeInvoice.Id !== createdInvoice.Id) {
+          throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_ID_MISMATCH", true);
+        }
+      } catch (error) {
+        const failure = classifyQuickBooksProviderFailure(error);
+        // A successful provider CREATE is irreversible from QuoteFly's point of
+        // view. Persist its identity before returning for every confirmation-read
+        // failure, including revoked authorization, so no retry can create a
+        // second financial record.
+        const operation = await withTenantRlsContext(
+          app.prisma,
+          access.tenantId,
+          (transaction) => retainCreatedQuickBooksInvoiceForReconciliation(transaction, access, {
+            invoiceId,
+            claimToken: claim.claimToken as string,
+            providerInvoiceId: createdInvoice.Id,
+            failureCode: failure.code,
+          }),
+        );
+        request.log.warn(
+          { code: failure.code, invoiceId },
+          "QuickBooks invoice was created but its authoritative snapshot remains pending",
+        );
+        if (isQuickBooksReauthorizationError(error)) {
+          return reply.code(409).send({
+            error: "QuickBooks authorization needs attention. Reconnect the workspace and then reconcile this invoice.",
+            code: "QUICKBOOKS_REAUTH_REQUIRED",
+            duplicate: false,
+            reconciliationRequired: true,
+            operation: serializeQuickBooksInvoiceOperation(operation),
+          });
+        }
+        return reply.code(202).send({
+          error: "QuickBooks created the invoice, but QuoteFly could not confirm its latest provider state. Reconcile before trying again.",
+          code: "QUICKBOOKS_RESULT_UNCERTAIN",
+          duplicate: false,
+          reconciliationRequired: true,
           operation: serializeQuickBooksInvoiceOperation(operation),
         });
       }
@@ -1947,23 +2061,26 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
       let providerInvoice: Awaited<ReturnType<typeof fetchQuickBooksInvoice>> | null = null;
       try {
-        const accessToken = await getAccessToken({
+        const providerConnection = {
           ...claim.connection,
           realmId: claim.providerRealmId,
-        });
-        const providerInvoices = claim.providerInvoiceId
-          ? [await fetchQuickBooksInvoice(
-              app.env,
-              claim.providerRealmId,
-              accessToken,
-              claim.providerInvoiceId,
-            )]
-          : await findQuickBooksInvoicesByDocNumber(
-              app.env,
-              claim.providerRealmId,
-              accessToken,
-              claim.providerDocNumber,
-            );
+        };
+        const providerInvoices = await runQuickBooksProviderRequest(
+          providerConnection,
+          async (accessToken) => claim.providerInvoiceId
+            ? [await fetchQuickBooksInvoice(
+                app.env,
+                claim.providerRealmId,
+                accessToken,
+                claim.providerInvoiceId,
+              )]
+            : findQuickBooksInvoicesByDocNumber(
+                app.env,
+                claim.providerRealmId,
+                accessToken,
+                claim.providerDocNumber,
+              ),
+        );
         providerInvoice = providerInvoices.length === 1
           && quickBooksInvoiceFingerprint(providerInvoices[0] as NonNullable<typeof providerInvoices[0]>) === claim.payloadHash
           ? providerInvoices[0] as NonNullable<typeof providerInvoices[0]>
@@ -1991,6 +2108,31 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         }
       } catch (error) {
         const failure = classifyQuickBooksProviderFailure(error);
+        if (isQuickBooksReauthorizationError(error)) {
+          // The exact-generation NEEDS_REAUTH transition clears the manual
+          // claim and leaves provider-bound operations in durable
+          // reconciliation. Reload that authoritative state instead of trying
+          // to retain an intentionally stale claim.
+          const operation = await withTenantRlsContext(
+            app.prisma,
+            access.tenantId,
+            (transaction) => transaction.quickBooksInvoiceOperation.findFirstOrThrow({
+              where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
+              select: QuickBooksInvoiceOperationPublicSelect,
+            }),
+          );
+          request.log.warn(
+            { code: failure.code, invoiceId },
+            "QuickBooks invoice identity lookup requires reauthorization",
+          );
+          return reply.code(409).send({
+            error: "QuickBooks authorization needs attention. Reconnect the workspace and try again.",
+            code: "QUICKBOOKS_REAUTH_REQUIRED",
+            found: Boolean(claim.providerInvoiceId),
+            reconciliationRequired: true,
+            operation: serializeQuickBooksInvoiceOperation(operation),
+          });
+        }
         const operation = await withTenantRlsContext(
           app.prisma,
           access.tenantId,
@@ -2049,6 +2191,31 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         const failure = error instanceof QuickBooksReconciliationError
           ? { code: error.code, retryable: error.retryable }
           : { ...classifyQuickBooksProviderFailure(error), retryable: true };
+        if (isQuickBooksReauthorizationError(error)) {
+          // The exact-generation NEEDS_REAUTH transition already invalidates
+          // hosted links and moves provider-bound operations back to durable
+          // reconciliation. Reload that authoritative state instead of trying
+          // to finish the now-stale manual claim.
+          const operation = await withTenantRlsContext(
+            app.prisma,
+            access.tenantId,
+            (transaction) => transaction.quickBooksInvoiceOperation.findFirstOrThrow({
+              where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
+              select: QuickBooksInvoiceOperationPublicSelect,
+            }),
+          );
+          request.log.warn(
+            { code: failure.code, invoiceId },
+            "QuickBooks invoice reconciliation requires reauthorization",
+          );
+          return reply.code(409).send({
+            error: "QuickBooks authorization needs attention. Reconnect the workspace and try again.",
+            code: "QUICKBOOKS_REAUTH_REQUIRED",
+            found: true,
+            reconciliationRequired: true,
+            operation: serializeQuickBooksInvoiceOperation(operation),
+          });
+        }
         let operation: QuickBooksInvoiceOperationPublic;
         try {
           operation = await withTenantRlsContext(
@@ -2122,6 +2289,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         if (error instanceof QuickBooksReconciliationError) {
           return reply.code(error.retryable ? 503 : 409).send({ error: error.message, code: error.code });
         }
+        if (sendQuickBooksReauthRequired(reply, error)) return;
         throw error;
       }
     },
@@ -2204,7 +2372,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const hostedPaymentUrl = reviewedOnlinePayments
         && record
         && quickBooksInvoiceLinkAvailable(record.operation)
-        ? validateQuickBooksInvoiceLink(record?.operation.providerInvoiceLink)
+        ? (() => {
+            try {
+              return validateQuickBooksInvoiceLink(decryptQuickBooksHostedPaymentLink(
+                app.env,
+                record.operation.providerInvoiceLink as string,
+              ));
+            } catch {
+              return null;
+            }
+          })()
         : null;
       if (!record || !hostedPaymentUrl) {
         return reply.code(404).send({ error: "A QuickBooks hosted payment link is not available yet.", code: "QUICKBOOKS_INVOICE_LINK_UNAVAILABLE" });

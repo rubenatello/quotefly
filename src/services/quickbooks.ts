@@ -1,5 +1,4 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
-import type { QuickBooksConnection } from "@prisma/client";
 import type { env } from "../config/env";
 import { z } from "zod";
 
@@ -8,6 +7,8 @@ const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const QUICKBOOKS_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const QUICKBOOKS_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
 const QUICKBOOKS_SECRET_ENVELOPE_VERSION = "v2";
+const QUICKBOOKS_HOSTED_LINK_ENVELOPE_VERSION = "qbl1";
+const QUICKBOOKS_HOSTED_LINK_AAD = Buffer.from("quotefly:quickbooks:hosted-payment-link:v1", "utf8");
 const QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION = "qbo2";
 
 type RuntimeEnv = typeof env;
@@ -777,7 +778,7 @@ export async function fetchQuickBooksInvoice(
 }
 
 export function validateQuickBooksInvoiceLink(value: unknown): string | null {
-  if (typeof value !== "string" || !value.trim()) return null;
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 2_048) return null;
   try {
     const url = new URL(value.trim());
     const hostname = url.hostname.toLowerCase();
@@ -1144,7 +1145,25 @@ export async function refreshQuickBooksAccessToken(
   }, false);
 
   if (!response.ok) {
-    throw new Error(`QuickBooks token refresh failed with status ${response.status}.`);
+    let providerCode: unknown;
+    try {
+      const body = await response.json() as { error?: unknown };
+      providerCode = body.error;
+    } catch {
+      providerCode = undefined;
+    }
+    // A refresh credential is terminal only when Intuit explicitly classifies
+    // that credential as invalid. HTTP status alone is insufficient: a 401 can
+    // also represent a transient client-auth or provider-edge failure.
+    const reconnectRequired = providerCode === "invalid_grant"
+      || providerCode === "invalid_token";
+    throw new QuickBooksProviderError(
+      reconnectRequired
+        ? "QUICKBOOKS_REAUTH_REQUIRED"
+        : `QUICKBOOKS_TOKEN_REFRESH_HTTP_${response.status}`,
+      false,
+      response.status,
+    );
   }
 
   return parseQuickBooksEntity(
@@ -1174,57 +1193,6 @@ export async function revokeQuickBooksToken(
   if (!response.ok) {
     throw new QuickBooksProviderError(`QUICKBOOKS_REVOKE_HTTP_${response.status}`, false, response.status);
   }
-}
-
-export async function ensureQuickBooksAccessToken(
-  runtimeEnv: RuntimeEnv,
-  connection: Pick<
-    QuickBooksConnection,
-    | "id"
-    | "accessTokenEncrypted"
-    | "refreshTokenEncrypted"
-    | "accessTokenExpiresAtUtc"
-    | "environment"
-    | "tenantId"
-  >,
-  save: (input: {
-    accessTokenEncrypted: string;
-    refreshTokenEncrypted: string;
-    accessTokenExpiresAtUtc: Date;
-    lastTokenRefreshAtUtc: Date;
-    refreshTokenRotatedAtUtc: Date;
-  }) => Promise<void>,
-): Promise<string> {
-  if (connection.environment !== runtimeEnv.QUICKBOOKS_ENVIRONMENT) {
-    throw new QuickBooksProviderError("QUICKBOOKS_CONNECTION_ENVIRONMENT_MISMATCH", false, 409);
-  }
-  const accessToken = connection.accessTokenEncrypted ? decryptQuickBooksSecret(runtimeEnv, connection.accessTokenEncrypted) : null;
-  const refreshToken = connection.refreshTokenEncrypted
-    ? decryptQuickBooksSecret(runtimeEnv, connection.refreshTokenEncrypted)
-    : null;
-
-  if (!refreshToken) {
-    throw new Error("QuickBooks refresh token is missing. Reconnect the workspace.");
-  }
-
-  const expiresAt = connection.accessTokenExpiresAtUtc?.getTime() ?? 0;
-  if (accessToken && expiresAt > Date.now() + 60_000) {
-    return accessToken;
-  }
-
-  const refreshed = await refreshQuickBooksAccessToken(runtimeEnv, refreshToken);
-  const now = new Date();
-  const nextExpiry = new Date(now.getTime() + refreshed.expires_in * 1000);
-
-  await save({
-    accessTokenEncrypted: encryptQuickBooksSecret(runtimeEnv, refreshed.access_token),
-    refreshTokenEncrypted: encryptQuickBooksSecret(runtimeEnv, refreshed.refresh_token),
-    accessTokenExpiresAtUtc: nextExpiry,
-    lastTokenRefreshAtUtc: now,
-    refreshTokenRotatedAtUtc: now,
-  });
-
-  return refreshed.access_token;
 }
 
 export function encryptQuickBooksSecret(runtimeEnv: RuntimeEnv, value: string): string {
@@ -1297,6 +1265,77 @@ export function decryptQuickBooksSecret(runtimeEnv: RuntimeEnv, encryptedValue: 
   }
 
   throw new Error("QuickBooks secret payload is invalid.");
+}
+
+function quickBooksHostedLinkKey(secret: string) {
+  return createHash("sha256")
+    .update(QUICKBOOKS_HOSTED_LINK_AAD)
+    .update("\0", "utf8")
+    .update(secret, "utf8")
+    .digest();
+}
+
+/**
+ * InvoiceLink is a bearer-like capability to an Intuit-hosted payment page.
+ * Keep it encrypted independently from OAuth-token envelopes so ciphertext
+ * cannot be moved between credential and hosted-link fields.
+ */
+export function encryptQuickBooksHostedPaymentLink(runtimeEnv: RuntimeEnv, value: string): string {
+  const hostedPaymentUrl = validateQuickBooksInvoiceLink(value);
+  if (!hostedPaymentUrl) throw new Error("QuickBooks hosted payment link is invalid.");
+  const encryptionSecret = runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
+  if (encryptionSecret.length < 32) {
+    throw new Error("QuickBooks token encryption key is not configured.");
+  }
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", quickBooksHostedLinkKey(encryptionSecret), iv);
+  cipher.setAAD(QUICKBOOKS_HOSTED_LINK_AAD);
+  const encrypted = Buffer.concat([cipher.update(hostedPaymentUrl, "utf8"), cipher.final()]);
+  return [
+    QUICKBOOKS_HOSTED_LINK_ENVELOPE_VERSION,
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(".");
+}
+
+export function decryptQuickBooksHostedPaymentLink(runtimeEnv: RuntimeEnv, encryptedValue: string): string {
+  const parts = encryptedValue.split(".");
+  if (parts.length !== 4 || parts[0] !== QUICKBOOKS_HOSTED_LINK_ENVELOPE_VERSION) {
+    throw new Error("QuickBooks hosted payment link payload is invalid.");
+  }
+  const [, ivPart, authTagPart, payloadPart] = parts;
+  if (
+    !ivPart
+    || !authTagPart
+    || !payloadPart
+    || ![ivPart, authTagPart, payloadPart].every((part) => /^[A-Za-z0-9_-]+$/.test(part))
+  ) {
+    throw new Error("QuickBooks hosted payment link payload is invalid.");
+  }
+  const iv = Buffer.from(ivPart, "base64url");
+  const authTag = Buffer.from(authTagPart, "base64url");
+  const encryptedPayload = Buffer.from(payloadPart, "base64url");
+  if (iv.length !== 12 || authTag.length !== 16 || encryptedPayload.length === 0) {
+    throw new Error("QuickBooks hosted payment link payload is invalid.");
+  }
+  const candidateSecrets = [
+    runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim(),
+    runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim(),
+  ].filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index);
+  for (const candidateSecret of candidateSecrets) {
+    try {
+      const decipher = createDecipheriv("aes-256-gcm", quickBooksHostedLinkKey(candidateSecret), iv);
+      decipher.setAAD(QUICKBOOKS_HOSTED_LINK_AAD);
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([decipher.update(encryptedPayload), decipher.final()]).toString("utf8");
+      const hostedPaymentUrl = validateQuickBooksInvoiceLink(decrypted);
+      if (hostedPaymentUrl) return hostedPaymentUrl;
+    } catch {
+      // Rotation deliberately tries the previous key without identifying it.
+    }
+  }
+  throw new Error("QuickBooks hosted payment link payload is invalid.");
 }
 
 export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {

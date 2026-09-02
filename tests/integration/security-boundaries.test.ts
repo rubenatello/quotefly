@@ -432,6 +432,10 @@ describe("security boundary helpers", () => {
           QUICKBOOKS_WEBHOOK_VERIFIER: "quickbooks-webhook-verifier-sentinel",
           QUICKBOOKS_TOKEN_ENCRYPTION_KEY: sentinel,
           QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+          QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+          QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+          QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+          QUICKBOOKS_CDC_WORKER_ENABLED: "true",
         },
       },
     );
